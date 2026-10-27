@@ -218,3 +218,28 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# ---------------------------------------------------------------------------
+# Project-specific (freyja-agent)
+# ---------------------------------------------------------------------------
+
+# Secrets: any env variant except the documented example, plus key material
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+
+# Agent workspace: skills are source, case files are runtime output
+workspace/cases/
+
+# Editors and OS
+.idea/
+.vscode/*
+!.vscode/settings.json
+!.vscode/extensions.json
+.DS_Store
+Thumbs.db
+
+# Claude Code per-user settings
+.claude/settings.local.json
