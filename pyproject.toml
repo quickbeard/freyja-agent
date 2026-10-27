@@ -1,0 +1,76 @@
+[project]
+name = "freyja-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Minh Nguyen", email = "quickbeard@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.32",
+    "fastapi[standard]>=0.162.0",
+    "langchain-anthropic>=1.7.6",
+    "langgraph-checkpoint-postgres>=3.2.0",
+    "psycopg[binary,pool]>=3.3.6",
+    "pydantic-settings>=2.16.1",
+    "sse-starlette>=3.6.0",
+]
+
+[project.scripts]
+freyja-api = "freyja_agent.api.app:main"
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pre-commit>=4.7.0",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "tests"]          # first-party import detection for isort
+extend-exclude = ["workspace"]  # skills and case files are not Python
+
+[tool.ruff.lint]
+select = [
+  "E", "W",   # pycodestyle
+  "F",        # pyflakes: unused imports, undefined names
+  "I",        # isort
+  "UP",       # pyupgrade: modern 3.12 syntax
+  "B",        # bugbear: likely bugs
+  "SIM",      # simplify
+  "C4",       # comprehensions
+  "ASYNC",    # blocking calls inside async code
+  "S",        # bandit security checks
+  "N",        # pep8 naming
+  "PTH",      # prefer pathlib over os.path
+  "T20",      # no stray print()
+  "ARG",      # unused arguments
+  "RUF",      # ruff-specific rules
+]
+ignore = ["E501"]  # line length is the formatter's job
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "ARG"]            # assert and unused fixtures are normal in tests
+"src/freyja_agent/cli.py" = ["T201"]    # the CLI prints by design
+
+[tool.ruff.lint.isort]
+known-first-party = ["freyja_agent"]
+
+[tool.ruff.lint.flake8-bugbear]
+# B008 would otherwise flag FastAPI's call-in-default pattern, e.g. db: Session = Depends(get_db)
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query", "fastapi.Path", "fastapi.Header", "fastapi.Body"]
+
+[tool.ruff.format]
+docstring-code-format = true
