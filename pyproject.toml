@@ -18,7 +18,7 @@ dependencies = [
 ]
 
 [project.scripts]
-freyja-agent = "freyja_agent:main"
+freyja-api = "freyja_agent.api.app:main"
 
 [build-system]
 requires = ["uv_build>=0.12.21,<0.13.0"]
@@ -31,3 +31,10 @@ dev = [
     "pytest-asyncio>=1.4.1",
     "ruff>=0.17.3",
 ]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
