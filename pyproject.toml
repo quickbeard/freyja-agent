@@ -1,0 +1,33 @@
+[project]
+name = "freyja-agent"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Minh Nguyen", email = "v.minhnh71@vinsoc.vn" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "deepagents>=0.7.32",
+    "fastapi[standard]>=0.162.0",
+    "langchain-anthropic>=1.7.6",
+    "langgraph-checkpoint-postgres>=3.2.0",
+    "psycopg[binary,pool]>=3.3.6",
+    "pydantic-settings>=2.16.1",
+    "sse-starlette>=3.6.0",
+]
+
+[project.scripts]
+freyja-agent = "freyja_agent:main"
+
+[build-system]
+requires = ["uv_build>=0.12.21,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.1",
+    "ruff>=0.17.3",
+]
