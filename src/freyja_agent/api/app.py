@@ -11,4 +11,4 @@ async def healthz() -> dict[str, str]:
 def main() -> None:
     import uvicorn
 
-    uvicorn.run("freyja_agent.api.app:app", host="0.0.0.0", port=8000)
+    uvicorn.run("freyja_agent.api.app:app", host="0.0.0.0", port=8000)  # noqa: S104  container bind
