@@ -1,4 +1,5 @@
 import pytest
+from pydantic import ValidationError
 
 from freyja_agent.config import Settings
 
@@ -17,3 +18,9 @@ def test_env_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     settings = Settings()
     assert settings.host == "10.0.0.5"
     assert settings.port == 9000
+
+
+def test_database_uri_is_required(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FREYJA_DATABASE_URI")
+    with pytest.raises(ValidationError, match="database_uri"):
+        Settings()
