@@ -11,7 +11,7 @@ class Settings(BaseSettings):
     port: int = 8000
     # Carries credentials, so it has no default: startup fails until FREYJA_DATABASE_URI is set.
     database_uri: str
-    model: str = "anthropic:claude-opus-5-5"
+    model: str = "anthropic:claude-sonnet-5-5"
 
 
 settings = Settings()
