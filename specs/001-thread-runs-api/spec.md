@@ -8,6 +8,15 @@
 
 **Input**: User description: "Thread runs API: the minimal Freyja runtime. A Deep Agents orchestrator is built by one factory (build_agent) using the model from Settings, a Postgres checkpointer and store opened in the FastAPI lifespan, a FilesystemBackend rooted at workspace/, and skills loaded from workspace/skills/. POST /threads/{thread_id}/runs accepts a message and streams the run over SSE (updates and messages, with an optional debug flag). GET /threads/{thread_id}/state returns the thread's current state. One placeholder environment-changing tool (isolate_host, which only logs) is gated by an interrupt with approve, edit, and reject decisions; POST /threads/{thread_id}/resume submits a decision and continues the same thread, including after a server restart. Local Postgres comes from a docker-compose file whose credentials match .env.example. Out of scope: delegate agents, authentication, real SOC tools, the CLI, and multiple models."
 
+## Clarifications
+
+### Session 2026-10-28
+
+- Q: When a thread's state is read, should the conversation include every message, meaning the orchestrator's tool calls and tool results as well as human and assistant text, or only the human and assistant text? → A: Full transcript: human, assistant, tool-call, and tool-result messages, in order.
+- Q: Should a single run have a maximum number of orchestrator steps, and when that limit is reached, should the run end with an error event rather than continue? → A: Yes: a step limit read from settings with a local default; on reaching it the run ends with an error event naming the limit, and the thread stays usable.
+- Q: Is this increment allowed to assume a single running service instance, so the one-active-run rule can be enforced in the process's memory and a crash clears it, or must the rule hold across several instances sharing one database? → A: Multi-instance from the start: durable lock in the database with an expiry so a crashed instance does not strand the thread.
+- Q: What is the maximum length of a thread id, and which characters are allowed in it? → A: 128 characters; letters, digits, hyphen, underscore, dot.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Send a message and watch the run live (Priority: P1)
@@ -57,7 +66,7 @@ An analyst, or a tool acting for one, reads a thread's current state: the conver
 
 **Acceptance Scenarios**:
 
-1. **Given** a thread with completed turns, **When** its state is read, **Then** the response includes the conversation messages in order and shows that no decision is pending and no run is active.
+1. **Given** a thread with completed turns, **When** its state is read, **Then** the response includes the full transcript in order (human, assistant, tool-call, and tool-result messages) and shows that no decision is pending and no run is active.
 2. **Given** a paused thread, **When** its state is read, **Then** the response includes the pending decision with the same action name and arguments the stream reported.
 3. **Given** a thread id that has never been used, **When** its state is read, **Then** the response says the thread was not found.
 4. **Given** a stream that has just closed, **When** state is read immediately afterwards, **Then** it already reflects that run's outcome.
@@ -100,13 +109,15 @@ A developer clones the repository, starts the local database with one command us
 ### Edge Cases
 
 - **Client disconnects mid-stream**: the run stops at the next step boundary; work completed before then is saved; the thread stays consistent, so a later state read or run works. The run does not continue in the background in this increment.
-- **Service stops while a run is in flight (not paused)**: the in-flight step is lost, completed steps remain, and the thread stays usable. The gated action cannot have executed, because it only runs after a recorded approve or edit decision.
+- **Service stops while a run is in flight (not paused)**: the in-flight step is lost and completed steps remain. The thread's active-run marker is released when the service stops cleanly; after a crash it expires on its own, so a new run is refused only until the expiry window passes. The gated action cannot have executed, because it only runs after a recorded approve or edit decision.
+- **Two service instances share one database**: a run started on one instance is visible to every instance, so a run requested on another instance for the same thread is refused as a conflict; a paused thread can be resumed from any instance.
 - **Model provider fails or times out during a run**: the stream emits an error event with a human-readable message and closes; the thread stays consistent; the next run on the thread works.
+- **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run.
 - **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
 - **Decision submitted for a thread that was never used**: refused the same way as a thread with no pending decision.
 - **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal remains visible in the thread history.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
-- **Thread id with unusual characters or excessive length**: thread ids are opaque, client-chosen strings; an empty or overlong id is rejected as invalid before any work starts.
+- **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
 
 ## Requirements *(mandatory)*
 
@@ -115,15 +126,17 @@ A developer clones the repository, starts the local database with one command us
 **Interface**
 
 - **FR-001**: The service MUST expose three thread operations: start a run (`POST /threads/{thread_id}/runs`, taking a message and an optional debug flag), read state (`GET /threads/{thread_id}/state`), and resume a paused thread (`POST /threads/{thread_id}/resume`, taking a decision and an optional debug flag). The existing health check is unchanged.
+- **FR-001a**: A thread id MUST be 1 to 128 characters long and contain only letters, digits, hyphen, underscore, and dot. Every thread operation MUST reject any other id as invalid before doing any work.
 - **FR-002**: Starting a run MUST return a live event stream that a standard HTTP client can consume incrementally. Every event MUST be labeled with its kind. By default the stream carries progress events (one per step the orchestrator completes, including tool calls and their results) and message events (the orchestrator's reply as it is produced).
 - **FR-003**: The stream MUST end in exactly one of three ways, each distinguishable by the client: completion of the reply, a pause event carrying the proposed action's name and arguments, or an error event carrying a human-readable message. The stream closes after the terminal event.
 - **FR-004**: With the debug flag set, the stream MUST additionally include verbose debug events. The flag MUST NOT change the run's behavior or outcome; it is the same run with more detail.
+- **FR-004a**: A run MUST stop after a maximum number of orchestrator steps, read from settings with a safe local default. Reaching the limit MUST end the run with the error event described in FR-003, naming the limit, and MUST leave the thread usable.
 
 **Threads and persistence**
 
 - **FR-005**: All turns sent to the same thread id MUST form one conversation. Thread history, orchestrator working state, and pending decisions MUST be stored durably and MUST survive a service restart.
-- **FR-006**: A thread MUST accept at most one active run at a time. A run requested while another is active on that thread MUST be refused with a conflict explanation, leaving the active run unaffected.
-- **FR-007**: Reading a thread's state MUST return the conversation messages so far, whether a run is active, and the pending decision with its full proposal when one exists. A thread id that has never been used MUST produce a not-found response.
+- **FR-006**: A thread MUST accept at most one active run at a time, enforced through the shared database so the rule holds across every service instance using that database. A run requested while another is active on that thread MUST be refused with a conflict explanation, leaving the active run unaffected. The active-run marker MUST be released when the run ends and MUST expire after a configurable period if the instance holding it dies, so a crashed instance cannot leave a thread refused indefinitely.
+- **FR-007**: Reading a thread's state MUST return the full transcript so far (human, assistant, tool-call, and tool-result messages, in order), whether a run is active, and the pending decision with its full proposal when one exists. A thread id that has never been used MUST produce a not-found response.
 - **FR-008**: Persistence connections MUST be opened when the service starts and released when it stops. If the database cannot be reached at startup, the service MUST fail to start with an error that names the cause.
 
 **Gated action**
@@ -146,12 +159,12 @@ A developer clones the repository, starts the local database with one command us
 - **FR-018**: The repository MUST include a local database definition that a developer brings up with one command, whose credentials match the documented example configuration exactly, so the copied example connects without edits.
 - **FR-019**: Every new configurable value introduced by this feature MUST be read through settings from the project's environment-variable prefix, MUST have a safe local default unless it carries a credential, and MUST be documented in the example configuration.
 - **FR-020**: The README MUST document, as they exist, how to bring up the local database, start the service, start a run, read thread state, and resume a paused thread.
-- **FR-021**: Automated tests MUST cover: the stream's event kinds and terminal events, thread continuity, the one-active-run rule, the pause on the gated action, each decision kind and its effect on the log, resume after a simulated restart, and state reads including not-found. The suite MUST run without a live model provider.
+- **FR-021**: Automated tests MUST cover: the stream's event kinds and terminal events, thread continuity, the one-active-run rule including a marker left by a dead instance expiring, the step limit ending a run with an error event, the pause on the gated action, each decision kind and its effect on the log, resume after a simulated restart, and state reads including not-found, and thread id validation. The suite MUST run without a live model provider.
 
 ### Key Entities
 
-- **Thread**: a conversation identified by a client-chosen id. Holds the ordered messages, the orchestrator's working state, and at most one pending decision. Outlives the service process.
-- **Run**: one turn of work on a thread, started by a message or by a decision. Ends completed, paused awaiting a decision, or failed. At most one is active per thread.
+- **Thread**: a conversation identified by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot). Holds the ordered messages, the orchestrator's working state, and at most one pending decision. Outlives the service process.
+- **Run**: one turn of work on a thread, started by a message or by a decision. Ends completed, paused awaiting a decision, or failed. At most one is active per thread across all service instances; the active marker is shared and expires if its instance dies.
 - **Run Event**: an item in a run's live stream, labeled by kind: progress, message, debug, pause, error, or completion. Pause events carry the proposal.
 - **Pending Decision (Proposal)**: an environment-changing action the orchestrator wants to take, with the action's name and arguments, waiting for an analyst. Visible in thread state until resolved.
 - **Decision**: an analyst's response to a proposal: approve, edit (with replacement arguments), or reject (with an optional reason). Recorded on the thread.
@@ -176,11 +189,11 @@ A developer clones the repository, starts the local database with one command us
 
 - Out of scope, per the description: delegate agents, authentication, real SOC tools, the command-line interface, and support for more than one model at a time. Also out of scope for this increment: listing, creating, or deleting threads as separate operations; cancelling a run; continuing a run in the background after the client disconnects; and deterministic escalation of high-severity signals (no severity handling exists yet, so that principle is not exercised).
 - The analyst's input is plain text; the service treats it as the human turn of the conversation.
-- Thread ids are opaque strings chosen by the client; the service rejects empty or overlong ids and otherwise uses them as given.
+- Thread ids are opaque strings chosen by the client, 1 to 128 characters of letters, digits, hyphen, underscore, and dot; the service rejects anything else and otherwise uses them as given.
 
 **Behavior choices**
 
-- One active run per thread; concurrent requests are refused rather than queued.
+- One active run per thread; concurrent requests are refused rather than queued. The rule is enforced in the shared database rather than in process memory, so several service instances can share one database; the marker's expiry period is a setting.
 - Reading state for a never-used thread returns not found rather than an empty state, so a mistyped id is not mistaken for a fresh thread.
 - Resume on a never-used thread is refused the same way as a thread with nothing pending.
 - A client disconnect stops the run at the next step boundary; completed steps are saved.
