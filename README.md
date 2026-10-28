@@ -69,8 +69,10 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_HOST` | `127.0.0.1` | Bind address for `freyja-api`. Containers set `0.0.0.0`. |
 | `FREYJA_PORT` | `8000` | Bind port for `freyja-api`. |
 | `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer and store (wiring in progress). No default because it carries credentials; `.env.example` has the local container value. |
-| `FREYJA_MODEL` | `anthropic:claude-opus-5-5` | Model for the orchestrator (wiring in progress), as a LangChain `provider:model` string. |
-| `ANTHROPIC_API_KEY` | | Required once the agent is wired. Read by the model client, not by settings. The variable follows the `FREYJA_MODEL` prefix: `OPENROUTER_API_KEY` for `openrouter:` models, which also need `uv add langchain-openrouter`. |
+| `FREYJA_MODEL` | `anthropic:claude-opus-5-5` | Model for the orchestrator (wiring in progress), as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. |
+| `OPENAI_API_BASE`, `OPENAI_API_KEY` | | Endpoint and key for `openai:` models, including self-hosted OpenAI-compatible servers. Read by the model client, not by settings. |
+| `ANTHROPIC_API_KEY` | | Key for `anthropic:` models. `ANTHROPIC_BASE_URL` routes through a gateway. |
+| `OPENROUTER_API_KEY` | | Key for `openrouter:` models; the model id is OpenRouter's slug. |
 
 ## Project layout
 
