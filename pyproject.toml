@@ -42,7 +42,9 @@ testpaths = ["tests"]
 line-length = 100
 target-version = "py312"
 src = ["src", "tests"]          # first-party import detection for isort
-extend-exclude = ["workspace"]  # skills and case files are not Python
+# workspace holds agent skills and case files, not Python. .specify holds Spec Kit's generated
+# scripts and extensions, which are not edited by hand and do not follow this project's rules.
+extend-exclude = ["workspace", ".specify"]
 
 [tool.ruff.lint]
 select = [
