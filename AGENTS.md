@@ -30,7 +30,7 @@ pass `--env-file .env` to `uv run` whenever a command needs it.
 - `src/freyja_agent/config.py`: the `Settings` class (pydantic-settings, `FREYJA_*` prefix) and
   the shared `settings` instance.
 - `src/freyja_agent/api/app.py`: the FastAPI app, `/healthz`, and the `freyja-api` entry point.
-- `tests/`: pytest suite.
+- `tests/`: pytest suite. `conftest.py` supplies the required environment, so no `.env` is needed.
 - `.specify/`: Spec Kit templates, scripts, and the constitution. Feature artifacts go under
   `specs/<NNN-slug>/` as `spec.md`, `plan.md`, and `tasks.md`.
 - `.claude/skills/speckit-*/`: the Spec Kit skills for Claude Code. Codex CLI reads its own copy
@@ -41,7 +41,8 @@ pass `--env-file .env` to `uv run` whenever a command needs it.
 ## Conventions
 
 - Configuration goes through `Settings`. Never hardcode hosts, ports, connection strings, or
-  model ids; add a field with a safe local default and document it in `.env.example`.
+  model ids; add a field with a safe local default, or no default when the value carries a
+  credential, and document it in `.env.example`.
 - New behavior ships with a test in `tests/`.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.

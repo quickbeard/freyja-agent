@@ -75,7 +75,7 @@ not wait on it.
 - Orchestrator built on Deep Agents over LangGraph; served by FastAPI; persistence through
   `langgraph-checkpoint-postgres`; streaming over server-sent events via `sse-starlette`.
 - Model selected by a provider-prefixed string in settings, default
-  `anthropic:claude-opus-5-5`.
+  `anthropic:claude-sonnet-5-5`.
 - Ruff is the only linter and formatter, line length 100, configuration in
   `pyproject.toml`.
 - Agent skills under `workspace/skills/` are source and are committed; case files written at
@@ -100,4 +100,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.0.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-10-28
+**Version**: 1.0.1 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-10-28
