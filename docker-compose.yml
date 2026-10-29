@@ -1,0 +1,21 @@
+# Local Postgres for the checkpointer, store, and run locks. The credentials equal
+# FREYJA_DATABASE_URI in .env.example, so the copied example connects without edits.
+services:
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: freyja
+      POSTGRES_PASSWORD: freyja
+      POSTGRES_DB: freyja
+    ports:
+      - "5432:5432"
+    volumes:
+      - freyja-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U freyja -d freyja"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  freyja-postgres:

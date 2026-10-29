@@ -8,7 +8,7 @@ authors = [
 ]
 requires-python = ">=3.12"
 dependencies = [
-    "deepagents>=0.7.32",
+    "deepagents>=0.7.32,<0.8",
     "fastapi[standard]>=0.162.0",
     "langchain-anthropic>=1.7.6",
     "langchain-openai>=1.7.3",
@@ -37,6 +37,7 @@ dev = [
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+asyncio_mode = "auto"
 
 [tool.ruff]
 line-length = 100
@@ -70,7 +71,7 @@ ignore = ["E501"]  # line length is the formatter's job
 "src/freyja_agent/cli.py" = ["T201"]    # the CLI prints by design
 
 [tool.ruff.lint.isort]
-known-first-party = ["freyja_agent"]
+known-first-party = ["freyja_agent", "tests"]
 
 [tool.ruff.lint.flake8-bugbear]
 # B008 would otherwise flag FastAPI's call-in-default pattern, e.g. db: Session = Depends(get_db)

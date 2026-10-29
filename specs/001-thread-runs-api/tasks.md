@@ -29,26 +29,26 @@ Single project, src layout: `src/freyja_agent/`, `tests/`, `workspace/`, repo-ro
 **Purpose**: Dependencies, settings, local database, and the package skeleton every later task
 builds on.
 
-- [ ] T001 Pin `deepagents>=0.7.32,<0.8` and add `asyncio_mode = "auto"` under
+- [X] T001 Pin `deepagents>=0.7.32,<0.8` and add `asyncio_mode = "auto"` under
       `[tool.pytest.ini_options]` in `pyproject.toml`; run `uv lock` (R1, R11)
-- [ ] T002 [P] Add `workspace_dir: str = "workspace"`, `max_steps: int = 50`, and
+- [X] T002 [P] Add `workspace_dir: str = "workspace"`, `max_steps: int = 50`, and
       `run_lock_ttl_seconds: int = 60` to `Settings` in `src/freyja_agent/config.py`, each with a
       one-line comment naming the FR it serves (data-model.md "Settings added by this feature")
-- [ ] T003 [P] Document `FREYJA_WORKSPACE_DIR=workspace`, `FREYJA_MAX_STEPS=50`,
+- [X] T003 [P] Document `FREYJA_WORKSPACE_DIR=workspace`, `FREYJA_MAX_STEPS=50`,
       `FREYJA_RUN_LOCK_TTL_SECONDS=60`, and a commented
       `# FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test` in
       `.env.example`
-- [ ] T004 [P] Add tests for the three new settings' defaults and `FREYJA_*` overrides in
+- [X] T004 [P] Add tests for the three new settings' defaults and `FREYJA_*` overrides in
       `tests/test_config.py`
-- [ ] T005 [P] Create `docker-compose.yml` with one service `postgres` (image
+- [X] T005 [P] Create `docker-compose.yml` with one service `postgres` (image
       `postgres:17-alpine`, `POSTGRES_USER=freyja`, `POSTGRES_PASSWORD=freyja`,
       `POSTGRES_DB=freyja`, port `5432:5432`, named volume, `pg_isready` healthcheck) so the
       credentials equal `FREYJA_DATABASE_URI` in `.env.example` (R13, FR-018)
-- [ ] T006 [P] Create the placeholder skill `workspace/skills/case-notes/SKILL.md` with front
+- [X] T006 [P] Create the placeholder skill `workspace/skills/case-notes/SKILL.md` with front
       matter `name: case-notes` and a `description`, and a body telling the orchestrator to keep
       working notes under `cases/<thread_id>/notes.md`; confirm `workspace/cases/` is ignored by
       `.gitignore` (R14, FR-017)
-- [ ] T007 [P] Create empty packages `src/freyja_agent/agent/__init__.py` and
+- [X] T007 [P] Create empty packages `src/freyja_agent/agent/__init__.py` and
       `src/freyja_agent/runtime/__init__.py`
 
 **Checkpoint**: `uv sync`, `uv run pytest`, and `docker compose up -d postgres` all succeed.
@@ -62,23 +62,23 @@ fakes. No user story can be built or tested before these exist.
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T008 [P] Implement `send_notification(channel: str, message: str)` as a `@tool` in
+- [X] T008 [P] Implement `send_notification(channel: str, message: str)` as a `@tool` in
       `src/freyja_agent/agent/tools.py`: docstring says it is a placeholder that only logs; emits
       one `WARNING` record on logger `freyja_agent.actions` carrying `channel` and `message`;
       returns `"Notification to {channel} recorded (placeholder: logged only)."`; export
       `SEND_NOTIFICATION_INTERRUPT = {"send_notification": {"allowed_decisions": ["approve",
       "edit", "reject"], "description": "Send a notification to a channel (placeholder: logs
       only)."}}` (R15, FR-009)
-- [ ] T009 [P] Write `DEFAULT_PROMPT` for the orchestrator in `src/freyja_agent/agent/prompts.py`
+- [X] T009 [P] Write `DEFAULT_PROMPT` for the orchestrator in `src/freyja_agent/agent/prompts.py`
       (who it is, that it works inside its workspace, that notifications require approval)
-- [ ] T010 Implement `build_agent(model, *, checkpointer, store, workspace_dir,
+- [X] T010 Implement `build_agent(model, *, checkpointer, store, workspace_dir,
       system_prompt=DEFAULT_PROMPT)` in `src/freyja_agent/agent/factory.py`: create
       `workspace_dir` if missing; call `create_deep_agent` with
       `backend=FilesystemBackend(root_dir=workspace_dir, virtual_mode=True)`,
       `tools=[send_notification]`, `interrupt_on=SEND_NOTIFICATION_INTERRUPT`,
       `skills=["/skills/"]`, `checkpointer`, `store`, `name="freyja"`; nothing else (R1, FR-015,
       FR-016, FR-017)
-- [ ] T011 [P] Implement the run lease in `src/freyja_agent/runtime/locks.py`: a `RunLocks`
+- [X] T011 [P] Implement the run lease in `src/freyja_agent/runtime/locks.py`: a `RunLocks`
       protocol with `acquire(thread_id, owner) -> bool`, `renew(thread_id, owner) -> None`,
       `release(thread_id, owner) -> None`, `is_active(thread_id) -> bool`; `InMemoryRunLocks`
       taking an injectable clock; `PostgresRunLocks(pool, ttl_seconds)` using the table
@@ -89,52 +89,52 @@ fakes. No user story can be built or tested before these exist.
       %s`; release = `DELETE ... WHERE thread_id = %s AND owner = %s`; is_active = `SELECT
       EXISTS(... WHERE thread_id = %s AND expires_at > now())`; plus a `setup()` that creates
       the table (R7, data-model.md RunLock)
-- [ ] T012 [P] Implement `open_persistence(settings)` in
+- [X] T012 [P] Implement `open_persistence(settings)` in
       `src/freyja_agent/runtime/persistence.py`: one
       `AsyncConnectionPool(settings.database_uri, kwargs={"autocommit": True,
       "prepare_threshold": 0, "row_factory": dict_row}, open=False, min_size=1, max_size=10)`,
       `await pool.open()`, `AsyncPostgresSaver(pool)` and `AsyncPostgresStore(pool)` with
       `setup()` on both; return pool, saver, store; let connection errors propagate so startup
       fails naming the database (R6, FR-008)
-- [ ] T013 Implement `Runtime` in `src/freyja_agent/runtime/runtime.py`: a dataclass with
+- [X] T013 Implement `Runtime` in `src/freyja_agent/runtime/runtime.py`: a dataclass with
       `agent`, `locks`, `instance_id` (UUID4 string, injectable), `settings`; an async context
       manager classmethod `Runtime.open(settings)` that calls `open_persistence`, creates
       `PostgresRunLocks` and runs its `setup()`, calls `build_agent(settings.model, ...)` with
       `workspace_dir=settings.workspace_dir`, yields the runtime, and closes the pool on exit
       (depends on T010, T011, T012)
-- [ ] T014 [P] Define request and response models in `src/freyja_agent/api/schemas.py` per
+- [X] T014 [P] Define request and response models in `src/freyja_agent/api/schemas.py` per
       `contracts/openapi.yaml`: `THREAD_ID_PATTERN = r"^[A-Za-z0-9._-]{1,128}$"`;
       `RunRequest(message: str, minLength 1, maxLength 32000)`; `ApproveDecision`,
       `EditDecision(args: dict)`, `RejectDecision(message: str | None, maxLength 4000)` as a
       discriminated union on `type`; `ResumeRequest(decisions: list, minItems 1)`; `Message`,
       `ActionRequest`, `PendingDecision`, `ThreadState`, `ErrorDetail(code, message)`
-- [ ] T015 [P] Implement `src/freyja_agent/api/serialize.py`: `message_to_dict` (fields `id`,
+- [X] T015 [P] Implement `src/freyja_agent/api/serialize.py`: `message_to_dict` (fields `id`,
       `type` in human/ai/tool/system, `content`, `name`, `tool_calls` as `{id, name, args}` on
       `ai`, `tool_call_id` on `tool`), `update_to_dict` for an `updates` chunk,
       `interrupt_to_pending` mapping the HITL value `{"action_requests": [...],
       "review_configs": [...]}` plus the interrupt id to `PendingDecision`, and a `to_jsonable`
       fallback for debug chunks (R4, R8, data-model.md Message and PendingDecision)
-- [ ] T016 Refactor `src/freyja_agent/api/app.py` into `create_app(open_runtime=Runtime.open)`:
+- [X] T016 Refactor `src/freyja_agent/api/app.py` into `create_app(open_runtime=Runtime.open)`:
       a lifespan that enters `open_runtime(settings)` and stores the runtime on `app.state`,
       the unchanged `/healthz`, a module-level `app = create_app()`, and `main()` unchanged
       (R6, R11, FR-015)
-- [ ] T017 [P] Write `tests/fakes.py`: `ScriptedChatModel(BaseChatModel)` implementing
+- [X] T017 [P] Write `tests/fakes.py`: `ScriptedChatModel(BaseChatModel)` implementing
       `_generate`, `_llm_type`, `bind_tools` (records tool names, returns self), and
       `_get_ls_params` (fixed provider); scripted per turn with `AIMessage`s that may carry
       `tool_calls`, returning a final text message when the script is exhausted; a
       `LoopingChatModel` variant that always calls `ls`; `FakeClock` with `now()` and
       `advance(seconds)` (R11)
-- [ ] T018 Extend `tests/conftest.py` with fixtures: `scripted_model`, `in_memory_runtime`
+- [X] T018 Extend `tests/conftest.py` with fixtures: `scripted_model`, `in_memory_runtime`
       (`build_agent` with `InMemorySaver()`, `InMemoryStore()`, `tmp_path` workspace containing a
       copy of `workspace/skills/`, `InMemoryRunLocks(FakeClock())`), `make_app(runtime)` that
       calls `create_app` with an `open_runtime` yielding that runtime, and an `sse_events(response)`
       helper that parses `event:`/`data:` pairs from `iter_lines()` and ignores `: ping` comments
       (depends on T016, T017)
-- [ ] T019 [P] Write `tests/test_factory.py`: the tools bound to the model exclude `execute`
+- [X] T019 [P] Write `tests/test_factory.py`: the tools bound to the model exclude `execute`
       and include `task` and `send_notification`; the skills list in the system prompt names
       `case-notes`; the system prompt is `DEFAULT_PROMPT`; a `BaseChatModel` instance is used
       as given and a string is passed through unchanged (FR-015, FR-016, FR-017; R1, R3, R14)
-- [ ] T020 [P] Write `tests/test_locks.py` unit tests for `InMemoryRunLocks`: acquire succeeds
+- [X] T020 [P] Write `tests/test_locks.py` unit tests for `InMemoryRunLocks`: acquire succeeds
       once, second acquire fails while unexpired, renew moves expiry, release frees, expiry via
       `FakeClock.advance` frees for a new owner, release with a wrong owner is a no-op (FR-006)
 
