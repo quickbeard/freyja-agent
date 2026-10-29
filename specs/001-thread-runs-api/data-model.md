@@ -107,7 +107,7 @@ Serialized from LangChain message objects for the `update` event and the state r
 
 ### PendingDecision (API shape)
 
-The proposal waiting on an analyst. Appears in the `interrupt` event and in `ThreadState.pending`.
+The proposal waiting on a user. Appears in the `interrupt` event and in `ThreadState.pending`.
 
 | Field | Type | Rules |
 |---|---|---|

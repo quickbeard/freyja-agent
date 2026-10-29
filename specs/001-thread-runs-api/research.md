@@ -19,7 +19,7 @@ limit is not a factory argument; it is per-run config (R10). The factory passes:
   (`deepagents/_models.py:54-57` accepts both).
 - `backend=FilesystemBackend(root_dir=workspace_dir, virtual_mode=True)`; the directory is
   created if missing.
-- `tools=[isolate_host]`, `interrupt_on={"isolate_host": {"allowed_decisions": ["approve",
+- `tools=[send_notification]`, `interrupt_on={"send_notification": {"allowed_decisions": ["approve",
   "edit", "reject"], "description": ...}}` (R2).
 - `skills=["/skills/"]` (R14), `system_prompt=` the Freyja prompt (an empty authored prompt is
   what you get when `system_prompt` is `None` and no profile matches, `graph.py:363-383`).
@@ -41,7 +41,7 @@ Both are kept:
   `execute` is absent from the tools the model receives.
 - The subagent is Deep Agents' context-isolation mechanism: a delegated phase returns one
   report instead of filling the parent's window. It inherits `interrupt_on` (`graph.py:897-902`),
-  so `isolate_host` proposed from inside a subagent still pauses the run, and the step limit
+  so `send_notification` proposed from inside a subagent still pauses the run, and the step limit
   reaches into it (R10), so a `task` call is bounded. Keeping it on from the first increment
   lets the suite prove that the gate holds through the first nested code path Freyja has, which
   principle I demands of every path.
@@ -81,7 +81,7 @@ Batched mode does not pin the tool name or validate edited args (886-911): an ed
 to any available tool. FR-013 and principle I need both guarantees, so the API layer provides
 them. On reject the middleware appends an error `ToolMessage` ("User rejected the tool call ...
 with reason: ...") and the model runs again (266-284; `agents/factory.py:2021-2040`), which is
-exactly the spec's "orchestrator continues and tells the analyst". The `respond` decision type
+exactly the spec's "orchestrator continues and tells the user". The `respond` decision type
 exists but is not exposed (spec names three decisions).
 
 **Alternatives considered**: `interrupt_mode="per_call"` pins the name and validates args
@@ -273,7 +273,7 @@ steps and a loop that ends with a final answer is three (`_loop.py:789, 1849, 18
 limit N runs N node rounds). Completed steps stay checkpointed because `after_tick()` persists
 before the next `tick()` detects `out_of_steps` (`_loop.py:658-659, 1381`), which gives the
 clarified FR-004a its "thread stays usable". 50 allows roughly 16 tool calls per turn, generous
-for a triage conversation and still bounded. The limit applies per graph invocation, subagents
+for a working conversation and still bounded. The limit applies per graph invocation, subagents
 included: the `task` tool passes almost no config of its own and the parent's ambient
 `recursion_limit` propagates into the child, which binds none (`middleware/subagents.py:856-865`;
 `create_sub_agent` returns a plain `create_agent`, 1-56). The worst case per run is the limit in
@@ -293,7 +293,7 @@ long model calls); relying on the Deep Agents preset (effectively unbounded).
   turn with `AIMessage`s that may carry `tool_calls`, and returns a final text message when the
   script is exhausted. A variant that always calls `ls` drives the step-limit test. The parent
   agent and the general-purpose subagent share the one model instance, so a script that reads
-  "parent calls `task`, subagent calls `isolate_host`" drives the gate-through-subagent test.
+  "parent calls `task`, subagent calls `send_notification`" drives the gate-through-subagent test.
 - Seams: `build_agent(model=..., checkpointer=InMemorySaver(), store=InMemoryStore(),
   workspace_dir=tmp_path)`; `Runtime(agent=..., locks=InMemoryRunLocks(clock=FakeClock()),
   ...)`; `create_app(open_runtime=...)` where `open_runtime` is an async context manager
@@ -377,23 +377,27 @@ skills list into the system prompt (873-913, 1105-1116). Skills are loaded at th
 thread and cached in checkpointed state (`skills_metadata`, 1168-1212), so a skill added to the
 repository is available to new threads immediately and to the service after restart, which
 meets FR-017; existing threads keep the list they loaded. The placeholder skill is about the
-workspace itself, not a SOC capability, matching the spec's assumption.
+workspace itself, not a real capability, matching the spec's assumption.
 
 **Alternatives considered**: no committed skill (skill loading would be untestable); a skill
-describing a SOC procedure (out of scope).
+describing a real-world procedure (out of scope).
 
-## R15. The `isolate_host` placeholder
+## R15. The `send_notification` placeholder
 
-**Decision**: a `@tool` with arguments `host: str` and `reason: str`, docstring stating it is a
-placeholder that only logs. It emits one `WARNING` record on logger `freyja_agent.actions` with
-`host` and `reason`, and returns `"Isolation of {host} recorded (placeholder: logged only)."`.
-Its `interrupt_on` description reads "Isolate a host from the network (placeholder: logs
-only)." The tool's `args_schema` is what R2 validates edited arguments against.
+**Decision**: a `@tool` with arguments `channel: str` and `message: str`, docstring stating it is
+a placeholder that only logs. It emits one `WARNING` record on logger `freyja_agent.actions`
+with `channel` and `message`, and returns `"Notification to {channel} recorded (placeholder:
+logged only)."`. Its `interrupt_on` description reads "Send a notification to a channel
+(placeholder: logs only)." The tool's `args_schema` is what R2 validates edited arguments
+against.
 
-**Rationale**: a structured log line is observable in tests with `caplog` (FR-009, SC-002,
-SC-003) and in the quickstart through the service log. Returning a sentence gives the model
-something to acknowledge (User Story 2, scenario 2). The `reason` argument exercises the edit
-path with more than one field.
+**Rationale**: a notification is the simplest action with an effect outside the workspace that
+every deployment of a general-purpose agent will eventually want, and it is visibly
+irreversible, which makes it a good stand-in for the gate. A structured log line is observable
+in tests with `caplog` (FR-009, SC-002, SC-003) and in the quickstart through the service log.
+Returning a sentence gives the model something to acknowledge (User Story 2, scenario 2). The
+two arguments exercise the edit path with more than one field.
 
-**Alternatives considered**: writing to a case file instead of logging (the description says
-"only logs").
+**Alternatives considered**: writing to a working file instead of logging (the description says
+"only logs"); a destructive placeholder such as deleting a record (harder to motivate in a
+quickstart, and a notification already proves the gate).

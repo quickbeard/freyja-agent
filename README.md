@@ -1,6 +1,6 @@
 # Freyja
 
-SOC orchestrator built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) and served with FastAPI. The orchestrator routes security operations work to the right delegate agent and keeps analysts in the loop for any action that changes the environment.
+General-purpose agent orchestrator built on [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) and served with FastAPI. The orchestrator routes work to the right delegate agent and keeps a human in the loop for any action with effects outside its workspace.
 
 ## Setup
 

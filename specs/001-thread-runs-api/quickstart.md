@@ -56,46 +56,46 @@ curl -s -X POST localhost:8000/threads/demo-1/runs -H 'content-type: application
 ## Scenario 2: the gated action (User Story 2)
 
 ```bash
-curl -N -X POST localhost:8000/threads/case-42/runs \
+curl -N -X POST localhost:8000/threads/task-42/runs \
   -H 'content-type: application/json' \
-  -d '{"message": "Host ws-042 is beaconing to a known C2 address. Isolate it now."}'
+  -d '{"message": "Tell the #ops channel that the nightly report is ready."}'
 ```
 
 Expected: the stream ends with `event: interrupt` whose data lists one action request named
-`isolate_host` with `host` set to `ws-042`, and `allowed_decisions` of approve, edit, reject. No
-`isolate_host` log line has been written yet.
+`send_notification` with `channel` set to `#ops`, and `allowed_decisions` of approve, edit, reject. No
+`send_notification` log line has been written yet.
 
 Approve:
 
 ```bash
-curl -N -X POST localhost:8000/threads/case-42/resume \
+curl -N -X POST localhost:8000/threads/task-42/resume \
   -H 'content-type: application/json' \
   -d '{"decisions": [{"type": "approve"}]}'
 ```
 
-Expected: the service log shows exactly one `isolate_host` line for `ws-042`; the stream shows a
+Expected: the service log shows exactly one `send_notification` line for `#ops`; the stream shows a
 `tool` message with the placeholder confirmation, then the orchestrator's acknowledgement, then
 `event: end`.
 
 Edit (new thread, same opening message, then):
 
 ```bash
-curl -N -X POST localhost:8000/threads/case-43/resume \
+curl -N -X POST localhost:8000/threads/task-43/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "edit", "args": {"host": "ws-043", "reason": "analyst corrected host"}}]}'
+  -d '{"decisions": [{"type": "edit", "args": {"channel": "#ops-staging", "message": "Nightly report is ready (staging)."}}]}'
 ```
 
-Expected: the log line names `ws-043`, not `ws-042`.
+Expected: the log line names `#ops-staging`, not `#ops`.
 
 Reject (new thread, same opening message, then):
 
 ```bash
-curl -N -X POST localhost:8000/threads/case-44/resume \
+curl -N -X POST localhost:8000/threads/task-44/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "reject", "message": "False positive, that is the EDR scanner."}]}'
+  -d '{"decisions": [{"type": "reject", "message": "Not needed, I will tell the team myself."}]}'
 ```
 
-Expected: no `isolate_host` log line; the orchestrator says the action was not taken and
+Expected: no `send_notification` log line; the orchestrator says the action was not taken and
 repeats the reason.
 
 Refusals:
@@ -103,16 +103,16 @@ Refusals:
 ```bash
 curl -s -X POST localhost:8000/threads/demo-1/resume -H 'content-type: application/json' -d '{"decisions": [{"type": "approve"}]}'
 # 409 {"detail": {"code": "nothing_pending", ...}}
-curl -s -X POST localhost:8000/threads/case-45/resume -H 'content-type: application/json' -d '{"decisions": [{"type": "launch"}]}'
+curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d '{"decisions": [{"type": "launch"}]}'
 # 422 on a paused thread (unknown type); GET state still shows pending
-curl -s -X POST localhost:8000/threads/case-45/runs -H 'content-type: application/json' -d '{"message": "never mind"}'
+curl -s -X POST localhost:8000/threads/task-45/runs -H 'content-type: application/json' -d '{"message": "never mind"}'
 # 409 {"detail": {"code": "decision_pending", ...}}: decide through resume first; the proposal is not dropped
 ```
 
 ## Scenario 3: inspect state (User Story 3)
 
 ```bash
-curl -s localhost:8000/threads/case-42/state | jq
+curl -s localhost:8000/threads/task-42/state | jq
 curl -s -o /dev/null -w '%{http_code}\n' localhost:8000/threads/never-used/state   # 404
 ```
 
@@ -122,9 +122,9 @@ the `tool` result; `pending` is null after the resume and non-null on a thread t
 
 ## Scenario 4: decide after a restart (User Story 4)
 
-1. Start a run on `case-46` that pauses on `isolate_host`.
+1. Start a run on `task-46` that pauses on `send_notification`.
 2. Stop the service (Ctrl-C) and start it again.
-3. `GET /threads/case-46/state` shows the same `pending` proposal.
+3. `GET /threads/task-46/state` shows the same `pending` proposal.
 4. Resume with approve; the continuation completes and the log line appears.
 
 ## Scenario 5: debug stream and conflicts (User Story 5, FR-006)

@@ -2,7 +2,7 @@ from fastapi import FastAPI
 
 from freyja_agent.config import settings
 
-app = FastAPI(title="Freyja SOC Orchestrator")
+app = FastAPI(title="Freyja Orchestrator")
 
 
 @app.get("/healthz")
