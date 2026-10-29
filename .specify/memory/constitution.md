@@ -2,24 +2,25 @@
 
 ## Core Principles
 
-### I. Analyst Approval for Environment-Changing Actions (NON-NEGOTIABLE)
+### I. Human Approval for Environment-Changing Actions (NON-NEGOTIABLE)
 
-Any tool that changes the monitored environment, such as isolating a host, blocking an
-address, disabling an account, or changing a detection rule, MUST be gated by a
+Any tool with effects outside the agent's workspace, such as sending a message, changing
+a record in an external system, deleting data, or spending money, MUST be gated by a
 human-in-the-loop interrupt with approve, edit, and reject decisions. No code path MAY
 bypass the gate, including delegate agents and background runs. A paused run MUST be
-resumable on the same thread after any delay, so an analyst can decide hours or days
-later with full context. Read-only lookups and enrichment do not require approval.
+resumable on the same thread after any delay, so a person can decide hours or days later
+with full context. Read-only lookups, retrieval, and edits inside the workspace do not
+require approval.
 
-Rationale: the orchestrator acts inside production security tooling, where a wrong action
-has a large blast radius and may be irreversible.
+Rationale: the orchestrator acts on systems other people depend on, where a wrong action
+can be visible to others and may be irreversible.
 
 ### II. Protocol-Based Delegation
 
 Delegate agents and services MUST be integrated over protocols: A2A for agents that carry
 their own reasoning, MCP for collections of tools, plain HTTP for services without agents.
 Another agent framework MUST NOT be imported into the orchestrator process. Each delegate
-stays owned by its team; the orchestrator owns routing, a single analyst-facing voice,
+stays owned by its team; the orchestrator owns routing, a single user-facing voice,
 hand-off context, and approval. Deterministic pipelines stay deterministic and are called
 as tools rather than wrapped in a model loop.
 
@@ -61,8 +62,9 @@ matter most here, insecure calls and stalled event loops.
 
 ### VI. Deterministic Guardrails Before Model Judgment
 
-High-severity handling MUST NOT depend on model routing. A confirmed critical signal MUST
-be escalated by a deterministic rule that runs before, or independently of, the
+Safety-critical handling MUST NOT depend on model routing. A condition that must never be
+missed, such as a hard policy rule or an input that must always be refused or escalated,
+MUST be handled by a deterministic rule that runs before, or independently of, the
 orchestrator's reasoning. Model judgment is for ambiguous, open-ended work; rules are for
 cases where a miss is unacceptable.
 
@@ -78,7 +80,7 @@ not wait on it.
   `anthropic:claude-sonnet-5-5`.
 - Ruff is the only linter and formatter, line length 100, configuration in
   `pyproject.toml`.
-- Agent skills under `workspace/skills/` are source and are committed; case files written at
+- Agent skills under `workspace/skills/` are source and are committed; working files written at
   runtime under `workspace/cases/` are not.
 
 ## Development Workflow
@@ -100,4 +102,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.0.1 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-10-28
+**Version**: 1.1.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-10-29

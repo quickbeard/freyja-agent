@@ -10,6 +10,10 @@
 
 ## Clarifications
 
+### Session 2026-10-29
+
+- Project direction: Freyja is a general-purpose agent orchestrator, not a security operations product. Domain wording below was generalized accordingly, and the placeholder gated action is `send_notification(channel, message)`. The Input line above is kept verbatim as the original request.
+
 ### Session 2026-10-28
 
 - Q: When a thread's state is read, should the conversation include every message, meaning the orchestrator's tool calls and tool results as well as human and assistant text, or only the human and assistant text? → A: Full transcript: human, assistant, tool-call, and tool-result messages, in order.
@@ -21,7 +25,7 @@
 
 ### User Story 1 - Send a message and watch the run live (Priority: P1)
 
-A SOC analyst opens a conversation with the orchestrator by sending a message to a thread they name, and watches the orchestrator work as it happens: each step it completes and its reply as it is written. A later message to the same thread continues the conversation with full memory of the earlier turns.
+A user opens a conversation with the orchestrator by sending a message to a thread they name, and watches the orchestrator work as it happens: each step it completes and its reply as it is written. A later message to the same thread continues the conversation with full memory of the earlier turns.
 
 **Why this priority**: Talking to the orchestrator is the product. Every other story builds on a thread that can receive a message and stream a run.
 
@@ -29,9 +33,9 @@ A SOC analyst opens a conversation with the orchestrator by sending a message to
 
 **Acceptance Scenarios**:
 
-1. **Given** a running service and a thread id that has never been used, **When** the analyst sends a message to that thread, **Then** the response is a live event stream that starts promptly, carries progress events and message events each labeled by kind, and closes when the orchestrator finishes its reply.
-2. **Given** a thread with one completed turn, **When** the analyst sends a follow-up to the same thread id, **Then** the orchestrator's reply reflects the content of the earlier turn.
-3. **Given** a thread with one completed turn, **When** the service is restarted and the analyst sends a follow-up, **Then** the earlier turn is still part of the conversation.
+1. **Given** a running service and a thread id that has never been used, **When** the user sends a message to that thread, **Then** the response is a live event stream that starts promptly, carries progress events and message events each labeled by kind, and closes when the orchestrator finishes its reply.
+2. **Given** a thread with one completed turn, **When** the user sends a follow-up to the same thread id, **Then** the orchestrator's reply reflects the content of the earlier turn.
+3. **Given** a thread with one completed turn, **When** the service is restarted and the user sends a follow-up, **Then** the earlier turn is still part of the conversation.
 4. **Given** a run in progress on a thread, **When** a second run is requested on the same thread, **Then** the second request is refused with a message that a run is already active, and the first run is unaffected.
 5. **Given** a request whose message is empty, **When** it is submitted, **Then** it is rejected as invalid and no run starts.
 
@@ -39,18 +43,18 @@ A SOC analyst opens a conversation with the orchestrator by sending a message to
 
 ### User Story 2 - Decide on an environment-changing action (Priority: P2)
 
-When the orchestrator wants to take an action that would change the monitored environment, the run pauses before the action executes. In this increment the only such action is a placeholder "isolate host" that does nothing but write a log line. The stream tells the analyst exactly what is proposed, with its arguments. The analyst approves it as proposed, edits the arguments and approves, or rejects it. The run then continues on the same thread and the orchestrator reports what happened.
+When the orchestrator wants to take an action with effects outside its workspace, the run pauses before the action executes. In this increment the only such action is a placeholder "send notification" that does nothing but write a log line. The stream tells the user exactly what is proposed, with its arguments. The user approves it as proposed, edits the arguments and approves, or rejects it. The run then continues on the same thread and the orchestrator reports what happened.
 
-**Why this priority**: The constitution makes analyst approval non-negotiable. This gate is what makes the runtime safe to connect to real tools later, and the placeholder lets the gate be built and proven before any real tool exists.
+**Why this priority**: The constitution makes human approval non-negotiable. This gate is what makes the runtime safe to connect to real tools later, and the placeholder lets the gate be built and proven before any real tool exists.
 
-**Independent Test**: Send a message that leads the orchestrator to propose isolating a host, observe the pause, then on separate threads submit each decision kind and check the log output and the continuation.
+**Independent Test**: Send a message that leads the orchestrator to propose sending a notification, observe the pause, then on separate threads submit each decision kind and check the log output and the continuation.
 
 **Acceptance Scenarios**:
 
-1. **Given** a run in which the orchestrator proposes the isolate-host action, **When** the proposal is reached, **Then** the action does not execute, the stream emits a pause event naming the action and its arguments, the stream closes, and the thread's state shows the pending decision.
-2. **Given** a paused thread, **When** the analyst approves, **Then** the action executes exactly once with the proposed arguments, one log line records the host, and the continuation stream shows the orchestrator acknowledging the result.
-3. **Given** a paused thread, **When** the analyst edits the arguments (for example a different host name) and approves, **Then** the action executes with the edited arguments and the log line shows the edited values, not the originals.
-4. **Given** a paused thread, **When** the analyst rejects, optionally with a reason, **Then** the action never executes, no log line is written, and the orchestrator continues and tells the analyst the action was not taken, repeating the reason when one was given.
+1. **Given** a run in which the orchestrator proposes the send-notification action, **When** the proposal is reached, **Then** the action does not execute, the stream emits a pause event naming the action and its arguments, the stream closes, and the thread's state shows the pending decision.
+2. **Given** a paused thread, **When** the user approves, **Then** the action executes exactly once with the proposed arguments, one log line records the channel and message, and the continuation stream shows the orchestrator acknowledging the result.
+3. **Given** a paused thread, **When** the user edits the arguments (for example a different channel) and approves, **Then** the action executes with the edited arguments and the log line shows the edited values, not the originals.
+4. **Given** a paused thread, **When** the user rejects, optionally with a reason, **Then** the action never executes, no log line is written, and the orchestrator continues and tells the user the action was not taken, repeating the reason when one was given.
 5. **Given** a thread with no pending decision, **When** a decision is submitted, **Then** it is refused with an explanation and the thread is unchanged.
 6. **Given** a pending decision, **When** the submitted decision is malformed (an unknown decision kind, or edited arguments the action cannot accept), **Then** it is refused and the pending decision remains available.
 
@@ -58,7 +62,7 @@ When the orchestrator wants to take an action that would change the monitored en
 
 ### User Story 3 - Inspect where a thread stands (Priority: P3)
 
-An analyst, or a tool acting for one, reads a thread's current state: the conversation so far, whether a run is active, and any decision waiting on them with the full proposal. This is how someone picking up a thread hours later sees the context before deciding.
+A user, or a tool acting for one, reads a thread's current state: the conversation so far, whether a run is active, and any decision waiting on them with the full proposal. This is how someone picking up a thread hours later sees the context before deciding.
 
 **Why this priority**: Deciding on a pause requires seeing the proposal and the conversation that led to it. Without state inspection a paused thread is a black box.
 
@@ -75,7 +79,7 @@ An analyst, or a tool acting for one, reads a thread's current state: the conver
 
 ### User Story 4 - Decide after a restart (Priority: P4)
 
-A paused thread outlives the service process. The service is stopped and started again (a deploy, a crash, an overnight gap) and the analyst decides later. The run continues as if there had been no interruption.
+A paused thread outlives the service process. The service is stopped and started again (a deploy, a crash, an overnight gap) and the user decides later. The run continues as if there had been no interruption.
 
 **Why this priority**: The constitution requires a paused run to be resumable after any delay. Restart durability is where persistence bugs show, so it is a separate, deliberately tested story.
 
@@ -84,8 +88,8 @@ A paused thread outlives the service process. The service is stopped and started
 **Acceptance Scenarios**:
 
 1. **Given** a paused thread, **When** the service is stopped and started again, **Then** reading the thread's state shows the same pending decision and proposal as before the restart.
-2. **Given** the restarted service, **When** the analyst submits a decision on that thread, **Then** the run continues and completes with the same outcome it would have had without the restart.
-3. **Given** a paused thread, **When** the analyst waits an arbitrary time before deciding, **Then** the service imposes no time limit and the decision is accepted.
+2. **Given** the restarted service, **When** the user submits a decision on that thread, **Then** the run continues and completes with the same outcome it would have had without the restart.
+3. **Given** a paused thread, **When** the user waits an arbitrary time before deciding, **Then** the service imposes no time limit and the decision is accepted.
 
 ---
 
@@ -115,7 +119,7 @@ A developer clones the repository, starts the local database with one command us
 - **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run.
 - **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
 - **Decision submitted for a thread that was never used**: refused the same way as a thread with no pending decision.
-- **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the analyst decides through resume first. A message is never treated as an implicit decision.
+- **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the user decides through resume first. A message is never treated as an implicit decision.
 - **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal remains visible in the thread history.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
 - **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
@@ -142,10 +146,10 @@ A developer clones the repository, starts the local database with one command us
 
 **Gated action**
 
-- **FR-009**: The runtime MUST include one placeholder environment-changing action, isolate host, whose only effect is writing a log line that records the host it was asked to isolate.
-- **FR-010**: The isolate-host action MUST NOT execute unless an approve or edit decision has been recorded on the thread for that specific proposal. No code path MAY bypass this, including any future delegate or background run.
-- **FR-011**: When the orchestrator proposes the isolate-host action, the run MUST pause before execution, emit the pause event described in FR-003, and leave the proposal readable through thread state. While a proposal is pending, a new message run on that thread MUST be refused with a conflict explanation; a proposal is resolved only by a decision.
-- **FR-012**: A decision MUST be one of: approve (execute as proposed), edit (execute with analyst-supplied replacement arguments), or reject (do not execute, with an optional reason). After edit, the action MUST receive the edited arguments. After reject, the orchestrator MUST be told the action was not taken, with the reason when given, and MUST continue the conversation.
+- **FR-009**: The runtime MUST include one placeholder environment-changing action, send notification, whose only effect is writing a log line that records the channel and message it was asked to send.
+- **FR-010**: The send-notification action MUST NOT execute unless an approve or edit decision has been recorded on the thread for that specific proposal. No code path MAY bypass this, including any future delegate or background run.
+- **FR-011**: When the orchestrator proposes the send-notification action, the run MUST pause before execution, emit the pause event described in FR-003, and leave the proposal readable through thread state. While a proposal is pending, a new message run on that thread MUST be refused with a conflict explanation; a proposal is resolved only by a decision.
+- **FR-012**: A decision MUST be one of: approve (execute as proposed), edit (execute with user-supplied replacement arguments), or reject (do not execute, with an optional reason). After edit, the action MUST receive the edited arguments. After reject, the orchestrator MUST be told the action was not taken, with the reason when given, and MUST continue the conversation.
 - **FR-013**: Resuming MUST continue the same thread from its pause and stream the continuation using the same event kinds and terminal events as a run. Resume MUST be refused when the thread has no pending decision, and a malformed decision MUST be refused while leaving the pending decision in place.
 - **FR-014**: A paused thread MUST be resumable after the service has been stopped and restarted, and after any delay, with the same outcome as an uninterrupted run.
 
@@ -167,17 +171,17 @@ A developer clones the repository, starts the local database with one command us
 - **Thread**: a conversation identified by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot). Holds the ordered messages, the orchestrator's working state, and at most one pending decision. Outlives the service process.
 - **Run**: one turn of work on a thread, started by a message or by a decision. Ends completed, paused awaiting a decision, or failed. At most one is active per thread across all service instances; the active marker is shared and expires if its instance dies.
 - **Run Event**: an item in a run's live stream, labeled by kind: progress, message, debug, pause, error, or completion. Pause events carry the proposal.
-- **Pending Decision (Proposal)**: an environment-changing action the orchestrator wants to take, with the action's name and arguments, waiting for an analyst. Visible in thread state until resolved.
-- **Decision**: an analyst's response to a proposal: approve, edit (with replacement arguments), or reject (with an optional reason). Recorded on the thread.
+- **Pending Decision (Proposal)**: an environment-changing action the orchestrator wants to take, with the action's name and arguments, waiting for a user. Visible in thread state until resolved.
+- **Decision**: a user's response to a proposal: approve, edit (with replacement arguments), or reject (with an optional reason). Recorded on the thread.
 - **Skill**: a committed instruction document in the workspace skills folder that the orchestrator can draw on. Source, not runtime output.
-- **Workspace**: the directory the orchestrator may read and write. Contains the skills folder (committed) and case files written at runtime (not committed).
+- **Workspace**: the directory the orchestrator may read and write. Contains the skills folder (committed) and working files written at runtime (not committed).
 
 ## Success Criteria *(mandatory)*
 
 ### Measurable Outcomes
 
-- **SC-001**: After a run request is accepted, the first stream event arrives within 1 second, before any model output, so the analyst knows the run started.
-- **SC-002**: In the automated suite, 100% of isolate-host proposals pause for a decision, and zero executions occur without a recorded approve or edit.
+- **SC-001**: After a run request is accepted, the first stream event arrives within 1 second, before any model output, so the user knows the run started.
+- **SC-002**: In the automated suite, 100% of send-notification proposals pause for a decision, and zero executions occur without a recorded approve or edit.
 - **SC-003**: Each decision kind (approve, edit, reject) produces the specified log outcome and a visible continuation in 100% of automated runs.
 - **SC-004**: A thread paused before a full service stop and start resumes and completes with the same outcome as an uninterrupted run, in 100% of automated runs.
 - **SC-005**: A state read performed immediately after a stream closes reflects that run's outcome (completed, paused, or failed) in 100% of cases; there are no stale reads.
@@ -188,8 +192,8 @@ A developer clones the repository, starts the local database with one command us
 
 **Scope**
 
-- Out of scope, per the description: delegate agents, authentication, real SOC tools, the command-line interface, and support for more than one model at a time. Also out of scope for this increment: listing, creating, or deleting threads as separate operations; cancelling a run; continuing a run in the background after the client disconnects; and deterministic escalation of high-severity signals (no severity handling exists yet, so that principle is not exercised).
-- The analyst's input is plain text; the service treats it as the human turn of the conversation.
+- Out of scope, per the description: delegate agents, authentication, real external tools, the command-line interface, and support for more than one model at a time. Also out of scope for this increment: listing, creating, or deleting threads as separate operations; cancelling a run; continuing a run in the background after the client disconnects; and deterministic escalation of high-severity signals (no severity handling exists yet, so that principle is not exercised).
+- The user's input is plain text; the service treats it as the human turn of the conversation.
 - Thread ids are opaque strings chosen by the client, 1 to 128 characters of letters, digits, hyphen, underscore, and dot; the service rejects anything else and otherwise uses them as given.
 
 **Behavior choices**
@@ -206,6 +210,6 @@ A developer clones the repository, starts the local database with one command us
 - The runtime stack and the component choices named in the description (one construction path for the orchestrator, persistence opened for the life of the service process, a workspace root with a committed skills folder, and a container definition for the local database) are planning inputs. They are preserved verbatim in the Input line above and bound by the constitution's Technology Constraints; the plan records them, so this spec does not restate them as requirements.
 - A model provider reachable through the existing provider settings is available when the service runs for real. Automated tests use a scripted stand-in model so they need no network access. How tests obtain persistence without a second runtime code path is decided in the plan; the existing tests' property of needing no database is preserved for tests that do not exercise persistence.
 - A long-term store is opened alongside checkpoint storage for the orchestrator's use; no cross-thread memory feature is specified in this increment.
-- At least one minimal skill is committed so skill loading is observable; it is a placeholder, not a SOC capability.
-- The service keeps binding to the local interface by default. Because there is no authentication, anyone who can reach the port acts as an analyst; that is acceptable for local development and is documented.
+- At least one minimal skill is committed so skill loading is observable; it is a placeholder, not a real capability.
+- The service keeps binding to the local interface by default. Because there is no authentication, anyone who can reach the port acts as a user; that is acceptable for local development and is documented.
 - The existing health check remains a liveness check and is not extended.

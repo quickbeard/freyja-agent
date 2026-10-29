@@ -32,11 +32,11 @@ One per orchestrator step. `node` is the graph node that ran; `data` is that nod
 update with messages serialized as [Message](../data-model.md#message-api-shape).
 
 ```json
-{"node": "model", "data": {"messages": [{"type": "ai", "content": "", "tool_calls": [{"id": "call_1", "name": "isolate_host", "args": {"host": "ws-042", "reason": "C2 beaconing"}}]}]}}
+{"node": "model", "data": {"messages": [{"type": "ai", "content": "", "tool_calls": [{"id": "call_1", "name": "send_notification", "args": {"channel": "#ops", "message": "Nightly report is ready."}}]}]}}
 ```
 
 ```json
-{"node": "tools", "data": {"messages": [{"type": "tool", "name": "isolate_host", "tool_call_id": "call_1", "content": "Isolation of ws-042 recorded (placeholder: logged only)."}]}}
+{"node": "tools", "data": {"messages": [{"type": "tool", "name": "send_notification", "tool_call_id": "call_1", "content": "Notification to #ops recorded (placeholder: logged only)."}]}}
 ```
 
 Steps taken inside a subagent launched through the `task` tool are not separate `update`
@@ -64,7 +64,7 @@ The run paused before executing a gated action. Same shape as `ThreadState.pendi
 {
   "interrupt_id": "6b1e...",
   "action_requests": [
-    {"name": "isolate_host", "args": {"host": "ws-042", "reason": "C2 beaconing"}, "description": "Isolate a host from the network (placeholder: logs only)."}
+    {"name": "send_notification", "args": {"channel": "#ops", "message": "Nightly report is ready."}, "description": "Send a notification to a channel (placeholder: logs only)."}
   ],
   "allowed_decisions": ["approve", "edit", "reject"]
 }

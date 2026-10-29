@@ -11,7 +11,7 @@ orchestrator from the model named in `Settings`, a Postgres checkpointer and sto
 life of the FastAPI process, a filesystem backend confined to `workspace/`, and skills read from
 `workspace/skills/`. Three endpoints expose it: start a run on a thread and stream it over SSE,
 read a thread's full state, and resume a paused thread with approve, edit, or reject decisions.
-The one tool that changes the environment, a placeholder `isolate_host` that only logs, is gated
+The one tool that changes the environment, a placeholder `send_notification` that only logs, is gated
 by Deep Agents' human-in-the-loop interrupt; the pause is checkpointed, so a decision can arrive
 after any delay or a restart. A small `freyja_run_locks` table with an expiring lease enforces one
 active run per thread across every service instance that shares the database, and a per-run
@@ -48,7 +48,7 @@ through the same factory the service uses. Postgres-backed integration tests run
 
 **Performance Goals**: first SSE event within 1 s of accepting a run, before any model output
 (SC-001); a state read immediately after a stream closes reflects that run (SC-005). Throughput is
-not a goal; a handful of analysts and tens of concurrent threads.
+not a goal; a handful of users and tens of concurrent threads.
 
 **Constraints**: binds 127.0.0.1 unless configured; no authentication; one active run per thread
 enforced in the database with an expiring lease; every run bounded by `FREYJA_MAX_STEPS`; no
@@ -64,7 +64,7 @@ placeholder tool; one placeholder skill; no delegates, CLI, or multi-model suppo
 
 | Principle | Touched? | How the plan satisfies it | Pre-research | Post-design |
 |---|---|---|---|---|
-| I. Analyst approval for environment-changing actions | Yes, central | `isolate_host` is registered with `interrupt_on` allowing exactly approve, edit, reject. The tool is reachable only through the agent's tool node, which the HITL middleware wraps; no route or helper calls it directly. The interrupt is checkpointed in Postgres, so `POST .../resume` works after any delay or restart (research R2, R5, R8). The API validates decisions (count, allowed type, edited args against the tool's schema) and pins the tool name, closing the batched-mode gap where an edit could switch tools (R2). A new message on a paused thread is refused rather than silently discarding the proposal (R9). The general-purpose subagent inherits the gate, and a test proves a proposal raised inside it pauses the run (R1). | PASS | PASS |
+| I. Human approval for environment-changing actions | Yes, central | `send_notification` is registered with `interrupt_on` allowing exactly approve, edit, reject. The tool is reachable only through the agent's tool node, which the HITL middleware wraps; no route or helper calls it directly. The interrupt is checkpointed in Postgres, so `POST .../resume` works after any delay or restart (research R2, R5, R8). The API validates decisions (count, allowed type, edited args against the tool's schema) and pins the tool name, closing the batched-mode gap where an edit could switch tools (R2). A new message on a paused thread is refused rather than silently discarding the proposal (R9). The general-purpose subagent inherits the gate, and a test proves a proposal raised inside it pauses the run (R1). | PASS | PASS |
 | II. Protocol-based delegation | Not exercised | No delegate agents in scope. No other agent framework is imported. The Deep Agents general-purpose subagent stays enabled: it is an in-process context-isolation tool of the orchestrator itself, not a delegate; it inherits the approval gate and is bounded by the step limit (R1, R10). | PASS | PASS |
 | III. One runtime, every environment | Yes | `build_agent` is the only place the orchestrator is constructed; the lifespan and the tests both call it. Persistence and the model are parameters of that factory, so tests inject `InMemorySaver`, `InMemoryStore`, an in-memory lock store, and a scripted model without a second code path: the routes, streaming loop, lock protocol, and factory are identical in tests and production (R11). The debug flag is LangGraph's `debug` stream mode on the same run, not a separate execution mode (R4). LangGraph Server and Studio are not used. | PASS | PASS |
 | IV. Configuration through settings | Yes | Three new settings with safe local defaults: `FREYJA_WORKSPACE_DIR=workspace`, `FREYJA_MAX_STEPS=50`, `FREYJA_RUN_LOCK_TTL_SECONDS=60`, all documented in `.env.example`. The compose file's credentials equal the example `FREYJA_DATABASE_URI`; no credential is committed beyond that documented local-only value. Bind stays 127.0.0.1 (R6, R13). | PASS | PASS |
@@ -102,7 +102,7 @@ src/freyja_agent/
 │   ├── __init__.py
 │   ├── factory.py             # build_agent(...): the one place the orchestrator is assembled
 │   ├── prompts.py             # the orchestrator's system prompt
-│   └── tools.py               # isolate_host (logs only) and its interrupt config
+│   └── tools.py               # send_notification (logs only) and its interrupt config
 ├── runtime/
 │   ├── __init__.py
 │   ├── persistence.py         # open_persistence(settings): pool, saver, store; setup(); close
@@ -119,7 +119,7 @@ src/freyja_agent/
 workspace/
 └── skills/
     └── case-notes/
-        └── SKILL.md           # placeholder skill proving skill loading; not a SOC capability
+        └── SKILL.md           # placeholder skill proving skill loading; not a real capability
 
 docker-compose.yml             # local Postgres; credentials equal .env.example
 

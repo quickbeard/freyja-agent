@@ -1,8 +1,8 @@
 # Freyja
 
-SOC orchestrator built on Deep Agents (LangGraph) and served with FastAPI. It routes security
-operations work to delegate agents and keeps analysts in the loop for any action that changes
-the environment.
+General-purpose agent orchestrator built on Deep Agents (LangGraph) and served with FastAPI. It
+routes work to delegate agents and keeps a human in the loop for any action with effects outside
+its workspace.
 
 This file is the shared instruction set for every coding agent used on the repo (Claude Code,
 Codex CLI). The project principles live in the Spec Kit constitution at
