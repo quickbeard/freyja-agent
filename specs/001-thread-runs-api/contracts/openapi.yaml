@@ -1,0 +1,243 @@
+openapi: 3.1.0
+info:
+  title: Freyja SOC Orchestrator
+  version: 0.1.0
+  description: >
+    Thread runs API. Streams are server-sent events; see sse-events.md for the event
+    contract. No authentication in this increment; bind to a local interface.
+paths:
+  /healthz:
+    get:
+      summary: Liveness check (unchanged)
+      responses:
+        "200":
+          description: Service process is up
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, enum: [ok] }
+  /threads/{thread_id}/runs:
+    post:
+      summary: Start a run on a thread and stream it
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/Debug"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/RunRequest" }
+      responses:
+        "200":
+          description: Event stream; first event is `start`, last is `end`, `interrupt`, or `error`
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "409":
+          description: >
+            Either a run is already active on this thread (code `run_active`) or the thread
+            is paused on a proposal that must be decided first through resume
+            (code `decision_pending`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: Invalid thread id or empty message
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+  /threads/{thread_id}/resume:
+    post:
+      summary: Submit decisions for a paused thread and stream the continuation
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/Debug"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResumeRequest" }
+      responses:
+        "200":
+          description: Event stream, same contract as runs
+          content:
+            text/event-stream:
+              schema: { type: string }
+        "404":
+          description: Thread has never been used (code `thread_not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: >
+            Either a run is active (code `run_active`) or the thread has no pending
+            decision (code `nothing_pending`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: >
+            Invalid thread id, unknown decision type, decision count does not match the
+            pending action requests, or edited args fail the tool's schema. The pending
+            decision is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+  /threads/{thread_id}/state:
+    get:
+      summary: Read a thread's current state
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: Current state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadState" }
+        "404":
+          description: Thread has never been used (code `thread_not_found`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: Invalid thread id
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationError" }
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema:
+        type: string
+        pattern: "^[A-Za-z0-9._-]{1,128}$"
+      description: Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars.
+    Debug:
+      name: debug
+      in: query
+      required: false
+      schema: { type: boolean, default: false }
+      description: Add `debug` events to the stream. Never changes the run's behavior.
+  schemas:
+    RunRequest:
+      type: object
+      required: [message]
+      properties:
+        message:
+          type: string
+          minLength: 1
+          maxLength: 32000
+          description: The analyst's plain-text turn.
+    ResumeRequest:
+      type: object
+      required: [decisions]
+      properties:
+        decisions:
+          type: array
+          minItems: 1
+          items: { $ref: "#/components/schemas/Decision" }
+          description: One per pending action request, in the same order.
+    Decision:
+      oneOf:
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [approve] }
+        - type: object
+          required: [type, args]
+          properties:
+            type: { type: string, enum: [edit] }
+            args:
+              type: object
+              description: Replacement arguments; validated against the tool's schema. The tool name cannot change.
+        - type: object
+          required: [type]
+          properties:
+            type: { type: string, enum: [reject] }
+            message:
+              type: string
+              maxLength: 4000
+              description: Optional reason, relayed to the orchestrator as the tool result.
+      discriminator:
+        propertyName: type
+    ThreadState:
+      type: object
+      required: [thread_id, run_active, messages, pending]
+      properties:
+        thread_id: { type: string }
+        run_active:
+          type: boolean
+          description: True while an unexpired run lock exists for the thread, on any instance.
+        messages:
+          type: array
+          items: { $ref: "#/components/schemas/Message" }
+          description: Full transcript in order, including tool calls and tool results.
+        pending:
+          oneOf:
+            - { $ref: "#/components/schemas/PendingDecision" }
+            - { type: "null" }
+        updated_at:
+          type: [string, "null"]
+          format: date-time
+    Message:
+      type: object
+      required: [type, content]
+      properties:
+        id: { type: [string, "null"] }
+        type: { type: string, enum: [human, ai, tool, system] }
+        content:
+          oneOf:
+            - { type: string }
+            - { type: array, items: { type: object } }
+        name: { type: [string, "null"] }
+        tool_calls:
+          type: array
+          items:
+            type: object
+            required: [id, name, args]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              args: { type: object }
+        tool_call_id: { type: string }
+    PendingDecision:
+      type: object
+      required: [interrupt_id, action_requests, allowed_decisions]
+      properties:
+        interrupt_id: { type: string }
+        action_requests:
+          type: array
+          items: { $ref: "#/components/schemas/ActionRequest" }
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+    ActionRequest:
+      type: object
+      required: [name, args]
+      properties:
+        name: { type: string }
+        args: { type: object }
+        description: { type: [string, "null"] }
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [run_active, decision_pending, nothing_pending, thread_not_found]
+            message: { type: string }
+    ValidationError:
+      type: object
+      description: FastAPI's default 422 body.
+      properties:
+        detail:
+          type: array
+          items: { type: object }

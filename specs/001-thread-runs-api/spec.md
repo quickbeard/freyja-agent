@@ -115,6 +115,7 @@ A developer clones the repository, starts the local database with one command us
 - **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run.
 - **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
 - **Decision submitted for a thread that was never used**: refused the same way as a thread with no pending decision.
+- **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the analyst decides through resume first. A message is never treated as an implicit decision.
 - **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal remains visible in the thread history.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
 - **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
@@ -143,7 +144,7 @@ A developer clones the repository, starts the local database with one command us
 
 - **FR-009**: The runtime MUST include one placeholder environment-changing action, isolate host, whose only effect is writing a log line that records the host it was asked to isolate.
 - **FR-010**: The isolate-host action MUST NOT execute unless an approve or edit decision has been recorded on the thread for that specific proposal. No code path MAY bypass this, including any future delegate or background run.
-- **FR-011**: When the orchestrator proposes the isolate-host action, the run MUST pause before execution, emit the pause event described in FR-003, and leave the proposal readable through thread state.
+- **FR-011**: When the orchestrator proposes the isolate-host action, the run MUST pause before execution, emit the pause event described in FR-003, and leave the proposal readable through thread state. While a proposal is pending, a new message run on that thread MUST be refused with a conflict explanation; a proposal is resolved only by a decision.
 - **FR-012**: A decision MUST be one of: approve (execute as proposed), edit (execute with analyst-supplied replacement arguments), or reject (do not execute, with an optional reason). After edit, the action MUST receive the edited arguments. After reject, the orchestrator MUST be told the action was not taken, with the reason when given, and MUST continue the conversation.
 - **FR-013**: Resuming MUST continue the same thread from its pause and stream the continuation using the same event kinds and terminal events as a run. Resume MUST be refused when the thread has no pending decision, and a malformed decision MUST be refused while leaving the pending decision in place.
 - **FR-014**: A paused thread MUST be resumable after the service has been stopped and restarted, and after any delay, with the same outcome as an uninterrupted run.
