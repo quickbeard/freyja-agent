@@ -113,6 +113,7 @@ src/freyja_agent/
     ├── app.py                 # create_app(open_runtime=Runtime.open); lifespan; /healthz; main()
     ├── threads.py             # router: POST runs, GET state, POST resume
     ├── schemas.py             # request/response models (contracts/openapi.yaml)
+    ├── decisions.py           # resume decision validation -> Command(resume=...)
     ├── serialize.py           # LangChain messages and interrupts -> JSON shapes
     └── streaming.py           # run_stream(): astream -> SSE events, lock heartbeat, terminal events
 

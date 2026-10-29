@@ -164,6 +164,9 @@ earlier turn. Manually: quickstart.md Scenario 1.
       is `end` with `{"status": "completed"}`; empty message is 422 and starts no run; a
       follow-up on the same thread passes the earlier human message to the model; `?debug=true`
       adds `debug` events without changing the outcome and no `debug` events appear without it;
+      `start` is emitted before the scripted model's first call (call counter, SC-001); a
+      scripted model that raises on its second turn yields `error` with code `model_error`,
+      the lease is released, and a following run on the thread completes;
       a second run while one streams gets 409 `run_active` and the first completes (FR-002,
       FR-003, FR-004, FR-005, FR-006)
 - [ ] T023 [P] [US1] Write `tests/test_step_limit.py`: with `max_steps=2` and
@@ -181,7 +184,8 @@ earlier turn. Manually: quickstart.md Scenario 1.
       chunk instead of emitting it), `messages` to `message`, `debug` to `debug`; after the
       stream drains emit `interrupt` if one was recorded else `end`; catch
       `GraphRecursionError` as `error` code `step_limit` naming the limit and `FREYJA_MAX_STEPS`,
-      other exceptions as `error` code `internal` (logged with run id) or `model_error`; every
+      exceptions raised by the chat model (provider API errors, timeouts) as `error` code
+      `model_error`, every other exception as `error` code `internal` (logged with run id); every
       payload is `json.dumps`-encoded into `ServerSentEvent(data=..., event=kind)` (R4, R5, R10)
 - [ ] T025 [US1] Add the lease to `run_stream` in `src/freyja_agent/api/streaming.py`: owner is
       `f"{runtime.instance_id}:{run_id}"`; a heartbeat `asyncio.Task` calls `locks.renew` every
@@ -226,7 +230,9 @@ the `freyja_agent.actions` log and the continuation. Manually: quickstart.md Sce
       resume on a never-used thread is 404 `thread_not_found`; an unknown decision type, a wrong
       decision count, and edit args failing the tool schema are 422 and `aget_state` still shows
       the interrupt; a new message on a paused thread is 409 `decision_pending` and the proposal
-      remains (FR-010 to FR-013, SC-002, SC-003)
+      remains; two `send_notification` calls in one step pause once with two action requests,
+      approving one and rejecting the other logs exactly one line; resume with `?debug=true`
+      emits `debug` events (FR-010 to FR-013, SC-002, SC-003)
 - [ ] T030 [P] [US2] Write `tests/test_subagent.py`: a script where the parent calls `task` and
       the subagent calls `send_notification` ends with `interrupt`; with `max_steps=2` the limit
       also ends a looping subagent with `error` `step_limit` (R1, R10, principle I through the
@@ -246,8 +252,8 @@ the `freyja_agent.actions` log and the continuation. Manually: quickstart.md Sce
       `src/freyja_agent/api/threads.py`: validate the id (422); acquire the lease (409
       `run_active`); read state under the lease; 404 `thread_not_found` when `metadata is None`;
       409 `nothing_pending` when `interrupts` is empty; 422 from T031 with the lease released and
-      the pending decision untouched; otherwise stream `run_stream(..., input=command,
-      mode="resume")` (R9)
+      the pending decision untouched; read the `debug` query flag; otherwise stream
+      `run_stream(..., input=command, mode="resume", debug=debug)` (R9)
 - [ ] T033 [US2] Confirm `run_stream` in `src/freyja_agent/api/streaming.py` accepts a
       `Command` as input and reports `mode: "resume"` in `start`; the resume stream uses the
       same event kinds and terminal events as a run (FR-013)
@@ -390,6 +396,7 @@ database (SC-006).
 ### Within Phase 2
 
 - T008 and T009 before T010; T010, T011, T012 before T013.
+- T013 before T016 (`create_app` imports `Runtime` for its default `open_runtime`).
 - T016 and T017 before T018; T018 before every test that uses the fixtures.
 - T014 and T015 have no dependencies inside the phase.
 
