@@ -118,9 +118,9 @@ A developer clones the repository, starts the local database with one command us
 - **Model provider fails or times out during a run**: the stream emits an error event with a human-readable message and closes; the thread stays consistent; the next run on the thread works.
 - **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run.
 - **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
-- **Decision submitted for a thread that was never used**: refused the same way as a thread with no pending decision.
+- **Decision submitted for a thread that was never used**: refused as not found, the same response a state read on that thread gives, so a mistyped id is not mistaken for a thread with nothing pending.
 - **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the user decides through resume first. A message is never treated as an implicit decision.
-- **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal remains visible in the thread history.
+- **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal is recorded in the pause event and in the thread's state while paused; after the edit the thread history carries the edited call, because that is what executed.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
 - **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
 
@@ -200,7 +200,7 @@ A developer clones the repository, starts the local database with one command us
 
 - One active run per thread; concurrent requests are refused rather than queued. The rule is enforced in the shared database rather than in process memory, so several service instances can share one database; the marker's expiry period is a setting.
 - Reading state for a never-used thread returns not found rather than an empty state, so a mistyped id is not mistaken for a fresh thread.
-- Resume on a never-used thread is refused the same way as a thread with nothing pending.
+- Resume on a never-used thread returns not found, matching state reads, rather than the refusal used for a thread with nothing pending.
 - A client disconnect stops the run at the next step boundary; completed steps are saved.
 - The debug flag only adds detail; it never alters behavior.
 - Each pending action receives its own decision when a step proposes more than one.

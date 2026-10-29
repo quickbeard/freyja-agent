@@ -76,7 +76,8 @@ The run paused before executing a gated action. Same shape as `ThreadState.pendi
 {"code": "step_limit", "message": "Run stopped after reaching the step limit of 50 (FREYJA_MAX_STEPS)."}
 ```
 
-`code` is one of `step_limit`, `model_error`, `internal`. `message` is human-readable and never
+`code` is one of `step_limit`, `model_error` (an exception raised by the chat model: provider
+API errors and timeouts), `internal` (anything else). `message` is human-readable and never
 contains secrets.
 
 ### `end` (terminal)
