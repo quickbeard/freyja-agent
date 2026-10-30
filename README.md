@@ -7,7 +7,7 @@ General-purpose agent orchestrator built on [Deep Agents](https://docs.langchain
 ```bash
 uv sync                     # creates .venv and installs runtime + dev dependencies
 cp .env.example .env        # fill in values as needed; .env is git-ignored
-uv run pre-commit install   # one-time per clone: runs Ruff on every commit
+uv run pre-commit install   # one-time per clone: runs Ruff and the unit tests on every commit
 ```
 
 ## Run the dev server
@@ -44,7 +44,7 @@ uv run ruff format .           # format in place
 uv run ruff format --check .   # report unformatted files without changing them (CI mode)
 ```
 
-The pre-commit hook runs `ruff check --fix` and `ruff format` on staged files. If the hook changes a file, the commit is blocked: re-stage the file and commit again. To run the hook over the whole repo:
+`uv sync` installs the pre-commit tool; `uv run pre-commit install` wires it into `.git/hooks`, which is not part of the repository, so every clone does it once. The hook runs `ruff check --fix` and `ruff format` on staged files, then the unit test suite. If Ruff changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes. To run the hook over the whole repo:
 
 ```bash
 uv run pre-commit run --all-files
