@@ -3,6 +3,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI
 
+from freyja_agent.api.threads import router as threads_router
 from freyja_agent.config import Settings, settings
 from freyja_agent.runtime.runtime import Runtime
 
@@ -25,6 +26,8 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
             yield
 
     app = FastAPI(title="Freyja Orchestrator", lifespan=lifespan)
+
+    app.include_router(threads_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

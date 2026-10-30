@@ -28,8 +28,10 @@ Spec vocabulary mapping: progress event = `update`, message event = `message`, p
 
 ### `update`
 
-One per orchestrator step. `node` is the graph node that ran; `data` is that node's state
-update with messages serialized as [Message](../data-model.md#message-api-shape).
+One per orchestrator step that changed state. `node` is the graph node that ran (`model`,
+`tools`, or a middleware node); `data` is that node's state update with messages serialized
+as [Message](../data-model.md#message-api-shape). Steps that produce no state update are
+not emitted.
 
 ```json
 {"node": "model", "data": {"messages": [{"type": "ai", "content": "", "tool_calls": [{"id": "call_1", "name": "send_notification", "args": {"channel": "#ops", "message": "Nightly report is ready."}}]}]}}
@@ -45,10 +47,13 @@ events; the `task` call and its result are. The subagent's model output does app
 
 ### `message`
 
-A token-level chunk of the orchestrator's reply as it is produced.
+A chunk of the orchestrator's reply as it is produced: token-level for providers that
+stream, one whole message per model call otherwise. The message uses the same
+[Message](../data-model.md#message-api-shape) shape as state and `update` events, so a
+chunk reports `type: "ai"`, not the chunk class name.
 
 ```json
-{"message": {"type": "AIMessageChunk", "content": "Looking at", "id": "run-..."}, "metadata": {"langgraph_node": "model", "langgraph_step": 1}}
+{"message": {"id": "run-...", "type": "ai", "content": "Looking at", "name": null, "tool_calls": []}, "metadata": {"langgraph_node": "model", "langgraph_step": 1}}
 ```
 
 ### `debug`
