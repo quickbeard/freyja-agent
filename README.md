@@ -44,7 +44,7 @@ uv run ruff format .           # format in place
 uv run ruff format --check .   # report unformatted files without changing them (CI mode)
 ```
 
-`uv sync` installs the pre-commit tool; `uv run pre-commit install` wires it into `.git/hooks`, which is not part of the repository, so every clone does it once. The hook runs `ruff check --fix` and `ruff format` on staged files, then the unit test suite. If Ruff changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes. To run the hook over the whole repo:
+The pre-commit hook runs `ruff check --fix` and `ruff format` on staged files, then the unit test suite. If Ruff changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes. To run the hook over the whole repo:
 
 ```bash
 uv run pre-commit run --all-files
