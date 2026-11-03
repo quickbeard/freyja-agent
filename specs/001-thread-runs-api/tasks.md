@@ -156,10 +156,10 @@ earlier turn. Manually: quickstart.md Scenario 1.
 
 ### Tests for User Story 1
 
-- [ ] T021 [P] [US1] Write `tests/test_thread_ids.py` with parametrized invalid ids (empty,
+- [X] T021 [P] [US1] Write `tests/test_thread_ids.py` with parametrized invalid ids (empty,
       129 chars, space, slash, unicode) asserting 422 on `POST /threads/{id}/runs` before any
       work starts (FR-001a); leave a parametrized route list so US2 and US3 add their routes
-- [ ] T022 [P] [US1] Write `tests/test_runs.py`: first event is `start` with `thread_id`,
+- [X] T022 [P] [US1] Write `tests/test_runs.py`: first event is `start` with `thread_id`,
       `run_id`, `mode: "run"`, `debug: false`; `update` and `message` events follow; last event
       is `end` with `{"status": "completed"}`; empty message is 422 and starts no run; a
       follow-up on the same thread passes the earlier human message to the model; `?debug=true`
@@ -169,14 +169,14 @@ earlier turn. Manually: quickstart.md Scenario 1.
       the lease is released, and a following run on the thread completes;
       a second run while one streams gets 409 `run_active` and the first completes (FR-002,
       FR-003, FR-004, FR-005, FR-006)
-- [ ] T023 [P] [US1] Write `tests/test_step_limit.py`: with `max_steps=2` and
+- [X] T023 [P] [US1] Write `tests/test_step_limit.py`: with `max_steps=2` and
       `LoopingChatModel`, the stream ends with `error` whose `code` is `step_limit` and whose
       message names `2` and `FREYJA_MAX_STEPS`; a following run on the same thread works
       (FR-004a)
 
 ### Implementation for User Story 1
 
-- [ ] T024 [US1] Implement `run_stream(runtime, thread_id, *, input, mode, debug, run_id)` in
+- [X] T024 [US1] Implement `run_stream(runtime, thread_id, *, input, mode, debug, run_id)` in
       `src/freyja_agent/api/streaming.py`: yield `start`; call `agent.astream(input,
       config={"configurable": {"thread_id": thread_id}, "recursion_limit":
       runtime.settings.max_steps}, stream_mode=["updates", "messages"] + (["debug"] if debug
@@ -187,19 +187,19 @@ earlier turn. Manually: quickstart.md Scenario 1.
       exceptions raised by the chat model (provider API errors, timeouts) as `error` code
       `model_error`, every other exception as `error` code `internal` (logged with run id); every
       payload is `json.dumps`-encoded into `ServerSentEvent(data=..., event=kind)` (R4, R5, R10)
-- [ ] T025 [US1] Add the lease to `run_stream` in `src/freyja_agent/api/streaming.py`: owner is
+- [X] T025 [US1] Add the lease to `run_stream` in `src/freyja_agent/api/streaming.py`: owner is
       `f"{runtime.instance_id}:{run_id}"`; a heartbeat `asyncio.Task` calls `locks.renew` every
       `run_lock_ttl_seconds / 3`; a `try/finally` cancels the heartbeat and calls
       `locks.release` inside `anyio.CancelScope(shield=True)` so disconnect, error, interrupt,
       and completion all release it (R7, R12)
-- [ ] T026 [US1] Implement `POST /threads/{thread_id}/runs` in `src/freyja_agent/api/threads.py`:
+- [X] T026 [US1] Implement `POST /threads/{thread_id}/runs` in `src/freyja_agent/api/threads.py`:
       validate the path id against `THREAD_ID_PATTERN` (422) and the body as `RunRequest`;
       acquire the lease first (409 `run_active` on failure); read `aget_state` under the lease
       and refuse with 409 `decision_pending` if `snapshot.interrupts` is non-empty, releasing the
       lease; otherwise return `EventSourceResponse(run_stream(...))` with the human message as
       input (R9)
-- [ ] T027 [US1] Register the threads router in `create_app` in `src/freyja_agent/api/app.py`
-- [ ] T028 [US1] Extend `tests/test_locks.py` with API-level cases: the lease is released after
+- [X] T027 [US1] Register the threads router in `create_app` in `src/freyja_agent/api/app.py`
+- [X] T028 [US1] Extend `tests/test_locks.py` with API-level cases: the lease is released after
       `end`, after `error`, and when the client closes the stream early (FR-006, R12)
 
 **Checkpoint**: User Story 1 is fully functional; `test_runs`, `test_step_limit`, and the runs
