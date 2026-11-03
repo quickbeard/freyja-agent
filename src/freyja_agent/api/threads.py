@@ -1,13 +1,16 @@
 """Thread endpoints: start a run, read state, resume a paused thread (contracts/openapi.yaml)."""
 
 import uuid
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, Query, Request
 from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
-from freyja_agent.api.schemas import THREAD_ID_PATTERN, RunRequest
+from freyja_agent.agent.tools import GATED_TOOLS
+from freyja_agent.api.decisions import build_resume_command
+from freyja_agent.api.schemas import THREAD_ID_PATTERN, ResumeRequest, RunRequest
+from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.api.streaming import lease_owner, run_stream
 from freyja_agent.runtime.runtime import Runtime
 
@@ -21,8 +24,12 @@ def _runtime(request: Request) -> Runtime:
     return request.app.state.runtime
 
 
-def _conflict(code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=409, detail={"code": code, "message": message})
+def _error(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+async def _state(runtime: Runtime, thread_id: str) -> Any:
+    return await runtime.agent.aget_state({"configurable": {"thread_id": thread_id}})
 
 
 @router.post("/{thread_id}/runs")
@@ -42,11 +49,12 @@ async def start_run(
     run_id = uuid.uuid4().hex
     owner = lease_owner(runtime, run_id)
     if not await runtime.locks.acquire(thread_id, owner):
-        raise _conflict("run_active", "A run is already active on this thread.")
+        raise _error(409, "run_active", "A run is already active on this thread.")
     try:
-        snapshot = await runtime.agent.aget_state({"configurable": {"thread_id": thread_id}})
+        snapshot = await _state(runtime, thread_id)
         if snapshot.interrupts:
-            raise _conflict(
+            raise _error(
+                409,
                 "decision_pending",
                 "This thread is paused on a proposal; decide it through resume first.",
             )
@@ -62,4 +70,41 @@ async def start_run(
             debug=debug,
             run_id=run_id,
         )
+    )
+
+
+@router.post("/{thread_id}/resume")
+async def resume_run(
+    thread_id: ThreadIdPath,
+    body: ResumeRequest,
+    request: Request,
+    debug: DebugQuery = False,
+) -> EventSourceResponse:
+    """Submit one decision per pending action request and stream the continuation.
+
+    Same lease-first order as ``start_run``. Decisions are validated against the pending
+    proposal before anything resumes; a failure leaves the proposal untouched (FR-013).
+    """
+    runtime = _runtime(request)
+    run_id = uuid.uuid4().hex
+    owner = lease_owner(runtime, run_id)
+    if not await runtime.locks.acquire(thread_id, owner):
+        raise _error(409, "run_active", "A run is already active on this thread.")
+    try:
+        snapshot = await _state(runtime, thread_id)
+        if snapshot.metadata is None:
+            raise _error(404, "thread_not_found", "This thread has never been used.")
+        if not snapshot.interrupts:
+            raise _error(409, "nothing_pending", "This thread has no pending decision.")
+        if len(snapshot.interrupts) > 1:
+            raise _error(
+                500, "internal", "The thread is paused on more than one interrupt at once."
+            )
+        pending = interrupt_to_pending(snapshot.interrupts[0])
+        command = build_resume_command(pending, body.decisions, GATED_TOOLS)
+    except BaseException:
+        await runtime.locks.release(thread_id, owner)
+        raise
+    return EventSourceResponse(
+        run_stream(runtime, thread_id, input=command, mode="resume", debug=debug, run_id=run_id)
     )

@@ -61,7 +61,11 @@ def make_runtime(workspace: Path, clock: FakeClock) -> Callable[..., Runtime]:
         store = store or InMemoryStore()
         locks = locks or InMemoryRunLocks(settings.run_lock_ttl_seconds, clock=clock.now)
         agent = build_agent(
-            model, checkpointer=saver, store=store, workspace_dir=settings.workspace_dir
+            model,
+            checkpointer=saver,
+            store=store,
+            workspace_dir=settings.workspace_dir,
+            max_steps=settings.max_steps,
         )
         return Runtime(agent=agent, locks=locks, instance_id=instance_id, settings=settings)
 

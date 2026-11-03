@@ -158,3 +158,16 @@ CLI calls `build_agent` and `Runtime.open` like the API does.
 > **Fill ONLY if Constitution Check has violations that must be justified**
 
 None. The Constitution Check passed without deviations before research and after design.
+
+## Implementation Notes
+
+- **Bounded subagent (Phase 4)**: the factory builds the general-purpose subagent itself and
+  binds `recursion_limit=max_steps` on it, because the per-call limit does not reach a compiled
+  subagent (research R10 correction). `build_agent` takes `max_steps`; the middleware list
+  mirrors `deepagents.graph` under the `deepagents<0.8` pin. This replaces R1's "no custom
+  middleware" for the subagent only; the main agent stack is still the Deep Agents default.
+- **Model resolution (Phase 4)**: the factory resolves the provider string through
+  `init_chat_model` plus Deep Agents' provider profile before building, because the subagent's
+  summarization middleware needs a model instance. The identifier still appears only in
+  settings (FR-016).
+- **`api/decisions.py`** holds resume validation, as the tasks list anticipated.

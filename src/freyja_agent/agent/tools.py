@@ -23,6 +23,9 @@ def send_notification(channel: str, message: str) -> str:
     return f"Notification to {channel} recorded (placeholder: logged only)."
 
 
+# Gated tools by name; the resume route validates edited arguments against their schemas.
+GATED_TOOLS = {send_notification.name: send_notification}
+
 # Human-in-the-loop configuration for the gated tool. Edits are validated by the API layer
 # against the tool's own argument schema before the run resumes (FR-012, FR-013).
 SEND_NOTIFICATION_INTERRUPT = {
