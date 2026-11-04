@@ -346,18 +346,43 @@ database (SC-006).
 
 ### Implementation for User Story 5
 
-- [ ] T043 [US5] Update `README.md`: start the local database with `docker compose up -d
+- [X] T043 [US5] Update `README.md`: start the local database with `docker compose up -d
       postgres`; copy `.env.example` unchanged for the database line; the three endpoints with
       one `curl` each and the SSE event kinds; the three new rows in the configuration table;
       `uv run pytest` needs no database and the integration suite needs
       `FREYJA_TEST_DATABASE_URI` (FR-020, documents only what now exists)
-- [ ] T044 [US5] Verify in `src/freyja_agent/runtime/persistence.py` that a connection failure
+- [X] T044 [US5] Verify in `src/freyja_agent/runtime/persistence.py` that a connection failure
       at startup surfaces as a startup error whose message names the database connection, and
       that `uvicorn` exits rather than serving (FR-008; covered by T041, verified manually with
       the compose database stopped)
-- [ ] T045 [US5] Run every scenario in `specs/001-thread-runs-api/quickstart.md` against the
+- [X] T045 [US5] Run every scenario in `specs/001-thread-runs-api/quickstart.md` against the
       compose database with a real provider key and record any mismatch as a fix task before
       closing the story (SC-001, SC-006)
+
+### Fix tasks from the quickstart pass (T045, 2026-11-04)
+
+Every scenario in quickstart.md was run against the compose database with a real provider
+(OpenRouter). All behaviors matched the spec; the three mismatches below are recorded as the
+story requires and are not yet implemented.
+
+- [ ] T050 [P] Configure application logging at startup in `src/freyja_agent/api/app.py`
+      (`main()` or the lifespan) so `freyja_agent.*` INFO records reach uvicorn's output: the
+      quickstart expects the "Persistence ready: checkpointer, store, and run-lock table" line
+      and it never appears, because uvicorn leaves application loggers at WARNING (FR-008,
+      quickstart Setup)
+- [ ] T051 [P] Give the orchestrator its thread id: during the quickstart conflict scenario the
+      `case-notes` skill wrote `workspace/cases/unknown-thread/notes.md`, because nothing in
+      the prompt or context carries `configurable.thread_id`. Inject it (for example a line in
+      the system prompt built per run, or a context value the skill can read) in
+      `src/freyja_agent/agent/` and assert it in a run test; adjust the skill wording in
+      `workspace/skills/case-notes/SKILL.md` if needed (FR-017, R14)
+- [ ] T052 [P] Correct the step-limit scenario: with `FREYJA_MAX_STEPS=2` no run completes, not
+      even a plain reply, because middleware nodes (`SkillsMiddleware.before_agent`, the
+      human-in-the-loop `after_model` hook) count as steps alongside the model and tool nodes,
+      so "the next run on the thread works" in `specs/001-thread-runs-api/quickstart.md` is only
+      true after restarting with the default limit. Reword the scenario, and document the
+      practical minimum in `.env.example` and the README `FREYJA_MAX_STEPS` row (or count model
+      steps only, if R10 is revised) (FR-004a, R10)
 
 **Checkpoint**: a clean clone reaches a completed run in under 15 minutes following the README.
 
