@@ -487,3 +487,25 @@ Task: "Register the router in src/freyja_agent/api/app.py (T027)"
   reference for completeness.
 - Commit after each phase at least; commits stay manual and use the `type: summary` form.
 - No new Ruff suppressions; blocking I/O in async code is a defect (principle V).
+
+## Phase 9: Convergence
+
+Appended by `/speckit-converge` on 2026-11-04 after all eight phases were implemented. The
+three fix tasks T050 to T052 from the Phase 7 quickstart pass are still open and are not
+repeated here; this phase holds only the gaps found in the code itself.
+
+- [ ] T053 Verify and test that a clean service stop during an active stream releases the run
+      lease: add a test in `tests/test_locks.py` (or `tests/test_restart.py`) that closes the
+      app's lifespan while a run streams and asserts the lease is gone, and document in
+      `README.md` that a clean stop waits for in-flight runs because uvicorn's graceful
+      shutdown has no timeout by default, per spec edge case "service stops while a run is in
+      flight" and FR-006 (partial)
+- [ ] T054 Validate each resume decision against its own action's allowed decisions: keep the
+      per-action `review_configs` in `src/freyja_agent/api/serialize.py` (or pass them to
+      `build_resume_command` in `src/freyja_agent/api/decisions.py`) instead of the union
+      across configs, and add a `tests/test_gate.py` case with two action requests whose
+      allowed sets differ, per FR-012 and FR-013 (partial)
+- [ ] T055 Document the `internal` error: add `internal` to the `ErrorResponse` code enum and a
+      `500` response on resume and state in `specs/001-thread-runs-api/contracts/openapi.yaml`,
+      and to `ErrorDetail.code` in `src/freyja_agent/api/schemas.py`, per FR-003 and the
+      contract (partial)
