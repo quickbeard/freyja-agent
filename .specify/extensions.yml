@@ -84,6 +84,15 @@ hooks:
     prompt: Commit outstanding changes before issue sync?
     description: Auto-commit before tasks-to-issues conversion
     condition: null
+  before_converge:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit outstanding changes before convergence?
+    description: Auto-commit before convergence assessment
+    condition: null
   after_constitution:
   - extension: git
     command: speckit.git.commit
@@ -164,4 +173,13 @@ hooks:
     priority: 10
     prompt: Commit after syncing issues?
     description: Auto-commit after tasks-to-issues conversion
+    condition: null
+  after_converge:
+  - extension: git
+    command: speckit.git.commit
+    enabled: true
+    optional: true
+    priority: 10
+    prompt: Commit convergence tasks?
+    description: Auto-commit after convergence assessment
     condition: null
