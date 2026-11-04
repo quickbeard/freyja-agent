@@ -8,6 +8,8 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.types import Interrupt
 from pydantic import BaseModel
 
+_DECISION_ORDER = ("approve", "edit", "reject")
+
 # Message chunks report their own type names; the API exposes the base message type.
 _CHUNK_TYPES = {
     "AIMessageChunk": "ai",
@@ -43,19 +45,24 @@ def update_to_dict(update: Any) -> Any:
 def interrupt_to_pending(interrupt: Interrupt) -> dict[str, Any]:
     """Map a human-in-the-loop interrupt to the ``PendingDecision`` API shape."""
     value = interrupt.value if isinstance(interrupt.value, dict) else {}
+    # One review config per gated tool; each action request carries its own allowed set so a
+    # decision is validated against the action it answers, not against the union (FR-012).
+    per_action: dict[str, list[str]] = {
+        config.get("action_name"): list(config.get("allowed_decisions", []))
+        for config in value.get("review_configs", [])
+    }
     action_requests = [
         {
             "name": request.get("name"),
             "args": to_jsonable(request.get("args", {})),
             "description": request.get("description"),
+            "allowed_decisions": per_action.get(request.get("name"), []),
         }
         for request in value.get("action_requests", [])
     ]
-    allowed: list[str] = []
-    for config in value.get("review_configs", []):
-        for decision in config.get("allowed_decisions", []):
-            if decision not in allowed:
-                allowed.append(decision)
+    # The union, in the contract's canonical order; anything unknown keeps its own order last.
+    union = {decision for decisions in per_action.values() for decision in decisions}
+    allowed = [d for d in _DECISION_ORDER if d in union] + sorted(union - set(_DECISION_ORDER))
     return {
         "interrupt_id": interrupt.id,
         "action_requests": action_requests,

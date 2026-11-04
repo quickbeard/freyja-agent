@@ -46,6 +46,13 @@ def test_system_prompt_is_default_prompt_with_skills_listed(workspace: Path) -> 
     assert "case-notes" in text
 
 
+def test_model_is_told_which_thread_it_works_on(workspace: Path) -> None:
+    model = _run_once(workspace)
+    text = model.seen[0][0].text
+    assert "thread `t-1`" in text
+    assert "cases/t-1/" in text
+
+
 def test_workspace_is_created_and_used_as_root(tmp_path: Path) -> None:
     root = tmp_path / "fresh"
     assert not root.exists()
@@ -96,5 +103,6 @@ def test_model_string_is_passed_through_unchanged(
     ]
     assert Path(captured["backend"].cwd) == workspace.resolve()
     assert [tool.name for tool in captured["tools"]] == ["send_notification"]
+    assert [type(m).__name__ for m in captured["middleware"]] == ["ThreadContextMiddleware"]
     assert captured["subagents"][0]["name"] == "general-purpose"
     assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7

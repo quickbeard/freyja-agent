@@ -5,10 +5,15 @@ from collections.abc import Callable
 from typing import Any
 
 import pytest
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
+from langgraph.types import Interrupt
 
+from freyja_agent.agent.tools import GATED_TOOLS
+from freyja_agent.api.decisions import build_resume_command
+from freyja_agent.api.schemas import ApproveDecision, EditDecision
+from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.runtime.runtime import Runtime
 from tests.fakes import ScriptedChatModel
 
@@ -85,6 +90,7 @@ def test_proposal_pauses_the_run_before_executing(
             "name": "send_notification",
             "args": PROPOSED,
             "description": "Send a notification to a channel (placeholder: logs only).",
+            "allowed_decisions": ["approve", "edit", "reject"],
         }
     ]
     assert data["allowed_decisions"] == ["approve", "edit", "reject"]
@@ -260,3 +266,60 @@ def test_debug_flag_on_resume_adds_debug_events(
     assert events[0][1]["debug"] is True
     assert "debug" in [kind for kind, _ in events]
     assert events[-1] == ("end", {"status": "completed"})
+
+
+# Per-action allowed decisions (FR-012, FR-013). Only one gated tool exists today, so the
+# shapes below are built by hand to stand in for a second tool with a narrower allowed set.
+
+
+def two_actions_pending() -> dict:
+    interrupt = Interrupt(
+        value={
+            "action_requests": [
+                {"name": "send_notification", "args": PROPOSED, "description": "notify"},
+                {"name": "send_notification", "args": PROPOSED, "description": "notify"},
+            ],
+            "review_configs": [
+                {"action_name": "send_notification", "allowed_decisions": ["approve", "reject"]},
+            ],
+        },
+        id="int-1",
+    )
+    pending = interrupt_to_pending(interrupt)
+    pending["action_requests"][1]["allowed_decisions"] = ["approve", "edit", "reject"]
+    pending["allowed_decisions"] = ["approve", "edit", "reject"]
+    return pending
+
+
+def test_interrupt_to_pending_keeps_each_actions_allowed_decisions() -> None:
+    interrupt = Interrupt(
+        value={
+            "action_requests": [{"name": "a", "args": {}}, {"name": "b", "args": {}}],
+            "review_configs": [
+                {"action_name": "a", "allowed_decisions": ["approve", "reject"]},
+                {"action_name": "b", "allowed_decisions": ["approve", "edit", "reject"]},
+            ],
+        },
+        id="int-2",
+    )
+    pending = interrupt_to_pending(interrupt)
+    assert [r["allowed_decisions"] for r in pending["action_requests"]] == [
+        ["approve", "reject"],
+        ["approve", "edit", "reject"],
+    ]
+    assert pending["allowed_decisions"] == ["approve", "edit", "reject"]
+
+
+def test_a_decision_is_checked_against_its_own_action_not_the_union() -> None:
+    pending = two_actions_pending()
+    edited = EditDecision(type="edit", args={"channel": "#x", "message": "y"})
+    with pytest.raises(HTTPException) as refused:
+        build_resume_command(pending, [edited, ApproveDecision(type="approve")], GATED_TOOLS)
+    assert refused.value.status_code == 422
+    assert refused.value.detail[0]["loc"] == ["body", "decisions", 0, "type"]
+    assert "not allowed for action 'send_notification'" in refused.value.detail[0]["msg"]
+
+    command = build_resume_command(pending, [ApproveDecision(type="approve"), edited], GATED_TOOLS)
+    decisions = command.resume["int-1"]["decisions"]
+    assert [d["type"] for d in decisions] == ["approve", "edit"]
+    assert decisions[1]["edited_action"]["args"] == {"channel": "#x", "message": "y"}

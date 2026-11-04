@@ -52,13 +52,18 @@ def build_resume_command(
 
     payload: list[dict[str, Any]] = []
     for index, (decision, request) in enumerate(zip(decisions, requests, strict=True)):
-        if decision.type not in allowed:
+        # Each action has its own allowed set; the pending-level list is their union.
+        allowed_here = list(request.get("allowed_decisions") or allowed)
+        if decision.type not in allowed_here:
             raise _invalid(
                 [
                     {
                         "type": "value_error",
                         "loc": ["body", "decisions", index, "type"],
-                        "msg": f"Decision '{decision.type}' is not allowed; expected one of {allowed}.",
+                        "msg": (
+                            f"Decision '{decision.type}' is not allowed for action "
+                            f"'{request['name']}'; expected one of {allowed_here}."
+                        ),
                     }
                 ]
             )

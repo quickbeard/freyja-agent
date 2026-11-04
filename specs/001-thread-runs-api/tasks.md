@@ -365,18 +365,18 @@ Every scenario in quickstart.md was run against the compose database with a real
 (OpenRouter). All behaviors matched the spec; the three mismatches below are recorded as the
 story requires and are not yet implemented.
 
-- [ ] T050 [P] Configure application logging at startup in `src/freyja_agent/api/app.py`
+- [X] T050 [P] Configure application logging at startup in `src/freyja_agent/api/app.py`
       (`main()` or the lifespan) so `freyja_agent.*` INFO records reach uvicorn's output: the
       quickstart expects the "Persistence ready: checkpointer, store, and run-lock table" line
       and it never appears, because uvicorn leaves application loggers at WARNING (FR-008,
       quickstart Setup)
-- [ ] T051 [P] Give the orchestrator its thread id: during the quickstart conflict scenario the
+- [X] T051 [P] Give the orchestrator its thread id: during the quickstart conflict scenario the
       `case-notes` skill wrote `workspace/cases/unknown-thread/notes.md`, because nothing in
       the prompt or context carries `configurable.thread_id`. Inject it (for example a line in
       the system prompt built per run, or a context value the skill can read) in
       `src/freyja_agent/agent/` and assert it in a run test; adjust the skill wording in
       `workspace/skills/case-notes/SKILL.md` if needed (FR-017, R14)
-- [ ] T052 [P] Correct the step-limit scenario: with `FREYJA_MAX_STEPS=2` no run completes, not
+- [X] T052 [P] Correct the step-limit scenario: with `FREYJA_MAX_STEPS=2` no run completes, not
       even a plain reply, because middleware nodes (`SkillsMiddleware.before_agent`, the
       human-in-the-loop `after_model` hook) count as steps alongside the model and tool nodes,
       so "the next run on the thread works" in `specs/001-thread-runs-api/quickstart.md` is only
@@ -494,18 +494,18 @@ Appended by `/speckit-converge` on 2026-11-04 after all eight phases were implem
 three fix tasks T050 to T052 from the Phase 7 quickstart pass are still open and are not
 repeated here; this phase holds only the gaps found in the code itself.
 
-- [ ] T053 Verify and test that a clean service stop during an active stream releases the run
+- [X] T053 Verify and test that a clean service stop during an active stream releases the run
       lease: add a test in `tests/test_locks.py` (or `tests/test_restart.py`) that closes the
       app's lifespan while a run streams and asserts the lease is gone, and document in
       `README.md` that a clean stop waits for in-flight runs because uvicorn's graceful
       shutdown has no timeout by default, per spec edge case "service stops while a run is in
       flight" and FR-006 (partial)
-- [ ] T054 Validate each resume decision against its own action's allowed decisions: keep the
+- [X] T054 Validate each resume decision against its own action's allowed decisions: keep the
       per-action `review_configs` in `src/freyja_agent/api/serialize.py` (or pass them to
       `build_resume_command` in `src/freyja_agent/api/decisions.py`) instead of the union
       across configs, and add a `tests/test_gate.py` case with two action requests whose
       allowed sets differ, per FR-012 and FR-013 (partial)
-- [ ] T055 Document the `internal` error: add `internal` to the `ErrorResponse` code enum and a
+- [X] T055 Document the `internal` error: add `internal` to the `ErrorResponse` code enum and a
       `500` response on resume and state in `specs/001-thread-runs-api/contracts/openapi.yaml`,
       and to `ErrorDetail.code` in `src/freyja_agent/api/schemas.py`, per FR-003 and the
       contract (partial)

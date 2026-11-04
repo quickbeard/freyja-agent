@@ -113,9 +113,9 @@ The proposal waiting on a user. Appears in the `interrupt` event and in `ThreadS
 |---|---|---|
 | `interrupt_id` | string | LangGraph's interrupt id; opaque to clients. |
 | `action_requests` | list of ActionRequest | One per gated tool call in the step; order is significant. |
-| `allowed_decisions` | list of `approve`, `edit`, `reject` | From the tool's interrupt config. |
+| `allowed_decisions` | list of `approve`, `edit`, `reject` | Union of every action request's allowed decisions. |
 
-ActionRequest: `{ "name": string, "args": object, "description": string or null }`.
+ActionRequest: `{ "name": string, "args": object, "description": string or null, "allowed_decisions": list }`, where `allowed_decisions` comes from that tool's interrupt config and is what a decision for this action is validated against.
 
 ### Decision (API shape)
 
@@ -127,9 +127,9 @@ One per action request, in the same order, submitted to resume.
 | `edit` | `args`: object, validated against the tool's argument schema | Tool runs with `args`. The tool name cannot be changed. |
 | `reject` | `message`: string, optional | Tool does not run; the orchestrator receives the message (or a default) as the tool result and continues. |
 
-Validation (FR-013): `decisions` length must equal `action_requests` length; `type` must be in
-`allowed_decisions`; `edit.args` must validate against the tool's schema. Any failure is HTTP 422
-and leaves the pending decision untouched.
+Validation (FR-013): `decisions` length must equal `action_requests` length; each `type` must
+be in its own action request's `allowed_decisions`; `edit.args` must validate against the tool's
+schema. Any failure is HTTP 422 and leaves the pending decision untouched.
 
 ### Skill
 

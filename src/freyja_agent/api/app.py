@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
@@ -8,6 +9,17 @@ from freyja_agent.config import Settings, settings
 from freyja_agent.runtime.runtime import Runtime
 
 OpenRuntime = Callable[[Settings], AbstractAsyncContextManager[Runtime]]
+
+
+def configure_logging() -> None:
+    """Make this package's INFO records visible; uvicorn configures only its own loggers.
+
+    The root logger gets a handler at WARNING if nothing configured one yet (``basicConfig``
+    is a no-op otherwise), so third-party INFO noise stays out, and ``freyja_agent`` is raised
+    to INFO so startup lines such as "Persistence ready" reach the service log (FR-008).
+    """
+    logging.basicConfig(level=logging.WARNING, format="%(levelname)s:     %(name)s: %(message)s")
+    logging.getLogger("freyja_agent").setLevel(logging.INFO)
 
 
 def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
@@ -21,6 +33,7 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        configure_logging()
         async with open_runtime(settings) as runtime:
             app.state.runtime = runtime
             yield

@@ -144,10 +144,13 @@ until `FREYJA_RUN_LOCK_TTL_SECONDS` (default 60) has passed, then accepted.
 
 ## Step limit (FR-004a)
 
-Run the service with `FREYJA_MAX_STEPS=2` and send any message that needs a tool call.
+Run the service with `FREYJA_MAX_STEPS=8` and send any message that needs a tool call. Middleware
+nodes count as steps alongside the model and tool nodes: a plain reply fits in 7 steps and the
+first tool call needs 11, so 8 lets a reply through and stops the first tool call.
 
-Expected: the stream ends with `event: error`, code `step_limit`, message naming the limit of 2.
-The next run on the thread works.
+Expected: the stream ends with `event: error`, code `step_limit`, message naming the limit of 8.
+Restart the service with the default limit; the next run on the thread works and also answers
+the message the limited run left unanswered, because completed steps are saved.
 
 ## Automated checks
 
