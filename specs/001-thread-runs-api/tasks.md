@@ -275,7 +275,7 @@ event's data. Manually: quickstart.md Scenario 3.
 
 ### Tests for User Story 3
 
-- [ ] T035 [P] [US3] Write `tests/test_state.py`: after a completed turn with a tool call the
+- [X] T035 [P] [US3] Write `tests/test_state.py`: after a completed turn with a tool call the
       transcript contains `human`, `ai` with `tool_calls`, `tool` with `tool_call_id`, and the
       final `ai` message in order, `pending` is null, `run_active` is false; on a paused thread
       `pending` matches the `interrupt` event payload; a never-used thread is 404
@@ -284,13 +284,13 @@ event's data. Manually: quickstart.md Scenario 3.
 
 ### Implementation for User Story 3
 
-- [ ] T036 [US3] Implement `GET /threads/{thread_id}/state` in `src/freyja_agent/api/threads.py`:
+- [X] T036 [US3] Implement `GET /threads/{thread_id}/state` in `src/freyja_agent/api/threads.py`:
       validate the id (422); `snapshot = await agent.aget_state(...)`; 404 when
       `snapshot.metadata is None`; build `ThreadState` with `messages` from
       `snapshot.values["messages"]` through `serialize.message_to_dict`, `pending` from
       `snapshot.interrupts` through `interrupt_to_pending`, `run_active` from
       `locks.is_active`, `updated_at` from `snapshot.created_at` (R8)
-- [ ] T037 [US3] Add the state route to the parametrized route list in
+- [X] T037 [US3] Add the state route to the parametrized route list in
       `tests/test_thread_ids.py` (FR-001a)
 
 **Checkpoint**: all three endpoints work; `test_state` passes.
