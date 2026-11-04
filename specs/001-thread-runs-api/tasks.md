@@ -390,17 +390,17 @@ story requires and are not yet implemented.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T046 [P] Update `AGENTS.md` Layout and Commands for the new packages (`agent/`,
+- [X] T046 [P] Update `AGENTS.md` Layout and Commands for the new packages (`agent/`,
       `runtime/`, `api/threads.py`, `api/streaming.py`), `workspace/`, `docker-compose.yml`,
       and the integration test variable
-- [ ] T047 [P] Review every `error` event message and log line in
+- [X] T047 [P] Review every `error` event message and log line in
       `src/freyja_agent/api/streaming.py` and `src/freyja_agent/runtime/persistence.py` for
       leaked secrets (connection strings, provider keys); error messages stay human-readable
       and generic for `internal`
-- [ ] T048 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`, and
+- [X] T048 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`, and
       `uv run pre-commit run --all-files`; confirm no new Ruff suppressions were added (SC-007,
       principle V)
-- [ ] T049 Re-run the plan's Constitution Check against the implemented code and note the
+- [X] T049 Re-run the plan's Constitution Check against the implemented code and note the
       result in the pull request description (principles I, III, IV, V)
 
 ---

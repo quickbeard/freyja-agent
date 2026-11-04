@@ -19,18 +19,40 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
-- `uv run pytest` runs the suite. Tests use FastAPI's test client; no server or database needed.
+- `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
+  client with in-memory persistence and a scripted model; no server, database, or model
+  provider is needed.
+- `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
+  tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
+  Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo.
+- `docker compose up -d postgres` starts the local Postgres the service and the integration
+  tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 
 `.env` is git-ignored; copy it from `.env.example`. Settings do not read `.env` themselves, so
-pass `--env-file .env` to `uv run` whenever a command needs it.
+pass `--env-file .env` to `uv run` whenever a command needs it. The service needs Postgres at
+startup and exits with an error naming the connection when it is unreachable.
 
 ## Layout
 
 - `src/freyja_agent/config.py`: the `Settings` class (pydantic-settings, `FREYJA_*` prefix) and
   the shared `settings` instance.
-- `src/freyja_agent/api/app.py`: the FastAPI app, `/healthz`, and the `freyja-api` entry point.
-- `tests/`: pytest suite. `conftest.py` supplies the required environment, so no `.env` is needed.
+- `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
+  (`build_agent`; the service, the tests, and any future CLI call it), `prompts.py` the system
+  prompt, `tools.py` the gated placeholder tool `send_notification` and its interrupt config.
+- `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
+  and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
+  `runtime.py` is the `Runtime` dataclass and `Runtime.open`, which the FastAPI lifespan enters.
+- `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
+  `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
+  `streaming.py` the SSE run loop with the lease heartbeat; `decisions.py` resume validation;
+  `schemas.py` and `serialize.py` the request, response, and event shapes.
+- `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
+  source; `cases/` is written at runtime and git-ignored.
+- `docker-compose.yml`: local Postgres for development and the integration tests.
+- `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
+  runtime fixtures, so no `.env` is needed; `fakes.py` holds the scripted chat model;
+  `integration/` holds the Postgres tests, skipped unless `FREYJA_TEST_DATABASE_URI` is set.
 - `.specify/`: Spec Kit templates, scripts, installed extensions, and the constitution. Feature
   artifacts go under `specs/<NNN-slug>/` as `spec.md`, `plan.md`, and `tasks.md`.
 - `.claude/skills/speckit-*/`: the Spec Kit skills for Claude Code. Codex CLI reads its own copy
