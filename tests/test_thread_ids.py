@@ -9,10 +9,11 @@ from fastapi.testclient import TestClient
 from freyja_agent.runtime.runtime import Runtime
 from tests.fakes import ScriptedChatModel
 
-# (method, path template, json body). US2 and US3 append their routes here.
+# (method, path template, json body): every thread route, so the id rule holds on all of them.
 ROUTES: list[tuple[str, str, dict | None]] = [
     ("POST", "/threads/{thread_id}/runs", {"message": "hello"}),
     ("POST", "/threads/{thread_id}/resume", {"decisions": [{"type": "approve"}]}),
+    ("GET", "/threads/{thread_id}/state", None),
 ]
 
 INVALID_IDS = [

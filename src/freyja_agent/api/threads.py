@@ -9,8 +9,8 @@ from sse_starlette import EventSourceResponse
 
 from freyja_agent.agent.tools import GATED_TOOLS
 from freyja_agent.api.decisions import build_resume_command
-from freyja_agent.api.schemas import THREAD_ID_PATTERN, ResumeRequest, RunRequest
-from freyja_agent.api.serialize import interrupt_to_pending
+from freyja_agent.api.schemas import THREAD_ID_PATTERN, ResumeRequest, RunRequest, ThreadState
+from freyja_agent.api.serialize import interrupt_to_pending, message_to_dict
 from freyja_agent.api.streaming import lease_owner, run_stream
 from freyja_agent.runtime.runtime import Runtime
 
@@ -107,4 +107,28 @@ async def resume_run(
         raise
     return EventSourceResponse(
         run_stream(runtime, thread_id, input=command, mode="resume", debug=debug, run_id=run_id)
+    )
+
+
+@router.get("/{thread_id}/state")
+async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
+    """Read the transcript, the run marker, and any pending proposal (FR-007, research R8).
+
+    A thread exists once its first checkpoint is written; before that it is not found, so a
+    mistyped id is not mistaken for a fresh thread. ``run_active`` comes from the shared
+    lease, so it reflects a run on any instance. The read takes no lease: the snapshot is the
+    latest durable checkpoint, which already reflects a stream that has closed (SC-005).
+    """
+    runtime = _runtime(request)
+    snapshot = await _state(runtime, thread_id)
+    if snapshot.metadata is None:
+        raise _error(404, "thread_not_found", "This thread has never been used.")
+    if len(snapshot.interrupts) > 1:
+        raise _error(500, "internal", "The thread is paused on more than one interrupt at once.")
+    return ThreadState(
+        thread_id=thread_id,
+        run_active=await runtime.locks.is_active(thread_id),
+        messages=[message_to_dict(message) for message in snapshot.values.get("messages", [])],
+        pending=interrupt_to_pending(snapshot.interrupts[0]) if snapshot.interrupts else None,
+        updated_at=snapshot.created_at,
     )
