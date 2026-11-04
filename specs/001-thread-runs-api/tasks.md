@@ -308,25 +308,25 @@ second app. Manually: quickstart.md Scenario 4.
 
 ### Tests for User Story 4
 
-- [ ] T038 [P] [US4] Write `tests/test_restart.py`: pause a thread on app A; create app B sharing
+- [X] T038 [P] [US4] Write `tests/test_restart.py`: pause a thread on app A; create app B sharing
       A's `InMemorySaver`, `InMemoryStore`, and `InMemoryRunLocks` with a new `instance_id`;
       `GET state` on B shows the same `pending`; resume with approve on B completes and logs the
       channel; a lease acquired on A before "crash" blocks B until `FakeClock.advance(ttl)`,
       after which B's run is accepted (FR-005, FR-014, FR-006, SC-004)
-- [ ] T039 [P] [US4] Write `tests/integration/conftest.py`: skip the directory unless
+- [X] T039 [P] [US4] Write `tests/integration/conftest.py`: skip the directory unless
       `FREYJA_TEST_DATABASE_URI` is set; a fixture that opens a `Runtime` against it with the
       scripted model and drops the LangGraph and `freyja_run_locks` tables afterwards (R11)
-- [ ] T040 [P] [US4] Write `tests/integration/test_postgres_locks.py`: the SQL lease against a
+- [X] T040 [P] [US4] Write `tests/integration/test_postgres_locks.py`: the SQL lease against a
       real database: acquire, concurrent acquire fails, renew extends `expires_at`, release
       deletes, an expired row is taken over by a new owner (R7)
-- [ ] T041 [US4] Write `tests/integration/test_postgres_runtime.py`: run to `interrupt` through
+- [X] T041 [US4] Write `tests/integration/test_postgres_runtime.py`: run to `interrupt` through
       one `Runtime.open`, close it, open a second `Runtime` with a new `instance_id`, read state
       and resume to `end` through Postgres; and `Runtime.open` against an unreachable URI raises
       an error naming the database connection (FR-008, FR-014) (depends on T039)
 
 ### Implementation for User Story 4
 
-- [ ] T042 [US4] Make `instance_id` and the model injectable on `Runtime.open` in
+- [X] T042 [US4] Make `instance_id` and the model injectable on `Runtime.open` in
       `src/freyja_agent/runtime/runtime.py` so the integration tests can open two runtimes
       against one database with the scripted model (R11)
 
