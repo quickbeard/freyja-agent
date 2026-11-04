@@ -22,6 +22,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
+from freyja_agent.agent.context import ThreadContextMiddleware
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
 from freyja_agent.agent.tools import SEND_NOTIFICATION_INTERRUPT, send_notification
 
@@ -45,7 +46,8 @@ def build_agent(
     instance in tests; Deep Agents resolves the string itself, so the identifier never
     appears here (FR-016). File tools are confined to ``workspace_dir`` and skills are read
     from its ``skills/`` folder (FR-017). ``max_steps`` bounds the general-purpose subagent;
-    the parent run is bounded per call by the same value (FR-004a).
+    the parent run is bounded per call by the same value (FR-004a). ``ThreadContextMiddleware``
+    tells the model, and every subagent, which thread it is working on.
     """
     root = Path(workspace_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -59,6 +61,7 @@ def build_agent(
         backend=backend,
         skills=[SKILLS_SOURCE],
         interrupt_on=SEND_NOTIFICATION_INTERRUPT,
+        middleware=[ThreadContextMiddleware()],
         subagents=[_general_purpose_subagent(chat_model, tools, backend, max_steps)],
         checkpointer=checkpointer,
         store=store,
@@ -95,6 +98,7 @@ def _general_purpose_subagent(
         create_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
+        ThreadContextMiddleware(),
     ]
     append_prompt_caching_middleware(middleware)
     spec: dict[str, Any] = {

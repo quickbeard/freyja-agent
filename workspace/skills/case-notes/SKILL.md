@@ -6,7 +6,7 @@ description: Keep running working notes for the current thread in the workspace.
 # Case notes
 
 Keep working notes for the current conversation under `cases/<thread_id>/notes.md` in the
-workspace. The thread id is the one the user is talking on.
+workspace. Your system prompt names the thread id you are working on; use it verbatim.
 
 1. At the start of a multi-step task, create the file if it does not exist with a one-line
    summary of the request.

@@ -62,6 +62,9 @@ def test_a_proposal_raised_inside_the_subagent_pauses_the_run(
         assert kind == "interrupt"
         assert data["action_requests"][0]["name"] == "send_notification"
         assert [r for r in caplog.records if r.name == ACTIONS] == []
+        # The subagent's own model call (the second) is told the same thread id as the parent.
+        assert "thread `s-1`" in model.seen[0][0].text
+        assert "thread `s-1`" in model.seen[1][0].text
 
         events = stream(
             client, "/threads/s-1/resume", {"decisions": [{"type": "approve"}]}, sse_events

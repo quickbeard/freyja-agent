@@ -53,16 +53,21 @@ class Message(BaseModel):
     tool_call_id: str | None = None
 
 
+AllowedDecision = Literal["approve", "edit", "reject"]
+
+
 class ActionRequest(BaseModel):
     name: str
     args: dict[str, Any]
     description: str | None = None
+    # The decisions this action accepts; ``PendingDecision.allowed_decisions`` is the union.
+    allowed_decisions: list[AllowedDecision] = Field(default_factory=list)
 
 
 class PendingDecision(BaseModel):
     interrupt_id: str
     action_requests: list[ActionRequest]
-    allowed_decisions: list[Literal["approve", "edit", "reject"]]
+    allowed_decisions: list[AllowedDecision]
 
 
 class ThreadState(BaseModel):
@@ -74,7 +79,9 @@ class ThreadState(BaseModel):
 
 
 class ErrorDetail(BaseModel):
-    code: Literal["run_active", "decision_pending", "nothing_pending", "thread_not_found"]
+    code: Literal[
+        "run_active", "decision_pending", "nothing_pending", "thread_not_found", "internal"
+    ]
     message: str
 
 

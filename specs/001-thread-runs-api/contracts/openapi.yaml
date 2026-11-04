@@ -85,6 +85,13 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationError" }
+        "500":
+          description: >
+            The thread is paused on more than one interrupt at once, which the batched
+            human-in-the-loop mode never produces (code `internal`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
   /threads/{thread_id}/state:
     get:
       summary: Read a thread's current state
@@ -106,6 +113,12 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationError" }
+        "500":
+          description: >
+            The thread is paused on more than one interrupt at once (code `internal`)
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
 components:
   parameters:
     ThreadId:
@@ -215,6 +228,7 @@ components:
         allowed_decisions:
           type: array
           items: { type: string, enum: [approve, edit, reject] }
+          description: Union of every action request's allowed decisions.
     ActionRequest:
       type: object
       required: [name, args]
@@ -222,6 +236,10 @@ components:
         name: { type: string }
         args: { type: object }
         description: { type: [string, "null"] }
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+          description: The decisions this action accepts; a decision is validated against this list.
     ErrorResponse:
       type: object
       required: [detail]
@@ -232,7 +250,7 @@ components:
           properties:
             code:
               type: string
-              enum: [run_active, decision_pending, nothing_pending, thread_not_found]
+              enum: [run_active, decision_pending, nothing_pending, thread_not_found, internal]
             message: { type: string }
     ValidationError:
       type: object
