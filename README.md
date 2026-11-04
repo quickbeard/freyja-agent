@@ -5,10 +5,13 @@ General-purpose agent orchestrator built on [Deep Agents](https://docs.langchain
 ## Setup
 
 ```bash
-uv sync                     # creates .venv and installs runtime + dev dependencies
-cp .env.example .env        # fill in values as needed; .env is git-ignored
-uv run pre-commit install   # one-time per clone: runs Ruff and the unit tests on every commit
+uv sync                         # creates .venv and installs runtime + dev dependencies
+cp .env.example .env            # pick one model block and set its key; leave the database line as is
+docker compose up -d postgres   # local Postgres; its credentials equal FREYJA_DATABASE_URI in .env.example
+uv run pre-commit install       # one-time per clone: runs Ruff and the unit tests on every commit
 ```
+
+`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in.
 
 ## Run the dev server
 
@@ -24,6 +27,8 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables plus the `freyja_run_locks` table if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving.
+
 Check it is up:
 
 ```bash
@@ -31,7 +36,41 @@ curl localhost:8000/healthz
 # {"status":"ok"}
 ```
 
-Interactive API docs are at <http://localhost:8000/docs>.
+Interactive API docs are at <http://localhost:8000/docs>. There is no authentication: anyone who can reach the port acts as a user, which is why the server binds `127.0.0.1` by default.
+
+## Use the API
+
+A thread is a conversation keyed by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot). Three endpoints work on it. The full contracts are in `specs/001-thread-runs-api/contracts/`.
+
+**Start a run** and stream it as server-sent events:
+
+```bash
+curl -N -X POST localhost:8000/threads/demo-1/runs \
+  -H 'content-type: application/json' \
+  -d '{"message": "Summarize what you can do and which skills you have loaded."}'
+```
+
+Each event has an `event:` line naming its kind and a `data:` line holding one JSON object. The first event is always `start`. Then come `update` (one per orchestrator step, with messages, tool calls, and tool results), `message` (the reply as it is produced), and, with `?debug=true`, `debug` (raw LangGraph detail; it never changes the run). Exactly one terminal event closes the stream: `end` when the reply is finished, `interrupt` when the orchestrator proposes an action that needs approval, or `error` with a `code` of `step_limit`, `model_error`, or `internal`. A later message to the same thread continues the conversation, including after a service restart.
+
+One run per thread: a second run while one streams gets `409` with code `run_active`. The marker is a lease in the database, so it holds across service instances and expires after `FREYJA_RUN_LOCK_TTL_SECONDS` if the instance holding it dies.
+
+**Read a thread's state**: the full transcript in order, whether a run is active, and the pending proposal if the thread is paused. A never-used id is `404`.
+
+```bash
+curl -s localhost:8000/threads/demo-1/state | jq
+```
+
+**Decide on a proposal.** The only action with an effect outside the workspace is `send_notification`, a placeholder that writes one log line. When the orchestrator proposes it, the stream ends with `interrupt` listing the proposed arguments, and the thread stays paused until a decision arrives, however long that takes. A new message on a paused thread is refused with `409` and code `decision_pending`. Resume with one decision per proposed action, in order, and the continuation streams with the same event kinds as a run:
+
+```bash
+curl -N -X POST localhost:8000/threads/demo-1/resume \
+  -H 'content-type: application/json' \
+  -d '{"decisions": [{"type": "approve"}]}'
+# or edit the arguments: {"decisions": [{"type": "edit", "args": {"channel": "#ops-staging", "message": "..."}}]}
+# or reject with an optional reason: {"decisions": [{"type": "reject", "message": "Not needed."}]}
+```
+
+The tool runs only after a recorded approve or edit. An edit keeps the action and replaces its arguments, validated against the tool's schema; the original proposal stays in the transcript and the tool result records that a person changed it. A reject skips the tool and the orchestrator is told why. Resume on a thread with nothing pending is `409` with code `nothing_pending`; a malformed decision is `422` and the proposal stays decidable.
 
 ## Lint and format
 
@@ -58,7 +97,14 @@ uv run pytest -q               # quiet output
 uv run pytest tests/test_health.py::test_healthz   # a single test
 ```
 
-Tests live in `tests/`. The health test uses FastAPI's test client without starting a server.
+Tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider.
+
+The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
+
+```bash
+docker compose exec postgres createdb -U freyja freyja_test
+FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
+```
 
 ## Configuration
 
@@ -68,11 +114,16 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 |---|---|---|
 | `FREYJA_HOST` | `127.0.0.1` | Bind address for `freyja-api`. Containers set `0.0.0.0`. |
 | `FREYJA_PORT` | `8000` | Bind port for `freyja-api`. |
-| `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer and store (wiring in progress). No default because it carries credentials; `.env.example` has the local container value. |
-| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator (wiring in progress), as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. |
+| `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer, store, and run locks. No default because it carries credentials; `.env.example` has the value the compose container uses. |
+| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. |
+| `FREYJA_WORKSPACE_DIR` | `workspace` | Root of the orchestrator's file tools. `skills/` inside it is committed source; `cases/` is written at runtime and git-ignored. |
+| `FREYJA_MAX_STEPS` | `50` | Maximum orchestrator steps per run. Reaching it ends the run with an `error` event of code `step_limit`; the thread stays usable. |
+| `FREYJA_RUN_LOCK_TTL_SECONDS` | `60` | Expiry of the per-thread run lease. A run renews it while streaming; a crashed instance frees its threads after this long. |
 | `OPENAI_API_KEY`, `OPENAI_API_BASE` | | Key for `openai:` models. `OPENAI_API_BASE` is optional: set it for self-hosted OpenAI-compatible servers or to route through a gateway. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | | Key for `anthropic:` models. `ANTHROPIC_API_URL` is optional: set it to route through a gateway. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | | Key for `openrouter:` models; the model id is OpenRouter's slug. `OPENROUTER_API_BASE` is optional: set it to route through a proxy. |
+
+`FREYJA_TEST_DATABASE_URI` is not a setting: it is read only by the integration tests, as described above.
 
 ## Spec Kit workflow
 
