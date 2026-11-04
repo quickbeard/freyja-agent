@@ -89,6 +89,11 @@ natively, but raises one interrupt per tool call (several per step) and changes 
 format to one value per interrupt id (`human_in_the_loop.py:172-194, 477-483`); it would push the
 "several pending decisions" complexity into the API for no gain in this increment.
 
+**Observation (2026-11-03, Phase 4)**: on an edit, the middleware leaves the model's original
+tool call in the transcript and records the replacement in the tool result message ("a human
+reviewer replaced this tool call before it ran"), so the original proposal remains visible in
+thread history after all. The spec's edge case was reworded back to say so.
+
 ## R3. Model resolution from settings
 
 **Decision**: pass `Settings.model` as the string to `create_deep_agent`; do not construct the
@@ -282,6 +287,14 @@ limit and a scripted subagent confirms the propagation.
 
 **Alternatives considered**: a wall-clock timeout (does not bound cost and interacts badly with
 long model calls); relying on the Deep Agents preset (effectively unbounded).
+
+**Correction (2026-11-03, Phase 4)**: the propagation claim above is wrong. `create_agent` binds
+`recursion_limit: 9_999` on every compiled subagent (`langchain/agents/factory.py:1899`), and
+LangGraph's per-key config merge lets a runnable's bound config win over the ambient parent
+config (`middleware/subagents.py:886-893`). A probe with a parent limit of 12 ran the subagent
+for 2,500 model calls. The factory therefore supplies the general-purpose subagent itself,
+mirroring Deep Agents' stack, as a compiled runnable bound with `recursion_limit=max_steps`
+(`agent/factory.py`, `_general_purpose_subagent`). `tests/test_subagent.py` holds the bound.
 
 ## R11. Test strategy
 

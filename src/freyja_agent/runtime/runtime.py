@@ -48,6 +48,7 @@ class Runtime:
                 checkpointer=persistence.saver,
                 store=persistence.store,
                 workspace_dir=settings.workspace_dir,
+                max_steps=settings.max_steps,
             )
             yield cls(
                 agent=agent,

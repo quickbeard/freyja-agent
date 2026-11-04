@@ -219,7 +219,7 @@ the `freyja_agent.actions` log and the continuation. Manually: quickstart.md Sce
 
 ### Tests for User Story 2
 
-- [ ] T029 [P] [US2] Write `tests/test_gate.py`: a scripted `send_notification` call ends the
+- [X] T029 [P] [US2] Write `tests/test_gate.py`: a scripted `send_notification` call ends the
       stream with `interrupt` carrying `interrupt_id`, one action request with `name`
       `send_notification` and the proposed `args`, and `allowed_decisions`
       `["approve", "edit", "reject"]`, with no `freyja_agent.actions` record in `caplog`;
@@ -233,14 +233,14 @@ the `freyja_agent.actions` log and the continuation. Manually: quickstart.md Sce
       remains; two `send_notification` calls in one step pause once with two action requests,
       approving one and rejecting the other logs exactly one line; resume with `?debug=true`
       emits `debug` events (FR-010 to FR-013, SC-002, SC-003)
-- [ ] T030 [P] [US2] Write `tests/test_subagent.py`: a script where the parent calls `task` and
+- [X] T030 [P] [US2] Write `tests/test_subagent.py`: a script where the parent calls `task` and
       the subagent calls `send_notification` ends with `interrupt`; with `max_steps=2` the limit
       also ends a looping subagent with `error` `step_limit` (R1, R10, principle I through the
       nested path)
 
 ### Implementation for User Story 2
 
-- [ ] T031 [US2] Implement decision validation in `src/freyja_agent/api/decisions.py`:
+- [X] T031 [US2] Implement decision validation in `src/freyja_agent/api/decisions.py`:
       `build_resume_command(pending, decisions, tool)`; require `len(decisions) ==
       len(pending.action_requests)`; require each `type` in `pending.allowed_decisions`; for
       `edit`, validate `args` with `send_notification.args_schema` and set `edited_action.name`
@@ -248,16 +248,16 @@ the `freyja_agent.actions` log and the continuation. Manually: quickstart.md Sce
       failure; return `Command(resume={pending.interrupt_id: {"decisions": [...]}})` with
       decision dicts `{"type": "approve"}`, `{"type": "edit", "edited_action": {"name", "args"}}`,
       `{"type": "reject", "message": ...}` (R2, FR-012, FR-013)
-- [ ] T032 [US2] Implement `POST /threads/{thread_id}/resume` in
+- [X] T032 [US2] Implement `POST /threads/{thread_id}/resume` in
       `src/freyja_agent/api/threads.py`: validate the id (422); acquire the lease (409
       `run_active`); read state under the lease; 404 `thread_not_found` when `metadata is None`;
       409 `nothing_pending` when `interrupts` is empty; 422 from T031 with the lease released and
       the pending decision untouched; read the `debug` query flag; otherwise stream
       `run_stream(..., input=command, mode="resume", debug=debug)` (R9)
-- [ ] T033 [US2] Confirm `run_stream` in `src/freyja_agent/api/streaming.py` accepts a
+- [X] T033 [US2] Confirm `run_stream` in `src/freyja_agent/api/streaming.py` accepts a
       `Command` as input and reports `mode: "resume"` in `start`; the resume stream uses the
       same event kinds and terminal events as a run (FR-013)
-- [ ] T034 [US2] Add the resume route to the parametrized route list in
+- [X] T034 [US2] Add the resume route to the parametrized route list in
       `tests/test_thread_ids.py` (FR-001a)
 
 **Checkpoint**: User Stories 1 and 2 work independently; `test_gate` and `test_subagent` pass.

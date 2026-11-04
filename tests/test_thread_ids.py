@@ -12,6 +12,7 @@ from tests.fakes import ScriptedChatModel
 # (method, path template, json body). US2 and US3 append their routes here.
 ROUTES: list[tuple[str, str, dict | None]] = [
     ("POST", "/threads/{thread_id}/runs", {"message": "hello"}),
+    ("POST", "/threads/{thread_id}/resume", {"decisions": [{"type": "approve"}]}),
 ]
 
 INVALID_IDS = [

@@ -120,7 +120,7 @@ A developer clones the repository, starts the local database with one command us
 - **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
 - **Decision submitted for a thread that was never used**: refused as not found, the same response a state read on that thread gives, so a mistyped id is not mistaken for a thread with nothing pending.
 - **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the user decides through resume first. A message is never treated as an implicit decision.
-- **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal is recorded in the pause event and in the thread's state while paused; after the edit the thread history carries the edited call, because that is what executed.
+- **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal stays in the thread history on the orchestrator's message, and the action's result records that a person replaced the arguments before it ran, so both the proposal and what executed are visible afterwards.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
 - **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
 

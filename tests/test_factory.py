@@ -11,13 +11,18 @@ from langgraph.store.memory import InMemoryStore
 from freyja_agent.agent import factory
 from freyja_agent.agent.factory import build_agent
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
+from freyja_agent.config import Settings
 from tests.fakes import ScriptedChatModel
 
 
 def _run_once(workspace: Path) -> ScriptedChatModel:
     model = ScriptedChatModel()
     agent = build_agent(
-        model, checkpointer=InMemorySaver(), store=InMemoryStore(), workspace_dir=workspace
+        model,
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
+        workspace_dir=workspace,
+        max_steps=Settings().max_steps,
     )
     agent.invoke(
         {"messages": [HumanMessage("hello")]}, config={"configurable": {"thread_id": "t-1"}}
@@ -45,7 +50,11 @@ def test_workspace_is_created_and_used_as_root(tmp_path: Path) -> None:
     root = tmp_path / "fresh"
     assert not root.exists()
     build_agent(
-        ScriptedChatModel(), checkpointer=InMemorySaver(), store=InMemoryStore(), workspace_dir=root
+        ScriptedChatModel(),
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
+        workspace_dir=root,
+        max_steps=Settings().max_steps,
     )
     assert root.is_dir()
 
@@ -59,15 +68,26 @@ def test_model_string_is_passed_through_unchanged(
         captured.update(kwargs)
         return "graph"
 
+    resolved = ScriptedChatModel()
+    seen: dict[str, Any] = {}
+
+    def fake_init(model: str, **kwargs: Any) -> ScriptedChatModel:
+        seen["model"] = model
+        seen["kwargs"] = kwargs
+        return resolved
+
     monkeypatch.setattr(factory, "create_deep_agent", fake_create)
+    monkeypatch.setattr(factory, "init_chat_model", fake_init)
     result = build_agent(
         "anthropic:claude-sonnet-5-5",
         checkpointer=InMemorySaver(),
         store=InMemoryStore(),
         workspace_dir=workspace,
+        max_steps=7,
     )
     assert result == "graph"
-    assert captured["model"] == "anthropic:claude-sonnet-5-5"
+    assert seen["model"] == "anthropic:claude-sonnet-5-5"
+    assert captured["model"] is resolved
     assert captured["skills"] == ["/skills/"]
     assert captured["interrupt_on"]["send_notification"]["allowed_decisions"] == [
         "approve",
@@ -76,3 +96,5 @@ def test_model_string_is_passed_through_unchanged(
     ]
     assert Path(captured["backend"].cwd) == workspace.resolve()
     assert [tool.name for tool in captured["tools"]] == ["send_notification"]
+    assert captured["subagents"][0]["name"] == "general-purpose"
+    assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7
