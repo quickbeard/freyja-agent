@@ -9,14 +9,22 @@ from sse_starlette import EventSourceResponse
 
 from freyja_agent.agent.tools import GATED_TOOLS
 from freyja_agent.api.decisions import build_resume_command
-from freyja_agent.api.schemas import THREAD_ID_PATTERN, ResumeRequest, RunRequest, ThreadState
+from freyja_agent.api.schemas import (
+    THREAD_ID_MAX_LENGTH,
+    THREAD_ID_PATTERN,
+    ResumeRequest,
+    RunRequest,
+    ThreadState,
+)
 from freyja_agent.api.serialize import interrupt_to_pending, message_to_dict
 from freyja_agent.api.streaming import lease_owner, run_stream
 from freyja_agent.runtime.runtime import Runtime
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
-ThreadIdPath = Annotated[str, Path(pattern=THREAD_ID_PATTERN)]
+ThreadIdPath = Annotated[
+    str, Path(min_length=1, max_length=THREAD_ID_MAX_LENGTH, pattern=THREAD_ID_PATTERN)
+]
 DebugQuery = Annotated[bool, Query(description="Add debug events; never changes the run.")]
 
 
@@ -82,8 +90,11 @@ async def resume_run(
 ) -> EventSourceResponse:
     """Submit one decision per pending action request and stream the continuation.
 
-    Same lease-first order as ``start_run``. Decisions are validated against the pending
-    proposal before anything resumes; a failure leaves the proposal untouched (FR-013).
+    Same lease-first order as ``start_run``. The request names the proposal it decides; a
+    request naming any other id is refused before its decisions are looked at, so a decision
+    sent twice cannot approve a later proposal. Decisions are then validated against the
+    pending proposal before anything resumes; every refusal leaves the proposal untouched
+    (FR-013).
     """
     runtime = _runtime(request)
     run_id = uuid.uuid4().hex
@@ -101,6 +112,13 @@ async def resume_run(
                 500, "internal", "The thread is paused on more than one interrupt at once."
             )
         pending = interrupt_to_pending(snapshot.interrupts[0])
+        if body.interrupt_id != pending["interrupt_id"]:
+            raise _error(
+                409,
+                "proposal_mismatch",
+                "The interrupt_id is not the pending proposal's; read the thread state and "
+                "decide the proposal it shows.",
+            )
         command = build_resume_command(pending, body.decisions, GATED_TOOLS)
     except BaseException:
         await runtime.locks.release(thread_id, owner)

@@ -172,9 +172,10 @@ None. The Constitution Check passed without deviations before research and after
   settings (FR-016).
 - **`api/decisions.py`** holds resume validation, as the tasks list anticipated.
 - **API checklist review (2026-11-06)**: [checklists/api.md](checklists/api.md) was run after
-  implementation. It added three requirements the code does not meet yet: a resume names its
-  proposal (`interrupt_id`, 409 `proposal_mismatch`), a thread id made only of dots is refused,
-  and an edit with an argument the tool does not name is refused (research R16; spec FR-001a,
-  FR-013). The other findings changed wording only. The next `/speckit-converge` run turns the
-  three into tasks. The resume examples in the README and in feature 002's quickstart do not
-  send `interrupt_id` yet and change with the code.
+  implementation. It added three requirements: a resume names its proposal (`interrupt_id`,
+  409 `proposal_mismatch`), a thread id made only of dots is refused, and an edit with an
+  argument the tool does not name is refused (research R16; spec FR-001a, FR-013). The other
+  findings changed wording only. Phase 10 (T056 to T060) implemented the three: the id check
+  is in `api/threads.py`, before the decisions are validated; the unknown-argument check is
+  in `api/decisions.py`; the thread id rule is a lookahead-free pattern plus a length bound in
+  `api/schemas.py`, because the validation engine has no lookahead.

@@ -4,10 +4,12 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, Field
 
-# Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars (FR-001a).
-THREAD_ID_PATTERN = r"^[A-Za-z0-9._-]{1,128}$"
-
-ThreadId = Annotated[str, Field(pattern=THREAD_ID_PATTERN)]
+# Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars; at least one
+# character that is not a dot, so "." and ".." never name a thread (FR-001a). The length is a
+# separate bound because the pattern is written without lookahead, which the validation
+# engine does not support.
+THREAD_ID_PATTERN = r"^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+THREAD_ID_MAX_LENGTH = 128
 
 
 class RunRequest(BaseModel):
@@ -35,6 +37,9 @@ Decision = Annotated[
 
 
 class ResumeRequest(BaseModel):
+    # The proposal being decided, as the interrupt event and the thread state report it. A
+    # decision sent twice therefore cannot be applied to a later proposal (FR-013).
+    interrupt_id: str
     decisions: Annotated[list[Decision], Field(min_length=1)]
 
 
@@ -80,7 +85,12 @@ class ThreadState(BaseModel):
 
 class ErrorDetail(BaseModel):
     code: Literal[
-        "run_active", "decision_pending", "nothing_pending", "thread_not_found", "internal"
+        "run_active",
+        "decision_pending",
+        "nothing_pending",
+        "proposal_mismatch",
+        "thread_not_found",
+        "internal",
     ]
     message: str
 

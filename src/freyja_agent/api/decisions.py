@@ -2,7 +2,7 @@
 
 The human-in-the-loop middleware's batched mode does not pin the tool name or validate edited
 arguments, so an edit could otherwise switch tools or pass arguments the tool cannot accept.
-This module closes that gap before the run resumes (FR-012, FR-013; research R2).
+This module closes that gap before the run resumes (FR-012, FR-013; research R2, R16).
 """
 
 from collections.abc import Mapping, Sequence
@@ -94,6 +94,7 @@ def _edit(
                 }
             ]
         )
+    errors: list[dict[str, Any]] = []
     try:
         validated = tool.args_schema.model_validate(decision.args)
     except ValidationError as exc:
@@ -101,6 +102,18 @@ def _edit(
             {**error, "loc": ["body", "decisions", index, "args", *error["loc"]]}
             for error in exc.errors(include_url=False, include_context=False)
         ]
-        raise _invalid(errors) from None
+    # The schema ignores keys it does not define, which would drop part of the approver's
+    # instruction without a word. An edit is refused instead (FR-013).
+    errors += [
+        {
+            "type": "extra_forbidden",
+            "loc": ["body", "decisions", index, "args", key],
+            "msg": f"Action '{name}' has no argument named '{key}'.",
+        }
+        for key in decision.args
+        if key not in tool.args_schema.model_fields
+    ]
+    if errors:
+        raise _invalid(errors)
     # The tool name is pinned server-side: an edit changes arguments, never the action.
     return {"type": "edit", "edited_action": {"name": name, "args": validated.model_dump()}}

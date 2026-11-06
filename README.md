@@ -40,7 +40,7 @@ Interactive API docs are at <http://localhost:8000/docs>. There is no authentica
 
 ## Use the API
 
-A thread is a conversation keyed by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot). Three endpoints work on it. The full contracts are in `specs/001-thread-runs-api/contracts/`.
+A thread is a conversation keyed by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot; not only dots). Three endpoints work on it. The full contracts are in `specs/001-thread-runs-api/contracts/`.
 
 **Start a run** and stream it as server-sent events:
 
@@ -60,17 +60,20 @@ One run per thread: a second run while one streams gets `409` with code `run_act
 curl -s localhost:8000/threads/demo-1/state | jq
 ```
 
-**Decide on a proposal.** The only action with an effect outside the workspace is `send_notification`, a placeholder that writes one log line. When the orchestrator proposes it, the stream ends with `interrupt` listing the proposed arguments, and the thread stays paused until a decision arrives, however long that takes. A new message on a paused thread is refused with `409` and code `decision_pending`. Resume with one decision per proposed action, in order, and the continuation streams with the same event kinds as a run:
+**Decide on a proposal.** The only action with an effect outside the workspace is `send_notification`, a placeholder that writes one log line. When the orchestrator proposes it, the stream ends with `interrupt` listing the proposed arguments, and the thread stays paused until a decision arrives, however long that takes. A new message on a paused thread is refused with `409` and code `decision_pending`. Resume with the proposal's `interrupt_id`, which the `interrupt` event and the thread state both report, and one decision per proposed action, in order. The continuation streams with the same event kinds as a run:
 
 ```bash
+ID=$(curl -s localhost:8000/threads/demo-1/state | jq -r .pending.interrupt_id)
 curl -N -X POST localhost:8000/threads/demo-1/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "approve"}]}'
-# or edit the arguments: {"decisions": [{"type": "edit", "args": {"channel": "#ops-staging", "message": "..."}}]}
-# or reject with an optional reason: {"decisions": [{"type": "reject", "message": "Not needed."}]}
+  -d "{\"interrupt_id\": \"$ID\", \"decisions\": [{\"type\": \"approve\"}]}"
+# or edit the arguments: "decisions": [{"type": "edit", "args": {"channel": "#ops-staging", "message": "..."}}]
+# or reject with an optional reason: "decisions": [{"type": "reject", "message": "Not needed."}]
 ```
 
-The tool runs only after a recorded approve or edit. An edit keeps the action and replaces its arguments, validated against the tool's schema; the original proposal stays in the transcript and the tool result records that a person changed it. A reject skips the tool and the orchestrator is told why. Resume on a thread with nothing pending is `409` with code `nothing_pending`; a malformed decision is `422` and the proposal stays decidable.
+The tool runs only after a recorded approve or edit. An edit keeps the action and replaces its arguments, validated against the tool's schema; the original proposal stays in the transcript and the tool result records that a person changed it. An edit that carries an argument the action does not name is refused, so nothing an approver sends is dropped silently. A reject skips the tool and the orchestrator is told why.
+
+The `interrupt_id` ties a decision to one proposal: a request that names any other id is `409` with code `proposal_mismatch`, so a decision sent twice cannot approve a later proposal. Resume on a thread with nothing pending is `409` with code `nothing_pending`. A malformed decision is `422`. In each of these cases nothing runs and a pending proposal stays decidable.
 
 ## Lint and format
 

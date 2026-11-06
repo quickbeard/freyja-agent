@@ -116,7 +116,7 @@ curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: applicat
 # 422 on a paused thread (unknown type); GET state still shows pending
 curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d "{\"interrupt_id\": \"$(pending_id task-45)\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"channel\": \"#ops\", \"message\": \"hi\", \"extra\": \"x\"}}]}"
 # 422 (an argument the action does not name); GET state still shows pending
-curl -s -o /dev/null -w '%{http_code}\n' 'localhost:8000/threads/%2E%2E/state'   # 422, a thread id made only of dots
+curl -s --path-as-is -o /dev/null -w '%{http_code}\n' 'localhost:8000/threads/%2E%2E/state'   # 422, a thread id made only of dots (without --path-as-is curl rewrites the path and the answer is a plain 404)
 curl -s -X POST localhost:8000/threads/task-45/runs -H 'content-type: application/json' -d '{"message": "never mind"}'
 # 409 {"detail": {"code": "decision_pending", ...}}: decide through resume first; the proposal is not dropped
 ```

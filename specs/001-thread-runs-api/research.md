@@ -435,7 +435,7 @@ quickstart, and a notification already proves the gate).
 Written after the feature was implemented, while resolving
 [checklists/api.md](checklists/api.md). "Probe" here means a throwaway test run against the
 shipped app through the suite's in-memory fixtures. The first three decisions change behavior;
-the code does not implement them yet, and the next converge run picks them up.
+they were implemented as tasks T056 to T058 (Phase 10).
 
 **Decision 1: a resume names its proposal.** `ResumeRequest` gains a required `interrupt_id`.
 After the `nothing_pending` check, the route compares it with the pending interrupt's id and
@@ -458,7 +458,8 @@ character that is not a dot.
 
 Rationale: probe: `GET /threads/%2E%2E/state` reaches the route with the id `..`, and a run on
 it completes; the same request written as `/threads/../state` is rewritten by the client to
-`/state` and never reaches the route. The orchestrator is told to keep working files under
+`/state` and never reaches the route. curl rewrites the encoded form too unless it is given
+`--path-as-is`. The orchestrator is told to keep working files under
 `cases/<thread_id>/` (`agent/context.py`), so the id `..` names the workspace root instead of
 a folder of its own. The path stays inside the workspace, because the backend confines it
 (R1), so this is a correctness fix, not an escape.
@@ -489,8 +490,9 @@ is then not what was submitted).
 - *Database failure after startup.* Probe: when the lease cannot be acquired because the
   store raises, the response is 500 with the plain-text body `Internal Server Error`, outside
   the `ErrorResponse` shape. During a stream, an exception from the checkpointer is caught by
-  the generic handler in `run_stream` and becomes an `error` event with code `internal`; this
-  second case is from reading the code, not from a probe.
+  the generic handler in `run_stream` and becomes an `error` event with code `internal`. The
+  converge run of 2026-11-06 confirmed this second case with a probe: the raised error carried
+  a connection string, and the client received only the fixed sentence.
 - *A continuation that fails after a decision.* Probe: the model failed on the call after an
   approved action. The action ran once, the stream ended with `model_error`, the state showed
   the tool result with nothing pending, and a second resume answered 409 `nothing_pending`.

@@ -1,4 +1,5 @@
-"""FR-001a: thread ids are 1 to 128 characters of letters, digits, hyphen, underscore, dot."""
+"""FR-001a: thread ids are 1 to 128 characters of letters, digits, hyphen, underscore, dot,
+and never only dots."""
 
 from collections.abc import Callable
 
@@ -12,7 +13,11 @@ from tests.fakes import ScriptedChatModel
 # (method, path template, json body): every thread route, so the id rule holds on all of them.
 ROUTES: list[tuple[str, str, dict | None]] = [
     ("POST", "/threads/{thread_id}/runs", {"message": "hello"}),
-    ("POST", "/threads/{thread_id}/resume", {"decisions": [{"type": "approve"}]}),
+    (
+        "POST",
+        "/threads/{thread_id}/resume",
+        {"interrupt_id": "any", "decisions": [{"type": "approve"}]},
+    ),
     ("GET", "/threads/{thread_id}/state", None),
 ]
 
@@ -21,9 +26,14 @@ INVALID_IDS = [
     pytest.param("bad id", id="space"),
     pytest.param("bad!id", id="punctuation"),
     pytest.param("ünïcode", id="non-ascii"),
+    # Only dots. Sent percent-encoded: a client rewrites a literal "." or ".." path segment
+    # before the request leaves, so the encoded form is how such an id reaches the service.
+    pytest.param("%2E", id="one-dot"),
+    pytest.param("%2E%2E", id="two-dots"),
+    pytest.param("%2E%2E%2E", id="three-dots"),
 ]
 
-VALID_IDS = ["a", "x" * 128, "case-2026-10-30_0042.v1", "0123456789abcdef"]
+VALID_IDS = ["a", "x" * 128, "case-2026-10-30_0042.v1", "0123456789abcdef", "v1.2", ".a", "a."]
 
 
 @pytest.fixture
