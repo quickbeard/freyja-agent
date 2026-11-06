@@ -61,8 +61,10 @@ on loopback is about 10 ms (probe), so per-call connections are not a cost that 
 tool reaches the orchestrator without one; every gated call pauses before it reaches a server;
 no call is retried; a tool call is bounded by `FREYJA_MCP_CALL_TIMEOUT_SECONDS`; an address
 must be loopback, checked without DNS; credentials reach a launched server only through named
-environment variables and are redacted from everything a server link emits; the catalog read
-contacts no server; no blocking I/O in async handlers (Ruff `ASYNC`).
+environment variables and are redacted from everything a server link emits, including the
+tool descriptions it lists and a launched server's captured error output; a step's calls all
+wait for its decisions, and a decision is applied under the configuration in force; the
+catalog read contacts no server; no blocking I/O in async handlers (Ruff `ASYNC`).
 
 **Scale/Scope**: a handful of servers and tens of tools. One new endpoint, three new settings,
 one new package (`delegates/`), one changed API schema (`ActionRequest.server`), and a changed
@@ -86,11 +88,14 @@ size limits, per-thread tool sets.
 
 No deviations. The Complexity Tracking table is therefore empty.
 
-One refinement of the spec's wording is recorded rather than hidden: the spec gives two
-classifications, read-only and effectful. The API reports three values. For server tools the
-spec's rule holds exactly, as `read_only` and `gated`. The third, `workspace`, is given only by
-a fixed table to Freyja's own file-writing and delegation tools, which FR-011 says need no
-approval and which are not read-only (R8).
+The spec and the API name the same three classifications. For server tools the rule in FR-006
+gives read-only or effectful, reported as `read_only` and `gated`. The third,
+workspace-confined, reported as `workspace`, is given only by a fixed table to Freyja's own
+file-writing and delegation tools, which FR-011 says need no approval and which are not
+read-only (R8). The spec was aligned with this plan in the security checklist review of
+2026-11-06 ([checklists/security.md](checklists/security.md)); the same review added FR-019,
+the capture of a launched server's error output (R12), and the rules for a proposal decided
+under a changed configuration (R9).
 
 ## Project Structure
 

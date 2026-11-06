@@ -20,7 +20,7 @@ The full contract, with examples, is [contracts/server-config.md](contracts/serv
 | name (the key) | string | `^[a-z][a-z0-9_-]{0,31}$`; unique by construction. |
 | `command` | string or absent | Exactly one of `command` and `url` is present (FR-001, FR-004). |
 | `args` | list of string | Default empty. Only with `command`. |
-| `pass_env` | list of string | Names of environment variables to hand to the launched process. Only with `command`. Each must be set when the service starts (FR-002). |
+| `pass_env` | list of string | Names of environment variables to hand to the launched process. Only with `command`. Each must be set and not empty when the service starts (FR-002, FR-004). |
 | `url` | string or absent | Scheme `http` or `https`; host `localhost` or a loopback IP literal (FR-001). |
 | `read_only` | list of string | Tool names exempt from approval. Default empty. Each must be a tool the server provides (FR-004). |
 
@@ -66,9 +66,9 @@ A tool provided by a tool server, converted once at startup (`delegates/mcp_tool
 |---|---|---|
 | `name` | string | The server's tool name, unchanged. `^[A-Za-z0-9_-]{1,64}$`; unique across all servers and Freyja's own tools (FR-004). |
 | `server` | string | The owning tool server's name. |
-| `description` | string | From the server; empty if it gives none. |
-| `input_schema` | JSON Schema object | From the server. "No declared input" means no `properties`, or an empty one (FR-009). |
-| `server_hints` | object or null | The annotations the server publishes about the tool. Informational only (FR-006, FR-014). |
+| `description` | string | From the server, redacted; empty if it gives none. |
+| `input_schema` | JSON Schema object | From the server, string values redacted. "No declared input" means no `properties`, or an empty one (FR-009). |
+| `server_hints` | object or null | The annotations the server publishes about the tool, redacted. Informational only (FR-006, FR-014). |
 | `classification` | `read_only` or `gated` | `read_only` if and only if `name` is in the server's `read_only` list (FR-006). |
 
 ### Catalog entry
@@ -119,8 +119,8 @@ event and in thread state.
 | `name` | string | Unchanged. |
 | `args` | object | Unchanged. |
 | `description` | string or null | For a delegate tool: `<server>: <first line of the tool's description>`. |
-| `allowed_decisions` | list | Unchanged in meaning; approve and reject only for a tool with no declared input. |
-| `server` | string or null | **New.** The tool server the proposed tool belongs to; null for Freyja's own tools (FR-008). |
+| `allowed_decisions` | list | Unchanged in meaning; approve and reject only for a tool with no declared input. Computed against the current catalog: approve and reject for a tool that is no longer configured, approve only for a tool that is now read-only (FR-019). |
+| `server` | string or null | **New.** The tool server the proposed tool belongs to now; null for Freyja's own tools and for a tool that is no longer configured (FR-008, FR-019). |
 
 ### Tool result
 
@@ -134,7 +134,8 @@ tool message; not a new entity.
 | The call exceeded the time limit | `error` | Names the server, the tool, and the limit, and says the outcome is unknown. |
 | The server could not be reached | `error` | Names the server and the tool. |
 
-All content passes through redaction of the server's `pass_env` values (FR-002).
+All content passes through redaction of the server's `pass_env` values (FR-002). A call is
+attempted once: nothing is retried (FR-012).
 
 ## Settings added
 
