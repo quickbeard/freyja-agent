@@ -171,3 +171,10 @@ None. The Constitution Check passed without deviations before research and after
   summarization middleware needs a model instance. The identifier still appears only in
   settings (FR-016).
 - **`api/decisions.py`** holds resume validation, as the tasks list anticipated.
+- **API checklist review (2026-11-06)**: [checklists/api.md](checklists/api.md) was run after
+  implementation. It added three requirements the code does not meet yet: a resume names its
+  proposal (`interrupt_id`, 409 `proposal_mismatch`), a thread id made only of dots is refused,
+  and an edit with an argument the tool does not name is refused (research R16; spec FR-001a,
+  FR-013). The other findings changed wording only. The next `/speckit-converge` run turns the
+  three into tasks. The resume examples in the README and in feature 002's quickstart do not
+  send `interrupt_id` yet and change with the code.
