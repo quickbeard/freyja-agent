@@ -63,7 +63,8 @@ def test_a_pause_survives_a_restart_through_postgres(
         assert state["pending"] == interrupt
         assert state["run_active"] is False
         assert [m["type"] for m in state["messages"]] == ["human", "ai"]
-        events = stream(b, "/threads/pg-1/resume", {"decisions": [{"type": "approve"}]}, sse_events)
+        decision = {"interrupt_id": interrupt["interrupt_id"], "decisions": [{"type": "approve"}]}
+        events = stream(b, "/threads/pg-1/resume", decision, sse_events)
         after = b.get("/threads/pg-1/state").json()
         assert lock_rows(settings) == 0
 

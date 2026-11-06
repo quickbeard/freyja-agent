@@ -4,6 +4,7 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage
@@ -98,6 +99,82 @@ def test_empty_message_is_rejected_and_starts_no_run(
         response = client.post("/threads/t-3/runs", json={"message": ""})
     assert response.status_code == 422
     assert model.calls == 0
+
+
+@pytest.mark.parametrize(
+    ("request_kwargs", "location"),
+    [
+        pytest.param({"json": {"message": "x" * 32001}}, ["body", "message"], id="too-long"),
+        pytest.param({"json": {}}, ["body", "message"], id="missing-message"),
+        pytest.param({"json": {"message": 5}}, ["body", "message"], id="wrong-type"),
+        pytest.param(
+            {"content": b"{not json", "headers": {"content-type": "application/json"}},
+            ["body", 1],
+            id="invalid-json",
+        ),
+        pytest.param(
+            {"json": {"message": "hi"}, "params": {"debug": "maybe"}},
+            ["query", "debug"],
+            id="debug-not-boolean",
+        ),
+    ],
+)
+def test_malformed_requests_are_rejected_and_start_no_run(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    request_kwargs: dict[str, Any],
+    location: list,
+) -> None:
+    model = ScriptedChatModel()
+    with TestClient(make_app(make_runtime(model))) as client:
+        response = client.post("/threads/t-3b/runs", **request_kwargs)
+        never_used = client.get("/threads/t-3b/state")
+    assert response.status_code == 422
+    entry = response.json()["detail"][0]
+    assert entry["loc"] == location
+    assert {"type", "loc", "msg"} <= set(entry)
+    assert model.calls == 0
+    assert never_used.status_code == 404
+
+
+def test_every_offending_field_is_named_in_one_response(
+    make_runtime: Callable[..., Runtime], make_app: Callable[[Runtime], FastAPI]
+) -> None:
+    with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
+        response = client.post("/threads/bad id/runs", json={"message": ""})
+    assert response.status_code == 422
+    assert [entry["loc"] for entry in response.json()["detail"]] == [
+        ["path", "thread_id"],
+        ["body", "message"],
+    ]
+
+
+def test_message_length_limit_is_inclusive(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+) -> None:
+    with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
+        events = run(client, "t-3c", "x" * 32000, sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+
+
+def test_undefined_fields_are_ignored_and_whitespace_is_a_message(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+) -> None:
+    model = ScriptedChatModel()
+    with (
+        TestClient(make_app(make_runtime(model))) as client,
+        client.stream(
+            "POST", "/threads/t-3d/runs", json={"message": "   ", "not_a_field": 1}
+        ) as response,
+    ):
+        assert response.status_code == 200
+        events = sse_events(response.iter_lines())
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [m.content for m in model.seen[0] if isinstance(m, HumanMessage)] == ["   "]
 
 
 def test_follow_up_sees_the_earlier_turn(

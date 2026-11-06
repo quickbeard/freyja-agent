@@ -62,7 +62,9 @@ def test_a_pause_survives_a_restart_and_resumes_on_the_new_instance(
         state = b.get("/threads/r-1/state").json()
         assert state["pending"] == interrupt
         assert state["run_active"] is False
-        events = stream(b, "/threads/r-1/resume", {"decisions": [{"type": "approve"}]}, sse_events)
+        # The proposal keeps its id across the restart, so a decision can still name it.
+        decision = {"interrupt_id": interrupt["interrupt_id"], "decisions": [{"type": "approve"}]}
+        events = stream(b, "/threads/r-1/resume", decision, sse_events)
         assert b.get("/threads/r-1/state").json()["pending"] is None
 
     assert events[-1] == ("end", {"status": "completed"})

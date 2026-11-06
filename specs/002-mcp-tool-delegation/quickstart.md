@@ -100,11 +100,18 @@ Expected: the stream ends with `event: interrupt`. Its action request has
 `allowed_decisions: [approve, edit, reject]`. `git -C /tmp/freyja-demo-repo branch` does not
 list the branch yet. `GET /threads/mcp-3/state` shows the same proposal under `pending`.
 
+A resume names the proposal it decides (feature 001, FR-013). The helper below reads the id
+from the thread state; every resume in this guide uses it.
+
+```bash
+pending_id() { curl -s "localhost:8000/threads/$1/state" | jq -r .pending.interrupt_id; }
+```
+
 Approve:
 
 ```bash
-curl -N -X POST localhost:8000/threads/mcp-3/resume \
-  -H 'content-type: application/json' -d '{"decisions": [{"type": "approve"}]}'
+curl -N -X POST localhost:8000/threads/mcp-3/resume -H 'content-type: application/json' \
+  -d "{\"interrupt_id\": \"$(pending_id mcp-3)\", \"decisions\": [{\"type\": \"approve\"}]}"
 ```
 
 Expected: the continuation shows the tool result and ends with `event: end`;
@@ -115,7 +122,7 @@ declared input does not accept:
 
 ```bash
 curl -s -X POST localhost:8000/threads/mcp-4/resume -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "edit", "args": {"repo_path": "/tmp/freyja-demo-repo", "branch_name": 7}}]}'
+  -d "{\"interrupt_id\": \"$(pending_id mcp-4)\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"repo_path\": \"/tmp/freyja-demo-repo\", \"branch_name\": 7}}]}"
 ```
 
 Expected: HTTP 422 whose error location ends in `args`, `branch_name`; the proposal is still
@@ -123,7 +130,7 @@ pending in state and no branch was created. Then a valid edit:
 
 ```bash
 curl -N -X POST localhost:8000/threads/mcp-4/resume -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "edit", "args": {"repo_path": "/tmp/freyja-demo-repo", "branch_name": "demo-edited"}}]}'
+  -d "{\"interrupt_id\": \"$(pending_id mcp-4)\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"repo_path\": \"/tmp/freyja-demo-repo\", \"branch_name\": \"demo-edited\"}}]}"
 ```
 
 Expected: `demo-edited` exists and `demo-edit` does not.
@@ -132,7 +139,7 @@ Reject, on a new thread (`mcp-5`, same request with `demo-reject`):
 
 ```bash
 curl -N -X POST localhost:8000/threads/mcp-5/resume -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "reject", "message": "Not on this repository."}]}'
+  -d "{\"interrupt_id\": \"$(pending_id mcp-5)\", \"decisions\": [{\"type\": \"reject\", \"message\": \"Not on this repository.\"}]}"
 ```
 
 Expected: no branch is created; the reply says the action was not taken and repeats the reason.

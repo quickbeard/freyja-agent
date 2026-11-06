@@ -517,7 +517,7 @@ Appended by `/speckit-converge` on 2026-11-06, after the API checklist review
 does not meet yet (research R16). Everything else the review changed was wording that already
 matched the code.
 
-- [ ] T056 Make a resume name its proposal: add a required `interrupt_id` to `ResumeRequest`
+- [X] T056 Make a resume name its proposal: add a required `interrupt_id` to `ResumeRequest`
       and `proposal_mismatch` to `ErrorDetail.code` in `src/freyja_agent/api/schemas.py`; in
       `resume_run` in `src/freyja_agent/api/threads.py`, after the `nothing_pending` and
       more-than-one-interrupt checks and before any decision is validated, answer 409
@@ -529,25 +529,25 @@ matched the code.
       call in `tests/test_gate.py`, `tests/test_restart.py`, `tests/test_subagent.py`,
       `tests/test_thread_ids.py`, and `tests/integration/test_postgres_runtime.py`, per FR-013,
       FR-010, and US2/AC7 (missing)
-- [ ] T057 Refuse an edit that carries an argument the tool does not name: in `_edit` in
+- [X] T057 Refuse an edit that carries an argument the tool does not name: in `_edit` in
       `src/freyja_agent/api/decisions.py`, answer 422 with one entry per unknown key at
       `["body", "decisions", <index>, "args", <key>]` instead of dropping it, and add an
       `edit-unknown-arg` case to `test_malformed_decisions_are_refused_and_the_proposal_stays`
       in `tests/test_gate.py`, per FR-013 and US2/AC6 (partial)
-- [ ] T058 Refuse a thread id made only of dots: change `THREAD_ID_PATTERN` in
+- [X] T058 Refuse a thread id made only of dots: change `THREAD_ID_PATTERN` in
       `src/freyja_agent/api/schemas.py` to require at least one character that is not a dot,
       using the lookahead-free pattern and length bounds from
       `specs/001-thread-runs-api/contracts/openapi.yaml`; add `.`, `..`, and `...` to
       `INVALID_IDS` in `tests/test_thread_ids.py`, sent percent-encoded because the test client
       rewrites dot segments, and keep an id such as `v1.2` among the valid ones, per FR-001a
       (partial)
-- [ ] T059 Bring the documentation in line with T056 to T058: in `README.md` under "Use the
+- [X] T059 Bring the documentation in line with T056 to T058: in `README.md` under "Use the
       API", state that a thread id cannot be only dots, send `interrupt_id` in the resume
       examples and say where it is read from, and name the `proposal_mismatch` refusal and the
       refusal of an unknown edit argument; send `interrupt_id` in the resume examples of
       `specs/002-mcp-tool-delegation/quickstart.md`, per FR-020 and plan Implementation Notes
       (partial)
-- [ ] T060 Pin request validation with tests in `tests/test_runs.py` and `tests/test_gate.py`:
+- [X] T060 Pin request validation with tests in `tests/test_runs.py` and `tests/test_gate.py`:
       a message of 32,001 characters, a reject reason of 4,001 characters, a body that is not
       valid JSON, and a `debug` value that is not a boolean each answer 422 and start no run;
       a body field the interface does not define is ignored; a message of only whitespace is

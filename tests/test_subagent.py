@@ -66,9 +66,8 @@ def test_a_proposal_raised_inside_the_subagent_pauses_the_run(
         assert "thread `s-1`" in model.seen[0][0].text
         assert "thread `s-1`" in model.seen[1][0].text
 
-        events = stream(
-            client, "/threads/s-1/resume", {"decisions": [{"type": "approve"}]}, sse_events
-        )
+        decision = {"interrupt_id": data["interrupt_id"], "decisions": [{"type": "approve"}]}
+        events = stream(client, "/threads/s-1/resume", decision, sse_events)
     assert events[-1] == ("end", {"status": "completed"})
     records = [r for r in caplog.records if r.name == ACTIONS]
     assert len(records) == 1

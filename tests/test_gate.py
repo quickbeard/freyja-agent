@@ -39,12 +39,20 @@ def run(client: TestClient, thread: str, message: str, sse_events: Any, **params
     return stream(client, f"/threads/{thread}/runs", {"message": message}, sse_events, **params)
 
 
+def pending_id(client: TestClient, thread: str) -> str:
+    """The id of the proposal the thread is paused on, as a client reads it from state."""
+    return client.get(f"/threads/{thread}/state").json()["pending"]["interrupt_id"]
+
+
+def resume_body(client: TestClient, thread: str, decisions: list) -> dict:
+    return {"interrupt_id": pending_id(client, thread), "decisions": decisions}
+
+
 def resume(
     client: TestClient, thread: str, decisions: list, sse_events: Any, **params: Any
 ) -> Events:
-    return stream(
-        client, f"/threads/{thread}/resume", {"decisions": decisions}, sse_events, **params
-    )
+    body = resume_body(client, thread, decisions)
+    return stream(client, f"/threads/{thread}/resume", body, sse_events, **params)
 
 
 def action_records(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
@@ -173,7 +181,11 @@ def test_resume_with_nothing_pending_is_refused(
 ) -> None:
     with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
         run(client, "g-5", "hello", sse_events)
-        response = client.post("/threads/g-5/resume", json={"decisions": [{"type": "approve"}]})
+        response = client.post(
+            "/threads/g-5/resume",
+            json={"interrupt_id": "any", "decisions": [{"type": "approve"}]},
+        )
+    # Nothing is pending, so that is the answer whatever id the request names.
     assert response.status_code == 409
     assert response.json()["detail"]["code"] == "nothing_pending"
 
@@ -182,7 +194,10 @@ def test_resume_on_a_never_used_thread_is_not_found(
     make_runtime: Callable[..., Runtime], make_app: Callable[[Runtime], FastAPI]
 ) -> None:
     with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
-        response = client.post("/threads/never/resume", json={"decisions": [{"type": "approve"}]})
+        response = client.post(
+            "/threads/never/resume",
+            json={"interrupt_id": "any", "decisions": [{"type": "approve"}]},
+        )
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "thread_not_found"
 
@@ -196,6 +211,8 @@ def test_resume_on_a_never_used_thread_is_not_found(
         pytest.param(
             [{"type": "edit", "args": {"channel": 5, "message": "x"}}], id="edit-wrong-type"
         ),
+        pytest.param([{"type": "edit", "args": {**PROPOSED, "extra": "x"}}], id="edit-unknown-arg"),
+        pytest.param([{"type": "reject", "message": "x" * 4001}], id="reject-reason-too-long"),
         pytest.param([], id="empty"),
     ],
 )
@@ -208,12 +225,105 @@ def test_malformed_decisions_are_refused_and_the_proposal_stays(
     runtime, app, _ = gated
     with TestClient(app) as client:
         run(client, "g-6", "notify", sse_events)
-        response = client.post("/threads/g-6/resume", json={"decisions": decisions})
+        response = client.post("/threads/g-6/resume", json=resume_body(client, "g-6", decisions))
         assert response.status_code == 422, response.text
         assert isinstance(response.json()["detail"], list)
         assert client.portal.call(pending_count, runtime, "g-6") == 1
         # The proposal is still decidable.
         events = resume(client, "g-6", [{"type": "approve"}], sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert len(action_records(caplog)) == 1
+
+
+def test_an_unknown_edit_argument_is_named_in_the_refusal(
+    gated: tuple[Runtime, FastAPI, ScriptedChatModel], sse_events: Any, caplog: Any
+) -> None:
+    _, app, _ = gated
+    edit = {"type": "edit", "args": {**PROPOSED, "extra": "x", "more": 1}}
+    with TestClient(app) as client:
+        run(client, "g-6b", "notify", sse_events)
+        response = client.post("/threads/g-6b/resume", json=resume_body(client, "g-6b", [edit]))
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert [entry["loc"] for entry in detail] == [
+        ["body", "decisions", 0, "args", "extra"],
+        ["body", "decisions", 0, "args", "more"],
+    ]
+    assert all({"type", "loc", "msg"} <= set(entry) for entry in detail)
+    assert action_records(caplog) == []
+
+
+def test_resume_must_name_the_pending_proposal(
+    gated: tuple[Runtime, FastAPI, ScriptedChatModel], sse_events: Any, caplog: Any
+) -> None:
+    runtime, app, _ = gated
+    with TestClient(app) as client:
+        run(client, "g-10", "notify", sse_events)
+        wrong = client.post(
+            "/threads/g-10/resume",
+            json={"interrupt_id": "not-the-pending-one", "decisions": [{"type": "approve"}]},
+        )
+        assert wrong.status_code == 409
+        assert wrong.json()["detail"]["code"] == "proposal_mismatch"
+        assert client.portal.call(pending_count, runtime, "g-10") == 1
+        assert client.portal.call(runtime.locks.is_active, "g-10") is False
+        assert action_records(caplog) == []
+
+        missing = client.post("/threads/g-10/resume", json={"decisions": [{"type": "approve"}]})
+        assert missing.status_code == 422
+        assert missing.json()["detail"][0]["loc"] == ["body", "interrupt_id"]
+        assert client.portal.call(pending_count, runtime, "g-10") == 1
+
+        # The proposal is still decidable under its own id.
+        events = resume(client, "g-10", [{"type": "approve"}], sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert len(action_records(caplog)) == 1
+
+
+def test_a_proposal_id_is_checked_before_the_decisions(
+    gated: tuple[Runtime, FastAPI, ScriptedChatModel], sse_events: Any
+) -> None:
+    _, app, _ = gated
+    with TestClient(app) as client:
+        run(client, "g-11", "notify", sse_events)
+        response = client.post(
+            "/threads/g-11/resume",
+            json={"interrupt_id": "stale", "decisions": [{"type": "approve"}] * 2},
+        )
+    # A wrong id and a wrong decision count: the id is the answer (contract, order of checks).
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "proposal_mismatch"
+
+
+def test_a_decision_sent_again_cannot_approve_a_later_proposal(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+    caplog: Any,
+) -> None:
+    script = [notify("n1"), notify("n2", channel="#exec")]
+    runtime = make_runtime(ScriptedChatModel(script=script, final_text="done"))
+    with TestClient(make_app(runtime)) as client:
+        run(client, "g-12", "notify twice", sse_events)
+        first = resume_body(client, "g-12", [{"type": "approve"}])
+        events = stream(client, "/threads/g-12/resume", first, sse_events)
+        # The continuation paused again, on a proposal the user has not seen.
+        kind, second = events[-1]
+        assert kind == "interrupt"
+        assert second["interrupt_id"] != first["interrupt_id"]
+        assert second["action_requests"][0]["args"]["channel"] == "#exec"
+
+        # The same request arrives again, as after a lost response.
+        again = client.post("/threads/g-12/resume", json=first)
+        assert again.status_code == 409
+        assert again.json()["detail"]["code"] == "proposal_mismatch"
+        assert client.portal.call(pending_count, runtime, "g-12") == 1
+        records = action_records(caplog)
+        assert len(records) == 1
+        assert "channel=#ops " in records[0].getMessage()
+
+        # Deciding the second proposal under its own id works.
+        events = resume(client, "g-12", [{"type": "reject"}], sse_events)
     assert events[-1] == ("end", {"status": "completed"})
     assert len(action_records(caplog)) == 1
 
