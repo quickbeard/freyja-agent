@@ -148,7 +148,7 @@ async def run_stream(
                 },
             )
         elif interrupts:
-            yield _event("interrupt", interrupt_to_pending(interrupts[0]))
+            yield _event("interrupt", interrupt_to_pending(interrupts[0], runtime.catalog))
         else:
             yield _event("end", {"status": "completed"})
     finally:

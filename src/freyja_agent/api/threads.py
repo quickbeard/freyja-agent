@@ -110,7 +110,7 @@ async def resume_run(
             raise _error(
                 500, "internal", "The thread is paused on more than one interrupt at once."
             )
-        pending = interrupt_to_pending(snapshot.interrupts[0])
+        pending = interrupt_to_pending(snapshot.interrupts[0], runtime.catalog)
         if body.interrupt_id != pending["interrupt_id"]:
             raise _error(
                 409,
@@ -146,6 +146,10 @@ async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
         thread_id=thread_id,
         run_active=await runtime.locks.is_active(thread_id),
         messages=[message_to_dict(message) for message in snapshot.values.get("messages", [])],
-        pending=interrupt_to_pending(snapshot.interrupts[0]) if snapshot.interrupts else None,
+        pending=(
+            interrupt_to_pending(snapshot.interrupts[0], runtime.catalog)
+            if snapshot.interrupts
+            else None
+        ),
         updated_at=snapshot.created_at,
     )

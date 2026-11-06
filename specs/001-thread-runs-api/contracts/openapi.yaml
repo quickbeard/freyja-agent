@@ -277,9 +277,15 @@ components:
           description: Union of every action request's allowed decisions.
     ActionRequest:
       type: object
-      required: [name, args]
+      required: [name, args, server]
       properties:
         name: { type: string }
+        server:
+          type: [string, "null"]
+          description: >
+            Added by feature 002. The tool server the proposed tool belongs to; null for one
+            of Freyja's own tools, such as `send_notification`, and for a tool that is no
+            longer configured. See ../../002-mcp-tool-delegation/contracts/openapi.yaml.
         args: { type: object }
         description: { type: [string, "null"] }
         allowed_decisions:

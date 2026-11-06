@@ -136,6 +136,24 @@ class Catalog:
     def gated(self) -> tuple[CatalogTool, ...]:
         return tuple(tool for tool in self.tools if tool.gated)
 
+    def decisions_for(self, name: str) -> tuple[str, ...]:
+        """The decisions a pending proposal for ``name`` accepts under this catalog (FR-019).
+
+        A proposal can outlive a restart with another configuration, so the answer comes from
+        the tools in force now, not from the ones the proposal was made under:
+
+        - still gated: what the catalog says for the tool;
+        - no longer provided: approve and reject, and the call is never made either way;
+        - no longer gated: approve only, because the call no longer needs a decision and the
+          gate would silently ignore any other.
+        """
+        tool = self.get(name)
+        if tool is None:
+            return (APPROVE, REJECT)
+        if tool.gated:
+            return tool.allowed_decisions
+        return (APPROVE,)
+
 
 def first_line(text: str) -> str:
     return next((line.strip() for line in text.splitlines() if line.strip()), "")

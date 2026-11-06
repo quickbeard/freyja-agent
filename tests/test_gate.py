@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Interrupt
 
+from freyja_agent.agent.catalog import Catalog, CatalogTool, Classification
 from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import ApproveDecision, EditDecision
 from freyja_agent.api.serialize import interrupt_to_pending
@@ -98,6 +99,8 @@ def test_proposal_pauses_the_run_before_executing(
             "args": PROPOSED,
             "description": "Send a notification to a channel (placeholder: logs only).",
             "allowed_decisions": ["approve", "edit", "reject"],
+            # Freyja's own tool: no tool server provides it.
+            "server": None,
         }
     ]
     assert data["allowed_decisions"] == ["approve", "edit", "reject"]
@@ -381,41 +384,57 @@ def test_debug_flag_on_resume_adds_debug_events(
 # shapes below are built by hand to stand in for a second tool with a narrower allowed set.
 
 
-def two_actions_pending() -> dict:
+def gated_tool(name: str, decisions: tuple[str, ...]) -> CatalogTool:
+    return CatalogTool(
+        name=name,
+        server=None,
+        description=name,
+        input_schema={"type": "object", "properties": {"x": {"type": "string"}}},
+        classification=Classification.GATED,
+        allowed_decisions=decisions,
+    )
+
+
+def two_actions_pending(catalog: Catalog) -> dict:
     interrupt = Interrupt(
         value={
             "action_requests": [
                 {"name": "send_notification", "args": PROPOSED, "description": "notify"},
                 {"name": "send_notification", "args": PROPOSED, "description": "notify"},
             ],
-            "review_configs": [
-                {"action_name": "send_notification", "allowed_decisions": ["approve", "reject"]},
-            ],
         },
         id="int-1",
     )
-    pending = interrupt_to_pending(interrupt)
-    pending["action_requests"][1]["allowed_decisions"] = ["approve", "edit", "reject"]
-    pending["allowed_decisions"] = ["approve", "edit", "reject"]
+    pending = interrupt_to_pending(interrupt, catalog)
+    pending["action_requests"][0]["allowed_decisions"] = ["approve", "reject"]
     return pending
 
 
-def test_interrupt_to_pending_keeps_each_actions_allowed_decisions() -> None:
+def test_interrupt_to_pending_gives_each_action_its_own_allowed_decisions() -> None:
+    catalog = Catalog(
+        tools=(
+            gated_tool("a", ("approve", "reject")),
+            gated_tool("b", ("approve", "edit", "reject")),
+        )
+    )
     interrupt = Interrupt(
         value={
             "action_requests": [{"name": "a", "args": {}}, {"name": "b", "args": {}}],
+            # What the gate allowed when it paused is not what a decision is checked against;
+            # the catalog in force is.
             "review_configs": [
-                {"action_name": "a", "allowed_decisions": ["approve", "reject"]},
-                {"action_name": "b", "allowed_decisions": ["approve", "edit", "reject"]},
+                {"action_name": "a", "allowed_decisions": ["approve", "edit", "reject"]},
+                {"action_name": "b", "allowed_decisions": ["approve"]},
             ],
         },
         id="int-2",
     )
-    pending = interrupt_to_pending(interrupt)
+    pending = interrupt_to_pending(interrupt, catalog)
     assert [r["allowed_decisions"] for r in pending["action_requests"]] == [
         ["approve", "reject"],
         ["approve", "edit", "reject"],
     ]
+    assert [r["server"] for r in pending["action_requests"]] == [None, None]
     assert pending["allowed_decisions"] == ["approve", "edit", "reject"]
 
 
@@ -423,7 +442,7 @@ def test_a_decision_is_checked_against_its_own_action_not_the_union(
     make_runtime: Callable[..., Runtime],
 ) -> None:
     catalog = make_runtime(ScriptedChatModel()).catalog
-    pending = two_actions_pending()
+    pending = two_actions_pending(catalog)
     edited = EditDecision(type="edit", args={"channel": "#x", "message": "y"})
     with pytest.raises(HTTPException) as refused:
         build_resume_command(pending, [edited, ApproveDecision(type="approve")], catalog)
