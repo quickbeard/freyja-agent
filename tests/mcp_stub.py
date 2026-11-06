@@ -17,6 +17,7 @@ import base64
 import os
 import sys
 from collections.abc import Callable, Iterable, Mapping
+from pathlib import Path
 from typing import Annotated, Any
 
 from mcp.server.mcpserver import Audio, Image, MCPServer
@@ -26,6 +27,8 @@ from pydantic import BaseModel, Field
 
 # The environment variable the stub reads its credential from.
 STUB_ENV = "STUB_TOKEN"
+# When set, the module appends its process id to this file each time it starts.
+STARTS_FILE_ENV = "STUB_STARTS_FILE"
 
 # One transparent pixel; small, valid enough for a content block.
 _PNG = base64.b64decode(
@@ -163,6 +166,22 @@ def _register_standard_tools(stub: StubServer) -> None:
         return f"token is {token}"
 
 
+def _register_process_tools(stub: StubServer) -> None:
+    """Tools about the server's own process, for the tests that launch the stub for real."""
+
+    @stub.tool()
+    def pid() -> str:
+        """Return the id of the server's process."""
+        stub.record("pid")
+        return str(os.getpid())
+
+    @stub.tool()
+    def env_has(name: str) -> str:
+        """Say whether an environment variable is set in the server's process."""
+        stub.record("env_has", name=name)
+        return "set" if os.environ.get(name) else "unset"
+
+
 def _register_leaky_tool(stub: StubServer) -> None:
     """A tool whose listing itself carries the token: description, schema text, and a hint."""
     token = _token()
@@ -185,13 +204,15 @@ def make_stub(
     empty: bool = False,
     extra: Mapping[str, Callable[..., Any]] | None = None,
     leak_token_in_listing: bool = False,
+    process_tools: bool = False,
 ) -> StubServer:
     """Build a stub server.
 
     ``only`` keeps just the named standard tools; ``empty`` serves no tools at all; ``extra``
     adds tools under any name, including one that collides with another tool or that a model
     could not be offered; ``leak_token_in_listing`` adds a tool whose description, input
-    schema, and hint contain the value of ``STUB_TOKEN``.
+    schema, and hint contain the value of ``STUB_TOKEN``; ``process_tools`` adds ``pid`` and
+    ``env_has``, which report on the server's own process.
     """
     stub = StubServer(name)
     if not empty:
@@ -201,6 +222,8 @@ def make_stub(
                 stub.remove_tool(tool_name)
     if leak_token_in_listing:
         _register_leaky_tool(stub)
+    if process_tools:
+        _register_process_tools(stub)
     for tool_name, function in (extra or {}).items():
         stub.add_tool(function, name=tool_name)
     return stub
@@ -215,11 +238,24 @@ def main(argv: list[str] | None = None) -> None:
         help="serve Streamable HTTP on 127.0.0.1 at /mcp instead of stdio",
     )
     parser.add_argument("--leak-token-in-listing", action="store_true")
+    parser.add_argument(
+        "--chatty-stdout",
+        action="store_true",
+        help="write one line that is not a protocol message, holding the token, to stdout",
+    )
     options = parser.parse_args(argv)
-    stub = make_stub(leak_token_in_listing=options.leak_token_in_listing)
+    stub = make_stub(leak_token_in_listing=options.leak_token_in_listing, process_tools=True)
+    # One line per start of this process, so a test can tell that nothing launched it again.
+    if starts := os.environ.get(STARTS_FILE_ENV):
+        with Path(starts).open("a") as file:
+            file.write(f"{os.getpid()}\n")
     if _token():
         sys.stderr.write(f"stub: started with token {_token()}\n")
         sys.stderr.flush()
+    if options.chatty_stdout:
+        # A badly behaved server: its standard output is for protocol messages only.
+        sys.stdout.write(f"stub: hello, my token is {_token()}\n")
+        sys.stdout.flush()
     if options.http is None:
         stub.run("stdio")
     else:
