@@ -1,0 +1,186 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.2.0
+  description: >
+    Additions and changes made by feature 002, MCP tool delegation. The thread endpoints are
+    unchanged in path, request, and status codes; see ../../001-thread-runs-api/contracts/ for
+    them. This file defines the new tool catalog endpoint and the one changed schema,
+    ActionRequest, which appears in thread state and in the `interrupt` event. No
+    authentication in this increment; bind to a local interface.
+paths:
+  /tools:
+    get:
+      summary: List every tool the orchestrator can call
+      description: >
+        Returns the tools given to the orchestrator at startup and the status of each
+        configured tool server. Reads memory only: it never contacts a server, so a server's
+        status is the outcome of the most recent startup connection or tool call.
+      responses:
+        "200":
+          description: The catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolCatalog" }
+              example:
+                servers:
+                  - name: git
+                    connection: command
+                    reachable: true
+                    checked_at: "2026-11-06T09:14:03.120000+00:00"
+                    error: null
+                    tool_count: 2
+                tools:
+                  - name: ls
+                    server: null
+                    description: Lists all files in a directory.
+                    input_schema:
+                      type: object
+                      properties: { path: { type: string } }
+                    classification: read_only
+                    allowed_decisions: []
+                    server_hints: null
+                  - name: send_notification
+                    server: null
+                    description: Send a notification to a channel.
+                    input_schema:
+                      type: object
+                      properties:
+                        channel: { type: string }
+                        message: { type: string }
+                      required: [channel, message]
+                    classification: gated
+                    allowed_decisions: [approve, edit, reject]
+                    server_hints: null
+                  - name: git_status
+                    server: git
+                    description: Shows the working tree status
+                    input_schema:
+                      type: object
+                      properties: { repo_path: { type: string } }
+                      required: [repo_path]
+                    classification: read_only
+                    allowed_decisions: []
+                    server_hints: { read_only: true, destructive: false, idempotent: true, open_world: false }
+                  - name: git_diff
+                    server: git
+                    description: Shows differences between branches or commits
+                    input_schema:
+                      type: object
+                      properties:
+                        repo_path: { type: string }
+                        target: { type: string }
+                      required: [repo_path, target]
+                    classification: gated
+                    allowed_decisions: [approve, edit, reject]
+                    server_hints: { read_only: true, destructive: false, idempotent: true, open_world: false }
+components:
+  schemas:
+    ToolCatalog:
+      type: object
+      required: [servers, tools]
+      properties:
+        servers:
+          type: array
+          description: One entry per configured tool server, including a server with no tools.
+          items: { $ref: "#/components/schemas/ToolServerStatus" }
+        tools:
+          type: array
+          description: >
+            Exactly the tools the orchestrator was given at startup. Freyja's own tools first,
+            then each server's tools in configuration order.
+          items: { $ref: "#/components/schemas/CatalogTool" }
+    ToolServerStatus:
+      type: object
+      required: [name, connection, reachable, checked_at, error, tool_count]
+      properties:
+        name:
+          type: string
+          pattern: "^[a-z][a-z0-9_-]{0,31}$"
+        connection:
+          type: string
+          enum: [command, address]
+          description: >
+            `command`: the service launched the server and stops it at shutdown. `address`: the
+            server runs separately on this machine and the service connects to it per call.
+        reachable:
+          type: boolean
+          description: Outcome of the most recent attempt to use the server, at startup or in a call.
+        checked_at:
+          type: string
+          format: date-time
+          description: When that attempt finished.
+        error:
+          type: [string, "null"]
+          maxLength: 500
+          description: Reason for the last failure, with credentials removed; null when reachable.
+        tool_count: { type: integer, minimum: 0 }
+    CatalogTool:
+      type: object
+      required: [name, server, description, input_schema, classification, allowed_decisions, server_hints]
+      properties:
+        name:
+          type: string
+          description: Unique across the catalog.
+        server:
+          type: [string, "null"]
+          description: The tool server that provides the tool; null for Freyja's own tools.
+        description: { type: string }
+        input_schema:
+          type: object
+          description: >
+            JSON Schema of the tool's arguments. An edit decision is validated against it. A
+            schema with no `properties`, or an empty one, means the tool declares no input.
+        classification:
+          type: string
+          enum: [read_only, workspace, gated]
+          description: >
+            `read_only`: runs without approval because it changes nothing. `workspace`: runs
+            without approval because it changes only the orchestrator's own workspace; only
+            Freyja's own tools have it. `gated`: every call pauses for a decision. For a server
+            tool this is decided by the operator's configuration alone: `read_only` if the tool
+            is on its server's read-only list, `gated` otherwise.
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+          description: >
+            Empty unless `classification` is `gated`. A gated tool with no declared input
+            allows approve and reject only.
+        server_hints:
+          oneOf:
+            - { $ref: "#/components/schemas/ServerHints" }
+            - { type: "null" }
+          description: >
+            What the server says about its own tool. The server's claim only: it never affects
+            `classification`. Null when the server publishes no hints and for Freyja's own tools.
+    ServerHints:
+      type: object
+      additionalProperties: false
+      description: Only the hints the server set are present.
+      properties:
+        title: { type: string }
+        read_only: { type: boolean }
+        destructive: { type: boolean }
+        idempotent: { type: boolean }
+        open_world: { type: boolean }
+    ActionRequest:
+      type: object
+      required: [name, args, server]
+      description: >
+        Changed from 001: adds `server`. Appears in `PendingDecision.action_requests`, which is
+        returned by `GET /threads/{thread_id}/state` and carried by the `interrupt` event.
+      properties:
+        name: { type: string }
+        args: { type: object }
+        description:
+          type: [string, "null"]
+          description: "For a server tool, the server name, a colon, and the first line of the tool's description."
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+          description: The decisions this action accepts; a decision is validated against this list.
+        server:
+          type: [string, "null"]
+          description: >
+            The tool server the proposed tool belongs to; null for Freyja's own tools, and for
+            a proposal whose tool is no longer configured.
