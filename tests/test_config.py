@@ -43,3 +43,47 @@ def test_feature_settings_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.workspace_dir == "/srv/freyja"
     assert settings.max_steps == 7
     assert settings.run_lock_ttl_seconds == 15
+
+
+MCP_VARS = (
+    "FREYJA_MCP_SERVERS",
+    "FREYJA_MCP_CALL_TIMEOUT_SECONDS",
+    "FREYJA_MCP_STARTUP_TIMEOUT_SECONDS",
+)
+
+
+def test_mcp_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in MCP_VARS:
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings()
+    assert settings.mcp_servers == {}
+    assert settings.mcp_call_timeout_seconds == 30
+    assert settings.mcp_startup_timeout_seconds == 20
+
+
+def test_mcp_settings_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "FREYJA_MCP_SERVERS",
+        '{"git": {"command": "uvx", "args": ["mcp-server-git"], "read_only": ["git_status"]}}',
+    )
+    monkeypatch.setenv("FREYJA_MCP_CALL_TIMEOUT_SECONDS", "2.5")
+    monkeypatch.setenv("FREYJA_MCP_STARTUP_TIMEOUT_SECONDS", "5")
+    settings = Settings()
+    assert list(settings.mcp_servers) == ["git"]
+    assert settings.mcp_servers["git"].command == "uvx"
+    assert settings.mcp_servers["git"].args == ["mcp-server-git"]
+    assert settings.mcp_servers["git"].read_only == ["git_status"]
+    assert settings.mcp_call_timeout_seconds == 2.5
+    assert settings.mcp_startup_timeout_seconds == 5
+
+
+@pytest.mark.parametrize(
+    "name", ["FREYJA_MCP_CALL_TIMEOUT_SECONDS", "FREYJA_MCP_STARTUP_TIMEOUT_SECONDS"]
+)
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_mcp_time_limits_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.removeprefix("FREYJA_").lower()):
+        Settings()

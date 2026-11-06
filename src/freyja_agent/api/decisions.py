@@ -9,10 +9,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from fastapi import HTTPException
-from langchain_core.tools import BaseTool
 from langgraph.types import Command
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
+from freyja_agent.agent.catalog import Catalog
 from freyja_agent.api.schemas import ApproveDecision, EditDecision, RejectDecision
 
 AnyDecision = ApproveDecision | EditDecision | RejectDecision
@@ -26,13 +26,13 @@ def _invalid(errors: list[dict[str, Any]]) -> HTTPException:
 def build_resume_command(
     pending: Mapping[str, Any],
     decisions: Sequence[AnyDecision],
-    tools: Mapping[str, BaseTool],
+    catalog: Catalog,
 ) -> Command:
     """Turn validated API decisions into the ``Command`` that resumes the paused run.
 
-    ``pending`` is the ``PendingDecision`` shape; ``tools`` maps gated tool names to the tool
-    objects whose ``args_schema`` validates edited arguments. Raises an HTTP 422 with a list
-    of field errors on any mismatch, leaving the pending decision untouched.
+    ``pending`` is the ``PendingDecision`` shape; ``catalog`` holds the tools the orchestrator
+    was given, whose argument schemas validate edited arguments. Raises an HTTP 422 with a
+    list of field errors on any mismatch, leaving the pending decision untouched.
     """
     requests = list(pending["action_requests"])
     allowed = list(pending["allowed_decisions"])
@@ -75,16 +75,21 @@ def build_resume_command(
                 entry["message"] = decision.message
             payload.append(entry)
         else:
-            payload.append(_edit(decision, request, index, tools))
+            payload.append(_edit(decision, request, index, catalog))
     return Command(resume={pending["interrupt_id"]: {"decisions": payload}})
 
 
 def _edit(
-    decision: EditDecision, request: Mapping[str, Any], index: int, tools: Mapping[str, BaseTool]
+    decision: EditDecision, request: Mapping[str, Any], index: int, catalog: Catalog
 ) -> dict[str, Any]:
     name = request["name"]
-    tool = tools.get(name)
-    if tool is None or tool.args_schema is None:
+    entry = catalog.get(name)
+    tool = entry.tool if entry is not None and entry.gated else None
+    # Only a tool whose arguments are described by a model can be checked here. A tool server's
+    # tool carries a JSON Schema instead; until its edits are validated against that schema, an
+    # edit of one is refused rather than passed on unchecked.
+    schema = tool.args_schema if tool is not None else None
+    if tool is None or not (isinstance(schema, type) and issubclass(schema, BaseModel)):
         raise _invalid(
             [
                 {
@@ -96,7 +101,7 @@ def _edit(
         )
     errors: list[dict[str, Any]] = []
     try:
-        validated = tool.args_schema.model_validate(decision.args)
+        validated = schema.model_validate(decision.args)
     except ValidationError as exc:
         errors = [
             {**error, "loc": ["body", "decisions", index, "args", *error["loc"]]}
@@ -111,7 +116,7 @@ def _edit(
             "msg": f"Action '{name}' has no argument named '{key}'.",
         }
         for key in decision.args
-        if key not in tool.args_schema.model_fields
+        if key not in schema.model_fields
     ]
     if errors:
         raise _invalid(errors)

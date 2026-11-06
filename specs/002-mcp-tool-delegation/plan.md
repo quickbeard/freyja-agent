@@ -207,5 +207,20 @@ None. The Constitution Check passed without deviations before research and after
   the pool. A failure connecting to a server therefore closes the pool on the way out.
 - **001 contract**: `ActionRequest` in `specs/001-thread-runs-api/contracts/openapi.yaml`
   gains `server` when the schema changes in code, so the two contract files do not disagree.
+- **Phases 1 and 2 as built (2026-11-06)**:
+  - The `connect` seam takes a third argument, `connect(name, config, on_error_output)`: the
+    function that receives each line a launched server writes to its error output. The
+    production target wraps the SDK's stdio transport so the pipe is read in the owner task
+    (`captured_stdio` in `delegates/mcp_servers.py`).
+  - `Runtime.assemble(settings, *, checkpointer, store, locks, ...)` is the shared assembly
+    that `Runtime.open` and the test fixtures both enter.
+  - The lock gained nine packages, not eight: the eight in R1 plus `pywin32`, which `mcp`
+    requires on Windows only.
+  - From the first phase a call's result text is redacted and a tool error is delivered as an
+    error result, so no phase ships a call path without them. Phase 3 adds the notes for
+    non-text content and the warning; Phase 6 adds the status record and the distinct errors.
+  - Until Phase 4 validates edits against a server tool's JSON Schema, an edit of a server
+    tool is refused with 422 instead of being passed on unchecked. The pause still lists
+    edit for such a tool during that time.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.

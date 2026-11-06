@@ -10,7 +10,6 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.types import Interrupt
 
-from freyja_agent.agent.tools import GATED_TOOLS
 from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import ApproveDecision, EditDecision
 from freyja_agent.api.serialize import interrupt_to_pending
@@ -420,16 +419,19 @@ def test_interrupt_to_pending_keeps_each_actions_allowed_decisions() -> None:
     assert pending["allowed_decisions"] == ["approve", "edit", "reject"]
 
 
-def test_a_decision_is_checked_against_its_own_action_not_the_union() -> None:
+def test_a_decision_is_checked_against_its_own_action_not_the_union(
+    make_runtime: Callable[..., Runtime],
+) -> None:
+    catalog = make_runtime(ScriptedChatModel()).catalog
     pending = two_actions_pending()
     edited = EditDecision(type="edit", args={"channel": "#x", "message": "y"})
     with pytest.raises(HTTPException) as refused:
-        build_resume_command(pending, [edited, ApproveDecision(type="approve")], GATED_TOOLS)
+        build_resume_command(pending, [edited, ApproveDecision(type="approve")], catalog)
     assert refused.value.status_code == 422
     assert refused.value.detail[0]["loc"] == ["body", "decisions", 0, "type"]
     assert "not allowed for action 'send_notification'" in refused.value.detail[0]["msg"]
 
-    command = build_resume_command(pending, [ApproveDecision(type="approve"), edited], GATED_TOOLS)
+    command = build_resume_command(pending, [ApproveDecision(type="approve"), edited], catalog)
     decisions = command.resume["int-1"]["decisions"]
     assert [d["type"] for d in decisions] == ["approve", "edit"]
     assert decisions[1]["edited_action"]["args"] == {"channel": "#x", "message": "y"}

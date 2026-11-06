@@ -10,10 +10,12 @@ requires-python = ">=3.12"
 dependencies = [
     "deepagents>=0.7.32,<0.8",
     "fastapi[standard]>=0.162.0",
+    "jsonschema>=4.20",
     "langchain-anthropic>=1.7.6",
     "langchain-openai>=1.7.3",
     "langchain-openrouter>=0.2.9",
     "langgraph-checkpoint-postgres>=3.2.0",
+    "mcp>=2.3,<3",
     "psycopg[binary,pool]>=3.3.6",
     "pydantic-settings>=2.16.1",
     "sse-starlette>=3.6.0",

@@ -1,8 +1,9 @@
 """Tools available to the orchestrator.
 
-The only tool with an effect outside the workspace is ``send_notification``, a placeholder
-that writes a log line and nothing else. It exists so the approval gate (constitution
-principle I) can be built and tested before any real external tool exists.
+The only tool of Freyja's own with an effect outside the workspace is ``send_notification``,
+a placeholder that writes a log line and nothing else. It exists so the approval gate
+(constitution principle I) can be built and tested before any real external tool exists. Its
+classification, and the gate's configuration for it, are in ``agent/catalog.py``.
 """
 
 import logging
@@ -21,16 +22,3 @@ def send_notification(channel: str, message: str) -> str:
     """
     logger.warning("send_notification channel=%s message=%s", channel, message)
     return f"Notification to {channel} recorded (placeholder: logged only)."
-
-
-# Gated tools by name; the resume route validates edited arguments against their schemas.
-GATED_TOOLS = {send_notification.name: send_notification}
-
-# Human-in-the-loop configuration for the gated tool. Edits are validated by the API layer
-# against the tool's own argument schema before the run resumes (FR-012, FR-013).
-SEND_NOTIFICATION_INTERRUPT = {
-    "send_notification": {
-        "allowed_decisions": ["approve", "edit", "reject"],
-        "description": "Send a notification to a channel (placeholder: logs only).",
-    }
-}
