@@ -1,10 +1,80 @@
+import ipaddress
+from typing import Annotated, Self
+from urllib.parse import urlsplit
+
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Shown in proposals, logs, and the catalog, so it is kept short and plain (FR-001).
+SERVER_NAME_PATTERN = r"^[a-z][a-z0-9_-]{0,31}$"
+ServerName = Annotated[str, StringConstraints(pattern=SERVER_NAME_PATTERN)]
+
+
+def is_local_host(host: str | None) -> bool:
+    """True when ``host`` names this machine directly: ``localhost`` or a loopback IP literal.
+
+    No name is looked up, so the answer cannot be changed by a resolver. ``localhost`` is
+    accepted as written; any other name is refused even if it would resolve here. An
+    IPv4-mapped IPv6 literal is judged by the IPv4 address it carries, because how
+    ``is_loopback`` answers for that form differs between Python patch releases (research R2).
+    """
+    if host is None:
+        return False
+    if host == "localhost":
+        return True
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return False
+    if isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None:
+        address = address.ipv4_mapped
+    return address.is_loopback
+
+
+class McpServerConfig(BaseModel):
+    """One tool server in ``FREYJA_MCP_SERVERS`` (contracts/server-config.md).
+
+    Exactly one form of connection: ``command``, which the service launches and stops, or
+    ``url``, the address of a server the operator runs on this machine. No error raised here
+    repeats a value from the entry, since an operator may have put a credential in the wrong
+    field.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    command: str | None = None
+    args: list[str] = Field(default_factory=list)
+    # Names of environment variables, never values, so a credential cannot be written here.
+    pass_env: list[str] = Field(default_factory=list)
+    url: str | None = None
+    # The tools exempt from approval. Every tool not listed is gated (FR-006).
+    read_only: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def _one_local_form(self) -> Self:
+        if (self.command is None) == (self.url is None):
+            raise ValueError("exactly one of 'command' and 'url' must be set")
+        if self.url is not None:
+            if self.args or self.pass_env:
+                raise ValueError("'args' and 'pass_env' are only allowed with 'command'")
+            parts = urlsplit(self.url)
+            if parts.scheme not in ("http", "https"):
+                raise ValueError("'url' must use http or https")
+            if not is_local_host(parts.hostname):
+                raise ValueError(
+                    "'url' must be an address on this machine: localhost or a loopback IP address"
+                )
+        return self
 
 
 class Settings(BaseSettings):
     """Runtime configuration, read from FREYJA_* environment variables."""
 
-    model_config = SettingsConfigDict(env_prefix="FREYJA_", extra="ignore")
+    # hide_input_in_errors: a refused value is never repeated in the error, which matters for
+    # the tool server list (FR-002) and costs nothing elsewhere.
+    model_config = SettingsConfigDict(
+        env_prefix="FREYJA_", extra="ignore", hide_input_in_errors=True
+    )
 
     # Local runs listen only on this machine. Containers set FREYJA_HOST=0.0.0.0.
     host: str = "127.0.0.1"
@@ -18,6 +88,12 @@ class Settings(BaseSettings):
     max_steps: int = 50
     # Expiry of the per-thread run lock; the heartbeat renews every third of it (FR-006).
     run_lock_ttl_seconds: int = 60
+    # Tool servers, as one JSON object of server name to entry. Empty means none (002 FR-001).
+    mcp_servers: dict[ServerName, McpServerConfig] = Field(default_factory=dict)
+    # Time limit for one tool call, including connecting (002 FR-012).
+    mcp_call_timeout_seconds: Annotated[float, Field(gt=0)] = 30
+    # Time limit per server for connecting and listing its tools at startup (002 SC-004).
+    mcp_startup_timeout_seconds: Annotated[float, Field(gt=0)] = 20
 
 
 settings = Settings()

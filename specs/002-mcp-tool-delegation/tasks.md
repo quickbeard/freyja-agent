@@ -39,14 +39,14 @@ Single project, src layout: `src/freyja_agent/`, `tests/`, repo-root files.
 **Purpose**: The two dependencies, the three settings, and the package every later task builds
 on.
 
-- [ ] T001 Add `mcp>=2.3,<3` and `jsonschema>=4.20` to `[project].dependencies` in
+- [X] T001 Add `mcp>=2.3,<3` and `jsonschema>=4.20` to `[project].dependencies` in
       `pyproject.toml` and run `uv lock`; confirm the lock gains eight packages and no other
       version moves (R1, R9)
-- [ ] T002 [P] Add tests for the three new settings to `tests/test_config.py`: defaults
+- [X] T002 [P] Add tests for the three new settings to `tests/test_config.py`: defaults
       `mcp_servers == {}`, `mcp_call_timeout_seconds == 30`, `mcp_startup_timeout_seconds == 20`;
       `FREYJA_MCP_SERVERS` parses from one JSON value; each timeout refuses zero and a negative
       number (FR-015, R2)
-- [ ] T003 [P] Write `tests/test_mcp_config.py` for one server entry: a `command` entry with
+- [X] T003 [P] Write `tests/test_mcp_config.py` for one server entry: a `command` entry with
       `args`, `pass_env`, and `read_only` is accepted; a `url` entry is accepted for
       `http://localhost:8765/mcp`, `http://127.0.0.1:8765/mcp`, `http://[::1]:8765/mcp`, and
       `http://[::ffff:127.0.0.1]:8765/mcp`; refused, with an error whose location is
@@ -55,7 +55,7 @@ on.
       `::ffff:10.0.0.5`, and `example.com`, an unknown field, and a server name that does not
       match `^[a-z][a-z0-9_-]{0,31}$`; user information in a URL does not change the host that is
       checked; no refusal echoes the entry's values (FR-001, FR-004, R2)
-- [ ] T004 Implement the settings in `src/freyja_agent/config.py`: `McpServerConfig` with
+- [X] T004 Implement the settings in `src/freyja_agent/config.py`: `McpServerConfig` with
       `extra="forbid"` and fields `command: str | None`, `args: list[str]` (default empty, only
       with `command`), `pass_env: list[str]` (default empty, only with `command`),
       `url: str | None`, `read_only: list[str]` (default empty); a validator requiring exactly
@@ -67,10 +67,10 @@ on.
       `^[a-z][a-z0-9_-]{0,31}$`, `mcp_call_timeout_seconds: float = 30` and
       `mcp_startup_timeout_seconds: float = 20`, both greater than zero, and
       `hide_input_in_errors=True` in `model_config` (FR-001, FR-015, R2; depends on T002, T003)
-- [ ] T005 [P] Document `FREYJA_MCP_SERVERS`, `FREYJA_MCP_CALL_TIMEOUT_SECONDS=30`, and
+- [X] T005 [P] Document `FREYJA_MCP_SERVERS`, `FREYJA_MCP_CALL_TIMEOUT_SECONDS=30`, and
       `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS=20` in `.env.example`, with the server list commented
       out and one single-quoted example line taken from `contracts/server-config.md` (FR-015)
-- [ ] T006 [P] Create the empty package `src/freyja_agent/delegates/__init__.py`
+- [X] T006 [P] Create the empty package `src/freyja_agent/delegates/__init__.py`
 
 **Checkpoint**: `uv sync` and `uv run pytest` succeed; `test_config` and `test_mcp_config` pass.
 
@@ -84,7 +84,7 @@ User Story 4, which every other story needs.
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T007 [P] Write the stub in `tests/mcp_stub.py`: a factory `make_stub(...)` returning an
+- [X] T007 [P] Write the stub in `tests/mcp_stub.py`: a factory `make_stub(...)` returning an
       MCP server object that records every call it receives, with these tools: `lookup(key)`
       returning text, labelled read-only by the server; `record_note(note, priority?)`, which
       has an effect on the stub's record and which the server also labels read-only; `ping()`
@@ -97,7 +97,7 @@ User Story 4, which every other story needs.
       description that contains `STUB_TOKEN`'s value. Run as `python -m tests.mcp_stub` it
       serves stdio; with `--http <port>` it serves Streamable HTTP at
       `http://127.0.0.1:<port>/mcp` (R13)
-- [ ] T008 [P] Implement classification in `src/freyja_agent/agent/catalog.py`:
+- [X] T008 [P] Implement classification in `src/freyja_agent/agent/catalog.py`:
       `Classification` with the values `read_only`, `workspace`, `gated`; `CatalogTool` with
       `name`, `server` (null for Freyja's own), `description`, `input_schema`, `classification`,
       `allowed_decisions`, `server_hints`; the fixed table for Freyja's own tools, in this
@@ -110,7 +110,7 @@ User Story 4, which every other story needs.
       approve, edit, reject, or approve and reject for a tool with no declared input, and a
       description of `<server>: <first line of the tool's description>` for a server tool, the
       existing sentence for `send_notification` (FR-006, FR-009, FR-011, R8)
-- [ ] T009 [P] Implement tool conversion in `src/freyja_agent/delegates/mcp_tools.py`: a
+- [X] T009 [P] Implement tool conversion in `src/freyja_agent/delegates/mcp_tools.py`: a
       `DelegateTool` record with `name`, `server`, `description`, `input_schema`,
       `server_hints`, `classification`, and the LangChain tool; hints mapped from the server's
       annotations to the keys `title`, `read_only`, `destructive`, `idempotent`, `open_world`,
@@ -120,7 +120,7 @@ User Story 4, which every other story needs.
       server's JSON Schema as a dict, `handle_tool_error=True`, and a coroutine that awaits the
       server link's call, returns the joined text of the result, and raises `ToolException` for
       any failure so that no failure ends a run (FR-006, R5, data-model.md "Delegate tool")
-- [ ] T010 Implement the server link in `src/freyja_agent/delegates/mcp_servers.py`:
+- [X] T010 Implement the server link in `src/freyja_agent/delegates/mcp_servers.py`:
       `default_connect(name, config)` returning the target for `mcp.Client`, which is the URL
       for an address entry, or for a command entry a stdio transport built from
       `StdioServerParameters` with only the entry's `pass_env` variables added to the SDK's
@@ -135,7 +135,7 @@ User Story 4, which every other story needs.
       `asyncio.timeout(call_timeout)`, including connecting. Descriptions, the string values
       inside input schemas, and hints are redacted when the tools are listed (FR-002, FR-005,
       R3, R7, R12)
-- [ ] T011 Implement startup in `src/freyja_agent/delegates/mcp_servers.py`: the async context
+- [X] T011 Implement startup in `src/freyja_agent/delegates/mcp_servers.py`: the async context
       manager `open_tool_servers(configs, *, connect, call_timeout, startup_timeout)` and
       `ToolServerError`. In order: resolve `pass_env` for every command entry, failing with the
       server and the variable named when one is unset or empty; connect to all servers
@@ -149,7 +149,7 @@ User Story 4, which every other story needs.
       server with no tools is accepted. On exit, stop every owner task, which stops the
       launched processes; an address server is left running (FR-003, FR-004, FR-005, R4;
       depends on T009, T010)
-- [ ] T012 Change the factory in `src/freyja_agent/agent/factory.py` and
+- [X] T012 Change the factory in `src/freyja_agent/agent/factory.py` and
       `src/freyja_agent/agent/tools.py`: `build_agent(model, *, checkpointer, store,
       workspace_dir, max_steps, delegate_tools=(), system_prompt=DEFAULT_PROMPT)` returns
       `Orchestrator(agent, catalog)`; the delegate tools join `send_notification` in the tool
@@ -162,7 +162,7 @@ User Story 4, which every other story needs.
       Stop using `GATED_TOOLS` and `SEND_NOTIFICATION_INTERRUPT` from `tools.py` here; T014
       removes them once the routes no longer import them (FR-003, FR-006, FR-007, FR-011, R8,
       R11; depends on T008, T009)
-- [ ] T013 Change the runtime in `src/freyja_agent/runtime/runtime.py`: `Runtime` gains
+- [X] T013 Change the runtime in `src/freyja_agent/runtime/runtime.py`: `Runtime` gains
       `catalog` and `servers`; one shared async context manager assembles a runtime from a
       checkpointer, a store, a lock store, and a `connect` function by entering
       `open_tool_servers`, building the agent with the resulting tools, yielding, and closing
@@ -170,21 +170,21 @@ User Story 4, which every other story needs.
       connect=default_connect)` opens persistence, enters that manager, and closes the pool
       last, so a server that fails to connect closes the pool on the way out (FR-003, FR-005,
       R4, R11; depends on T011, T012)
-- [ ] T014 Switch the routes to the catalog without changing behavior, in
+- [X] T014 Switch the routes to the catalog without changing behavior, in
       `src/freyja_agent/api/threads.py`, `src/freyja_agent/api/decisions.py`, and
       `src/freyja_agent/agent/tools.py`:
       `build_resume_command` receives the gated catalog entries from `runtime.catalog` in place
       of the `GATED_TOOLS` mapping, and an edit for `send_notification` is validated as today;
       then remove `GATED_TOOLS` and `SEND_NOTIFICATION_INTERRUPT` from `tools.py`, which keeps
       only `send_notification` (R9, R11; depends on T012, T013)
-- [ ] T015 Extend `tests/conftest.py`: `make_runtime` unpacks `Orchestrator` and fills
+- [X] T015 Extend `tests/conftest.py`: `make_runtime` unpacks `Orchestrator` and fills
       `catalog` and `servers`; a new fixture builds an app through `create_app(open_runtime=...)`
       using the shared assembly from T013 with in-memory persistence and a `connect` that
       returns stub server objects, so `mcp.Client` connects inside the test process; it takes
       the server list as configuration, returns the stubs so a test can read what each one
       received, and offers a wrapper target that fails on demand and can be told to recover
       (R13; depends on T007, T013)
-- [ ] T016 [P] Extend `tests/test_factory.py`: every tool in the compiled orchestrator and
+- [X] T016 [P] Extend `tests/test_factory.py`: every tool in the compiled orchestrator and
       subagent has a catalog entry or is `execute`; an own tool missing from the fixed table
       raises `UnclassifiedToolError` naming it; with stub tools given as delegate tools, the
       `interrupt_on` keys equal the gated entries for the orchestrator and for the subagent; a
@@ -192,7 +192,7 @@ User Story 4, which every other story needs.
       gated server tool is `<server>: <first line>`; with no delegate tools the catalog holds
       Freyja's nine own tools with the classifications of the fixed table (FR-006, FR-007,
       FR-011; depends on T015)
-- [ ] T017 [P] Write `tests/test_mcp_startup.py`: with a stub configured, the tools are bound
+- [X] T017 [P] Write `tests/test_mcp_startup.py`: with a stub configured, the tools are bound
       to the model on the first run and one log line names the server, its connection form,
       and its tool counts; a server with no tools starts and its line says zero; startup fails,
       naming what the spec requires, for an unreachable server, for two unreachable servers
@@ -203,7 +203,7 @@ User Story 4, which every other story needs.
       answers fails at the startup limit; after each failure every server that did open has
       been closed; leaving the app's lifespan closes the connections (FR-003, FR-004, FR-005,
       SC-004; depends on T015)
-- [ ] T018 [P] Adjust `tests/test_gate.py`, `tests/test_state.py`, `tests/test_subagent.py`,
+- [X] T018 [P] Adjust `tests/test_gate.py`, `tests/test_state.py`, `tests/test_subagent.py`,
       and `tests/test_restart.py` for the `Orchestrator` return type and the moved gate
       configuration, with no change to what they assert (depends on T015)
 

@@ -7,7 +7,6 @@ from fastapi import APIRouter, HTTPException, Path, Query, Request
 from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
-from freyja_agent.agent.tools import GATED_TOOLS
 from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
@@ -119,7 +118,7 @@ async def resume_run(
                 "The interrupt_id is not the pending proposal's; read the thread state and "
                 "decide the proposal it shows.",
             )
-        command = build_resume_command(pending, body.decisions, GATED_TOOLS)
+        command = build_resume_command(pending, body.decisions, runtime.catalog)
     except BaseException:
         await runtime.locks.release(thread_id, owner)
         raise
