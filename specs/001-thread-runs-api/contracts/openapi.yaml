@@ -5,6 +5,20 @@ info:
   description: >
     Thread runs API. Streams are server-sent events; see sse-events.md for the event
     contract. No authentication in this increment; bind to a local interface.
+
+    Errors. A refusal answers 404, 409, or 500 with `ErrorResponse` (`detail` is an object
+    with `code` and `message`). An invalid request answers 422 with `ValidationError`
+    (`detail` is a list). The status tells the two shapes apart. A failure this contract
+    does not list, such as the database becoming unreachable after startup, answers 500
+    with no guaranteed body. No error message contains the value of a credential setting.
+
+    Order of checks. Path, query, and body validation come first (422). Then, for runs:
+    `run_active`, `decision_pending`. For resume: `run_active`, `thread_not_found`,
+    `nothing_pending`, `proposal_mismatch`, and last the decisions themselves (422).
+
+    Compatibility. Fields, event kinds, and error codes may be added without notice; a
+    client ignores what it does not recognize. Removing or changing a documented one is a
+    breaking change and raises `info.version`. The rule holds from this revision on.
 paths:
   /healthz:
     get:
@@ -39,12 +53,17 @@ paths:
           description: >
             Either a run is already active on this thread (code `run_active`) or the thread
             is paused on a proposal that must be decided first through resume
-            (code `decision_pending`)
+            (code `decision_pending`). A paused thread always answers `decision_pending`
+            here, however many interrupts it holds, so this operation has no 500 for a
+            thread paused on more than one interrupt.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "422":
-          description: Invalid thread id or empty message
+          description: >
+            Invalid thread id; a body that is not valid JSON or lacks `message`; a message
+            that is empty or longer than 32,000 characters; or a `debug` value that is not
+            a boolean. When several apply, the body lists each one.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationError" }
@@ -72,16 +91,21 @@ paths:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
           description: >
-            Either a run is active (code `run_active`) or the thread has no pending
-            decision (code `nothing_pending`)
+            A run is active (code `run_active`); the thread has no pending decision (code
+            `nothing_pending`); or `interrupt_id` is not the id of the pending proposal
+            (code `proposal_mismatch`). In the last case no action runs and the pending
+            decision is unchanged.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "422":
           description: >
-            Invalid thread id, unknown decision type, decision count does not match the
-            pending action requests, or edited args fail the tool's schema. The pending
-            decision is unchanged.
+            Invalid thread id; a body that is not valid JSON or lacks `interrupt_id` or
+            `decisions`; a `debug` value that is not a boolean; an unknown decision type; a
+            decision type the action's own `allowed_decisions` does not list; a decision
+            count that does not match the pending action requests; a reject reason longer
+            than 4,000 characters; or edited args that fail the tool's schema, including an
+            argument the tool does not name. The pending decision is unchanged.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationError" }
@@ -127,8 +151,12 @@ components:
       required: true
       schema:
         type: string
-        pattern: "^[A-Za-z0-9._-]{1,128}$"
-      description: Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars.
+        minLength: 1
+        maxLength: 128
+        pattern: "^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*$"
+      description: >
+        Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars; at
+        least one character that is not a dot, so `.` and `..` are refused.
     Debug:
       name: debug
       in: query
@@ -147,8 +175,14 @@ components:
           description: The user's plain-text turn.
     ResumeRequest:
       type: object
-      required: [decisions]
+      required: [interrupt_id, decisions]
       properties:
+        interrupt_id:
+          type: string
+          description: >
+            The `interrupt_id` of the proposal being decided, as reported by the `interrupt`
+            event and by `ThreadState.pending`. It must equal the pending proposal's id, so
+            a decision sent twice cannot be applied to a later proposal.
         decisions:
           type: array
           minItems: 1
@@ -166,7 +200,10 @@ components:
             type: { type: string, enum: [edit] }
             args:
               type: object
-              description: Replacement arguments; validated against the tool's schema. The tool name cannot change.
+              description: >
+                Replacement arguments. They replace the proposed arguments entirely and are
+                validated against the tool's schema; an argument the tool does not name is
+                refused. The tool name cannot change.
         - type: object
           required: [type]
           properties:
@@ -179,12 +216,19 @@ components:
         propertyName: type
     ThreadState:
       type: object
+      description: >
+        The latest durable state of the thread. It has no field for a run that ended in an
+        error; a failure is reported only on that run's stream.
       required: [thread_id, run_active, messages, pending]
       properties:
         thread_id: { type: string }
         run_active:
           type: boolean
-          description: True while an unexpired run lock exists for the thread, on any instance.
+          description: >
+            True while an unexpired run lock exists for the thread, on any instance. While
+            it is true, `messages` holds the steps completed so far, and `pending` may
+            already show a proposal the stream has not reported yet; resume answers
+            `run_active` until that stream has closed.
         messages:
           type: array
           items: { $ref: "#/components/schemas/Message" }
@@ -221,7 +265,9 @@ components:
       type: object
       required: [interrupt_id, action_requests, allowed_decisions]
       properties:
-        interrupt_id: { type: string }
+        interrupt_id:
+          type: string
+          description: Identifies this proposal. A resume sends it back.
         action_requests:
           type: array
           items: { $ref: "#/components/schemas/ActionRequest" }
@@ -250,12 +296,29 @@ components:
           properties:
             code:
               type: string
-              enum: [run_active, decision_pending, nothing_pending, thread_not_found, internal]
+              enum: [run_active, decision_pending, nothing_pending, proposal_mismatch, thread_not_found, internal]
             message: { type: string }
     ValidationError:
       type: object
-      description: FastAPI's default 422 body.
+      description: >
+        The 422 body, in the shape FastAPI produces: one entry per failure. A failure that
+        is not a field validation, such as a decision count that does not match, uses the
+        same entry shape. An entry may carry other keys, such as `input`.
+      required: [detail]
       properties:
         detail:
           type: array
-          items: { type: object }
+          items:
+            type: object
+            required: [type, loc, msg]
+            properties:
+              type:
+                type: string
+                description: Machine-readable kind of failure, for example `missing` or `value_error`.
+              loc:
+                type: array
+                items: { type: [string, integer] }
+                description: Path to the offending value; starts with `path`, `query`, or `body`.
+              msg:
+                type: string
+                description: Human-readable explanation.

@@ -16,7 +16,7 @@ been written; before that, state reads return not found.
 
 | Field | Type | Rules |
 |---|---|---|
-| `thread_id` | string | `^[A-Za-z0-9._-]{1,128}$` (FR-001a). Used verbatim as the LangGraph `configurable.thread_id`. |
+| `thread_id` | string | 1 to 128 characters from `[A-Za-z0-9._-]`, with at least one that is not a dot (FR-001a). Used verbatim as the LangGraph `configurable.thread_id`. |
 | `messages` | list of Message | Full transcript from the latest checkpoint's `messages` channel, in order (FR-007). |
 | `pending` | PendingDecision or null | Derived from the latest checkpoint's interrupts. |
 | `run_active` | boolean | Derived from an unexpired RunLock row for this thread. |
@@ -111,7 +111,7 @@ The proposal waiting on a user. Appears in the `interrupt` event and in `ThreadS
 
 | Field | Type | Rules |
 |---|---|---|
-| `interrupt_id` | string | LangGraph's interrupt id; opaque to clients. |
+| `interrupt_id` | string | LangGraph's interrupt id; opaque to clients. It identifies the proposal, and a resume sends it back. |
 | `action_requests` | list of ActionRequest | One per gated tool call in the step; order is significant. |
 | `allowed_decisions` | list of `approve`, `edit`, `reject` | Union of every action request's allowed decisions. |
 
@@ -119,17 +119,25 @@ ActionRequest: `{ "name": string, "args": object, "description": string or null,
 
 ### Decision (API shape)
 
-One per action request, in the same order, submitted to resume.
+One per action request, in the same order, submitted to resume together with the
+`interrupt_id` of the proposal being decided.
 
 | `type` | Extra fields | Effect |
 |---|---|---|
 | `approve` | none | Tool runs with the proposed args. |
-| `edit` | `args`: object, validated against the tool's argument schema | Tool runs with `args`. The tool name cannot be changed. |
-| `reject` | `message`: string, optional | Tool does not run; the orchestrator receives the message (or a default) as the tool result and continues. |
+| `edit` | `args`: object, validated against the tool's argument schema | Tool runs with `args`, which replace the proposed args entirely. The tool name cannot be changed. |
+| `reject` | `message`: string, optional, at most 4,000 characters | Tool does not run; the orchestrator receives the message as the tool result and continues. Without a message it receives the approval gate's own rejection text, which is not part of the contract. |
 
-Validation (FR-013): `decisions` length must equal `action_requests` length; each `type` must
-be in its own action request's `allowed_decisions`; `edit.args` must validate against the tool's
-schema. Any failure is HTTP 422 and leaves the pending decision untouched.
+Validation (FR-013), in this order:
+
+1. `interrupt_id` must equal the pending proposal's id. Otherwise HTTP 409 `proposal_mismatch`.
+2. `decisions` length must equal `action_requests` length.
+3. Each `type` must be in its own action request's `allowed_decisions`.
+4. `edit.args` must validate against the tool's schema, and an argument the tool does not
+   name is refused.
+
+A failure of rules 2 to 4 is HTTP 422. Every failure leaves the pending decision untouched and
+runs no action.
 
 ### Skill
 

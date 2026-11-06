@@ -10,6 +10,22 @@
 
 ## Clarifications
 
+### API checklist review 2026-11-06
+
+Decisions taken while resolving [checklists/api.md](checklists/api.md), after the feature was implemented. Three of them (the first three below) change behavior and are picked up by the next converge run; the rest record what the service already does.
+
+- Q: Must a decision say which proposal it answers? → A: Yes. A resume names the proposal by the id the pause event and the thread state report. A resume that names any other id is refused as a conflict, nothing executes, and the pending proposal is unchanged. Without this, a decision sent again after a lost response could approve a later proposal the user never saw.
+- Q: Is a thread id made only of dots allowed? → A: No. It is rejected as invalid, because a client or a proxy may rewrite `.` and `..` as path segments and the orchestrator names its working folder after the thread id.
+- Q: What happens to an edit that carries an argument the action does not name? → A: It is refused as malformed and the proposal stays pending. An edit is the approver's exact instruction, so no part of it is dropped silently.
+- Q: What does a client receive when the database fails after startup? → A: A request that has not started streaming fails with a server error whose body is not guaranteed; a run that is streaming ends with the error event. Steps completed before the failure are kept.
+- Q: May a debug event contain sensitive content? → A: Yes. Debug events are unredacted and may carry anything held in the thread's state and the run's internal records. This is accepted because the same reader can read the thread's state and there is no authentication in this increment.
+- Q: What does "never contains secrets" cover in an error message? → A: The service puts no value of its own credential settings in an error response or an error event. For a model failure it relays the provider's error text unfiltered; what that text contains is the provider's choice.
+- Q: Can a client tell a subagent's text from the orchestrator's in message events? → A: No. Message events carry model output from the orchestrator and from any subagent it started, and nothing distinguishes the two in this increment.
+- Q: How does a state read show that a run failed? → A: It does not. State shows every step the run completed and any pause; a failure is reported only on that run's stream.
+- Q: What can a user do after a continuation fails, or its client disconnects, once a decision was accepted? → A: Read the thread's state. If the proposal is still pending, decide again; if it is not, the decision is spent and the action's result is in the transcript.
+- Q: What happens when several approved actions run in one step and one of them fails? → A: Not exercised in this increment, because the one gated action cannot fail. The feature that adds an action that can fail defines it.
+- Q: Which changes to the interface may a client expect without notice? → A: Additions. Fields, event kinds, and error codes may be added; a client ignores what it does not recognize. Removing or changing a documented one is a breaking change and raises the interface version.
+
 ### Session 2026-10-29
 
 - Project direction: Freyja is a general-purpose agent orchestrator, not a security operations product. Domain wording below was generalized accordingly, and the placeholder gated action is `send_notification(channel, message)`. The Input line above is kept verbatim as the original request.
@@ -37,7 +53,7 @@ A user opens a conversation with the orchestrator by sending a message to a thre
 2. **Given** a thread with one completed turn, **When** the user sends a follow-up to the same thread id, **Then** the orchestrator's reply reflects the content of the earlier turn.
 3. **Given** a thread with one completed turn, **When** the service is restarted and the user sends a follow-up, **Then** the earlier turn is still part of the conversation.
 4. **Given** a run in progress on a thread, **When** a second run is requested on the same thread, **Then** the second request is refused with a message that a run is already active, and the first run is unaffected.
-5. **Given** a request whose message is empty, **When** it is submitted, **Then** it is rejected as invalid and no run starts.
+5. **Given** a request whose message is empty or longer than 32,000 characters, **When** it is submitted, **Then** it is rejected as invalid and no run starts.
 
 ---
 
@@ -56,7 +72,8 @@ When the orchestrator wants to take an action with effects outside its workspace
 3. **Given** a paused thread, **When** the user edits the arguments (for example a different channel) and approves, **Then** the action executes with the edited arguments and the log line shows the edited values, not the originals.
 4. **Given** a paused thread, **When** the user rejects, optionally with a reason, **Then** the action never executes, no log line is written, and the orchestrator continues and tells the user the action was not taken, repeating the reason when one was given.
 5. **Given** a thread with no pending decision, **When** a decision is submitted, **Then** it is refused with an explanation and the thread is unchanged.
-6. **Given** a pending decision, **When** the submitted decision is malformed (an unknown decision kind, or edited arguments the action cannot accept), **Then** it is refused and the pending decision remains available.
+6. **Given** a pending decision, **When** the submitted decision is malformed (an unknown decision kind, or edited arguments the action cannot accept, including an argument it does not name), **Then** it is refused and the pending decision remains available.
+7. **Given** a pending decision, **When** a decision is submitted that names a different proposal, for example one that was already decided, **Then** it is refused as a conflict, no action executes, and the pending decision remains available.
 
 ---
 
@@ -73,7 +90,7 @@ A user, or a tool acting for one, reads a thread's current state: the conversati
 1. **Given** a thread with completed turns, **When** its state is read, **Then** the response includes the full transcript in order (human, assistant, tool-call, and tool-result messages) and shows that no decision is pending and no run is active.
 2. **Given** a paused thread, **When** its state is read, **Then** the response includes the pending decision with the same action name and arguments the stream reported.
 3. **Given** a thread id that has never been used, **When** its state is read, **Then** the response says the thread was not found.
-4. **Given** a stream that has just closed, **When** state is read immediately afterwards, **Then** it already reflects that run's outcome.
+4. **Given** a stream that has just closed, **When** state is read immediately afterwards, **Then** it already shows every step that run completed, and its pause when it paused.
 
 ---
 
@@ -112,17 +129,24 @@ A developer clones the repository, starts the local database with one command us
 
 ### Edge Cases
 
+In the cases below, a thread that "stays consistent" or "stays usable" means this: every step completed before the stop is kept; the unfinished step is dropped and the service does not retry it; a state read succeeds; and the next run or resume is accepted once the active-run marker is gone.
+
 - **Client disconnects mid-stream**: the run stops at the next step boundary; work completed before then is saved; the thread stays consistent, so a later state read or run works. The run does not continue in the background in this increment.
 - **Service stops while a run is in flight (not paused)**: the in-flight step is lost and completed steps remain. The thread's active-run marker is released when the service stops cleanly; after a crash it expires on its own, so a new run is refused only until the expiry window passes. The gated action cannot have executed, because it only runs after a recorded approve or edit decision.
 - **Two service instances share one database**: a run started on one instance is visible to every instance, so a run requested on another instance for the same thread is refused as a conflict; a paused thread can be resumed from any instance.
 - **Model provider fails or times out during a run**: the stream emits an error event with a human-readable message and closes; the thread stays consistent; the next run on the thread works.
-- **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run.
-- **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action; each action executes or is skipped according to its own decision.
+- **Run exceeds the step limit**: a run that reaches the configured maximum number of orchestrator steps ends with an error event that names the limit; completed steps are saved and the thread stays usable for the next run. When the limit is reached at the step that proposes a gated action, the run ends with the error event and not with a pause: no proposal is pending and the action does not execute.
+- **More than one gated action proposed in one step**: the pause lists every proposed action; the resume supplies one decision per action, in the order the pause listed them; each action executes or is skipped according to its own decision. What happens when one of several approved actions fails is not defined in this increment, because the one gated action cannot fail.
+- **Decision for a proposal that is no longer the pending one**: a resume names the proposal it decides. When that is not the pending proposal, for example because the decision was sent again after a lost response and the continuation has since paused on a new proposal, the resume is refused as a conflict, no action executes, and the pending proposal is unchanged.
+- **Continuation fails, or its client disconnects, after a decision was accepted**: the thread's state says where things stand. If the proposal is still pending, the action's step did not complete and the user decides again. If it is not, the decision is spent, the action's result is in the transcript, and the user continues with a new message. An interruption in the middle of the action's own step can leave the proposal pending after the action took effect, so deciding again would repeat it; this is an accepted limit in this increment, where the action only writes a log line.
+- **State read while a run is active**: the read returns the steps completed so far and shows the run as active. A proposal can become visible there shortly before the stream's pause event; a decision submitted in that interval is refused as a conflict until the stream has closed.
+- **Database fails after startup**: a request that has not started streaming fails with a server error whose body is not guaranteed; a run that is streaming ends with the error event. Steps completed before the failure are kept.
+- **Malformed request**: a body that is not valid JSON, lacks a required field, or gives a field or the debug flag a value of the wrong type is rejected as invalid, with every offending field named, before any work starts. A field the interface does not define is ignored. A message of only whitespace is not empty and is accepted.
 - **Decision submitted for a thread that was never used**: refused as not found, the same response a state read on that thread gives, so a mistyped id is not mistaken for a thread with nothing pending.
 - **New message while a decision is pending**: the run is refused as a conflict and the proposal stays pending and visible; the user decides through resume first. A message is never treated as an implicit decision.
 - **Edited arguments change the action's target**: the log line and the orchestrator's acknowledgement reflect the edited values. The original proposal stays in the thread history on the orchestrator's message, and the action's result records that a person replaced the arguments before it ran, so both the proposal and what executed are visible afterwards.
 - **Debug flag on resume**: resume accepts the same flag and streams the same event kinds as a run.
-- **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, or contains any other character is rejected as invalid before any work starts.
+- **Thread id with disallowed characters or excessive length**: thread ids are opaque, client-chosen strings of 1 to 128 characters drawn from letters, digits, hyphen, underscore, and dot; an id that is empty, longer, made only of dots, or contains any other character is rejected as invalid before any work starts.
 
 ## Requirements *(mandatory)*
 
@@ -130,11 +154,13 @@ A developer clones the repository, starts the local database with one command us
 
 **Interface**
 
-- **FR-001**: The service MUST expose three thread operations: start a run (`POST /threads/{thread_id}/runs`, taking a message and an optional debug flag), read state (`GET /threads/{thread_id}/state`), and resume a paused thread (`POST /threads/{thread_id}/resume`, taking a decision and an optional debug flag). The existing health check is unchanged.
-- **FR-001a**: A thread id MUST be 1 to 128 characters long and contain only letters, digits, hyphen, underscore, and dot. Every thread operation MUST reject any other id as invalid before doing any work.
-- **FR-002**: Starting a run MUST return a live event stream that a standard HTTP client can consume incrementally. Every event MUST be labeled with its kind. By default the stream carries progress events (one per step the orchestrator completes, including tool calls and their results) and message events (the orchestrator's reply as it is produced).
-- **FR-003**: The stream MUST end in exactly one of three ways, each distinguishable by the client: completion of the reply, a pause event carrying the proposed action's name and arguments, or an error event carrying a human-readable message. The stream closes after the terminal event.
-- **FR-004**: With the debug flag set, the stream MUST additionally include verbose debug events. The flag MUST NOT change the run's behavior or outcome; it is the same run with more detail.
+- **FR-001**: The service MUST expose three thread operations: start a run (`POST /threads/{thread_id}/runs`, taking a message and an optional debug flag), read state (`GET /threads/{thread_id}/state`), and resume a paused thread (`POST /threads/{thread_id}/resume`, taking the id of the proposal being decided, one decision per proposed action, and an optional debug flag). The existing health check is unchanged.
+- **FR-001a**: A thread id MUST be 1 to 128 characters long, contain only letters, digits, hyphen, underscore, and dot, and MUST NOT be made only of dots. Every thread operation MUST reject any other id as invalid before doing any work.
+- **FR-001b**: A request MUST be rejected as invalid, before any work starts and with every offending field named, when its body is not valid JSON, lacks a required field, or gives a field or the debug flag a value of the wrong type; when its message is empty (zero characters) or longer than 32,000 characters; or when a reject reason is longer than 4,000 characters. A field the interface does not define MUST be ignored.
+- **FR-002**: Starting a run MUST return a live event stream that a standard HTTP client can consume incrementally. Every event MUST be labeled with its kind. The first event MUST be a start event, sent before the orchestrator is invoked. By default the stream then carries progress events (one per step that changed the thread's state, including tool calls and their results; work inside a subagent is reported as the hand-off and its result, not step by step) and message events (model output as it is produced, from the orchestrator and from any subagent it started; the two are not distinguished in this increment).
+- **FR-003**: Unless the client disconnects first, the stream MUST end in exactly one of three ways, each distinguishable by the client: completion of the reply, a pause event carrying the proposed action's name and arguments, or an error event carrying a human-readable message. The stream closes after the terminal event.
+- **FR-004**: With the debug flag set, the stream MUST additionally include verbose debug events. The flag MUST NOT change the run's behavior or outcome; it is the same run with more detail. Debug events are unredacted: they may carry anything held in the thread's state and the run's internal records.
+- **FR-004b**: An error response or an error event MUST NOT contain the value of any credential setting of the service. For a model failure the error event relays the provider's error text unfiltered.
 - **FR-004a**: A run MUST stop after a maximum number of orchestrator steps, read from settings with a safe local default. Reaching the limit MUST end the run with the error event described in FR-003, naming the limit, and MUST leave the thread usable.
 
 **Threads and persistence**
@@ -149,8 +175,8 @@ A developer clones the repository, starts the local database with one command us
 - **FR-009**: The runtime MUST include one placeholder environment-changing action, send notification, whose only effect is writing a log line that records the channel and message it was asked to send.
 - **FR-010**: The send-notification action MUST NOT execute unless an approve or edit decision has been recorded on the thread for that specific proposal. No code path MAY bypass this, including any future delegate or background run.
 - **FR-011**: When the orchestrator proposes the send-notification action, the run MUST pause before execution, emit the pause event described in FR-003, and leave the proposal readable through thread state. While a proposal is pending, a new message run on that thread MUST be refused with a conflict explanation; a proposal is resolved only by a decision.
-- **FR-012**: A decision MUST be one of: approve (execute as proposed), edit (execute with user-supplied replacement arguments), or reject (do not execute, with an optional reason). After edit, the action MUST receive the edited arguments. After reject, the orchestrator MUST be told the action was not taken, with the reason when given, and MUST continue the conversation.
-- **FR-013**: Resuming MUST continue the same thread from its pause and stream the continuation using the same event kinds and terminal events as a run. Resume MUST be refused when the thread has no pending decision, and a malformed decision MUST be refused while leaving the pending decision in place.
+- **FR-012**: A decision MUST be one of: approve (execute as proposed), edit (execute with user-supplied arguments that replace the proposed ones entirely), or reject (do not execute, with an optional reason). After edit, the action MUST receive the edited arguments. After reject, the orchestrator MUST be told the action was not taken, with the reason when given, and MUST continue the conversation.
+- **FR-013**: Resuming MUST continue the same thread from its pause and stream the continuation using the same event kinds and terminal events as a run. Resume MUST be refused when the thread has no pending decision. A resume MUST name the proposal it decides, by the id the pause event and the thread state report; a resume that names any other id MUST be refused as a conflict, with no action executed and the pending decision left in place. A malformed decision MUST be refused while leaving the pending decision in place; malformed means a number of decisions other than one per proposed action, a decision kind the action does not allow, or edited arguments the action cannot accept, including an argument it does not name.
 - **FR-014**: A paused thread MUST be resumable after the service has been stopped and restarted, and after any delay, with the same outcome as an uninterrupted run.
 
 **Orchestrator construction**
@@ -164,15 +190,15 @@ A developer clones the repository, starts the local database with one command us
 - **FR-018**: The repository MUST include a local database definition that a developer brings up with one command, whose credentials match the documented example configuration exactly, so the copied example connects without edits.
 - **FR-019**: Every new configurable value introduced by this feature MUST be read through settings from the project's environment-variable prefix, MUST have a safe local default unless it carries a credential, and MUST be documented in the example configuration.
 - **FR-020**: The README MUST document, as they exist, how to bring up the local database, start the service, start a run, read thread state, and resume a paused thread.
-- **FR-021**: Automated tests MUST cover: the stream's event kinds and terminal events, thread continuity, the one-active-run rule including a marker left by a dead instance expiring, the step limit ending a run with an error event, the pause on the gated action, each decision kind and its effect on the log, resume after a simulated restart, and state reads including not-found, and thread id validation. The suite MUST run without a live model provider.
+- **FR-021**: Automated tests MUST cover: the stream's event kinds and terminal events, thread continuity, the one-active-run rule including a marker left by a dead instance expiring, the step limit ending a run with an error event, the pause on the gated action, each decision kind and its effect on the log, resume after a simulated restart, and state reads including not-found, and thread id validation. They MUST also cover each refusal and error path: a run refused while a decision is pending; a resume refused when nothing is pending, on a never-used thread, with a malformed decision, and with a proposal id that is not the pending one; a model failure ending the stream with the error event; and the active-run marker being released when the client disconnects. The suite MUST run without a live model provider.
 
 ### Key Entities
 
-- **Thread**: a conversation identified by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot). Holds the ordered messages, the orchestrator's working state, and at most one pending decision. Outlives the service process.
+- **Thread**: a conversation identified by a client-chosen id (1 to 128 characters: letters, digits, hyphen, underscore, dot; not only dots). Holds the ordered messages, the orchestrator's working state, and at most one pending decision. Outlives the service process.
 - **Run**: one turn of work on a thread, started by a message or by a decision. Ends completed, paused awaiting a decision, or failed. At most one is active per thread across all service instances; the active marker is shared and expires if its instance dies.
-- **Run Event**: an item in a run's live stream, labeled by kind: progress, message, debug, pause, error, or completion. Pause events carry the proposal.
-- **Pending Decision (Proposal)**: an environment-changing action the orchestrator wants to take, with the action's name and arguments, waiting for a user. Visible in thread state until resolved.
-- **Decision**: a user's response to a proposal: approve, edit (with replacement arguments), or reject (with an optional reason). Recorded on the thread.
+- **Run Event**: an item in a run's live stream, labeled by kind: start, progress, message, debug, pause, error, or completion. Pause events carry the proposal.
+- **Pending Decision (Proposal)**: an environment-changing action the orchestrator wants to take, with the action's name and arguments, waiting for a user. It has an id, which a decision must name. Visible in thread state until resolved.
+- **Decision**: a user's response to a proposal: approve, edit (with replacement arguments), or reject (with an optional reason). Recorded on the thread, which means the transcript shows it: after an approval, the action's result; after an edit, a result noting that a person replaced the arguments; after a rejection, a result saying the action was rejected, with the reason. Who decided is not recorded, because there is no authentication in this increment.
 - **Skill**: a committed instruction document in the workspace skills folder that the orchestrator can draw on. Source, not runtime output.
 - **Workspace**: the directory the orchestrator may read and write. Contains the skills folder (committed) and working files written at runtime (not committed).
 
@@ -184,7 +210,7 @@ A developer clones the repository, starts the local database with one command us
 - **SC-002**: In the automated suite, 100% of send-notification proposals pause for a decision, and zero executions occur without a recorded approve or edit.
 - **SC-003**: Each decision kind (approve, edit, reject) produces the specified log outcome and a visible continuation in 100% of automated runs.
 - **SC-004**: A thread paused before a full service stop and start resumes and completes with the same outcome as an uninterrupted run, in 100% of automated runs.
-- **SC-005**: A state read performed immediately after a stream closes reflects that run's outcome (completed, paused, or failed) in 100% of cases; there are no stale reads.
+- **SC-005**: A state read performed immediately after a stream closes shows every step that run completed, and its pause when it paused, in 100% of cases; there are no stale reads. A run that ended in an error is reported as failed only on its stream.
 - **SC-006**: A developer following only the README goes from a clean clone to a completed streamed run against the local database in under 15 minutes, without editing any credential.
 - **SC-007**: The lint, format, and test gates pass on the merged change, and the test suite completes with no network access to a model provider.
 
@@ -194,7 +220,7 @@ A developer clones the repository, starts the local database with one command us
 
 - Out of scope, per the description: delegate agents, authentication, real external tools, the command-line interface, and support for more than one model at a time. Also out of scope for this increment: listing, creating, or deleting threads as separate operations; cancelling a run; continuing a run in the background after the client disconnects; and deterministic escalation of high-severity signals (no severity handling exists yet, so that principle is not exercised).
 - The user's input is plain text; the service treats it as the human turn of the conversation.
-- Thread ids are opaque strings chosen by the client, 1 to 128 characters of letters, digits, hyphen, underscore, and dot; the service rejects anything else and otherwise uses them as given.
+- Thread ids are opaque strings chosen by the client, 1 to 128 characters of letters, digits, hyphen, underscore, and dot, and not only dots; the service rejects anything else and otherwise uses them as given.
 
 **Behavior choices**
 
@@ -204,6 +230,8 @@ A developer clones the repository, starts the local database with one command us
 - A client disconnect stops the run at the next step boundary; completed steps are saved.
 - The debug flag only adds detail; it never alters behavior.
 - Each pending action receives its own decision when a step proposes more than one.
+- A decision names the proposal it answers, so a decision sent twice cannot be applied to a later proposal.
+- The interface may gain fields, event kinds, and error codes without notice; a client ignores what it does not recognize. Removing or changing a documented one is a breaking change and raises the interface version. The rule holds from this revision on.
 
 **Environment and dependencies**
 
@@ -211,5 +239,5 @@ A developer clones the repository, starts the local database with one command us
 - A model provider reachable through the existing provider settings is available when the service runs for real. Automated tests use a scripted stand-in model so they need no network access. How tests obtain persistence without a second runtime code path is decided in the plan; the existing tests' property of needing no database is preserved for tests that do not exercise persistence.
 - A long-term store is opened alongside checkpoint storage for the orchestrator's use; no cross-thread memory feature is specified in this increment.
 - At least one minimal skill is committed so skill loading is observable; it is a placeholder, not a real capability.
-- The service keeps binding to the local interface by default. Because there is no authentication, anyone who can reach the port acts as a user; that is acceptable for local development and is documented.
+- The service keeps binding to the local interface by default. Because there is no authentication, anyone who can reach the port acts as a user; that is acceptable for local development and is documented. For the same reason two things are accepted as they are: debug events are unredacted, and the error event for a model failure relays the provider's error text unfiltered.
 - The existing health check remains a liveness check and is not extended.

@@ -65,12 +65,19 @@ Expected: the stream ends with `event: interrupt` whose data lists one action re
 `send_notification` with `channel` set to `#ops`, and `allowed_decisions` of approve, edit, reject. No
 `send_notification` log line has been written yet.
 
+A resume names the proposal it decides. Read the id from the `interrupt` event, or from the
+thread state as the helper below does; every resume in this guide uses it.
+
+```bash
+pending_id() { curl -s "localhost:8000/threads/$1/state" | jq -r .pending.interrupt_id; }
+```
+
 Approve:
 
 ```bash
 curl -N -X POST localhost:8000/threads/task-42/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "approve"}]}'
+  -d "{\"interrupt_id\": \"$(pending_id task-42)\", \"decisions\": [{\"type\": \"approve\"}]}"
 ```
 
 Expected: the service log shows exactly one `send_notification` line for `#ops`; the stream shows a
@@ -82,7 +89,7 @@ Edit (new thread, same opening message, then):
 ```bash
 curl -N -X POST localhost:8000/threads/task-43/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "edit", "args": {"channel": "#ops-staging", "message": "Nightly report is ready (staging)."}}]}'
+  -d "{\"interrupt_id\": \"$(pending_id task-43)\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"channel\": \"#ops-staging\", \"message\": \"Nightly report is ready (staging).\"}}]}"
 ```
 
 Expected: the log line names `#ops-staging`, not `#ops`.
@@ -92,7 +99,7 @@ Reject (new thread, same opening message, then):
 ```bash
 curl -N -X POST localhost:8000/threads/task-44/resume \
   -H 'content-type: application/json' \
-  -d '{"decisions": [{"type": "reject", "message": "Not needed, I will tell the team myself."}]}'
+  -d "{\"interrupt_id\": \"$(pending_id task-44)\", \"decisions\": [{\"type\": \"reject\", \"message\": \"Not needed, I will tell the team myself.\"}]}"
 ```
 
 Expected: no `send_notification` log line; the orchestrator says the action was not taken and
@@ -101,10 +108,15 @@ repeats the reason.
 Refusals:
 
 ```bash
-curl -s -X POST localhost:8000/threads/demo-1/resume -H 'content-type: application/json' -d '{"decisions": [{"type": "approve"}]}'
+curl -s -X POST localhost:8000/threads/demo-1/resume -H 'content-type: application/json' -d '{"interrupt_id": "any", "decisions": [{"type": "approve"}]}'
 # 409 {"detail": {"code": "nothing_pending", ...}}
-curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d '{"decisions": [{"type": "launch"}]}'
+curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d '{"interrupt_id": "not-the-pending-one", "decisions": [{"type": "approve"}]}'
+# 409 {"detail": {"code": "proposal_mismatch", ...}} on a paused thread; no log line; GET state still shows pending
+curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d "{\"interrupt_id\": \"$(pending_id task-45)\", \"decisions\": [{\"type\": \"launch\"}]}"
 # 422 on a paused thread (unknown type); GET state still shows pending
+curl -s -X POST localhost:8000/threads/task-45/resume -H 'content-type: application/json' -d "{\"interrupt_id\": \"$(pending_id task-45)\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"channel\": \"#ops\", \"message\": \"hi\", \"extra\": \"x\"}}]}"
+# 422 (an argument the action does not name); GET state still shows pending
+curl -s -o /dev/null -w '%{http_code}\n' 'localhost:8000/threads/%2E%2E/state'   # 422, a thread id made only of dots
 curl -s -X POST localhost:8000/threads/task-45/runs -H 'content-type: application/json' -d '{"message": "never mind"}'
 # 409 {"detail": {"code": "decision_pending", ...}}: decide through resume first; the proposal is not dropped
 ```
@@ -125,7 +137,8 @@ the `tool` result; `pending` is null after the resume and non-null on a thread t
 1. Start a run on `task-46` that pauses on `send_notification`.
 2. Stop the service (Ctrl-C) and start it again.
 3. `GET /threads/task-46/state` shows the same `pending` proposal.
-4. Resume with approve; the continuation completes and the log line appears.
+4. Resume with approve, naming the proposal's `interrupt_id`, which is the same as before the
+   restart; the continuation completes and the log line appears.
 
 ## Scenario 5: debug stream and conflicts (User Story 5, FR-006)
 

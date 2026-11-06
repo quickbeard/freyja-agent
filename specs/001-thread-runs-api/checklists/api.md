@@ -14,64 +14,73 @@
 
 ## Requirement Completeness
 
-- [ ] CHK001 - Can each refusal the spec describes ("refused", "rejected as invalid", "not found") be traced to exactly one HTTP status and one error code in the contract? [Traceability, Spec §FR-006, §FR-011, §FR-013, OpenAPI §ErrorResponse]
-- [ ] CHK002 - Is the body of a 422 response specified beyond "FastAPI's default", including the cases that are not field validation failures, such as a decision count that does not match the pending actions? [Completeness, OpenAPI §ValidationError, Research §R2]
-- [ ] CHK003 - Are requirements defined for a request body that is not valid JSON, lacks a required field, carries fields the contract does not name, or gives `debug` a value that is not a boolean? [Gap, OpenAPI §RunRequest, §ResumeRequest, §Debug]
-- [ ] CHK004 - Are the length limits the contract sets on a message (32,000 characters) and on a reject reason (4,000) stated as requirements in the spec, with the response when one is exceeded? [Gap, Spec §US1 scenario 5, OpenAPI §RunRequest, §Decision]
-- [ ] CHK005 - Are requirements defined for a database failure after startup, during a run, a state read, or a resume: the response or the event the client receives? [Gap, Exception Flow, Spec §FR-008]
-- [ ] CHK006 - Does the list of 422 causes for resume include a decision type that the action's own `allowed_decisions` does not permit, which the data model validates? [Completeness, OpenAPI §resume 422, Data model §Decision]
-- [ ] CHK007 - Are requirements stated for what a `debug` event may contain, given that its shape is outside the contract and only the `error` event is required to hold no secrets? [Gap, Events §debug, §error]
-- [ ] CHK008 - Does the resume request identify the proposal it decides, or do the requirements say how a decision sent against an outdated proposal is kept from applying to a newer one on the same thread? [Gap, Spec §FR-010, OpenAPI §ResumeRequest]
+- [x] CHK001 - Can each refusal the spec describes ("refused", "rejected as invalid", "not found") be traced to exactly one HTTP status and one error code in the contract? [Traceability, Spec §FR-006, §FR-011, §FR-013, OpenAPI §ErrorResponse]
+- [x] CHK002 - Is the body of a 422 response specified beyond "FastAPI's default", including the cases that are not field validation failures, such as a decision count that does not match the pending actions? [Completeness, OpenAPI §ValidationError, Research §R2]
+- [x] CHK003 - Are requirements defined for a request body that is not valid JSON, lacks a required field, carries fields the contract does not name, or gives `debug` a value that is not a boolean? [Gap, OpenAPI §RunRequest, §ResumeRequest, §Debug]
+- [x] CHK004 - Are the length limits the contract sets on a message (32,000 characters) and on a reject reason (4,000) stated as requirements in the spec, with the response when one is exceeded? [Gap, Spec §US1 scenario 5, OpenAPI §RunRequest, §Decision]
+- [x] CHK005 - Are requirements defined for a database failure after startup, during a run, a state read, or a resume: the response or the event the client receives? [Gap, Exception Flow, Spec §FR-008]
+- [x] CHK006 - Does the list of 422 causes for resume include a decision type that the action's own `allowed_decisions` does not permit, which the data model validates? [Completeness, OpenAPI §resume 422, Data model §Decision]
+- [x] CHK007 - Are requirements stated for what a `debug` event may contain, given that its shape is outside the contract and only the `error` event is required to hold no secrets? [Gap, Events §debug, §error]
+- [x] CHK008 - Does the resume request identify the proposal it decides, or do the requirements say how a decision sent against an outdated proposal is kept from applying to a newer one on the same thread? [Gap, Spec §FR-010, OpenAPI §ResumeRequest]
 
 ## Requirement Clarity
 
-- [ ] CHK009 - Is "empty" defined for a message: zero characters only, or also a message of whitespace? [Ambiguity, Spec §US1 scenario 5, OpenAPI §RunRequest]
-- [ ] CHK010 - Is "the thread stays consistent" after an error, a step limit, or a disconnect defined in terms a reader can check: what the transcript holds and what the next run does with an unfinished step? [Ambiguity, Spec §Edge Cases, §FR-004a]
-- [ ] CHK011 - Are the criteria that separate the `model_error` code from `internal` stated, and is the set of stream error codes declared closed? [Clarity, Events §error]
-- [ ] CHK012 - Is "never contains secrets" defined: which values count as secrets, and whether the rule also covers the message of an HTTP error response? [Ambiguity, Events §error, OpenAPI §ErrorResponse]
-- [ ] CHK013 - Is it specified which failures answer with an HTTP status and which with an `error` event on a stream that already returned 200, including a failure after the request is accepted and before `start` is sent? [Clarity, Spec §FR-003, Events §Order guarantees]
-- [ ] CHK014 - Is the precedence stated when a request meets several refusal conditions at once, for example a resume on a never-used thread while a run lock is held, or an invalid thread id sent with an empty message? [Ambiguity, Research §R9, OpenAPI §resume]
-- [ ] CHK015 - Is the mapping from decisions to actions (by position, in the order the pause listed them) stated in the spec, or only in the contract? [Clarity, Spec §Edge Cases, OpenAPI §ResumeRequest]
-- [ ] CHK016 - Does "replacement arguments" say that an edit replaces the whole argument set instead of merging with the proposed one, and whether an argument the action does not name is refused? [Clarity, Spec §FR-012, Data model §Decision]
-- [ ] CHK017 - Is the text the orchestrator receives on a reject with no reason specified, or left as "a default"? [Clarity, Spec §FR-012, Data model §Decision]
-- [ ] CHK018 - Is "Recorded on the thread" defined for each decision kind: where an approval, an edit, and a rejection can be read afterwards? [Ambiguity, Spec §Key Entities, §FR-010]
-- [ ] CHK019 - Can a client tell from a `message` event whether the text came from the orchestrator or from the subagent, given that FR-002 calls it "the orchestrator's reply"? [Ambiguity, Spec §FR-002, Events §update, §message]
+- [x] CHK009 - Is "empty" defined for a message: zero characters only, or also a message of whitespace? [Ambiguity, Spec §US1 scenario 5, OpenAPI §RunRequest]
+- [x] CHK010 - Is "the thread stays consistent" after an error, a step limit, or a disconnect defined in terms a reader can check: what the transcript holds and what the next run does with an unfinished step? [Ambiguity, Spec §Edge Cases, §FR-004a]
+- [x] CHK011 - Are the criteria that separate the `model_error` code from `internal` stated, and is the set of stream error codes declared closed? [Clarity, Events §error]
+- [x] CHK012 - Is "never contains secrets" defined: which values count as secrets, and whether the rule also covers the message of an HTTP error response? [Ambiguity, Events §error, OpenAPI §ErrorResponse]
+- [x] CHK013 - Is it specified which failures answer with an HTTP status and which with an `error` event on a stream that already returned 200, including a failure after the request is accepted and before `start` is sent? [Clarity, Spec §FR-003, Events §Order guarantees]
+- [x] CHK014 - Is the precedence stated when a request meets several refusal conditions at once, for example a resume on a never-used thread while a run lock is held, or an invalid thread id sent with an empty message? [Ambiguity, Research §R9, OpenAPI §resume]
+- [x] CHK015 - Is the mapping from decisions to actions (by position, in the order the pause listed them) stated in the spec, or only in the contract? [Clarity, Spec §Edge Cases, OpenAPI §ResumeRequest]
+- [x] CHK016 - Does "replacement arguments" say that an edit replaces the whole argument set instead of merging with the proposed one, and whether an argument the action does not name is refused? [Clarity, Spec §FR-012, Data model §Decision]
+- [x] CHK017 - Is the text the orchestrator receives on a reject with no reason specified, or left as "a default"? [Clarity, Spec §FR-012, Data model §Decision]
+- [x] CHK018 - Is "Recorded on the thread" defined for each decision kind: where an approval, an edit, and a rejection can be read afterwards? [Ambiguity, Spec §Key Entities, §FR-010]
+- [x] CHK019 - Can a client tell from a `message` event whether the text came from the orchestrator or from the subagent, given that FR-002 calls it "the orchestrator's reply"? [Ambiguity, Spec §FR-002, Events §update, §message]
 
 ## Requirement Consistency
 
-- [ ] CHK020 - Does FR-002's "one per step the orchestrator completes" agree with the event contract, which omits steps that produce no state update and steps taken inside a subagent? [Conflict, Spec §FR-002, Events §update]
-- [ ] CHK021 - Does the spec's list of event kinds (progress, message, debug, pause, error, completion) agree with the contract, which adds `start`? [Conflict, Spec §Key Entities, §FR-002, Events §start]
-- [ ] CHK022 - Does FR-003's "exactly one of three ways" agree with the disconnect case, where the stream ends with no terminal event? [Conflict, Spec §FR-003, §Edge Cases, Data model §Run]
-- [ ] CHK023 - Are the two error body shapes, `detail` as an object with `code` and `message` and `detail` as a list, presented as a deliberate difference that a client can tell apart by status alone? [Consistency, OpenAPI §ErrorResponse, §ValidationError]
-- [ ] CHK024 - Does the `interrupt` example, whose action request has no `allowed_decisions`, agree with the data model, which gives every action request that field, and is it clear which of the two lists a client must use when the top-level one is a union? [Conflict, Events §interrupt, Data model §PendingDecision, OpenAPI §ActionRequest]
-- [ ] CHK025 - Is the 500 response for a thread paused on more than one interrupt documented on all three operations, or is its absence from starting a run intended and explained? [Consistency, OpenAPI §runs, §resume, §state]
-- [ ] CHK026 - Does SC-005's "failed" outcome agree with the state response, which has no field that shows a run ended in error? [Conflict, Spec §SC-005, OpenAPI §ThreadState]
+- [x] CHK020 - Does FR-002's "one per step the orchestrator completes" agree with the event contract, which omits steps that produce no state update and steps taken inside a subagent? [Conflict, Spec §FR-002, Events §update]
+- [x] CHK021 - Does the spec's list of event kinds (progress, message, debug, pause, error, completion) agree with the contract, which adds `start`? [Conflict, Spec §Key Entities, §FR-002, Events §start]
+- [x] CHK022 - Does FR-003's "exactly one of three ways" agree with the disconnect case, where the stream ends with no terminal event? [Conflict, Spec §FR-003, §Edge Cases, Data model §Run]
+- [x] CHK023 - Are the two error body shapes, `detail` as an object with `code` and `message` and `detail` as a list, presented as a deliberate difference that a client can tell apart by status alone? [Consistency, OpenAPI §ErrorResponse, §ValidationError]
+- [x] CHK024 - Does the `interrupt` example, whose action request has no `allowed_decisions`, agree with the data model, which gives every action request that field, and is it clear which of the two lists a client must use when the top-level one is a union? [Conflict, Events §interrupt, Data model §PendingDecision, OpenAPI §ActionRequest]
+- [x] CHK025 - Is the 500 response for a thread paused on more than one interrupt documented on all three operations, or is its absence from starting a run intended and explained? [Consistency, OpenAPI §runs, §resume, §state]
+- [x] CHK026 - Does SC-005's "failed" outcome agree with the state response, which has no field that shows a run ended in error? [Conflict, Spec §SC-005, OpenAPI §ThreadState]
 
 ## Acceptance Criteria Quality
 
-- [ ] CHK027 - Can SC-001 be measured objectively: is "accepted" defined as the moment the clock starts, and is "starts promptly" in User Story 1 tied to the same one second? [Measurability, Spec §SC-001, §US1 scenario 1]
-- [ ] CHK028 - Does FR-021 name every refusal and error path that must be tested: a run refused for a pending decision, a resume with nothing pending, a malformed decision, a resume on a never-used thread, a model failure, and a client disconnect? [Measurability, Spec §FR-021, Research §R11]
-- [ ] CHK029 - Is a model failure during a run tied to an acceptance scenario with a stated pass criterion, or only to an edge case? [Acceptance Criteria, Spec §Edge Cases, §US1]
+- [x] CHK027 - Can SC-001 be measured objectively: is "accepted" defined as the moment the clock starts, and is "starts promptly" in User Story 1 tied to the same one second? [Measurability, Spec §SC-001, §US1 scenario 1]
+- [x] CHK028 - Does FR-021 name every refusal and error path that must be tested: a run refused for a pending decision, a resume with nothing pending, a malformed decision, a resume on a never-used thread, a model failure, and a client disconnect? [Measurability, Spec §FR-021, Research §R11]
+- [x] CHK029 - Is a model failure during a run tied to an acceptance scenario with a stated pass criterion, or only to an edge case? [Acceptance Criteria, Spec §Edge Cases, §US1]
 
 ## Scenario Coverage
 
-- [ ] CHK030 - Are requirements defined for a continuation that fails after a decision was accepted: whether the action ran, whether the proposal is still pending, and what the user can do next? [Coverage, Recovery Flow, Gap, Spec §FR-013]
-- [ ] CHK031 - Are requirements defined for a client that disconnects during a continuation, between the decision and the end of the action's step: whether the action ran and whether the proposal remains? [Coverage, Exception Flow, Spec §Edge Cases]
-- [ ] CHK032 - Are requirements defined for a decision submitted twice, in sequence after a lost response or at once from two instances: the second response, and that the action does not run twice? [Coverage, Spec §US2 scenario 2, §US2 scenario 5, Research §R9]
-- [ ] CHK033 - Are requirements defined for a step with several approved actions when one of them fails: whether the others still run and how the result is reported? [Coverage, Gap, Spec §Edge Cases]
-- [ ] CHK034 - Are requirements stated for a proposal raised inside the subagent: that the pause event, the thread state, and the resume behave the same as for one raised by the orchestrator? [Coverage, Gap, Spec §FR-010, Research §R1]
+- [x] CHK030 - Are requirements defined for a continuation that fails after a decision was accepted: whether the action ran, whether the proposal is still pending, and what the user can do next? [Coverage, Recovery Flow, Gap, Spec §FR-013]
+- [x] CHK031 - Are requirements defined for a client that disconnects during a continuation, between the decision and the end of the action's step: whether the action ran and whether the proposal remains? [Coverage, Exception Flow, Spec §Edge Cases]
+- [x] CHK032 - Are requirements defined for a decision submitted twice, in sequence after a lost response or at once from two instances: the second response, and that the action does not run twice? [Coverage, Spec §US2 scenario 2, §US2 scenario 5, Research §R9]
+- [x] CHK033 - Are requirements defined for a step with several approved actions when one of them fails: whether the others still run and how the result is reported? [Coverage, Gap, Spec §Edge Cases]
+- [x] CHK034 - Are requirements stated for a proposal raised inside the subagent: that the pause event, the thread state, and the resume behave the same as for one raised by the orchestrator? [Coverage, Gap, Spec §FR-010, Research §R1]
 
 ## Edge Case Coverage
 
-- [ ] CHK035 - Is the outcome specified when the step limit is reached at the step that proposes a gated action: a pause event or an error event? [Edge Case, Gap, Spec §FR-004a, §FR-011]
-- [ ] CHK036 - Is a thread id made only of dots (`.` or `..`), which the allowed characters permit and a client or proxy may rewrite as a path segment, addressed? [Edge Case, Spec §FR-001a, OpenAPI §ThreadId]
-- [ ] CHK037 - Is the result of a state read during an active run specified: which transcript the reader sees, and whether `pending` can appear before the stream's pause event? [Edge Case, Spec §FR-007, §SC-005, Research §R5]
+- [x] CHK035 - Is the outcome specified when the step limit is reached at the step that proposes a gated action: a pause event or an error event? [Edge Case, Gap, Spec §FR-004a, §FR-011]
+- [x] CHK036 - Is a thread id made only of dots (`.` or `..`), which the allowed characters permit and a client or proxy may rewrite as a path segment, addressed? [Edge Case, Spec §FR-001a, OpenAPI §ThreadId]
+- [x] CHK037 - Is the result of a state read during an active run specified: which transcript the reader sees, and whether `pending` can appear before the stream's pause event? [Edge Case, Spec §FR-007, §SC-005, Research §R5]
 
 ## Dependencies & Assumptions
 
-- [ ] CHK038 - Is it stated which parts of the event payloads follow the underlying library and may change with it, beyond `debug`: the node names in `update` and the keys of `metadata` in `message`? [Dependency, Events §update, §message, §debug]
-- [ ] CHK039 - Is a compatibility rule stated for the API: whether fields and event kinds may be added without notice, and how a breaking change would be signalled? [Gap, OpenAPI §info]
-- [ ] CHK040 - Is the assumption that the approval gate yields one interrupt per step recorded as a dependency on the pinned library version, given that the 500 response rests on it? [Assumption, Research §R2, §R9, OpenAPI §resume]
+- [x] CHK038 - Is it stated which parts of the event payloads follow the underlying library and may change with it, beyond `debug`: the node names in `update` and the keys of `metadata` in `message`? [Dependency, Events §update, §message, §debug]
+- [x] CHK039 - Is a compatibility rule stated for the API: whether fields and event kinds may be added without notice, and how a breaking change would be signalled? [Gap, OpenAPI §info]
+- [x] CHK040 - Is the assumption that the approval gate yields one interrupt per step recorded as a dependency on the pinned library version, given that the 500 response rests on it? [Assumption, Research §R2, §R9, OpenAPI §resume]
+
+## Review record
+
+Evaluated on 2026-11-06 at the reviewer's request, against the spec, the plan, and the two contracts as merged, with probes of the shipped service where an item turned on what it does. Ticked after the fixes below were made in the same pull request.
+
+- **Passed as written (13)**: CHK001, CHK009, CHK011, CHK013, CHK014, CHK015, CHK017, CHK023, CHK027, CHK029, CHK032, CHK034, CHK040. Two notes: CHK009 passes because the contract defines empty as zero characters, so a message of only whitespace is accepted; CHK032 passes for a plain duplicate, and the case of a retry that lands on a later proposal is CHK008.
+- **Resolved by a wording fix (15)**, where the documents now say what the service already does: CHK002 (OpenAPI `ValidationError`), CHK003 and CHK004 (FR-001b), CHK006 (OpenAPI resume 422), CHK010 (Edge Cases, opening paragraph), CHK018 (Key Entities, Decision), CHK020 and CHK021 (FR-002, Key Entities), CHK022 (FR-003, Events order guarantees), CHK024 (Events `interrupt`), CHK025 (OpenAPI runs 409), CHK028 (FR-021), CHK035 (Edge Cases, Events `error`, research R10), CHK037 (Edge Cases, OpenAPI `ThreadState`), CHK038 (Events, Stability).
+- **Resolved by a decision, wording only (9)**, each recorded in the spec's Clarifications under "API checklist review 2026-11-06": CHK005 (database failure after startup), CHK007 (debug events are unredacted), CHK012 (FR-004b), CHK019 (FR-002), CHK026 (SC-005), CHK030 and CHK031 (Edge Cases), CHK033 (Edge Cases), CHK039 (Assumptions, OpenAPI `info`).
+- **Resolved by a decision that changes behavior (3)**: CHK008 (a resume names its proposal: FR-013, OpenAPI `ResumeRequest`), CHK016 (an edit with an argument the action does not name is refused: FR-013), CHK036 (a thread id made only of dots is refused: FR-001a). The documents state these requirements, which is what the items test. The code does not implement them yet; research R16 holds the evidence, and the next `/speckit-converge` run turns them into tasks.
 
 ## Notes
 

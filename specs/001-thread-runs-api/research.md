@@ -94,6 +94,10 @@ tool call in the transcript and records the replacement in the tool result messa
 reviewer replaced this tool call before it ran"), so the original proposal remains visible in
 thread history after all. The spec's edge case was reworded back to say so.
 
+**Amendment (2026-11-06, API checklist review)**: two rules were added to the validation
+above; see R16. The resume request names its proposal (`interrupt_id`), and an edit that
+carries an argument the tool does not name is refused.
+
 ## R3. Model resolution from settings
 
 **Decision**: pass `Settings.model` as the string to `create_deep_agent`; do not construct the
@@ -240,6 +244,7 @@ legitimately empty); reading the `checkpoints` table directly (bypasses the save
 | resume | `metadata is None` | 404 `thread_not_found` |
 | resume | lease held | 409 `run_active` |
 | resume | no interrupts | 409 `nothing_pending` |
+| resume | `interrupt_id` is not the pending interrupt's id (added 2026-11-06, R16) | 409 `proposal_mismatch`, pending untouched |
 | resume | decisions fail R2 validation | 422, pending untouched |
 
 Order: acquire the lease first, then read state under the lease, then either refuse (releasing
@@ -295,6 +300,16 @@ config (`middleware/subagents.py:886-893`). A probe with a parent limit of 12 ra
 for 2,500 model calls. The factory therefore supplies the general-purpose subagent itself,
 mirroring Deep Agents' stack, as a compiled runnable bound with `recursion_limit=max_steps`
 (`agent/factory.py`, `_general_purpose_subagent`). `tests/test_subagent.py` holds the bound.
+
+**Correction (2026-11-06, API checklist review)**: the step arithmetic in the rationale above
+does not describe the assembled agent. Middleware nodes count as steps alongside the model and
+tool nodes. Probe against the shipped factory: a plain reply needs a limit of 7; each tool call
+adds 4; a run that proposes `send_notification` reaches its pause from a limit of 5. With a
+limit of 4 to 6 a plain reply is saved to the thread and the stream still ends with
+`step_limit`. The default of 50 therefore allows about 10 tool calls and a final reply, not 16.
+With a limit of 4, a run whose first model call proposes the gated action ends with
+`step_limit`, nothing is pending, and the action does not run; the spec's step-limit edge case
+now says so.
 
 ## R11. Test strategy
 
@@ -414,3 +429,74 @@ two arguments exercise the edit path with more than one field.
 **Alternatives considered**: writing to a working file instead of logging (the description says
 "only logs"); a destructive placeholder such as deleting a record (harder to motivate in a
 quickstart, and a notification already proves the gate).
+
+## R16. API checklist review (2026-11-06)
+
+Written after the feature was implemented, while resolving
+[checklists/api.md](checklists/api.md). "Probe" here means a throwaway test run against the
+shipped app through the suite's in-memory fixtures. The first three decisions change behavior;
+the code does not implement them yet, and the next converge run picks them up.
+
+**Decision 1: a resume names its proposal.** `ResumeRequest` gains a required `interrupt_id`.
+After the `nothing_pending` check, the route compares it with the pending interrupt's id and
+answers 409 `proposal_mismatch` when they differ, before any decision is validated.
+
+Rationale: FR-010 allows the action to run only on a decision "for that specific proposal",
+and the request carried nothing that tied a decision to one. Probe: a script proposed a
+notification to `#ops` and then one to `#exec`. Approving the first made the continuation
+pause on the second, under a new interrupt id. Sending the same approve request again, as a
+client would after a lost response, returned 200 and ran the second notification, which the
+user had not seen. The interrupt id already reaches the client in the `interrupt` event and
+in `ThreadState.pending`, so no new identifier is needed.
+
+Alternatives considered: an optional field (the unsafe request stays the default); an
+idempotency key per request (protects a retry, but not a decision made against an outdated
+state read).
+
+**Decision 2: a thread id made only of dots is refused.** The id must hold at least one
+character that is not a dot.
+
+Rationale: probe: `GET /threads/%2E%2E/state` reaches the route with the id `..`, and a run on
+it completes; the same request written as `/threads/../state` is rewritten by the client to
+`/state` and never reaches the route. The orchestrator is told to keep working files under
+`cases/<thread_id>/` (`agent/context.py`), so the id `..` names the workspace root instead of
+a folder of its own. The path stays inside the workspace, because the backend confines it
+(R1), so this is a correctness fix, not an escape.
+
+Alternatives considered: refusing only `.` and `..` (three or more dots are harmless as a
+path, but one rule is easier to state); dropping the dot from the allowed characters (breaks
+ids such as `v1.2`).
+
+**Decision 3: an edit with an argument the tool does not name is refused.** Edited arguments
+are validated with unknown keys forbidden; the failure is a 422 in the usual entry shape.
+
+Rationale: probe: an edit that added `"extra": "x"` to valid arguments returned 200 and the
+tool ran without it, because the tool's argument model ignores unknown keys by default and the
+route passes on only the validated fields. A partial edit (only `channel`) is already refused
+with `missing`, which confirms that an edit replaces the arguments and does not merge. An edit
+is the approver's exact instruction, so dropping part of it silently is the wrong default.
+Feature 002 requires the same for tools served over MCP.
+
+Alternatives considered: documenting the argument as ignored (no code change, but what runs
+is then not what was submitted).
+
+**Recorded without a behavior change:**
+
+- *Request validation.* Probe: a body that is not JSON, a missing field, `debug=maybe`, and a
+  message of 32,001 characters each answer 422; an invalid thread id sent with an empty
+  message answers one 422 that lists both; an unknown body field is ignored; a message of
+  only whitespace is accepted.
+- *Database failure after startup.* Probe: when the lease cannot be acquired because the
+  store raises, the response is 500 with the plain-text body `Internal Server Error`, outside
+  the `ErrorResponse` shape. During a stream, an exception from the checkpointer is caught by
+  the generic handler in `run_stream` and becomes an `error` event with code `internal`; this
+  second case is from reading the code, not from a probe.
+- *A continuation that fails after a decision.* Probe: the model failed on the call after an
+  approved action. The action ran once, the stream ended with `model_error`, the state showed
+  the tool result with nothing pending, and a second resume answered 409 `nothing_pending`.
+- *The step limit at the proposing step.* See the correction under R10.
+- *Error text.* `model_error` carries the provider's exception text (`run_stream` formats it
+  into the message); `internal` carries a fixed sentence. HTTP error messages are fixed
+  strings. None of them reads a credential setting.
+- *Subagent output.* `message` events pass on `langgraph_node` and `langgraph_step` only, so
+  a subagent's chunks cannot be told from the orchestrator's.
