@@ -93,13 +93,22 @@ Server names match `^[a-z][a-z0-9_-]{0,31}$`. The contract is in
   is `mcp_servers.<name>`, which names the server).
 - The address rule uses no DNS: `urlsplit(url).hostname` must be `localhost` or parse as an IP
   address whose `is_loopback` is true. A name that happens to resolve to this machine is
-  refused, so the check is deterministic and cannot be changed by a resolver.
+  refused, so the check is deterministic and cannot be changed by a resolver. The one name
+  accepted, `localhost`, is accepted as written, so the machine's own resolution of that name
+  is trusted (spec assumption). Probe, Python 3.12.16: `::ffff:127.0.0.1` counts as loopback,
+  `0.0.0.0` and `::ffff:10.0.0.5` do not, and user information in the address does not change
+  the host that is checked.
+- A server at a loopback address cannot send the client elsewhere: the SDK follows a redirect
+  only when it stays on the endpoint's origin, and fails the request otherwise
+  (`mcp/client/streamable_http.py`). Freyja passes no HTTP client of its own, so that rule is
+  the one in force.
 - `pass_env` holds variable names, never values, so a credential cannot be written into the
   server list by following the documented shape (FR-002). The SDK's stdio transport gives a
   launched process only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, and `USER` by default
   (`mcp/client/stdio.py`, `get_default_environment`); probe: `FREYJA_DATABASE_URI` was not
-  visible to the child and a `pass_env` variable was. A name in `pass_env` that is unset in
-  Freyja's environment fails startup naming the server and the variable.
+  visible to the child and a `pass_env` variable was. A name in `pass_env` that is unset or
+  empty in Freyja's environment fails startup naming the server and the variable; an empty
+  value would otherwise make redaction (R12) rewrite every string.
 - `Settings` sets `hide_input_in_errors=True`, so a validation error never echoes an entry's
   contents (probe: with it on the outer model the `input_value` is omitted; on the inner model
   alone it is not).
@@ -156,7 +165,8 @@ saving); a background health check (ruled out by clarification 3).
 **Decision**: `open_tool_servers(configs, ...)` is an async context manager entered by
 `Runtime.open` after persistence is ready and before the agent is built. In order:
 
-1. Resolve `pass_env` for every launched entry; an unset variable fails naming server and variable.
+1. Resolve `pass_env` for every launched entry; an unset or empty variable fails naming server
+   and variable.
 2. Connect to all servers concurrently, each under the startup limit, and list its tools,
    following pagination cursors. For a launched server this starts the owner task (R3).
 3. If any server failed, close the ones that opened and raise `ToolServerError` naming every
@@ -343,6 +353,11 @@ would be false.
   excluded.
 - Subagents inherit the gate the same way `send_notification` does today (001 research R1);
   the subagent receives the same tool list and the same `interrupt_on`.
+- A step with several proposals is held as a whole (FR-007). Deep Agents builds
+  `HumanInTheLoopMiddleware` in its default `batched` mode, which raises one pause after the
+  model's message and before the tool node. Probe: with a gated and a read-only tool proposed
+  in one step, the pause listed the gated one and neither had been called; both ran after the
+  decision.
 
 **Alternatives considered**: gating by default inside a middleware that inspects each call
 (a second gate implementation next to the HITL middleware); trusting `read_only_hint` when the
@@ -369,6 +384,24 @@ reported as read-only (false) or as effectful and ungated (contradicts FR-007).
   edit is unavailable, and the existing per-action check refuses an edit with a 422 before
   anything resumes (FR-009).
 
+- **A proposal decided under a changed configuration (FR-019).** A proposal can outlive a
+  restart, and the gate re-runs with the new `interrupt_on` when the thread resumes, so
+  `interrupt_to_pending` and `build_resume_command` compare every pending action with the
+  current catalog:
+
+  | The action's tool is now | `allowed_decisions` | What the resume does |
+  |---|---|---|
+  | still `gated` | as the catalog says | Unchanged. `server` and the schema an edit is checked against are the current ones. |
+  | not in the catalog | approve, reject | The decision is not passed to the gate. The tool node answers the call with its unknown-tool error, so nothing is called. |
+  | `read_only` | approve | The decision is not passed to the gate and the call runs as proposed. An edit or a reject gets a 422 saying the tool no longer needs a decision. |
+
+  The resume payload carries the decisions for the still-gated actions only, in order, because
+  those are the ones the gate asks for when it re-runs. A call in the paused step that has
+  since become gated is not in the stored proposal; the gate then asks for more decisions than
+  the payload holds and raises before the tool node runs. The stream reports that as a run
+  error and the thread stays paused on the same proposal until the earlier configuration is
+  restored.
+
 `jsonschema>=4.20` is declared in `pyproject.toml` although `mcp` already installs it, because
 Freyja imports it directly.
 
@@ -379,8 +412,23 @@ property")`, which is why the missing name is appended to `loc`. The per-action
 `allowed_decisions` mechanism already exists (001 convergence), so a no-input tool needs no new
 validation path. The tool name stays pinned server-side on an edit, as today.
 
+Probes for a changed configuration, each pausing a two-tool step under one gate and resuming
+under another on the same checkpointer: with all the original decisions the gate raised
+`Number of human decisions (2) does not match number of hanging tool calls (1)`, no tool ran,
+and the thread kept the same pending proposal; with only the still-gated decision, both calls
+ran, the no-longer-gated one with its proposed arguments; with the tool removed, the call came
+back as `Error: alpha is not a valid tool` and the run continued; with a read-only call that
+had become gated, the gate raised the same error with the counts reversed, and again nothing
+ran. A decision the gate no longer asks for is therefore ignored unless the API accounts for
+it, which is why a reject for a now read-only tool is refused instead of accepted and dropped.
+
 **Alternatives considered**: validating edits by calling the server with a dry-run flag (no
-such thing in the protocol); refusing edits for all server tools (contradicts FR-009).
+such thing in the protocol); refusing edits for all server tools (contradicts FR-009);
+honouring a reject for a now read-only tool by writing a rejection into the thread's messages
+on resume (probe: it works for a proposal made by the orchestrator; it was not verified for
+one made by a subagent, whose paused step is in the subagent's own state); refusing
+every decision on a proposal the configuration no longer matches (leaves a thread stuck after
+a server is simply removed).
 
 ## R10. The catalog endpoint
 
@@ -425,7 +473,8 @@ out by clarification 3).
 - `Runtime` gains `catalog` and `servers`. `Runtime.open(settings, *, model=None,
   instance_id=None, connect=default_connect)` enters `open_tool_servers(...)` between opening
   persistence and building the agent. `connect(name, config)` returns the target handed to
-  `mcp.Client`: `StdioServerParameters` or the URL in production.
+  `mcp.Client`: in production the URL, or a stdio transport built from `StdioServerParameters`
+  with the error-output pipe (R12).
 - `api/threads.py` and `api/streaming.py` use `runtime.catalog` where they used `GATED_TOOLS`
   and the bare `interrupt_to_pending`. `api/tools.py` adds the catalog route.
 - New package `src/freyja_agent/delegates/`: `mcp_servers.py` (configuration to target,
@@ -448,18 +497,38 @@ separately (two calls that must be given the same tools); connecting inside `bui
 
 **Decision**: a credential reaches a launched server only as an environment variable named in
 `pass_env`. Each `ToolServer` keeps the values of its `pass_env` variables and replaces any
-occurrence of one with `***` in every string it emits: result text, error text, log lines, and
-the catalog's `error`. Log lines and errors name the server and tool and never include `args`,
-the environment, or the URL's query string. Error text is cut to 500 characters.
+occurrence of one with `***` in every string that comes from the server or is written about
+it:
 
-**Rationale**: FR-002 and User Story 4 scenario 5 cover logs, errors, the stream, and the
-catalog. Redacting at the one place text leaves a server link covers all four, including a
-server that echoes its own environment in an error. Authentication to address servers is out
-of scope, so there are no headers to protect. A launched server's stderr goes to Freyja's
-stderr unchanged (the SDK default); what a server prints there is the server's own log.
+- result text and error text, which is everything a call puts in the stream and the thread;
+- log lines, and the catalog's `error`;
+- what the server lists at startup: each tool's description, the string values inside its
+  input schema, and its hints, so the catalog and the model see the redacted form;
+- the server's error output (below).
+
+The match is on the exact value. A value the server encodes or cuts before printing it is not
+recognized, which FR-002 states. An empty value never reaches redaction, because startup
+refuses it (R4). Log lines and errors name the server and tool and never include `args`, the
+environment, or the URL's query string. Error text is cut to 500 characters.
+
+A launched server's error output is captured instead of inherited. The stdio transport is
+built with `stdio_client(params, errlog=<write end of a pipe>)` and handed to `Client`; the
+owner task (R3) also runs a reader that takes the pipe line by line, redacts each line, and
+logs it at info level under the server's name.
+
+**Rationale**: FR-002 lists the log, including a launched server's error output, error
+messages, the stream, tool results and thread state, and the catalog. Redacting at the one
+place text leaves a server link covers all of them, including a server that echoes its own
+environment in an error. Authentication to address servers is out of scope, so there are no
+headers to protect. Probe: a stub that printed its token to its error output at startup and
+again inside a tool call; with the pipe in place nothing reached Freyja's own error output, and
+both captured lines carried `***`. `Client` accepts the transport object directly
+(`mcp/client/client.py` passes `stdio_client(...)` through the same path itself).
 
 **Alternatives considered**: redacting only in the log formatter (misses the stream and the
-catalog); refusing to start when `args` looks like it holds a secret (guesswork).
+catalog); refusing to start when `args` looks like it holds a secret (guesswork); leaving a
+launched server's error output on Freyja's own, which is the SDK default (a server that prints
+its token there would put it in the service's output unredacted).
 
 ## R13. Test strategy
 
@@ -469,7 +538,8 @@ catalog); refusing to start when `args` looks like it holds a secret (guesswork)
   configuration marks read-only; a recording tool that is effectful and whose server labels it
   read-only; a no-argument tool; a tool with nested and optional arguments; a failing tool; a
   slow tool; tools returning an image, audio, a binary resource, and structured data; a tool
-  that echoes an environment variable. It records every call it receives so tests can assert
+  that echoes a named environment variable in its result and on its error output, and whose
+  description can be made to contain it. It records every call it receives so tests can assert
   exactly what reached the server. Run as a module it serves stdio, or loopback HTTP with
   `--http <port>`.
 - `tests/conftest.py` gains a fixture that builds the app through `create_app(open_runtime=...)`
@@ -480,13 +550,20 @@ catalog); refusing to start when `args` looks like it holds a secret (guesswork)
   transport tests in `tests/test_mcp_transports.py` exercise the real stdio and HTTP paths
   against the stub: one launches it with the test interpreter over pipes, including the
   process exiting mid-service; one serves it on `127.0.0.1` with an ephemeral port, including
-  stop and restart. They use only the loopback interface and what `uv sync` installed.
+  stop and restart. They use only the loopback interface and what `uv sync` installed. The
+  stdio test also asserts what the launched process can see: a `pass_env` variable is present,
+  another variable set in the service's environment is absent, and the stub's error output
+  arrives in the log redacted. That re-checks, on every SDK upgrade, the default environment
+  this design relies on (R2).
 - Subagent tests reuse the 001 pattern: the parent script calls `task`, the subagent script
   calls the server tool.
 
 FR coverage map (FR → test module): 001, 002 → `test_mcp_config`, `test_mcp_calls`
-(redaction); 003, 004, 005 → `test_mcp_startup`; 006, 007, 008, 009 → `test_mcp_gate`,
-`test_factory` (every tool classified, `interrupt_on` equals the gated set); 010, 012, 013,
+(redaction in results, errors, the log, and the catalog), `test_mcp_transports` (the launched
+process's environment and error output); 003, 004, 005 → `test_mcp_startup`; 006, 007, 008,
+009, 019 → `test_mcp_gate` (including a step with several proposals, directly and through a
+subagent, and each row of R9's table for a changed configuration), `test_factory` (every tool
+classified, `interrupt_on` equals the gated set); 010, 012, 013,
 018 → `test_mcp_calls`; 011 → `test_factory`, `test_catalog`; 014 → `test_catalog`; 015 →
 `test_config`, `test_mcp_config`; 016 → README review and quickstart; 017 → the suite, plus
 `test_mcp_transports` for the two real forms.

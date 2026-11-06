@@ -38,9 +38,11 @@ Each violation stops the service at startup with an error that names the server.
 
 1. Exactly one of `command` and `url` is present.
 2. `url` uses `http` or `https`, and its host is `localhost` or a loopback IP address
-   (`127.0.0.0/8` or `::1`). No name lookup is performed.
+   (`127.0.0.0/8` or `::1`). No name lookup is performed: `localhost` is accepted as written,
+   and any other name is refused even if it would resolve to this machine. A redirect from the
+   server to a different host is not followed.
 3. No field other than those above is present.
-4. Every variable named in `pass_env` is set in the service's environment.
+4. Every variable named in `pass_env` is set in the service's environment and is not empty.
 5. The server can be launched or reached, and lists its tools, within
    `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` (default 20).
 6. Every name in `read_only` is a tool the server provides.
@@ -59,7 +61,13 @@ shown in the catalog as the server's claim and never change whether a tool pause
 Put a credential in the service's environment and name the variable in `pass_env`. Never put a
 credential in `args` or in a `url`: both are configuration, and the service does not treat them
 as secret. Values of `pass_env` variables are replaced with `***` wherever text from that
-server appears: results, errors, logs, and the catalog.
+server appears: results, errors, logs, and the catalog, including the tool descriptions, input
+schemas, and hints the server lists. What a launched server writes to its error output is
+captured, redacted the same way, and logged under the server's name. The match is on the exact
+value: a value the server encodes or shortens before printing it is not recognized.
+
+The catalog never shows a server's `command`, `args`, `url`, or `pass_env`; it shows only
+which of the two forms the server uses.
 
 ## Related settings
 

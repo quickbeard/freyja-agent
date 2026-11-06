@@ -178,7 +178,11 @@ components:
         allowed_decisions:
           type: array
           items: { type: string, enum: [approve, edit, reject] }
-          description: The decisions this action accepts; a decision is validated against this list.
+          description: >
+            The decisions this action accepts; a decision is validated against this list. It is
+            computed against the configuration in force. A tool that is no longer configured
+            accepts approve and reject, and is never called. A tool that is now read-only
+            accepts approve only.
         server:
           type: [string, "null"]
           description: >
