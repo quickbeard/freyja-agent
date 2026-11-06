@@ -113,7 +113,7 @@ components:
         error:
           type: [string, "null"]
           maxLength: 500
-          description: Reason for the last failure, with credentials removed; null when reachable.
+          description: Reason for the last failure, with credentials and the server's address removed; null when reachable.
         tool_count: { type: integer, minimum: 0 }
     CatalogTool:
       type: object
@@ -129,8 +129,10 @@ components:
         input_schema:
           type: object
           description: >
-            JSON Schema of the tool's arguments. An edit decision is validated against it. A
-            schema with no `properties`, or an empty one, means the tool declares no input.
+            JSON Schema of the tool's arguments. An edit decision is validated against it, and
+            an edited argument that `properties` does not name is refused unless the schema
+            sets `additionalProperties`. A schema with no `properties`, or an empty one, means
+            the tool declares no input.
         classification:
           type: string
           enum: [read_only, workspace, gated]

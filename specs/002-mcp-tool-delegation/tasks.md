@@ -61,7 +61,8 @@ on.
       `url: str | None`, `read_only: list[str]` (default empty); a validator requiring exactly
       one of `command` and `url`; a URL validator requiring scheme `http` or `https` and a host
       that is `localhost` or an IP literal whose `is_loopback` is true, read from
-      `urlsplit(url).hostname` with no name lookup; on `Settings`,
+      `urlsplit(url).hostname` with no name lookup, where an IPv4-mapped IPv6 literal is
+      unwrapped with `ipv4_mapped` and judged by the IPv4 address it carries; on `Settings`,
       `mcp_servers: dict[str, McpServerConfig] = {}` with keys matching
       `^[a-z][a-z0-9_-]{0,31}$`, `mcp_call_timeout_seconds: float = 30` and
       `mcp_startup_timeout_seconds: float = 20`, both greater than zero, and
@@ -94,7 +95,8 @@ User Story 4, which every other story needs.
       environment variable `STUB_TOKEN` and printing it to its error output. Factory options:
       extra or renamed tools (for collisions and a bad tool name), no tools at all, and a tool
       description that contains `STUB_TOKEN`'s value. Run as `python -m tests.mcp_stub` it
-      serves stdio; with `--http <port>` it serves Streamable HTTP on `127.0.0.1` (R13)
+      serves stdio; with `--http <port>` it serves Streamable HTTP at
+      `http://127.0.0.1:<port>/mcp` (R13)
 - [ ] T008 [P] Implement classification in `src/freyja_agent/agent/catalog.py`:
       `Classification` with the values `read_only`, `workspace`, `gated`; `CatalogTool` with
       `name`, `server` (null for Freyja's own), `description`, `input_schema`, `classification`,
@@ -157,8 +159,9 @@ User Story 4, which every other story needs.
       name that is neither a delegate tool nor a row of the fixed table; assert that the
       `interrupt_on` keys equal the gated catalog entries; build each of Freyja's own catalog
       entries from the compiled tool, with the JSON Schema of the arguments the model supplies.
-      Remove `GATED_TOOLS` and `SEND_NOTIFICATION_INTERRUPT` from `tools.py`, which keeps only
-      `send_notification` (FR-003, FR-006, FR-007, FR-011, R8, R11; depends on T008, T009)
+      Stop using `GATED_TOOLS` and `SEND_NOTIFICATION_INTERRUPT` from `tools.py` here; T014
+      removes them once the routes no longer import them (FR-003, FR-006, FR-007, FR-011, R8,
+      R11; depends on T008, T009)
 - [ ] T013 Change the runtime in `src/freyja_agent/runtime/runtime.py`: `Runtime` gains
       `catalog` and `servers`; one shared async context manager assembles a runtime from a
       checkpointer, a store, a lock store, and a `connect` function by entering
@@ -168,10 +171,12 @@ User Story 4, which every other story needs.
       last, so a server that fails to connect closes the pool on the way out (FR-003, FR-005,
       R4, R11; depends on T011, T012)
 - [ ] T014 Switch the routes to the catalog without changing behavior, in
-      `src/freyja_agent/api/threads.py` and `src/freyja_agent/api/decisions.py`:
+      `src/freyja_agent/api/threads.py`, `src/freyja_agent/api/decisions.py`, and
+      `src/freyja_agent/agent/tools.py`:
       `build_resume_command` receives the gated catalog entries from `runtime.catalog` in place
-      of the `GATED_TOOLS` mapping, and an edit for `send_notification` is validated as today
-      (R9, R11; depends on T012, T013)
+      of the `GATED_TOOLS` mapping, and an edit for `send_notification` is validated as today;
+      then remove `GATED_TOOLS` and `SEND_NOTIFICATION_INTERRUPT` from `tools.py`, which keeps
+      only `send_notification` (R9, R11; depends on T012, T013)
 - [ ] T015 Extend `tests/conftest.py`: `make_runtime` unpacks `Orchestrator` and fills
       `catalog` and `servers`; a new fixture builds an app through `create_app(open_runtime=...)`
       using the shared assembly from T013 with in-memory persistence and a `connect` that
@@ -296,9 +301,10 @@ Manually: quickstart.md Scenario 3.
       are accepted, the stub receives nothing, and the model is told the tool is unavailable;
       the tool now read-only shows approve only, approve runs it as proposed, and an edit or a
       reject is refused with 422 saying the tool no longer needs a decision; a `lookup` call in
-      the paused step that has become gated makes the resume end with an `error` event, the
-      stub receives nothing, the thread keeps the same `interrupt_id`, and restoring the first
-      list lets the proposal be decided; on a thread with nothing pending, a new call to a tool
+      the paused step that has become gated makes the resume end with an `error` event whose
+      code is `internal`, the stub receives nothing, the log holds the gate's message, the
+      thread keeps the same `interrupt_id`, a new message on it is refused with
+      `decision_pending`, and restoring the first list lets the proposal be decided; on a thread with nothing pending, a new call to a tool
       that is no longer configured comes back as an error result and the run continues
       (FR-019, R9, spec edge case "a server is removed from the configuration")
 - [ ] T026 [P] [US2] Update the expected proposal shape in `tests/test_gate.py`,
@@ -315,7 +321,7 @@ Manually: quickstart.md Scenario 3.
       the catalog: `server` is filled by tool name; `allowed_decisions` for each action is
       computed against the current catalog, as the catalog says for a tool still gated, approve
       and reject for a tool not in the catalog, and approve only for a tool that is now
-      read-only or workspace-confined; a tool the catalog does not know gets `server: null`.
+      read-only; a tool the catalog does not know gets `server: null`.
       Pass `runtime.catalog` at every call site in `src/freyja_agent/api/streaming.py` and
       `src/freyja_agent/api/threads.py` (FR-008, FR-019, R9; depends on T027)
 - [ ] T029 [US2] Validate edits for server tools in `src/freyja_agent/api/decisions.py`: for a
@@ -423,9 +429,11 @@ Scenarios 4 and 5.
       an error result and the catalog shows it unreachable, and nothing launches it again;
       closing the runtime ends a process that is still alive. Over HTTP on `127.0.0.1` with an
       ephemeral port: a call succeeds; with the server stopped a call fails and marks it
-      unreachable; after it restarts on the same port the next call succeeds and marks it
-      reachable; closing the runtime leaves the server running (FR-001, FR-002, FR-005,
-      FR-012, FR-017, R3, R13)
+      unreachable, and the catalog's `error` for it does not contain the address; after it
+      restarts on the same port the next call succeeds and marks it reachable; an endpoint
+      that answers with a redirect to a second loopback listener is not followed, the call
+      fails, and the second listener receives no request; closing the runtime leaves the
+      server running (FR-001, FR-002, FR-005, FR-012, FR-014, FR-017, R2, R3, R13)
 
 ### Implementation for User Story 4
 
@@ -440,8 +448,10 @@ Scenarios 4 and 5.
       background check (FR-012, R7)
 - [ ] T039 [US4] Make every text that leaves a server link pass through its redactor in
       `src/freyja_agent/delegates/mcp_servers.py`: startup errors, the status `error`, log
-      lines, and the lines read from a launched server's error output; confirm no log line or
-      error includes arguments, the environment, or a URL's query string (FR-002, R12)
+      lines, and the lines read from a launched server's error output; replace the server's
+      configured URL with `<address>` in the status `error`, which the catalog shows; confirm
+      no log line or error includes arguments, the environment, or a URL's query string
+      (FR-002, FR-014, R12)
 
 **Checkpoint**: All of User Stories 1 to 4 work; `test_mcp_calls` and `test_mcp_transports`
 pass with the network disconnected.
@@ -578,6 +588,7 @@ Task: "JSON Schema validation and the changed-configuration rules in src/freyja_
   reference for completeness.
 - Between Phase 2 and Phase 6 a call already runs under the time limit and never ends a run;
   Phase 6 adds the distinct error texts, the status record, and the recovery behavior.
-- T029 refuses an edit argument the tool's schema does not name. Research R9 does not state
-  that rule; it follows from feature 001's FR-013, which was added after this feature's plan.
+- T029 refuses an edit argument the tool's schema does not name, as FR-009 and research R9
+  state since the analysis of 2026-11-06; feature 001's FR-013 applies the same rule to every
+  action.
 - Commit after each phase at least; commits stay manual and use the `type: summary` form.
