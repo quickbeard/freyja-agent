@@ -97,11 +97,16 @@ Server names match `^[a-z][a-z0-9_-]{0,31}$`. The contract is in
   accepted, `localhost`, is accepted as written, so the machine's own resolution of that name
   is trusted (spec assumption). Probe, Python 3.12.16: `::ffff:127.0.0.1` counts as loopback,
   `0.0.0.0` and `::ffff:10.0.0.5` do not, and user information in the address does not change
-  the host that is checked.
+  the host that is checked. The project supports every Python from 3.12.0 on, and
+  `is_loopback` does not answer the same for an IPv4-mapped address in every patch release
+  (probe: `False` for `::ffff:127.0.0.1` on 3.12.0 and 3.12.3, `True` on 3.12.16), so the
+  validator does not rely on it: an IPv4-mapped IPv6 literal is unwrapped with
+  `ipv4_mapped` and judged by the IPv4 address it carries.
 - A server at a loopback address cannot send the client elsewhere: the SDK follows a redirect
   only when it stays on the endpoint's origin, and fails the request otherwise
   (`mcp/client/streamable_http.py`). Freyja passes no HTTP client of its own, so that rule is
-  the one in force.
+  the one in force. Because the rule is the SDK's and not Freyja's, a transport test asserts
+  it, so an SDK upgrade that changed it would fail the suite (R13).
 - `pass_env` holds variable names, never values, so a credential cannot be written into the
   server list by following the documented shape (FR-002). The SDK's stdio transport gives a
   launched process only `HOME`, `LOGNAME`, `PATH`, `SHELL`, `TERM`, and `USER` by default
@@ -377,8 +382,10 @@ reported as read-only (false) or as effectful and ungated (contradicts FR-007).
   mapping. An edit for a tool whose input is a JSON Schema dict is validated with
   `jsonschema`'s validator for that schema; each error becomes a FastAPI-shaped entry with
   `loc` of `["body", "decisions", i, "args", *path]` and the validator's message. A missing
-  required property is reported with the property appended to `loc`. An edit for a tool with a
-  pydantic schema (`send_notification`) is validated as today.
+  required property is reported with the property appended to `loc`. A top-level argument that
+  is not in the schema's `properties` is refused, unless the schema sets
+  `additionalProperties` to `true` or to a schema. An edit for a tool with a pydantic schema
+  (`send_notification`) is validated as today.
 - A tool has **no declared input** when its input schema has no `properties` or an empty one.
   Its `allowed_decisions` are approve and reject, so the pause itself tells the client that
   edit is unavailable, and the existing per-action check refuses an edit with a 422 before
@@ -399,8 +406,12 @@ reported as read-only (false) or as effectful and ungated (contradicts FR-007).
   those are the ones the gate asks for when it re-runs. A call in the paused step that has
   since become gated is not in the stored proposal; the gate then asks for more decisions than
   the payload holds and raises before the tool node runs. The stream reports that as a run
-  error and the thread stays paused on the same proposal until the earlier configuration is
-  restored.
+  error with code `internal`, and the thread stays paused on the same proposal until the
+  earlier configuration is restored. The gate's own message, with the two counts, is in the
+  service log through the stream's existing handler. A new message is refused while the
+  proposal is pending, so the thread is blocked for that time. Telling this case apart for
+  the client would need the paused step's tool calls, which for a proposal made by a subagent
+  are in the subagent's state; that is left for a later increment.
 
 `jsonschema>=4.20` is declared in `pyproject.toml` although `mcp` already installs it, because
 Freyja imports it directly.
@@ -411,6 +422,13 @@ Freyja imports it directly.
 property")`, which is why the missing name is appended to `loc`. The per-action
 `allowed_decisions` mechanism already exists (001 convergence), so a no-input tool needs no new
 validation path. The tool name stays pinned server-side on an edit, as today.
+
+JSON Schema on its own accepts a key it does not describe whenever `additionalProperties` is
+absent, which is the usual case for a server's tool. The edited arguments are sent to the
+server as given, so nothing would be dropped, but a server that ignores an unknown key would
+turn a mistyped name into a call with the proposed or default value, which is not the call
+the approver meant. Refusing the key matches what feature 001 requires of every action (its
+FR-013), and a schema that really is open says so itself.
 
 Probes for a changed configuration, each pausing a two-tool step under one gate and resuming
 under another on the same checkpointer: with all the original decisions the gate raised
@@ -509,7 +527,9 @@ it:
 The match is on the exact value. A value the server encodes or cuts before printing it is not
 recognized, which FR-002 states. An empty value never reaches redaction, because startup
 refuses it (R4). Log lines and errors name the server and tool and never include `args`, the
-environment, or the URL's query string. Error text is cut to 500 characters.
+environment, or the URL's query string. The status `error`, which the catalog shows, also has
+the server's configured URL replaced with `<address>`, because FR-014 keeps the address out of
+the catalog and an exception's text can quote it. Error text is cut to 500 characters.
 
 A launched server's error output is captured instead of inherited. The stdio transport is
 built with `stdio_client(params, errlog=<write end of a pipe>)` and handed to `Client`; the
@@ -550,7 +570,8 @@ its token there would put it in the service's output unredacted).
   transport tests in `tests/test_mcp_transports.py` exercise the real stdio and HTTP paths
   against the stub: one launches it with the test interpreter over pipes, including the
   process exiting mid-service; one serves it on `127.0.0.1` with an ephemeral port, including
-  stop and restart. They use only the loopback interface and what `uv sync` installed. The
+  stop and restart, and an endpoint that answers with a redirect to a different origin, which
+  must not be followed. They use only the loopback interface and what `uv sync` installed. The
   stdio test also asserts what the launched process can see: a `pass_env` variable is present,
   another variable set in the service's environment is absent, and the stub's error output
   arrives in the log redacted. That re-checks, on every SDK upgrade, the default environment

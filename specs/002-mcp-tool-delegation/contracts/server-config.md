@@ -38,7 +38,8 @@ Each violation stops the service at startup with an error that names the server.
 
 1. Exactly one of `command` and `url` is present.
 2. `url` uses `http` or `https`, and its host is `localhost` or a loopback IP address
-   (`127.0.0.0/8` or `::1`). No name lookup is performed: `localhost` is accepted as written,
+   (`127.0.0.0/8` or `::1`; an IPv4-mapped IPv6 address counts as the IPv4 address it
+   carries). No name lookup is performed: `localhost` is accepted as written,
    and any other name is refused even if it would resolve to this machine. A redirect from the
    server to a different host is not followed.
 3. No field other than those above is present.

@@ -21,7 +21,7 @@ The full contract, with examples, is [contracts/server-config.md](contracts/serv
 | `command` | string or absent | Exactly one of `command` and `url` is present (FR-001, FR-004). |
 | `args` | list of string | Default empty. Only with `command`. |
 | `pass_env` | list of string | Names of environment variables to hand to the launched process. Only with `command`. Each must be set and not empty when the service starts (FR-002, FR-004). |
-| `url` | string or absent | Scheme `http` or `https`; host `localhost` or a loopback IP literal (FR-001). |
+| `url` | string or absent | Scheme `http` or `https`; host `localhost` or a loopback IP literal; an IPv4-mapped IPv6 literal is judged by the IPv4 address it carries (FR-001). |
 | `read_only` | list of string | Tool names exempt from approval. Default empty. Each must be a tool the server provides (FR-004). |
 
 Unknown fields are refused. Read once at startup; a change takes effect on restart (FR-003).
@@ -37,7 +37,7 @@ In memory only; one per configured server per service instance.
 | `connection` | `command` or `address` | Which form the entry used. |
 | `reachable` | boolean | Outcome of the most recent attempt to use the server (FR-014). |
 | `checked_at` | timestamp | When that attempt finished. Set at startup, then by every call. |
-| `error` | string or null | Redacted reason for the last failure, at most 500 characters; null when reachable. |
+| `error` | string or null | Redacted reason for the last failure, at most 500 characters, with the server's address removed; null when reachable. |
 | `tools` | list of Delegate tool | As listed at startup; never refreshed (FR-003). |
 
 Lifetime: a `command` server is launched at startup and stopped at shutdown, with one
