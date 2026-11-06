@@ -357,7 +357,7 @@ implies. Manually: quickstart.md Scenario 1.
 
 ### Tests for User Story 3
 
-- [ ] T031 [US3] Write `tests/test_catalog.py`: the tool names equal the names the model was
+- [X] T031 [US3] Write `tests/test_catalog.py`: the tool names equal the names the model was
       offered; Freyja's own tools come first in the fixed order, then each server's in
       configuration and listing order; every entry has `name`, `server`, `description`,
       `input_schema`, `classification`, `allowed_decisions`, and `server_hints`;
@@ -373,17 +373,17 @@ implies. Manually: quickstart.md Scenario 1.
 
 ### Implementation for User Story 3
 
-- [ ] T032 [P] [US3] Add `ToolCatalog`, `ToolServerStatus`, `CatalogTool`, and `ServerHints` to
+- [X] T032 [P] [US3] Add `ToolCatalog`, `ToolServerStatus`, `CatalogTool`, and `ServerHints` to
       `src/freyja_agent/api/schemas.py` per `contracts/openapi.yaml`: `ToolServerStatus.name`
       with pattern `^[a-z][a-z0-9_-]{0,31}$`, `connection` one of `command` and `address`,
       `error` nullable with a maximum length of 500, `tool_count` at least 0;
       `CatalogTool.classification` one of `read_only`, `workspace`, `gated`; `ServerHints`
       with only the optional keys `title`, `read_only`, `destructive`, `idempotent`,
       `open_world`, serialized without the keys the server did not set
-- [ ] T033 [US3] Implement `GET /tools` in `src/freyja_agent/api/tools.py`: return the tools
+- [X] T033 [US3] Implement `GET /tools` in `src/freyja_agent/api/tools.py`: return the tools
       from `runtime.catalog` and one status per entry of `runtime.servers`, read from memory
       with no call to any server (FR-014, R10; depends on T032)
-- [ ] T034 [US3] Register the tools router in `create_app` in `src/freyja_agent/api/app.py`
+- [X] T034 [US3] Register the tools router in `create_app` in `src/freyja_agent/api/app.py`
 
 **Checkpoint**: User Stories 1 to 3 work; `test_catalog` passes.
 

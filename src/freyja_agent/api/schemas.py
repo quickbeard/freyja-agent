@@ -1,8 +1,11 @@
 """Request and response models for the thread endpoints (contracts/openapi.yaml)."""
 
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
+
+from freyja_agent.config import SERVER_NAME_PATTERN
 
 # Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars; at least one
 # character that is not a dot, so "." and ".." never name a thread (FR-001a). The length is a
@@ -84,6 +87,51 @@ class ThreadState(BaseModel):
     messages: list[Message]
     pending: PendingDecision | None
     updated_at: str | None = None
+
+
+class ServerHints(BaseModel):
+    """What a tool server says about its own tool. The server's claim only: it is shown and
+    never affects the classification. Only the hints the server set are serialized."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str | None = None
+    read_only: bool | None = None
+    destructive: bool | None = None
+    idempotent: bool | None = None
+    open_world: bool | None = None
+
+
+class CatalogTool(BaseModel):
+    """One tool the orchestrator can call (feature 002 contracts/openapi.yaml)."""
+
+    name: str
+    # The tool server that provides the tool; None for Freyja's own tools.
+    server: str | None
+    description: str
+    # JSON Schema of the tool's arguments; an edit decision is validated against it.
+    input_schema: dict[str, Any]
+    classification: Literal["read_only", "workspace", "gated"]
+    # Empty unless the tool is gated.
+    allowed_decisions: list[AllowedDecision]
+    server_hints: ServerHints | None
+
+
+class ToolServerStatus(BaseModel):
+    """A configured tool server and the outcome of the most recent attempt to use it."""
+
+    name: Annotated[str, Field(pattern=SERVER_NAME_PATTERN)]
+    # Which form of connection the entry uses; nothing else about the entry is shown.
+    connection: Literal["command", "address"]
+    reachable: bool
+    checked_at: datetime
+    error: Annotated[str | None, Field(max_length=500)]
+    tool_count: Annotated[int, Field(ge=0)]
+
+
+class ToolCatalog(BaseModel):
+    servers: list[ToolServerStatus]
+    tools: list[CatalogTool]
 
 
 class ErrorDetail(BaseModel):

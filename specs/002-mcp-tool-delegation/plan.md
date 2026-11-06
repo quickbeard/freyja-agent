@@ -246,5 +246,13 @@ None. The Constitution Check passed without deviations before research and after
     `additionalProperties`, so an argument it does not list by name is left to the validator.
   - `ActionRequest.server` was added to feature 001's contract, event example, and data
     model, as the note above asks.
+- **Phase 5 as built (2026-11-06)**:
+  - `GET /tools` is in `api/tools.py`. The route serializes with `exclude_unset`, which is
+    how a hint the server did not set is left out while `server: null` and `error: null`
+    are kept.
+  - `tests/test_catalog.py` validates the response against `contracts/openapi.yaml` itself,
+    so the contract and the endpoint cannot drift apart unnoticed. Reading that file needs a
+    YAML parser: `pyyaml`, already in the lock as a dependency of LangChain, is now declared
+    in the `dev` group. No runtime dependency changed.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.
