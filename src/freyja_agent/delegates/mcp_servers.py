@@ -290,13 +290,23 @@ class ToolServer:
     async def call(self, tool: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call under the time limit, including connecting, and return its result.
 
-        Nothing is retried: a call is attempted once (FR-012).
+        Nothing is retried: a call is attempted once (FR-012). A result means the server
+        answered, so it is reachable, and that holds for a tool error too: the server refused
+        or failed the call, it did not go away (research R7). A tool error is logged with the
+        server and the tool, never with the arguments.
         """
         async with asyncio.timeout(self._call_timeout):
             if self.connection == "command":
-                return await self._connected().call_tool(tool, arguments)
-            async with Client(self._target()) as client:
-                return await client.call_tool(tool, arguments)
+                result = await self._connected().call_tool(tool, arguments)
+            else:
+                async with Client(self._target()) as client:
+                    result = await client.call_tool(tool, arguments)
+        self._mark(reachable=True)
+        if getattr(result, "is_error", False):
+            logger.warning(
+                "Tool server %s: tool %s returned an error (tool_error)", self.name, tool
+            )
+        return result
 
     async def close(self) -> None:
         """Release the link. A launched server's process is stopped; an address server is not

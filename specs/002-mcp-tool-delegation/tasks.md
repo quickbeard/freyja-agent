@@ -225,14 +225,14 @@ Manually: quickstart.md Scenario 2.
 
 ### Tests for User Story 1
 
-- [ ] T019 [US1] Write `tests/test_mcp_calls.py` with the read-only path: a run that calls
+- [X] T019 [US1] Write `tests/test_mcp_calls.py` with the read-only path: a run that calls
       `lookup` shows the call and its result in `update` events, has no `interrupt` event, ends
       with `end`, and the stub recorded one call with the proposed arguments; the same through
       the subagent, where the parent calls `task` and the subagent calls `lookup`; a call to
       `fail` produces a tool message with status `error` carrying the server's text, the run
       ends with `end`, the lease is released, and one warning names the server, the tool, and
       `tool_error` (US1 scenarios 2 to 4, FR-010, FR-012, SC-002)
-- [ ] T020 [US1] Add result cases to `tests/test_mcp_calls.py`: `picture` delivers its text
+- [X] T020 [US1] Add result cases to `tests/test_mcp_calls.py`: `picture` delivers its text
       and `[image omitted: <mime type>]`; `sound` delivers `[audio omitted: <mime type>]`;
       `attachment` delivers `[file omitted: <mime type>]`; a result made only of such parts is
       delivered as those notes with status `success`; no binary data is in the thread state;
@@ -242,7 +242,7 @@ Manually: quickstart.md Scenario 2.
 
 ### Implementation for User Story 1
 
-- [ ] T021 [US1] Implement result conversion in `src/freyja_agent/delegates/mcp_tools.py`: one
+- [X] T021 [US1] Implement result conversion in `src/freyja_agent/delegates/mcp_tools.py`: one
       string built from the content blocks in order and joined with blank lines; a text block
       and an embedded resource with text contents become their text; an image becomes
       `[image omitted: <mime type>]`, audio `[audio omitted: <mime type>]`, an embedded
@@ -250,7 +250,7 @@ Manually: quickstart.md Scenario 2.
       `[resource link omitted: <uri>]`, anything else `[<type> content omitted]`; structured
       content is appended as JSON only when the result has no text block; a result whose
       `is_error` is true is converted the same way and raised as `ToolException` (FR-018, R6)
-- [ ] T022 [US1] Complete the successful and tool-error outcomes of `ToolServer.call` in
+- [X] T022 [US1] Complete the successful and tool-error outcomes of `ToolServer.call` in
       `src/freyja_agent/delegates/mcp_servers.py`: result text and error text pass through the
       server's redactor; a result marks the server reachable; a tool error also marks it
       reachable and logs one warning with the server, the tool, and `tool_error`; no log line
