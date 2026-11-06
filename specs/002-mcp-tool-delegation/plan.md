@@ -219,9 +219,8 @@ None. The Constitution Check passed without deviations before research and after
   - From the first phase a call's result text is redacted and a tool error is delivered as an
     error result, so no phase ships a call path without them. Phase 3 adds the notes for
     non-text content and the warning; Phase 6 adds the status record and the distinct errors.
-  - Until Phase 4 validates edits against a server tool's JSON Schema, an edit of a server
-    tool is refused with 422 instead of being passed on unchecked. The pause still lists
-    edit for such a tool during that time.
+  - Until Phase 4 validated edits against a server tool's JSON Schema, an edit of a server
+    tool was refused with 422 instead of being passed on unchecked. Phase 4 removed that.
 - **Phase 3 as built (2026-11-06)**:
   - `result_text` in `delegates/mcp_tools.py` implements the table in R6. A block with no
     mime type gets the note `[image omitted: unknown type]`, which R6 does not cover.
@@ -229,5 +228,23 @@ None. The Constitution Check passed without deviations before research and after
     it, but the `Message` shape of the stream and of `GET .../state` does not carry it, as in
     feature 001. A client sees a tool error only through its text. Quickstart Scenario 2
     says the result "has an error status"; T041 checks that wording against the real service.
+- **Phase 4 as built (2026-11-06)**:
+  - `interrupt_to_pending(interrupt, catalog)` takes each action's `server` and
+    `allowed_decisions` from the catalog in force (`Catalog.decisions_for`). The lists the
+    gate stored with the interrupt are no longer read.
+  - When no listed action is still gated, the resume command carries an empty list of
+    decisions. The gate does not pause again, the tool node answers a removed tool as
+    unknown, and the run continues.
+  - Edit errors for a server tool use three entry types: `missing` for a required property,
+    `extra_forbidden` for an argument the schema does not name, and `value_error` for
+    everything else, each with the validator's own message.
+  - A declared input that points to a schema at another address is not fetched. Probe:
+    `jsonschema` retrieves a remote `$ref` by default, and validation hung on an unreachable
+    address. The validator is given a registry that refuses retrieval, and an edit whose
+    schema cannot be used is refused with 422. R9 did not cover this.
+  - A schema with `patternProperties` counts as open, like one that sets
+    `additionalProperties`, so an argument it does not list by name is left to the validator.
+  - `ActionRequest.server` was added to feature 001's contract, event example, and data
+    model, as the note above asks.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.

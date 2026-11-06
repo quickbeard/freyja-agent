@@ -274,7 +274,7 @@ Manually: quickstart.md Scenario 3.
 
 ### Tests for User Story 2
 
-- [ ] T023 [US2] Write `tests/test_mcp_gate.py` with the decisions: a proposal for
+- [X] T023 [US2] Write `tests/test_mcp_gate.py` with the decisions: a proposal for
       `record_note` ends the stream with `interrupt` whose action request has `name`, `server`,
       the proposed `args`, a description of `<server>: <first line>`, and approve, edit, reject;
       the stub received nothing; thread state shows the same proposal; approve makes exactly
@@ -287,14 +287,14 @@ Manually: quickstart.md Scenario 3.
       their servers and applies each decision to its own call; a proposal for
       `send_notification` has `server: null` (US2 scenarios 1 to 8, FR-006, FR-007, FR-008,
       SC-001)
-- [ ] T024 [US2] Add edit validation cases to `tests/test_mcp_gate.py`: for `file_report`, a
+- [X] T024 [US2] Add edit validation cases to `tests/test_mcp_gate.py`: for `file_report`, a
       wrong type is refused with 422 and a location ending in `args` and the field; a wrong
       element in the nested list is refused with its full path; a missing required property is
       refused with the property appended to the location; an argument the schema's `properties`
       do not name is refused; after each refusal the proposal is still pending, the stub
       received nothing, and a valid edit then goes through; the pause for `ping` offers approve
       and reject only, and an edit for it is refused with 422 (US2 scenario 3, FR-009, R9)
-- [ ] T025 [US2] Add the changed-configuration cases to `tests/test_mcp_gate.py`, each pausing
+- [X] T025 [US2] Add the changed-configuration cases to `tests/test_mcp_gate.py`, each pausing
       under one server list and resuming on a second runtime that shares the persistence and
       has another list: the tool still gated is decided as usual and an edit is checked against
       the current schema; the tool removed shows `server: null` with approve and reject, both
@@ -307,24 +307,24 @@ Manually: quickstart.md Scenario 3.
       `decision_pending`, and restoring the first list lets the proposal be decided; on a thread with nothing pending, a new call to a tool
       that is no longer configured comes back as an error result and the run continues
       (FR-019, R9, spec edge case "a server is removed from the configuration")
-- [ ] T026 [P] [US2] Update the expected proposal shape in `tests/test_gate.py`,
+- [X] T026 [P] [US2] Update the expected proposal shape in `tests/test_gate.py`,
       `tests/test_state.py`, and `tests/test_subagent.py`: every action request carries
       `server`, which is `null` for `send_notification` (FR-008)
 
 ### Implementation for User Story 2
 
-- [ ] T027 [P] [US2] Add `server: str | None` to `ActionRequest` in
+- [X] T027 [P] [US2] Add `server: str | None` to `ActionRequest` in
       `src/freyja_agent/api/schemas.py`, and add `server` to `ActionRequest` in
       `specs/001-thread-runs-api/contracts/openapi.yaml` so the two contract files agree
       (FR-008, plan Implementation Notes)
-- [ ] T028 [US2] Change `interrupt_to_pending` in `src/freyja_agent/api/serialize.py` to take
+- [X] T028 [US2] Change `interrupt_to_pending` in `src/freyja_agent/api/serialize.py` to take
       the catalog: `server` is filled by tool name; `allowed_decisions` for each action is
       computed against the current catalog, as the catalog says for a tool still gated, approve
       and reject for a tool not in the catalog, and approve only for a tool that is now
       read-only; a tool the catalog does not know gets `server: null`.
       Pass `runtime.catalog` at every call site in `src/freyja_agent/api/streaming.py` and
       `src/freyja_agent/api/threads.py` (FR-008, FR-019, R9; depends on T027)
-- [ ] T029 [US2] Validate edits for server tools in `src/freyja_agent/api/decisions.py`: for a
+- [X] T029 [US2] Validate edits for server tools in `src/freyja_agent/api/decisions.py`: for a
       tool whose input is a JSON Schema dict, run `jsonschema`'s validator for that schema over
       the edited arguments and turn each error into an entry with `type`, `loc` of
       `["body", "decisions", <index>, "args", *path]`, and the validator's message, appending
@@ -333,7 +333,7 @@ Manually: quickstart.md Scenario 3.
       properties, in the entry shape feature 001 uses for the same refusal; keep the tool name
       pinned; leave the pydantic path for `send_notification` as it is (FR-009, R9, feature 001
       FR-013)
-- [ ] T030 [US2] Apply a decision under the configuration in force in
+- [X] T030 [US2] Apply a decision under the configuration in force in
       `src/freyja_agent/api/decisions.py`: check each decision against its action's
       `allowed_decisions` from T028, so an edit or a reject for a tool that no longer needs a
       decision is refused with 422 and that explanation; build the resume payload from the

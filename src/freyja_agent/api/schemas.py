@@ -63,6 +63,9 @@ AllowedDecision = Literal["approve", "edit", "reject"]
 
 class ActionRequest(BaseModel):
     name: str
+    # The tool server the proposed tool belongs to now; None for Freyja's own tools and for a
+    # tool that is no longer configured (feature 002, FR-008, FR-019).
+    server: str | None = None
     args: dict[str, Any]
     description: str | None = None
     # The decisions this action accepts; ``PendingDecision.allowed_decisions`` is the union.

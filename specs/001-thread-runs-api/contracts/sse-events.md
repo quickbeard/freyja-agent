@@ -94,13 +94,15 @@ The run paused before executing a gated action. Same shape as `ThreadState.pendi
 {
   "interrupt_id": "6b1e...",
   "action_requests": [
-    {"name": "send_notification", "args": {"channel": "#ops", "message": "Nightly report is ready."}, "description": "Send a notification to a channel (placeholder: logs only).", "allowed_decisions": ["approve", "edit", "reject"]}
+    {"name": "send_notification", "server": null, "args": {"channel": "#ops", "message": "Nightly report is ready."}, "description": "Send a notification to a channel (placeholder: logs only).", "allowed_decisions": ["approve", "edit", "reject"]}
   ],
   "allowed_decisions": ["approve", "edit", "reject"]
 }
 ```
 
-`interrupt_id` identifies the proposal; the resume request sends it back. Each action request
+`interrupt_id` identifies the proposal; the resume request sends it back. `server` names the
+tool server a proposed tool belongs to and is `null` for one of Freyja's own tools (added by
+feature 002). Each action request
 carries its own `allowed_decisions`, which is the list a decision for that action is checked
 against. The top-level list is the union of them, for display.
 

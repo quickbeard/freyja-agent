@@ -8,6 +8,8 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 from langgraph.types import Interrupt
 from pydantic import BaseModel
 
+from freyja_agent.agent.catalog import Catalog
+
 _DECISION_ORDER = ("approve", "edit", "reject")
 
 # Message chunks report their own type names; the API exposes the base message type.
@@ -42,26 +44,31 @@ def update_to_dict(update: Any) -> Any:
     return to_jsonable(update)
 
 
-def interrupt_to_pending(interrupt: Interrupt) -> dict[str, Any]:
-    """Map a human-in-the-loop interrupt to the ``PendingDecision`` API shape."""
+def interrupt_to_pending(interrupt: Interrupt, catalog: Catalog) -> dict[str, Any]:
+    """Map a human-in-the-loop interrupt to the ``PendingDecision`` API shape.
+
+    Each action names the tool server its tool belongs to and carries its own allowed
+    decisions, both read from ``catalog``: the tools in force now. A proposal can be shown and
+    decided after a restart with another configuration, and the approval gate runs again under
+    that configuration when the thread resumes, so the stored proposal's own lists are not
+    what a decision is checked against (feature 002, FR-008, FR-019; research R9).
+    """
     value = interrupt.value if isinstance(interrupt.value, dict) else {}
-    # One review config per gated tool; each action request carries its own allowed set so a
-    # decision is validated against the action it answers, not against the union (FR-012).
-    per_action: dict[str, list[str]] = {
-        config.get("action_name"): list(config.get("allowed_decisions", []))
-        for config in value.get("review_configs", [])
-    }
-    action_requests = [
-        {
-            "name": request.get("name"),
-            "args": to_jsonable(request.get("args", {})),
-            "description": request.get("description"),
-            "allowed_decisions": per_action.get(request.get("name"), []),
-        }
-        for request in value.get("action_requests", [])
-    ]
+    action_requests = []
+    for request in value.get("action_requests", []):
+        name = request.get("name")
+        tool = catalog.get(name)
+        action_requests.append(
+            {
+                "name": name,
+                "server": tool.server if tool is not None else None,
+                "args": to_jsonable(request.get("args", {})),
+                "description": request.get("description"),
+                "allowed_decisions": list(catalog.decisions_for(name)),
+            }
+        )
     # The union, in the contract's canonical order; anything unknown keeps its own order last.
-    union = {decision for decisions in per_action.values() for decision in decisions}
+    union = {decision for request in action_requests for decision in request["allowed_decisions"]}
     allowed = [d for d in _DECISION_ORDER if d in union] + sorted(union - set(_DECISION_ORDER))
     return {
         "interrupt_id": interrupt.id,

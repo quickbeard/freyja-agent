@@ -115,7 +115,7 @@ The proposal waiting on a user. Appears in the `interrupt` event and in `ThreadS
 | `action_requests` | list of ActionRequest | One per gated tool call in the step; order is significant. |
 | `allowed_decisions` | list of `approve`, `edit`, `reject` | Union of every action request's allowed decisions. |
 
-ActionRequest: `{ "name": string, "args": object, "description": string or null, "allowed_decisions": list }`, where `allowed_decisions` comes from that tool's interrupt config and is what a decision for this action is validated against.
+ActionRequest: `{ "name": string, "server": string or null, "args": object, "description": string or null, "allowed_decisions": list }`, where `allowed_decisions` is what a decision for this action is validated against. Feature 002 added `server` and computes `allowed_decisions` from the tools in force when the proposal is read, not from the interrupt as stored; see [its data model](../002-mcp-tool-delegation/data-model.md#action-request-extended).
 
 ### Decision (API shape)
 
