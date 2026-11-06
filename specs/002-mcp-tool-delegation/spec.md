@@ -8,6 +8,16 @@
 
 **Input**: User description: "Delegate tools over MCP. Freyja connects at startup to MCP servers named in settings and loads their tools into the one agent factory, alongside its own. Every tool is classified deterministically from configuration as read-only or effectful; effectful and unclassified tools are gated by the existing approve, edit, reject interrupt, on the orchestrator and its subagents alike. Tool catalogs are visible through an endpoint. The suite uses an in-process fake MCP server and needs no network; the quickstart proves one real local MCP server. Out of scope: A2A delegate agents, authentication, remote MCP servers over the network, the CLI."
 
+## Clarifications
+
+### Session 2026-11-06
+
+- Q: What should happen when the service starts and one configured MCP server cannot be started or reached? → A: Fail startup: the service refuses to serve and the error names the server, as it does for an unreachable database. There is no degraded start and no per-server opt-out.
+- Q: How should an operator describe a local MCP server in the configuration: as a command Freyja launches itself, as an address of a server that is already running on this machine, or either? → A: Either form. Each server entry is a launch command, which the service starts and stops, or a local address of a server the operator runs, which the service only connects to. An address that is not on the local machine is refused at startup.
+- Q: After a server fails during operation, what should the next call to one of its tools do: try to connect again, or fail immediately until the service is restarted? → A: Reconnect on the next call, inside the per-call time limit. A server that is answering again works without restarting the service, and the catalog shows the outcome of the most recent attempt. There is no background health check, and the service never relaunches a server process that exited.
+- Q: When an MCP tool returns something that is not plain text, such as an image, audio, or an attached file, what should the orchestrator receive? → A: Text and structured data only. Each non-text part is replaced by a short note naming its kind, so the orchestrator knows something was left out; the result is not an error.
+- Q: Beyond name, origin, description, and classification, what else should the tool catalog show for each tool? → A: The arguments the tool accepts and the hints its server publishes about it, such as a read-only label. The hints are labelled as the server's claim and never affect gating.
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Use a delegate's read-only tools without friction (Priority: P1)
@@ -49,7 +59,7 @@ A tool that is not on the read-only list is treated as effectful. When the orche
 
 ### User Story 3 - See what Freyja can call (Priority: P3)
 
-A user, an operator, or a tool acting for them reads the catalog of everything the orchestrator can call: Freyja's own tools and each connected server's tools, with each tool's description, whether it is read-only or gated, and whether its server is currently reachable. This is how someone decides what to mark read-only and how they find out why a tool is unavailable.
+A user, an operator, or a tool acting for them reads the catalog of everything the orchestrator can call: Freyja's own tools and each connected server's tools, with each tool's description, whether it is read-only or gated, and whether its server was reachable the last time it was used. This is how someone decides what to mark read-only and how they find out why a tool is unavailable.
 
 **Why this priority**: Approval decisions and configuration choices both need a trustworthy list of what exists. Without it the operator is editing a list of names blind, and a user seeing a pause cannot tell where the tool came from.
 
@@ -57,9 +67,10 @@ A user, an operator, or a tool acting for them reads the catalog of everything t
 
 **Acceptance Scenarios**:
 
-1. **Given** a running service, **When** the catalog is read, **Then** every tool the orchestrator can call is listed with its name, origin (Freyja itself or a named server), description, and classification, and the list matches what the orchestrator was given.
-2. **Given** a server whose connection has been lost since startup, **When** the catalog is read, **Then** that server is shown as unavailable and its tools are still listed with their classification.
+1. **Given** a running service, **When** the catalog is read, **Then** every tool the orchestrator can call is listed with its name, origin (Freyja itself or a named server), description, declared input, and classification, and the list matches what the orchestrator was given.
+2. **Given** a server whose most recent call failed because it could not be reached, **When** the catalog is read, **Then** that server is shown as unavailable and its tools are still listed with their classification.
 3. **Given** no servers configured, **When** the catalog is read, **Then** only Freyja's own tools appear, and the notification placeholder is listed as gated.
+4. **Given** a server that labels a tool as read-only while the configuration does not, **When** the catalog is read, **Then** the tool is listed as gated, and the server's label appears separately, marked as the server's own claim.
 
 ---
 
@@ -78,6 +89,7 @@ An operator misconfigures a server, or a server stops working. Startup refuses t
 3. **Given** two servers that provide tools with the same name, or a server tool named like one of Freyja's own, **When** the service starts, **Then** startup fails naming the collision.
 4. **Given** a server that stops responding during a run, **When** the orchestrator calls one of its tools, **Then** the call fails within the configured time limit, the orchestrator receives the error as the tool's result, the service log names the server and the tool, and the thread stays usable.
 5. **Given** any failure above, **When** the error is written to the stream, the log, or the catalog, **Then** it never contains a credential the server was given.
+6. **Given** a server marked unavailable after a failed call, **When** it is answering again and the orchestrator calls one of its tools, **Then** the call succeeds without a service restart and the catalog shows the server as reachable.
 
 ---
 
@@ -105,9 +117,12 @@ A developer follows the README to add one real tool server that runs on their ma
 - **A server is removed from the configuration while old threads reference its tools**: the transcript still shows the old calls and results; a new call to a tool that no longer exists fails as unknown, and the run continues.
 - **Two runs on different threads call the same server at the same time**: both complete and each receives its own result; the service MUST NOT mix results between runs.
 - **A call exceeds the per-call time limit**: it fails with an error result naming the limit; the orchestrator continues; the lease and the thread are unaffected.
-- **The server's own read-only labels differ from the configuration**: the configuration wins in every case; server labels are informational only and MAY be shown in the catalog.
-- **A read-only tool is slow or chatty**: it still needs no approval; its output is passed through unchanged. Output size limits are out of scope for this increment.
+- **The server's own read-only labels differ from the configuration**: the configuration wins in every case; server labels are informational only and are shown in the catalog as the server's own claim, apart from the classification.
+- **A read-only tool is slow or chatty**: it still needs no approval; its text output is passed through unchanged. Output size limits are out of scope for this increment.
+- **A tool returns an image, audio, or an attached file**: the text and structured parts reach the orchestrator, each other part becomes a note naming its kind, and the run continues; a result made only of such parts is delivered as those notes.
 - **The notification placeholder**: unchanged; it stays gated and appears in the catalog like any effectful tool.
+- **A server entry gives an address on another machine**: startup fails naming the server; servers reached over the network are out of scope, and the rule is checked from the configuration, not left to the operator's care.
+- **A launched server's process exits while the service runs**: its tools return error results and the catalog shows it unavailable until the service is restarted, because the service does not relaunch it. A server reached by address recovers on the next call once the operator has it running again.
 - **Configuration changes while the service runs**: not picked up until restart; the catalog reflects what was loaded at startup.
 
 ## Requirements *(mandatory)*
@@ -116,11 +131,11 @@ A developer follows the README to add one real tool server that runs on their ma
 
 **Configuration and startup**
 
-- **FR-001**: Operators MUST be able to name one or more tool servers in the service configuration, each with a unique name, how to start or reach it on the local machine, and the list of its tools that are read-only. Everything about a server MUST come from configuration; nothing MAY be hardcoded.
+- **FR-001**: Operators MUST be able to name one or more tool servers in the service configuration, each with a unique name, exactly one of two forms of connection, and the list of its tools that are read-only. The two forms are a command the service launches on the local machine, and the local address of a server that is already running. An address that does not refer to the local machine MUST be refused. Everything about a server MUST come from configuration; nothing MAY be hardcoded.
 - **FR-002**: Credentials a server needs MUST be supplied through the environment and MUST NOT appear in committed configuration, in logs, in error messages, or in the catalog.
 - **FR-003**: When the service starts, it MUST connect to every configured server, obtain its tool list, and make those tools available to the orchestrator and to its subagents through the one construction path the service already has. Tools MUST be loaded once at startup; configuration changes take effect on restart.
-- **FR-004**: Startup MUST fail with an error naming the server when a configured server cannot be started or reached, when the configuration marks as read-only a tool the server does not provide, or when two tools would share a name. The service MUST NOT serve requests in that state.
-- **FR-005**: Connections to servers MUST be released when the service stops.
+- **FR-004**: Startup MUST fail with an error naming the server when a configured server cannot be started or reached, when a server entry gives both forms of connection, neither, or an address that is not local, when the configuration marks as read-only a tool the server does not provide, or when two tools would share a name. The service MUST NOT serve requests in that state.
+- **FR-005**: Connections to servers MUST be released when the service stops. A server the service launched MUST be stopped with it; a server reached by address is left running, because the operator owns it.
 
 **Classification and the gate**
 
@@ -133,26 +148,27 @@ A developer follows the README to add one real tool server that runs on their ma
 
 **Execution**
 
-- **FR-012**: A failing, timing out, or unavailable server call MUST become an error result delivered to the orchestrator, MUST be logged with the server and tool names, and MUST NOT end the run or affect the thread's run lease. The per-call time limit MUST be configurable with a safe local default.
+- **FR-012**: A failing, timing out, or unavailable server call MUST become an error result delivered to the orchestrator, MUST be logged with the server and tool names, and MUST NOT end the run or affect the thread's run lease. The per-call time limit MUST be configurable with a safe local default. A call to a server whose connection was lost MUST try to connect again within that same limit, so a server that is answering again is usable without a service restart. The service MUST NOT relaunch a server process that exited and MUST NOT probe servers in the background.
 - **FR-013**: Calls from concurrent runs to the same server MUST each receive their own result.
+- **FR-018**: A tool result MUST reach the orchestrator as its text and structured data. Each part that is not text, such as an image, audio, or an attached file, MUST be replaced by a short note naming the kind of content left out, and MUST NOT be sent to the model or stored in the thread. A result with such parts is a normal result, not an error. This applies to read-only and effectful tools alike.
 
 **Catalog**
 
-- **FR-014**: The service MUST expose a read-only catalog listing every tool the orchestrator can call: name, origin (Freyja itself or the server name), description, classification, and, for server tools, whether the server is currently reachable. The catalog MUST reflect exactly the tools given to the orchestrator at startup.
+- **FR-014**: The service MUST expose a read-only catalog listing every tool the orchestrator can call: name, origin (Freyja itself or the server name), description, declared input, classification, and, for server tools, whether the server is reachable and the hints the server publishes about the tool. Those hints MUST be presented as the server's own claim, separate from the classification, and a tool whose server publishes none MUST show none. Reachability is the outcome of the most recent attempt to use the server, at startup or in a call; reading the catalog MUST NOT contact a server. The catalog MUST reflect exactly the tools given to the orchestrator at startup.
 
 **Local development, documentation, and quality**
 
 - **FR-015**: Every new configurable value MUST be read through settings from the project's environment-variable prefix, MUST have a safe local default unless it carries a credential, and MUST be documented in the example configuration.
 - **FR-016**: The README MUST document how to configure a server and its read-only list, how to read the catalog, and how to run the suite, and MUST name one real local server the developer can try.
-- **FR-017**: Automated tests MUST cover: tools loaded from a server at startup; read-only calls completing without a pause, directly and through a subagent; effectful and unclassified calls pausing; approve, edit, and reject reaching the server as specified; edit validation against declared input, including a tool with none; server-published labels being ignored; the catalog's contents and server status; each startup failure in FR-004; a failing or timed-out call; concurrent calls; and absence of credentials in output. The suite MUST run without a network and without any external server installed, using a stand-in server inside the test process.
+- **FR-017**: Automated tests MUST cover: tools loaded from a server at startup; read-only calls completing without a pause, directly and through a subagent; effectful and unclassified calls pausing; approve, edit, and reject reaching the server as specified; edit validation against declared input, including a tool with none; server-published labels being ignored for gating and shown in the catalog as the server's claim; the catalog's contents, including each tool's declared input, and server status; a server entry in each of the two forms of connection being accepted; each startup failure in FR-004; a failing or timed-out call; a call succeeding again after its server recovers; a result with a non-text part delivered as text plus a note; concurrent calls; and absence of credentials in output. The suite MUST run without a network and without any external server installed, using a stand-in server inside the test process.
 
 ### Key Entities
 
-- **Tool Server**: an external provider of tools, running on the same machine, identified by a configured name. Has a connection status (reachable or not) and a set of Tools. Started and stopped with the service.
-- **Tool**: a callable the orchestrator may use, with a name, a description, an optional declared input, an origin (Freyja itself or a Tool Server), and a Classification.
+- **Tool Server**: an external provider of tools, running on the same machine, identified by a configured name and described in one of two forms: launched by the service, which then starts and stops it, or reached at a local address, where the operator owns its lifetime. Has a connection status (reachable or not, as of the most recent attempt to use it) and a set of Tools.
+- **Tool**: a callable the orchestrator may use, with a name, a description, an optional declared input, an origin (Freyja itself or a Tool Server), a Classification, and, for a server's tool, any hints the server publishes about it, which are informational only.
 - **Classification**: read-only or effectful. Derived from configuration by a fixed rule; effectful tools are gated.
 - **Read-only List**: the configured set of tool names, per server, that are exempt from approval. The only input to Classification.
-- **Catalog**: the list of every Tool with origin, description, Classification, and server status, as loaded at startup.
+- **Catalog**: the list of every Tool with origin, description, declared input, Classification, server-published hints, and server status. The tools are those loaded at startup; the status is the latest known.
 - **Proposal**: an existing entity, extended with the server name of the proposed tool.
 
 ## Success Criteria *(mandatory)*
@@ -171,13 +187,13 @@ A developer follows the README to add one real tool server that runs on their ma
 
 **Scope**
 
-- Out of scope, per the description: delegate agents that carry their own reasoning (A2A), authentication, servers reached over the network rather than on the local machine, and the command-line interface. Also out of scope for this increment: reloading configuration without a restart, automatic restart of a server that died, limits on tool output size, and per-user or per-thread differences in which tools are available.
-- Servers run on the same machine as the service and are started and stopped with it; how a server is launched is a planning decision.
+- Out of scope, per the description: delegate agents that carry their own reasoning (A2A), authentication, servers reached over the network rather than on the local machine, and the command-line interface. Also out of scope for this increment: reloading configuration without a restart, relaunching a server process that exited, background health checks, limits on tool output size, and per-user or per-thread differences in which tools are available.
+- Servers run on the same machine as the service. A launched server is started and stopped with the service; a server reached by address is started by the operator before the service and is unreachable, a startup failure, if it is not running. Which transport each form uses is a planning decision.
 - Subagents receive the same tool set as the orchestrator, with the same classification; there is no narrower tool set per subagent in this increment.
 
 **Behavior choices**
 
-- A server that cannot be reached at startup fails startup, matching how the service already treats an unreachable database. The alternative, running without that server's tools and showing it as unavailable, hides a missing capability behind a model that cannot explain it; the catalog's "unavailable" status is for servers lost after a successful start. This choice is the most likely candidate for the clarify step.
+- A server that cannot be reached at startup fails startup, matching how the service already treats an unreachable database. The alternative, running without that server's tools and showing it as unavailable, hides a missing capability behind a model that cannot explain it; the catalog's "unavailable" status is for servers lost after a successful start. Confirmed in clarification on 2026-11-06; there is no degraded start and no per-server opt-out in this increment.
 - Silence in the configuration means "gated". Marking a tool read-only is an explicit operator act, and the list is checked against the server's actual tools at startup so a typo fails loudly.
 - Labels a server publishes about its own tools are never trusted for classification, because the server is the party whose effects are being gated.
 - Tool names are unique across the whole catalog, so a proposal names one tool without ambiguity; a collision is a startup error rather than silently renaming anything.
