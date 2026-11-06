@@ -254,5 +254,27 @@ None. The Constitution Check passed without deviations before research and after
     so the contract and the endpoint cannot drift apart unnoticed. Reading that file needs a
     YAML parser: `pyyaml`, already in the lock as a dependency of LangChain, is now declared
     in the `dev` group. No runtime dependency changed.
+- **Phase 6 as built (2026-11-06)**:
+  - `ToolServer.call` raises the error result's text itself, as `ToolException`. A timed-out
+    call says its effect may or may not have happened. An unreachable server's error adds
+    "if the call had already been sent, its effect may or may not have happened", because a
+    connection can drop after the request left; R7 has only the first of the two.
+  - `ToolServer.describe` is the one function for text about a server that is logged, raised
+    at startup, or stored as its status. It replaces the server's `pass_env` values and its
+    address in three forms: the full URL, host with port, and the same with user information.
+  - **What the MCP library logs is filtered too, which R12 did not cover.** The library logs
+    text it received from a server: a line on a launched server's standard output that is not
+    a protocol message is logged with a traceback that quotes it. Probe: that traceback
+    showed the end of a credential, because the quote is shortened in the middle and a cut
+    value cannot be matched. While servers with `pass_env` values are open, a filter on the
+    library's loggers (`mcp` and below) replaces the values in the message and reduces a
+    traceback to the type of the exception.
+  - The redirect case in `tests/test_mcp_transports.py` fails at startup, not in a call: a
+    server that only redirects cannot be listed, so the service refuses to start with it. The
+    second listener receives no request, which is the point of the test.
+  - The stub gained what the transport tests need when it is launched for real: the tools
+    `pid` and `env_has`, a file it appends its process id to on each start, and
+    `--chatty-stdout`, which writes one non-protocol line to standard output.
+  - The suite takes about 12 seconds; the five transport tests are 3 of them.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.

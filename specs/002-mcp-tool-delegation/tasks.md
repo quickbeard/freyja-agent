@@ -402,7 +402,7 @@ Scenarios 4 and 5.
 
 ### Tests for User Story 4
 
-- [ ] T035 [US4] Add failure cases to `tests/test_mcp_calls.py`: with a short call limit,
+- [X] T035 [US4] Add failure cases to `tests/test_mcp_calls.py`: with a short call limit,
       `slow` ends in an error result that names the limit and says its effect may or may not
       have happened, the stub recorded one call and no second attempt, the run ends with `end`,
       the lease is released, and a following run on the thread works; a server that cannot be
@@ -413,14 +413,14 @@ Scenarios 4 and 5.
       succeeds with no restart and the catalog shows `reachable: true` and `error: null`; an
       approved gated call that times out is not repeated (US4 scenarios 4 and 6, US3
       scenario 2, FR-012, SC-005)
-- [ ] T036 [US4] Add the credential cases to `tests/test_mcp_calls.py`, with `STUB_TOKEN` set
+- [X] T036 [US4] Add the credential cases to `tests/test_mcp_calls.py`, with `STUB_TOKEN` set
       and named in `pass_env`: its value is absent, and `***` present where the text would have
       been, in the result of `whoami`, in an error result, in every stream event of the run, in
       the thread state, in the captured log, in the catalog's `error`, and in a tool
       description, an input schema string, and a hint that the stub was built to contain it; a
       startup failure of that server does not contain the value either (US4 scenario 5,
       FR-002, SC-008, R12)
-- [ ] T037 [P] [US4] Write `tests/test_mcp_transports.py`, which uses only the loopback
+- [X] T037 [P] [US4] Write `tests/test_mcp_transports.py`, which uses only the loopback
       interface and the test interpreter. Over pipes, launching `python -m tests.mcp_stub`
       through `default_connect`: a call succeeds; the launched process sees a `pass_env`
       variable and does not see another variable set in the service's environment; what the
@@ -437,7 +437,7 @@ Scenarios 4 and 5.
 
 ### Implementation for User Story 4
 
-- [ ] T038 [US4] Complete the failure outcomes of `ToolServer.call` in
+- [X] T038 [US4] Complete the failure outcomes of `ToolServer.call` in
       `src/freyja_agent/delegates/mcp_servers.py`: at the time limit, mark the server
       unreachable and raise a `ToolException` that names the server, the tool, and the limit
       and says the outcome is unknown; for any other exception, take the innermost one out of
@@ -446,7 +446,7 @@ Scenarios 4 and 5.
       log one warning per failure with the server, the tool, and `timeout` or `unreachable`;
       set `checked_at` on every outcome; never retry, never relaunch a process, and start no
       background check (FR-012, R7)
-- [ ] T039 [US4] Make every text that leaves a server link pass through its redactor in
+- [X] T039 [US4] Make every text that leaves a server link pass through its redactor in
       `src/freyja_agent/delegates/mcp_servers.py`: startup errors, the status `error`, log
       lines, and the lines read from a launched server's error output; replace the server's
       configured URL with `<address>` in the status `error`, which the catalog shows; confirm

@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+import os
 import threading
 from collections.abc import Callable
 from types import SimpleNamespace
@@ -19,6 +20,7 @@ from fastapi.testclient import TestClient
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from mcp.server.mcpserver.exceptions import ToolError
 from mcp.types import (
     AudioContent,
     BlobResourceContents,
@@ -30,6 +32,7 @@ from mcp.types import (
     TextResourceContents,
 )
 
+from freyja_agent.delegates.mcp_servers import ToolServerError
 from freyja_agent.delegates.mcp_tools import result_text
 from freyja_agent.runtime.runtime import Runtime
 from tests.conftest import McpApp
@@ -393,3 +396,260 @@ def test_concurrent_calls_each_receive_their_own_result(
     assert replies == {key: f"value-of-{key}" for key in keys}
     # The calls overlapped on the one connection; none waited for another to finish.
     assert most_at_once > 1
+
+
+# Failures during a run (User Story 4, FR-012, SC-005): a slow or absent server is an error
+# result, a warning, and a status in the catalog; nothing is tried twice.
+
+ADDRESS = {"stub": {"url": "http://127.0.0.1:8765/mcp", "read_only": ["lookup", "slow"]}}
+
+
+def server_status(client: TestClient, name: str = "stub") -> dict[str, Any]:
+    catalog = client.get("/tools").json()
+    return next(server for server in catalog["servers"] if server["name"] == name)
+
+
+def warnings_of(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == SERVERS_LOGGER and record.levelno == logging.WARNING
+    ]
+
+
+def test_a_call_that_exceeds_the_time_limit_is_an_error_result_and_is_not_repeated(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger=SERVERS_LOGGER)
+    model = ScriptedChatModel(script=[call("slow", seconds=3)], final_text="It took too long.")
+    servers = {"stub": {"command": "stub-command", "read_only": ["lookup", "slow"]}}
+    made = make_mcp_app(model, servers, mcp_call_timeout_seconds=0.2)
+    with TestClient(made.app) as client:
+        before = server_status(client)
+        events = run(client, "t-1", "wait for it", sse_events)
+        (result,) = tool_results(client, made.runtime, "t-1")
+        active = client.portal.call(made.runtime.locks.is_active, "t-1")
+        after = server_status(client)
+        tool_count = len(client.get("/tools").json()["tools"])
+
+        # The thread is usable, and the server answers the next call on the same connection.
+        model.script.append(call("lookup", "c2", key="alpha"))
+        again = run(client, "t-1", "now look up alpha", sse_events)
+        recovered = server_status(client)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert "interrupt" not in kinds(events) and "error" not in kinds(events)
+    assert result.status == "error"
+    assert "'slow'" in result.content and "'stub'" in result.content
+    assert "0.2 seconds" in result.content
+    assert "may or may not have happened" in result.content
+    assert active is False
+    # One attempt reached the server, and nothing tried again.
+    assert made.stubs["stub"].called("slow") == [{"seconds": 3}]
+    (warning,) = warnings_of(caplog)
+    assert "stub" in warning and "slow" in warning and "timeout" in warning
+    # The catalog shows the outcome of that attempt, and still lists the server's tools.
+    assert before["reachable"] is True and before["error"] is None
+    assert after["reachable"] is False
+    assert after["error"] and len(after["error"]) <= 500 and "0.2 seconds" in after["error"]
+    assert after["checked_at"] > before["checked_at"]
+    assert after["tool_count"] == before["tool_count"] and tool_count > after["tool_count"]
+    assert again[-1] == ("end", {"status": "completed"})
+    assert made.stubs["stub"].called("lookup") == [{"key": "alpha"}]
+    assert recovered["reachable"] is True and recovered["error"] is None
+
+
+def test_an_unreachable_server_is_an_error_result_and_recovers_on_the_next_call(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.WARNING, logger=SERVERS_LOGGER)
+    model = ScriptedChatModel(script=[call("lookup", key="alpha")], final_text="Done.")
+    made = make_mcp_app(model, ADDRESS)
+    with TestClient(made.app) as client:
+        before = server_status(client)
+        # The operator's server goes away after startup.
+        made.links["stub"].down = True
+        events = run(client, "u-1", "look up alpha", sse_events)
+        (result,) = tool_results(client, made.runtime, "u-1")
+        active = client.portal.call(made.runtime.locks.is_active, "u-1")
+        down = server_status(client)
+        tools_while_down = [t["name"] for t in client.get("/tools").json()["tools"]]
+
+        # It is answering again; no restart of the service.
+        made.links["stub"].down = False
+        model.script.append(call("lookup", "c2", key="beta"))
+        again = run(client, "u-2", "look up beta", sse_events)
+        (second,) = tool_results(client, made.runtime, "u-2")
+        up = server_status(client)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert "error" not in kinds(events)
+    assert result.status == "error"
+    assert "'stub'" in result.content and "'lookup'" in result.content
+    assert "could not be reached" in result.content
+    assert active is False
+    assert made.stubs["stub"].calls == [("lookup", {"key": "beta"})]
+    (warning,) = warnings_of(caplog)
+    assert "stub" in warning and "lookup" in warning and "unreachable" in warning
+    assert down["reachable"] is False
+    assert down["error"] == "ConnectionRefusedError: the stub server is down"
+    assert down["checked_at"] > before["checked_at"]
+    assert "lookup" in tools_while_down
+    assert again[-1] == ("end", {"status": "completed"})
+    assert second.status == "success" and second.content == "value-of-beta"
+    assert up["reachable"] is True and up["error"] is None
+    assert up["checked_at"] > down["checked_at"]
+
+
+def test_an_approved_call_that_times_out_is_not_repeated(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(script=[call("slow", seconds=3)], final_text="Unknown outcome.")
+    servers = {"stub": {"command": "stub-command"}}  # `slow` is gated here
+    made = make_mcp_app(model, servers, mcp_call_timeout_seconds=0.2)
+    with TestClient(made.app) as client:
+        events = run(client, "t-2", "do the slow thing", sse_events)
+        assert events[-1][0] == "interrupt"
+        assert made.stubs["stub"].calls == []
+        proposal = events[-1][1]["interrupt_id"]
+        with client.stream(
+            "POST",
+            "/threads/t-2/resume",
+            json={"interrupt_id": proposal, "decisions": [{"type": "approve"}]},
+        ) as response:
+            resumed = sse_events(response.iter_lines())
+        (result,) = tool_results(client, made.runtime, "t-2")
+        state = client.get("/threads/t-2/state").json()
+
+    # The approval authorized one attempt. It is reported, not retried, and nothing is pending.
+    assert resumed[-1] == ("end", {"status": "completed"})
+    assert result.status == "error" and "may or may not have happened" in result.content
+    assert made.stubs["stub"].called("slow") == [{"seconds": 3}]
+    assert state["pending"] is None and state["run_active"] is False
+
+
+# Credentials (FR-002, SC-008, research R12): a value given to a server appears nowhere in the
+# form it was supplied.
+
+GIVEN = "zz-9f3e-value-given-to-the-server"
+
+
+def test_a_credential_appears_nowhere_a_run_can_show_it(
+    make_mcp_app: Callable[..., McpApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv(STUB_ENV, GIVEN)
+
+    def denied() -> str:
+        """Fail, quoting the token the server was started with."""
+        raise ToolError(f"denied for holder of {os.environ[STUB_ENV]}")
+
+    stub = make_stub(leak_token_in_listing=True, extra={"denied": denied})
+    servers = {
+        "stub": {
+            "command": "stub-command",
+            "pass_env": [STUB_ENV],
+            "read_only": ["whoami", "denied", "token_help"],
+        }
+    }
+    model = ScriptedChatModel(
+        script=[call("whoami"), call("denied", "c2"), call("token_help", "c3", topic="all")],
+        final_text="ok",
+    )
+    made = make_mcp_app(model, servers, stubs={"stub": stub})
+    with TestClient(made.app) as client:
+        events = run(client, "s-1", "who are you?", sse_events)
+        results = tool_results(client, made.runtime, "s-1")
+        state = client.get("/threads/s-1/state").text
+        catalog = client.get("/tools").text
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [message.content for message in results[:2]] == [
+        "token is ***",
+        "Error executing tool denied: denied for holder of ***",
+    ]
+    stream = json.dumps(events)
+    log = "\n".join(f"{r.getMessage()} {r.exc_text or ''}" for r in caplog.records)
+    for place, text in (("stream", stream), ("state", state), ("catalog", catalog), ("log", log)):
+        assert GIVEN not in text, place
+    # The server's own listing carried it three times: description, schema text, and a hint.
+    assert catalog.count("***") >= 3
+    assert "token is ***" in stream and "token is ***" in state
+
+
+def test_a_credential_in_a_connection_failure_is_redacted(
+    make_mcp_app: Callable[..., McpApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    monkeypatch.setenv(STUB_ENV, GIVEN)
+    servers = {"stub": {"command": "stub-command", "pass_env": [STUB_ENV], "read_only": ["lookup"]}}
+    model = ScriptedChatModel(script=[call("lookup", key="alpha")], final_text="ok")
+    made = make_mcp_app(model, servers)
+    with TestClient(made.app) as client:
+        # A launched server's connection is held open, so make the held client fail.
+        (server,) = made.runtime.servers
+
+        async def refuse(*_args: Any, **_kwargs: Any) -> Any:
+            raise ConnectionError(f"handshake rejected for {GIVEN}")
+
+        monkeypatch.setattr(server._client, "call_tool", refuse)
+        events = run(client, "s-2", "look up alpha", sse_events)
+        (result,) = tool_results(client, made.runtime, "s-2")
+        status = server_status(client)
+        state = client.get("/threads/s-2/state").text
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert result.status == "error"
+    assert status["reachable"] is False
+    assert status["error"] == "ConnectionError: handshake rejected for ***"
+    log = "\n".join(f"{r.getMessage()} {r.exc_text or ''}" for r in caplog.records)
+    for place, text in (("stream", json.dumps(events)), ("state", state), ("log", log)):
+        assert GIVEN not in text, place
+    assert "handshake rejected for ***" in log
+
+
+def test_a_credential_in_a_startup_failure_is_redacted(
+    make_mcp_app: Callable[..., McpApp], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(STUB_ENV, GIVEN)
+    servers = {"stub": {"command": "stub-command", "pass_env": [STUB_ENV]}}
+    made = make_mcp_app(ScriptedChatModel(), servers)
+    made.links["stub"].down = True
+    made.links["stub"].down_reason = f"refused the token {GIVEN}"
+    with pytest.raises(ToolServerError) as refused, TestClient(made.app):
+        pytest.fail("the app must not start")
+    assert GIVEN not in str(refused.value)
+    assert "refused the token ***" in str(refused.value)
+
+
+def test_a_servers_address_is_kept_out_of_its_status_and_the_log(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    caplog.set_level(logging.DEBUG)
+    url = "http://127.0.0.1:8765/mcp?key=zz-query-value"
+    servers = {"stub": {"url": url, "read_only": ["lookup"]}}
+    model = ScriptedChatModel(script=[call("lookup", key="alpha")], final_text="ok")
+    made = make_mcp_app(model, servers)
+    with TestClient(made.app) as client:
+        made.links["stub"].down = True
+        made.links["stub"].down_reason = f"cannot connect to {url} (tried 127.0.0.1:8765)"
+        events = run(client, "s-3", "look up alpha", sse_events)
+        status = server_status(client)
+        catalog = client.get("/tools").text
+
+    assert events[-1] == ("end", {"status": "completed"})
+    # The catalog shows that the server is unreachable and why, without where it is (FR-014).
+    assert (
+        status["error"] == "ConnectionRefusedError: cannot connect to <address> (tried <address>)"
+    )
+    log = "\n".join(r.getMessage() for r in caplog.records)
+    for hidden in ("zz-query-value", "127.0.0.1:8765", "/mcp"):
+        assert hidden not in catalog, hidden
+        assert hidden not in json.dumps(events), hidden
+    assert "zz-query-value" not in log

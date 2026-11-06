@@ -101,11 +101,13 @@ class StubLink:
     down: bool = False
     hang: bool = False
     connections: int = 0
+    # What the failed connection says, for tests of what may appear in errors and logs.
+    down_reason: str = "the stub server is down"
 
     def target(self) -> Any:
         self.connections += 1
         if self.down:
-            raise ConnectionRefusedError("the stub server is down")
+            raise ConnectionRefusedError(self.down_reason)
         if self.hang:
             return _never_connects()
         return self.stub

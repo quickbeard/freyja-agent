@@ -22,11 +22,13 @@ import asyncio
 import logging
 import os
 import re
-from collections.abc import AsyncIterator, Callable, Iterable, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
+from langchain_core.tools import ToolException
 from mcp import Client, StdioServerParameters, stdio_client
 
 from freyja_agent.agent.catalog import RESERVED_TOOL_NAMES
@@ -40,6 +42,8 @@ logger = logging.getLogger(__name__)
 TOOL_NAME_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 ERROR_TEXT_LIMIT = 500
 REDACTED = "***"
+# Stands in for a server's address in text that may be shown, such as the catalog (FR-014).
+ADDRESS = "<address>"
 
 # How long closing a launched server may take before its owner task is cancelled. The SDK
 # bounds its own shutdown (close stdin, terminate, kill), each step within about 2 seconds.
@@ -47,6 +51,8 @@ _CLOSE_SECONDS = 10.0
 # How long the reader of a launched server's error output may drain after the process ended.
 _DRAIN_SECONDS = 0.5
 _ERROR_OUTPUT_LINE_LIMIT = 8192
+# The MCP library's own loggers all live under this name.
+_SDK_LOGGER = "mcp"
 
 Connection = Literal["command", "address"]
 # Returns what ``mcp.Client`` connects to: a URL, a transport, or (in tests) a server object.
@@ -69,6 +75,9 @@ class Redactor:
         # Longest first, so a value that contains another is replaced whole.
         self._secrets = tuple(sorted({s for s in secrets if s}, key=len, reverse=True))
 
+    def __bool__(self) -> bool:
+        return bool(self._secrets)
+
     def text(self, text: str) -> str:
         for secret in self._secrets:
             text = text.replace(secret, REDACTED)
@@ -83,6 +92,61 @@ class Redactor:
         if isinstance(value, list | tuple):
             return [self.deep(item) for item in value]
         return value
+
+
+class _RedactSdkLogs(logging.Filter):
+    """Keeps what servers were given out of what the MCP library itself logs.
+
+    The library logs text it received from a server. For example, a line on a launched
+    server's standard output that is not a protocol message is logged with a traceback that
+    quotes the line. Those records are part of the service's log like any other, so they get
+    the same protection (FR-002):
+
+    - the message has the exact values replaced, as everywhere else;
+    - a traceback is reduced to the type of the exception. A traceback can quote a server's
+      text in a shortened form, with the middle cut out, and a value that is cut cannot be
+      recognized and replaced.
+
+    Every record passes; only its text changes.
+    """
+
+    def __init__(self, redactor: Redactor) -> None:
+        super().__init__()
+        self._redactor = redactor
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = self._redactor.text(record.getMessage())
+        record.args = None
+        if record.exc_info or record.exc_text:
+            raised = record.exc_info[0] if record.exc_info else None
+            kind = raised.__name__ if raised is not None else "an exception"
+            # Let go of the exception object as well: it still holds the original text.
+            record.exc_info = None
+            record.exc_text = f"{kind} (details withheld: they can quote text from the tool server)"
+        return True
+
+
+@contextmanager
+def _sdk_logs_redacted(secrets: Iterable[str]) -> Iterator[None]:
+    """Attach the filter to the MCP library's loggers for as long as the servers are open."""
+    redactor = Redactor(secrets)
+    if not redactor:
+        yield
+        return
+    log_filter = _RedactSdkLogs(redactor)
+    names = [
+        name
+        for name in logging.root.manager.loggerDict
+        if name == _SDK_LOGGER or name.startswith(f"{_SDK_LOGGER}.")
+    ]
+    loggers = [logging.getLogger(name) for name in names]
+    for sdk_logger in loggers:
+        sdk_logger.addFilter(log_filter)
+    try:
+        yield
+    finally:
+        for sdk_logger in loggers:
+            sdk_logger.removeFilter(log_filter)
 
 
 def innermost(exc: BaseException) -> BaseException:
@@ -217,6 +281,29 @@ class ToolServer:
     def redact(self, text: str) -> str:
         return self._redactor.text(text)
 
+    def describe(self, text: str) -> str:
+        """Text about this server that is safe to log, to raise, and to show in the catalog.
+
+        The values the server was given are replaced, and so is its address: an exception's
+        text can quote the URL it failed to reach, with whatever its query string holds, and
+        the catalog shows which form of connection a server uses and nothing more (FR-002,
+        FR-014). Cut to the length a status may have.
+        """
+        text = self.redact(text)
+        for address in self._addresses:
+            text = text.replace(address, ADDRESS)
+        return text[:ERROR_TEXT_LIMIT]
+
+    @property
+    def _addresses(self) -> tuple[str, ...]:
+        """The forms in which this server's address can appear, longest first."""
+        if self.config.url is None:
+            return ()
+        parts = urlsplit(self.config.url)
+        host_and_port = parts.netloc.rpartition("@")[2]
+        forms = {self.config.url, parts.netloc, host_and_port}
+        return tuple(sorted((form for form in forms if form), key=len, reverse=True))
+
     def _target(self) -> Any:
         return self._connect(self.name, self.config, self._log_error_output)
 
@@ -224,9 +311,10 @@ class ToolServer:
         logger.info("Tool server %s: %s", self.name, self.redact(line))
 
     def _mark(self, reachable: bool, error: str | None = None) -> None:
+        """Record the outcome of the most recent attempt to use the server."""
         self.reachable = reachable
         self.checked_at = datetime.now(UTC)
-        self.error = None if reachable else self.redact(error or "")[:ERROR_TEXT_LIMIT]
+        self.error = None if reachable else self.describe(error or "")
 
     async def start(self, startup_timeout: float) -> None:
         """Connect, list the tools, and convert them. Closes the link again if that fails."""
@@ -264,7 +352,9 @@ class ToolServer:
         except Exception as exc:
             if ready.done():
                 logger.warning(
-                    "Tool server %s: the connection ended: %s", self.name, self.redact(reason(exc))
+                    "Tool server %s: the connection ended: %s",
+                    self.name,
+                    self.describe(reason(exc)),
                 )
             else:
                 ready.set_exception(exc)
@@ -290,17 +380,57 @@ class ToolServer:
     async def call(self, tool: str, arguments: dict[str, Any]) -> Any:
         """Run one tool call under the time limit, including connecting, and return its result.
 
-        Nothing is retried: a call is attempted once (FR-012). A result means the server
-        answered, so it is reachable, and that holds for a tool error too: the server refused
-        or failed the call, it did not go away (research R7). A tool error is logged with the
-        server and the tool, never with the arguments.
+        Every outcome updates the server's status, and none is tried again (FR-012, research
+        R7):
+
+        - a result means the server answered, so it is reachable. That holds for a tool error
+          too: the server refused or failed the call, it did not go away;
+        - at the time limit the call is abandoned. Its effect may or may not have happened,
+          and the error says so, because an approval authorizes one attempt and only a person
+          can decide on another;
+        - anything else means the server could not be used. A server at an address is
+          connected again on the next call, so it recovers by itself once it answers; a
+          launched server whose process has exited stays unreachable until the service is
+          restarted, because the service never launches it again.
+
+        A failure is raised as ``ToolException``, which reaches the orchestrator as an error
+        result and never ends a run. It is logged with the server and the tool, never with the
+        arguments.
         """
-        async with asyncio.timeout(self._call_timeout):
-            if self.connection == "command":
-                result = await self._connected().call_tool(tool, arguments)
-            else:
-                async with Client(self._target()) as client:
-                    result = await client.call_tool(tool, arguments)
+        limit = self._call_timeout
+        try:
+            async with asyncio.timeout(limit) as deadline:
+                if self.connection == "command":
+                    result = await self._connected().call_tool(tool, arguments)
+                else:
+                    async with Client(self._target()) as client:
+                        result = await client.call_tool(tool, arguments)
+        except Exception as exc:
+            if isinstance(exc, TimeoutError) and deadline.expired():
+                self._mark(False, f"the call to '{tool}' did not finish within {limit:g} seconds")
+                logger.warning(
+                    "Tool server %s: tool %s did not finish within %g seconds (timeout)",
+                    self.name,
+                    tool,
+                    limit,
+                )
+                raise ToolException(
+                    f"Tool '{tool}' on server '{self.name}' did not finish within {limit:g} "
+                    "seconds, the time limit for one call. Its effect may or may not have "
+                    "happened. It was not tried again."
+                ) from None
+            self._mark(False, reason(exc))
+            logger.warning(
+                "Tool server %s: tool %s could not be called: %s (unreachable)",
+                self.name,
+                tool,
+                self.error,
+            )
+            raise ToolException(
+                f"Tool server '{self.name}' could not be reached, so the call to '{tool}' was "
+                "not completed. If the call had already been sent, its effect may or may not "
+                "have happened. It was not tried again."
+            ) from None
         self._mark(reachable=True)
         if getattr(result, "is_error", False):
             logger.warning(
@@ -342,7 +472,7 @@ def _start_failure(server: ToolServer, exc: BaseException, startup_timeout: floa
     if isinstance(innermost(exc), TimeoutError):
         why = f"it did not answer within {startup_timeout:g} seconds"
     else:
-        why = server.redact(reason(exc))[:ERROR_TEXT_LIMIT]
+        why = server.describe(reason(exc))
     return f"Tool server '{server.name}' could not be {verb}: {why}"
 
 
@@ -400,16 +530,21 @@ async def open_tool_servers(
     Raises ``ToolServerError`` naming the server, or every server, that cannot be used
     (research R4). Nothing is left open when it raises.
     """
+    secrets = {name: _resolve_pass_env(name, config) for name, config in configs.items()}
     servers = [
-        ToolServer(
-            name,
-            config,
-            connect=connect,
-            call_timeout=call_timeout,
-            secrets=_resolve_pass_env(name, config),
-        )
+        ToolServer(name, config, connect=connect, call_timeout=call_timeout, secrets=secrets[name])
         for name, config in configs.items()
     ]
+    with _sdk_logs_redacted(value for values in secrets.values() for value in values):
+        async with _opened(servers, startup_timeout, reserved_names):
+            yield tuple(servers)
+
+
+@asynccontextmanager
+async def _opened(
+    servers: Sequence[ToolServer], startup_timeout: float, reserved_names: frozenset[str]
+) -> AsyncIterator[None]:
+    """Start every server, check the result against the configuration, and close on exit."""
     outcomes = await asyncio.gather(
         *(server.start(startup_timeout) for server in servers), return_exceptions=True
     )
@@ -435,6 +570,6 @@ async def open_tool_servers(
                 len(server.tools),
                 read_only,
             )
-        yield tuple(servers)
+        yield
     finally:
         await _close_all(servers)

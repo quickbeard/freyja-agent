@@ -108,10 +108,12 @@ def _coroutine(link: ServerLink, name: str) -> Callable[..., Awaitable[str]]:
     async def call(**arguments: Any) -> str:
         try:
             result = await link.call(name, arguments)
-        except Exception as exc:  # every failure becomes an error result; none ends a run
+        except ToolException:
+            raise  # the link has already said what happened, in text that is safe to show
+        except Exception:  # every failure becomes an error result; none ends a run
             raise ToolException(
                 f"Tool server '{link.name}' could not complete the call to '{name}'."
-            ) from exc
+            ) from None
         text = link.redact(result_text(result))
         if getattr(result, "is_error", False):
             raise ToolException(text or f"Tool '{name}' on server '{link.name}' failed.")
