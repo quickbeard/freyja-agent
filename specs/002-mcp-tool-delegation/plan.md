@@ -222,5 +222,12 @@ None. The Constitution Check passed without deviations before research and after
   - Until Phase 4 validates edits against a server tool's JSON Schema, an edit of a server
     tool is refused with 422 instead of being passed on unchecked. The pause still lists
     edit for such a tool during that time.
+- **Phase 3 as built (2026-11-06)**:
+  - `result_text` in `delegates/mcp_tools.py` implements the table in R6. A block with no
+    mime type gets the note `[image omitted: unknown type]`, which R6 does not cover.
+  - A tool message's status (`success` or `error`) is in the thread, where the tests read
+    it, but the `Message` shape of the stream and of `GET .../state` does not carry it, as in
+    feature 001. A client sees a tool error only through its text. Quickstart Scenario 2
+    says the result "has an error status"; T041 checks that wording against the real service.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.

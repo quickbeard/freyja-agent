@@ -7,6 +7,7 @@ which the tool node delivers to the orchestrator as an error result: nothing a t
 does can end a run (FR-012).
 """
 
+import json
 from collections.abc import Awaitable, Callable, Collection
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -65,13 +66,42 @@ def server_hints(annotations: Any) -> dict[str, Any] | None:
     return hints or None
 
 
+def _block_text(block: Any) -> str:
+    """One content block as text: its text, or a note naming the kind of content left out."""
+    kind = getattr(block, "type", None)
+    if kind == "text":
+        return block.text or ""
+    mime_type = getattr(block, "mime_type", None) or "unknown type"
+    if kind == "image":
+        return f"[image omitted: {mime_type}]"
+    if kind == "audio":
+        return f"[audio omitted: {mime_type}]"
+    if kind == "resource":
+        resource = getattr(block, "resource", None)
+        text = getattr(resource, "text", None)
+        if text is not None:
+            return text
+        return f"[file omitted: {getattr(resource, 'mime_type', None) or 'unknown type'}]"
+    if kind == "resource_link":
+        return f"[resource link omitted: {getattr(block, 'uri', '')}]"
+    return f"[{kind or 'unknown'} content omitted]"
+
+
 def result_text(result: Any) -> str:
-    """The text of a tool result: its text blocks, in order, joined with blank lines."""
-    return "\n\n".join(
-        block.text
-        for block in getattr(result, "content", None) or []
-        if getattr(block, "type", None) == "text"
-    )
+    """A tool result as the one string the orchestrator receives (FR-018, research R6).
+
+    The content blocks in order, joined with blank lines. Text stays text; an image, audio, a
+    binary file, or a link becomes a short note naming its kind, so the orchestrator knows
+    something was left out and nothing binary reaches the model or the thread. Structured
+    content is added as JSON only when the result has no text block: a server that sends
+    structured content normally sends the same data as text too, and it must not arrive twice.
+    """
+    blocks = list(getattr(result, "content", None) or [])
+    parts = [_block_text(block) for block in blocks]
+    structured = getattr(result, "structured_content", None)
+    if structured is not None and not any(getattr(b, "type", None) == "text" for b in blocks):
+        parts.append(json.dumps(structured, ensure_ascii=False, default=str))
+    return "\n\n".join(part for part in parts if part)
 
 
 def _coroutine(link: ServerLink, name: str) -> Callable[..., Awaitable[str]]:

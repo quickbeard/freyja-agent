@@ -121,7 +121,8 @@ def _register_standard_tools(stub: StubServer) -> None:
         await asyncio.sleep(seconds)
         return f"waited {seconds} seconds"
 
-    @stub.tool()
+    # Unstructured: the result is content blocks, not data for the SDK to describe with a schema.
+    @stub.tool(structured_output=False)
     def picture() -> list[Any]:
         """Return a caption and an image."""
         stub.record("picture")
