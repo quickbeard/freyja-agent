@@ -136,7 +136,8 @@ specs/003-a2a-agent-delegation/
 │   ├── agent-config.md  # The FREYJA_A2A_AGENTS shape, rules, and examples
 │   └── sse-events.md    # The agent progress update and the background start mode
 ├── checklists/
-│   └── requirements.md  # Spec quality checklist (from /speckit-specify)
+│   ├── requirements.md  # Spec quality checklist (from /speckit-specify)
+│   └── security-reliability.md  # Security and reliability checklist (from /speckit-checklist), reviewed
 └── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
 ```
 
