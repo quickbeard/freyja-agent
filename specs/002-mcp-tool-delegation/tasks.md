@@ -487,18 +487,18 @@ local server in under 20 minutes, following the README alone.
 
 ## Phase 8: Polish & Cross-Cutting Concerns
 
-- [ ] T042 [P] Update `AGENTS.md`: the Layout entries for `src/freyja_agent/delegates/`,
+- [X] T042 [P] Update `AGENTS.md`: the Layout entries for `src/freyja_agent/delegates/`,
       `agent/catalog.py`, `api/tools.py`, and `tests/mcp_stub.py`; the changed return type of
       `build_agent`; the three settings; and the Commands note that the default suite needs no
       installed MCP server
-- [ ] T043 [P] Update the documentation tree in
+- [X] T043 [P] Update the documentation tree in
       `specs/002-mcp-tool-delegation/plan.md` to list `checklists/security.md` and `tasks.md`
       as they exist, and record under Implementation Notes anything the implementation settled
       differently from the plan
-- [ ] T044 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`, and
+- [X] T044 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`, and
       `uv run pre-commit run --all-files`; confirm no Ruff suppression was added and that the
       suite passes with the network disconnected (SC-007, principle V)
-- [ ] T045 Re-run the plan's Constitution Check against the implemented code and note the
+- [X] T045 Re-run the plan's Constitution Check against the implemented code and note the
       result in the pull request description (principles I, II, III, IV, V, VI)
 
 ---
