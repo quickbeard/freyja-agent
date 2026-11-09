@@ -1,0 +1,253 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.3.0
+  description: >
+    Additions and changes made by feature 003, A2A agent delegation. Paths, requests, and status
+    codes are unchanged; see ../../001-thread-runs-api/contracts/ and
+    ../../002-mcp-tool-delegation/contracts/ for them. This file defines the changed schemas:
+    ThreadState gains agent_tasks, ActionRequest gains agent, and the catalog gains agents and
+    CatalogTool.agent. No authentication in this increment; bind to a local interface.
+paths:
+  /threads/{thread_id}/state:
+    get:
+      summary: Read a thread's transcript, pending proposal, and agent tasks
+      description: >
+        Unchanged from 001 except for `agent_tasks`, read from the service's database, so it
+        reflects a task watched by any instance.
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        "200":
+          description: The thread state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadState" }
+              example:
+                thread_id: inc-2041
+                run_active: false
+                messages: []
+                pending: null
+                updated_at: "2026-11-09T10:02:11.004000+00:00"
+                agent_tasks:
+                  - agent: stub
+                    task_id: 3f1c2b7e-0d1a-4c55-9a8e-6f2b1d0c9e44
+                    message: "slow 90: compile the weekly report"
+                    status: working
+                    started_at: "2026-11-09T10:00:41.512000+00:00"
+                    last_checked_at: "2026-11-09T10:02:01.990000+00:00"
+                    ended_at: null
+                    outcome_delivered: false
+  /tools:
+    get:
+      summary: List every tool the orchestrator can call, and every agent
+      description: >
+        Unchanged from 002 except for `agents` and `CatalogTool.agent`. Reads memory only: no
+        tool server and no agent is contacted.
+      responses:
+        "200":
+          description: The catalog
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ToolCatalog" }
+              example:
+                servers: []
+                agents:
+                  - name: hello
+                    reachable: true
+                    checked_at: "2026-11-09T09:58:12.031000+00:00"
+                    error: null
+                    card:
+                      name: Hello World Agent
+                      description: Just a hello world agent
+                      version: 0.0.1
+                      skills:
+                        - id: echo_bot
+                          name: Echo Bot
+                          description: An example agent that acknowledges client request and responds with a "Hello World" message.
+                          tags: [a2a, echo-example]
+                tools:
+                  - name: handoff_to_hello
+                    server: null
+                    agent: hello
+                    description: "Hand a task to the agent 'hello' (Hello World Agent): Just a hello world agent. Skills: Echo Bot."
+                    input_schema:
+                      type: object
+                      properties:
+                        message: { type: string, minLength: 1, maxLength: 32000 }
+                        context: { type: [string, "null"], maxLength: 32000 }
+                        task_id: { type: [string, "null"] }
+                      required: [message]
+                    classification: gated
+                    allowed_decisions: [approve, edit, reject]
+                    server_hints: null
+                  - name: cancel_hello_task
+                    server: null
+                    agent: hello
+                    description: Ask the agent 'hello' to cancel one of its tasks.
+                    input_schema:
+                      type: object
+                      properties:
+                        task_id: { type: string }
+                      required: [task_id]
+                    classification: gated
+                    allowed_decisions: [approve, reject]
+                    server_hints: null
+components:
+  schemas:
+    ThreadState:
+      type: object
+      required: [thread_id, run_active, messages, pending, agent_tasks]
+      description: Changed from 001 and 002 by adding `agent_tasks`.
+      properties:
+        thread_id: { type: string }
+        run_active: { type: boolean }
+        messages: { type: array, items: { type: object } }
+        pending:
+          oneOf:
+            - { type: object, description: "PendingDecision, as in 001, with ActionRequest below" }
+            - { type: "null" }
+        updated_at: { type: [string, "null"] }
+        agent_tasks:
+          type: array
+          description: >
+            Every agent task the thread has started, pending or ended, oldest first. Nothing is
+            dropped from the list.
+          items: { $ref: "#/components/schemas/AgentTask" }
+    AgentTask:
+      type: object
+      required: [agent, task_id, message, status, started_at, last_checked_at, ended_at, outcome_delivered]
+      properties:
+        agent: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        task_id:
+          type: string
+          description: The agent's own id for the task.
+        message:
+          type: string
+          description: The task message the task was started with.
+        status:
+          type: string
+          enum: [working, input_required, completed, failed, rejected, canceled, given_up]
+          description: >
+            `working` and `input_required` are pending. `given_up` means Freyja stopped
+            watching at the maximum age, or because the agent is no longer configured; the
+            agent may still be working on it, and a cancel can still be sent.
+        started_at: { type: string, format: date-time }
+        last_checked_at: { type: string, format: date-time }
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+          description: Null while the task is pending.
+        outcome_delivered:
+          type: boolean
+          description: >
+            True once a run recorded the task's outcome in the thread's messages. A task whose
+            outcome the hand-off itself returned is true from the start.
+    ActionRequest:
+      type: object
+      required: [name, args, server, agent]
+      description: >
+        Changed from 002 by adding `agent`. Appears in `PendingDecision.action_requests`, in
+        thread state and the `interrupt` event.
+      properties:
+        name: { type: string }
+        args:
+          type: object
+          description: >
+            For a hand-off: `message`, `context`, and `task_id`. An edit may change `message`
+            and `context`; `task_id` is pinned and an edit that changes it is refused.
+        description:
+          type: [string, "null"]
+          description: "For an agent tool: the agent name, a colon, and `hand-off` or `cancel a task`."
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+        server:
+          type: [string, "null"]
+          description: The tool server of a server tool; null for an agent tool.
+        agent:
+          type: [string, "null"]
+          description: >
+            The agent a hand-off, answer, or cancel goes to; null for every other tool, and for
+            a proposal whose agent is no longer configured.
+    ToolCatalog:
+      type: object
+      required: [servers, agents, tools]
+      properties:
+        servers:
+          type: array
+          description: As in 002.
+          items: { type: object }
+        agents:
+          type: array
+          description: One entry per configured agent, in configuration order. Empty when none is configured.
+          items: { $ref: "#/components/schemas/AgentStatus" }
+        tools:
+          type: array
+          description: >
+            Exactly the tools the orchestrator was given at startup: Freyja's own, then each
+            tool server's, then each agent's hand-off and cancel tools.
+          items: { $ref: "#/components/schemas/CatalogTool" }
+    AgentStatus:
+      type: object
+      required: [name, reachable, checked_at, error, card]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        reachable:
+          type: boolean
+          description: Outcome of the most recent attempt to use the agent, at startup, in a hand-off, or while checking a task.
+        checked_at: { type: string, format: date-time }
+        error:
+          type: [string, "null"]
+          maxLength: 500
+          description: Reason for the last failure, with the agent's address removed; null when reachable.
+        card:
+          $ref: "#/components/schemas/AgentCardClaims"
+    AgentCardClaims:
+      type: object
+      description: >
+        What the agent's card says about itself, read at startup. The agent's own claim: it
+        never affects classification.
+      required: [name, description, version, skills]
+      properties:
+        name: { type: string }
+        description: { type: string }
+        version: { type: string }
+        skills:
+          type: array
+          items:
+            type: object
+            required: [id, name, description, tags]
+            properties:
+              id: { type: string }
+              name: { type: string }
+              description: { type: string }
+              tags: { type: array, items: { type: string } }
+    CatalogTool:
+      type: object
+      required: [name, server, agent, description, input_schema, classification, allowed_decisions, server_hints]
+      description: Changed from 002 by adding `agent`.
+      properties:
+        name: { type: string }
+        server: { type: [string, "null"] }
+        agent:
+          type: [string, "null"]
+          description: The agent a hand-off or cancel tool belongs to; null for every other tool.
+        description: { type: string }
+        input_schema: { type: object }
+        classification:
+          type: string
+          enum: [read_only, workspace, gated]
+          description: >
+            For an agent tool, decided by the agent's entry alone: `read_only` if it says
+            `read_only: true`, `gated` otherwise.
+        allowed_decisions:
+          type: array
+          items: { type: string, enum: [approve, edit, reject] }
+          description: Empty unless gated. A cancel tool allows approve and reject only.
+        server_hints:
+          type: ["object", "null"]
+          description: As in 002; null for agent tools.
