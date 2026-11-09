@@ -183,7 +183,7 @@ limit:
 | `failed`, `rejected`, `canceled`, `auth_required` | an error result naming the agent and the state, with the agent's message if any |
 | time limit after acknowledgment | a note that the task is pending, naming the agent and the task id |
 | time limit before acknowledgment | an error result saying the agent may or may not have received the task |
-| unreachable, protocol error, malformed reply | an error result naming the agent |
+| unreachable, protocol error, malformed reply (including a task or context id that is empty or longer than 256 characters) | an error result naming the agent |
 
 Every failure becomes a `ToolException`, so nothing an agent does can end a run (FR-009). The
 link records reachability on every call. The ledger row is updated with the result text.
@@ -289,12 +289,20 @@ the agent is built and stopped before the links close. Each tick, every poll int
 3. Deliver ready outcomes (R10).
 
 A failed `get_task` marks the agent unavailable and leaves the task pending; it is checked again
-on the next tick. Watching only reads (FR-019).
+on the next tick. An answer that the task is not found ends it as `failed` with that reason
+(spec FR-019). The age is counted from `started_at`, and every time compared across instances
+(age, `watch_until`) is the database's `now()`, not the instance's clock. Watching only reads
+(FR-019).
 
 **Rationale**: claiming per row, with a lease that expires, gives exactly one watcher per task
 across instances and hands a task to another instance when its watcher dies, which is
 the run lease's design applied to tasks. The clock and the tick are injectable, so the suite
 drives ticks directly instead of sleeping.
+
+**Worst case when a watcher stops** (SC-003): its claim lasts `3 × interval` = 30 s; another
+instance claims the task on its next tick, at most 10 s later, and checks it at once; delivery
+follows in the same tick if the thread is free. About 40 s plus the run's start, inside the
+one-minute bound with the default interval.
 
 **Alternatives considered**: `subscribe` per pending task (one open stream per task, and a
 dropped stream needs polling anyway); push notifications (out of scope).

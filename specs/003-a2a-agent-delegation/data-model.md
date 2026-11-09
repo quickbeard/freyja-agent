@@ -103,7 +103,7 @@ One row per task an agent created for a thread, kept for good (clarification of 
 |---|---|---|
 | `agent`, `task_id` | text | primary key |
 | `thread_id` | text | indexed |
-| `context_id` | text | |
+| `context_id` | text | at most 256 characters, as `task_id`; a longer or empty one makes the reply malformed (spec FR-009) |
 | `message` | text | the task message it was started with |
 | `state` | text | see transitions |
 | `started_at`, `last_checked_at`, `ended_at` | timestamptz | `ended_at` null until a final state |
@@ -132,7 +132,9 @@ One row per task an agent created for a thread, kept for good (clarification of 
 
 - `working` covers the protocol's `submitted` and `working`.
 - `completed`, `failed`, `rejected`, `canceled` are final and set `ended_at`. `auth_required`
-  from the agent is stored as `failed`, with the reason in the outcome.
+  from the agent, and a task the agent answers as not found, are stored as `failed`, with the
+  reason in the outcome (spec FR-019). A cancel the agent made itself is `canceled` with an
+  outcome to deliver (spec FR-020).
 - `input_required` is not final: the task is waiting for the user's answer and is not polled,
   but the maximum age still applies.
 - `given_up` is Freyja's own state: it stopped watching. The agent may still be working; a
@@ -172,8 +174,17 @@ sees.
 | `CatalogTool.agent` | new: the agent a tool belongs to; null otherwise | catalog |
 | `update` event, `node: "agent"` | new payload: agent, task_id, state, text | run stream |
 
-`AgentTask.status` values: `working`, `input_required`, `completed`, `failed`, `rejected`,
-`canceled`, `given_up`.
+`AgentTask.status` values, with the spec's words for them (Key Entities "Agent Task"):
+
+| Spec | API and table |
+|---|---|
+| working | `working` |
+| waiting for input | `input_required` |
+| finished | `completed` |
+| failed | `failed` |
+| rejected | `rejected` |
+| canceled | `canceled` |
+| given up | `given_up` |
 
 ## Settings added
 
