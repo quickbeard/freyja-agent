@@ -468,13 +468,13 @@ provider, local Postgres, and `uvx mcp-server-git`.
 
 ### Implementation for User Story 5
 
-- [ ] T040 [US5] Document the feature in `README.md` as it now exists: how to describe a tool
+- [X] T040 [US5] Document the feature in `README.md` as it now exists: how to describe a tool
       server in `FREYJA_MCP_SERVERS` in both forms, what the read-only list means and that
       silence means gated, how credentials are passed with `pass_env`, the two time limits,
       how to read `GET /tools`, that a proposal names its server, what happens when a server
       fails at startup and during a run, the reference git server as the one to try, and that
       the suite needs no network and no installed server (FR-016)
-- [ ] T041 [US5] Run every scenario of `specs/002-mcp-tool-delegation/quickstart.md` against
+- [X] T041 [US5] Run every scenario of `specs/002-mcp-tool-delegation/quickstart.md` against
       the real service and record the outcome of each in the pull request description; correct
       `quickstart.md` or `README.md` where an instruction or an expected result is wrong, and
       add a fix task to this phase for anything that needs a code change (US5 scenarios 1 and

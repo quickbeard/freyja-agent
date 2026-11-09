@@ -42,8 +42,9 @@ uv run --env-file .env freyja-api
 ```
 
 Expected: after the persistence line, one line names the server `git`, its connection form
-`command`, the number of tools it provided, and that three are read-only. Then the service
-listens on 127.0.0.1:8000 (User Story 1, scenario 1).
+`command`, the number of tools it provided, and that three are read-only, such as
+`Tool server git (command): 14 tools, 3 read-only` (the count depends on the server's
+version). Then the service listens on 127.0.0.1:8000 (User Story 1, scenario 1).
 
 ## Scenario 1: read the catalog (User Story 3)
 
@@ -83,9 +84,11 @@ curl -N -X POST localhost:8000/threads/mcp-2/runs \
   -d '{"message": "What is the git status of the repository at /etc?"}'
 ```
 
-Expected: the tool result has an error status and says the path is outside the allowed
-repository, the stream still ends with `event: end`, and the reply says the lookup failed
-(scenario 4). The service log has a warning naming server `git` and tool `git_status`.
+Expected: the tool result's text starts with `Error executing tool git_status` and says the
+path is outside the allowed repository, the stream still ends with `event: end`, and the reply
+says the lookup failed (scenario 4). The stream and `GET .../state` carry no status field on a
+message, as in feature 001, so a client sees a tool error only through its text. The service
+log has a warning naming server `git`, tool `git_status`, and `tool_error`.
 
 ## Scenario 3: an effectful tool waits for a decision (User Story 2)
 
@@ -157,7 +160,10 @@ Expected: `event: interrupt` for `git_diff` (scenarios 5 and 6).
 ## Scenario 4: a misbehaving server is obvious (User Story 4)
 
 Stop the service before each configuration change. Each of these fails at startup, names the
-server, and leaves nothing listening on port 8000:
+server, and leaves nothing listening on port 8000. The first two rows and the last are refused
+while the service starts its tool servers, with an error that begins `Tool server 'git'`. The
+two rows that change the entry's shape are refused earlier, when settings are read, with a
+validation error for `mcp_servers.git`:
 
 | Change to the `git` entry | Expected error names |
 |---|---|
@@ -171,16 +177,21 @@ Restore the working entry and start the service. Then end the launched server wh
 service runs:
 
 ```bash
-pkill -f mcp-server-git
+pkill -f 'mcp-server-git --repository /tmp/freyja-demo-repo'
 curl -N -X POST localhost:8000/threads/mcp-7/runs \
   -H 'content-type: application/json' \
   -d '{"message": "What is the git status of the repository at /tmp/freyja-demo-repo?"}'
 curl -s localhost:8000/tools | jq '.servers'
 ```
 
+The pattern names the repository so it ends only the server this service launched (`uvx` and
+the Python process it started), not another `mcp-server-git` on the machine.
+
 Expected: the tool result is an error saying server `git` could not be reached, the stream
-ends with `event: end`, the log has a warning naming `git` and `git_status`, and the catalog
-shows `git` with `reachable: false` and a reason. A second run fails the same way: the service
+ends with `event: end`, the log has a warning naming `git`, `git_status`, and `unreachable`,
+and the catalog shows `git` with `reachable: false` and a reason. The model may propose the
+call again within the run; that is a new call with its own error and warning, not a retry by
+the service. A second run fails the same way: the service
 does not relaunch the command. Restart the service to bring the server back.
 
 ## Scenario 5: a server reached by address, and recovery (User Story 4)
