@@ -314,6 +314,8 @@ None. The Constitution Check passed without deviations before research and after
     `server` is `null`, although T026 names that file; `test_mcp_gate.py` covers `server` for
     Freyja's own tool on the orchestrator and for server tools through the subagent. The
     missing assertion is left for the converge step, since this phase changes no tests.
+- **Phase 9, convergence (2026-11-09)**: the converge step found that one gap and nothing
+  else. T046 added the assertion to `test_subagent.py`; no application code changed.
   - `AGENTS.md` now names the new modules, the `build_agent` return type, the three
     settings, and the stub, which is the Layout entry the tree's "Also edited" line refers to.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
