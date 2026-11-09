@@ -109,14 +109,16 @@ This is the startup half of User Story 6, which every other story needs.
       flight); tasks keyed by `(agent, task_id)` with every column in data-model.md
       "Agent task", `state` one of `working`, `input_required`, `completed`, `failed`,
       `rejected`, `canceled`, `given_up`; `list_tasks(thread_id)` oldest first;
-      `claim_due(instance_id, now, until)`; `ready_outcomes(thread_id)`; `mark_delivered(...)`;
-      and the follow-up fields; `InMemoryAgentTaskStore` takes an injectable clock (R8)
+      `claim_due(instance_id, lease_seconds)`; `ready_outcomes(thread_id)`;
+      `mark_delivered(...)`; and the follow-up fields; `InMemoryAgentTaskStore` takes an
+      injectable clock and uses it for every time it sets or compares (R8)
 - [ ] T009 Implement `PostgresAgentTaskStore` in `src/freyja_agent/runtime/agent_tasks.py`:
       `CREATE TABLE IF NOT EXISTS` for `freyja_agent_conversations`, `freyja_agent_sends`, and
       `freyja_agent_tasks` with the columns and keys in data-model.md and an index on
       `freyja_agent_tasks(thread_id)`; every statement single and parameterized; the claim is one
       `UPDATE ... WHERE (agent, task_id) IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING`
-      using the database's `now()` for age and `watch_until` (R8, R9, spec Assumptions)
+      setting `watch_until = now() + lease_seconds` and judging age by the database's `now()`
+      (R8, R9, spec Assumptions)
 - [ ] T010 [P] Extend `src/freyja_agent/agent/catalog.py`: `CatalogTool.agent: str | None`
       (null for every tool that is not an agent's) and `pinned_args: tuple[str, ...]`;
       `allowed_decisions` gives approve and reject only for a gated tool whose every declared
@@ -212,6 +214,8 @@ context id.
       the stub received exactly two text parts, the message and the context with metadata
       `{"freyja": "context"}`, and nothing else from the thread; `progress 3` produces three
       `update` events with `node: "agent"` in order, before the `tools` update with the result;
+      with the stub's card set not to stream, each status change Freyja observes appears as a
+      progress event, in order;
       `parts` gives the text, compact JSON for the data part, `[file omitted: <media type>]` and
       `[file link omitted: <media type>]` notes, and no bytes in the thread (FR-005, FR-006,
       FR-007, SC-002, US1 scenarios 1 to 4, 6)
@@ -276,7 +280,8 @@ edit, and reject a proposed hand-off; the stub's record shows exactly the expect
 - [ ] T028 [P] [US2] Add to `tests/test_a2a_gate.py`: a proposal decided after a restart with a
       changed configuration: agent removed, approve and reject accepted and nothing sent; agent
       now read-only, approve only; a step whose call became gated, resume fails and the proposal
-      stays (FR-014)
+      stays; a new answer or cancel for a task started before the agent's read-only mark changed
+      is classified under the configuration in force (FR-014)
 - [ ] T029 [P] [US2] Add to `tests/test_gate.py` and `tests/test_state.py`: every action request
       carries `agent`, null for Freyja's own tools and for tool server tools
 
@@ -360,8 +365,10 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       for one instance only, also with two runtimes sharing one store; a restarted runtime
       watches it again; status changes to completed, failed, rejected, canceled by the agent,
       input required, not found (ends `failed` with that reason), and authentication required
-      (ends `failed`) are recorded with an outcome ready (FR-017, FR-019, FR-020, US4 scenarios
-      1, 3, 4, 6, 7)
+      (ends `failed`) are recorded with an outcome ready; with the fake clock, the instance
+      holding the claim stops ticking, the other runtime claims the task once `watch_until`
+      passes (3 × the interval), and the outcome is delivered within 60 s of the task changing
+      (FR-017, FR-019, FR-020, SC-003, US4 scenarios 1, 3, 4, 6, 7)
 - [ ] T039 [P] [US4] Write `tests/test_a2a_background.py`: a ready outcome on a free thread is
       delivered by one background run whose input is one `check_agent_tasks` call and one tool
       result per task with ids `a2a-outcome-<agent>-<task id>`, followed by the reply; a second
@@ -370,8 +377,9 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       outcome before the user's message and no background run follows; a resume's continuation
       records nothing; a background run whose model proposes a gated action pauses, the state
       shows the proposal, and the resume route continues it; several outcomes on one thread are
-      delivered by one run in the order they were recorded (FR-018, FR-020, SC-003, US4
-      scenarios 2, 5, 6, 11, Edge Cases)
+      delivered by one run in the order they were recorded; a pending task started by a
+      subagent's hand-off is delivered to the orchestrator of its thread (FR-018, FR-020,
+      SC-003, US4 scenarios 2, 5, 6, 11, Edge Cases)
 - [ ] T040 [P] [US4] Add to `tests/test_a2a_background.py`: on each model call the system message
       lists the thread's pending tasks (agent, task id, status, start time), and nothing when
       there are none; `check_agent_tasks` lists the thread's tasks, or the named ones, and is
@@ -401,8 +409,11 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       `take_undelivered(runtime, thread_id, snapshot)`, which marks as delivered every ready
       outcome already in the snapshot and returns the messages for the rest (FR-020, R10)
 - [ ] T045 [US4] In `start_run` in `src/freyja_agent/api/threads.py`, after the paused-thread
-      check, prepend the undelivered outcome messages to the input and mark them delivered once
-      the run's first checkpoint is written; `resume_run` records nothing (FR-018, R10)
+      check, prepend the undelivered outcome messages to the input and mark them delivered when
+      the run's first `update` event arrives, which with `durability="sync"` comes after the
+      checkpoint holding the input; if the run fails before that, they stay marked undelivered
+      and the next run's check (T044) finds them already in the thread; `resume_run` records
+      nothing (FR-018, R10)
 - [ ] T046 [US4] Implement `src/freyja_agent/delegates/delegation_worker.py`:
       `DelegationWorker(runtime, clock)` with `tick()` and a loop at the poll interval; each
       tick claims due tasks (`watch_until = now + 3 × interval`), checks each `working` task with
@@ -441,7 +452,8 @@ outcome, one message to the stub, and the third attempt succeed.
       rejected or unreachable cancel leaves the task pending and is not repeated; a task that
       reaches the maximum age, counted from `started_at` and including time spent
       `input_required`, is `given_up`, the stub received no cancel, and the delivered report says
-      the agent may still be working and offers a cancel; a given-up task can be canceled; after
+      the agent may still be working and offers a cancel; a given-up task can be canceled; a
+      cancel proposed by the subagent pauses and works the same way; after
       a restart without its agent, a pending task is given up and reported (FR-021, FR-022,
       FR-023, SC-011, US4 scenarios 8, 9, Edge Cases)
 - [ ] T050 [P] [US4] Add to `tests/test_a2a_background.py`: a background run that ends with
@@ -451,7 +463,8 @@ outcome, one message to the stub, and the third attempt succeed.
       an attempt that failed before recording the outcome records it on retry; retries stop once
       another run ended with `end`, `interrupt`, or `step_limit`, but not after one that failed;
       remaining attempts resume after a restart; the last failure is logged with the thread and
-      task ids; a background run ending with `step_limit` is not retried (FR-027, SC-010, Edge
+      task ids; a background run ending with `step_limit` is not retried; a retried attempt that
+      proposes a gated hand-off pauses like the first attempt (FR-012, FR-027, SC-010, Edge
       Cases)
 
 ### Implementation for User Story 4, part 2
@@ -498,8 +511,8 @@ reachability, and every agent tool with its agent.
       agent gated and appears only under `card`; no response contains an agent's address; reading
       makes no request to any stub; with no agents, `agents` is empty and `tools` equals the
       catalog of feature 002; the response validates against
-      `specs/003-a2a-agent-delegation/contracts/openapi.yaml` (FR-024, SC-007, US5 scenarios 1
-      to 4)
+      `specs/003-a2a-agent-delegation/contracts/openapi.yaml`; the response arrives within 1
+      second (FR-024, SC-007, US5 scenarios 1 to 4)
 
 ### Implementation for User Story 5
 
@@ -533,8 +546,10 @@ task id; each gives an error result and the run continues; start it again and ha
       give a malformed-reply error; an unreachable agent gives an error result and the catalog
       shows it unavailable, and the next hand-off after it answers again succeeds and shows it
       reachable; no error result, log record, thread message, or catalog entry contains the
-      configured address; none of these is sent twice (FR-009, FR-010, SC-006, US6 scenarios 4
-      and 5)
+      configured address; none of these is sent twice; a runtime stopped while a `slow` hand-off
+      is in flight, then a new runtime on the same store: the next user's run gives the
+      orchestrator the may-or-may-not result for that call, not Deep Agents' cancelled text, and
+      the stub received the message once (FR-009, FR-010, FR-017, SC-006, US6 scenarios 4 and 5)
 - [ ] T061 [P] [US6] Write `tests/test_a2a_transport.py`: the stub served by uvicorn on a free
       loopback port, through the production httpx transport: a read-only hand-off with progress
       arriving before the result; a `slow` task becoming pending and delivered by a tick; a
@@ -558,8 +573,19 @@ task id; each gives an error result and the run continues; start it again and ha
       every give-up and every background run attempt with the agent, thread, and task ids and
       never the address, and add those log records to the address check in
       `tests/test_a2a_handoff.py` (FR-009, R14)
+- [ ] T071 [US6] Answer sends left in flight at the start of a run, in
+      `src/freyja_agent/api/outcomes.py` and `src/freyja_agent/api/threads.py`: when a user's run
+      or a background run starts, for every send of the thread whose `result` is null and whose
+      tool call has no answer in the snapshot, add a `ToolMessage` for that tool call id saying
+      `Agent '<agent>' may or may not have received this message; Freyja does not know, and will
+      not send it again.`, record that text as the send's result, and put it in the run's input
+      ahead of everything else, so Deep Agents' `PatchToolCallsMiddleware` finds the call
+      answered instead of adding its own "cancelled or interrupted" text (FR-017, Edge Cases
+      "The service stops while a hand-off is in progress"; numbered after T070 by the analysis
+      of 2026-11-09, so no later ID moved)
 
-**Checkpoint**: quickstart Scenario 8 works.
+**Checkpoint**: quickstart Scenario 8 works, and a hand-off interrupted by a restart is reported
+as possibly received, never resent.
 
 ---
 
@@ -641,7 +667,7 @@ agent in under 20 minutes, following the README alone.
 - Tests first, and they must fail before implementation starts.
 - Tasks that share a file run in the order listed: T020, T021, T022 (one file, three parts);
   T023 then T025; T024 then T025; T030 then T031; T042 to T048 in order where they share a
-  file; T051 to T054 likewise; T057 then T058; T062 then T063 then T064.
+  file; T051 to T054 likewise; T057 then T058; T062 then T063 then T064 then T071.
 
 ### Parallel Opportunities
 

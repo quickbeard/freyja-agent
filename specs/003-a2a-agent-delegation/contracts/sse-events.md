@@ -8,7 +8,9 @@ kinds, order guarantees, and terminal events are unchanged.
 A progress update from an agent while a hand-off or answer is in progress within the run
 (FR-007). It appears between the `update` that proposes or starts the hand-off and the `update`
 of the `tools` node that carries the hand-off's result, in the order the agent sent the
-updates. A hand-off made by a subagent reports progress the same way.
+updates. A hand-off made by a subagent reports progress the same way. For an agent whose card
+says it does not stream, there is one event per status change Freyja observes when it checks
+the task, about once a second.
 
 ```json
 {"node": "agent", "data": {"agent": "hello", "task_id": "3f1c...", "state": "working", "text": "Processing request..."}}
