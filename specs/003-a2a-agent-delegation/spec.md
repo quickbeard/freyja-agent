@@ -18,6 +18,10 @@
 - Q: If the user sends a message after an agent's task finished but before a background run reported the outcome, does the user's run deliver it? → A: Yes. A user's run records at its start every outcome that has arrived and not been delivered, and that counts as delivery. A resume's continuation does not, because it finishes a step that was already under way; a background run delivers what is still undelivered once the thread is free.
 - Q: Once an agent task has ended and its outcome was delivered, does the thread state still list it? → A: Yes. The thread state lists every agent task the thread has started: pending ones with their current status, ended ones with their final status and when they ended. Nothing is dropped from the list.
 
+### Plan review 2026-11-09
+
+- Q: No published A2A agent runs locally with no account or key (research R17). What does the README name, and the quickstart use? → A: An official sample of the A2A project, pinned to a commit: the `helloworld` agent from `a2aproject/a2a-samples` at `1bb0871294`, run locally with no account or key. FR-025, SC-008, User Story 7, and Assumptions say "official sample, pinned" in place of "published".
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Hand work to an agent and get its answer (Priority: P1)
@@ -137,7 +141,7 @@ An operator misconfigures an agent, or an agent stops working. Startup refuses t
 
 ### User Story 7 - Bring a real agent up locally (Priority: P7)
 
-A developer follows the README to run one real, published agent on their machine, configures it, starts Freyja, and completes a hand-off that runs without a pause and one that pauses and is approved. The automated suite proves all of the above against a stand-in agent inside the test process, so it still needs no network.
+A developer follows the README to run one real agent, an official sample of the A2A project pinned to a commit, on their machine, configures it, starts Freyja, and completes a hand-off that runs without a pause and one that pauses and is approved. The automated suite proves all of the above against a stand-in agent inside the test process, so it still needs no network.
 
 **Why this priority**: The feature is only real once it works with an agent Freyja did not write. It is last because the automated tests do not depend on it.
 
@@ -222,7 +226,7 @@ A developer follows the README to run one real, published agent on their machine
 
 **Local development, documentation, and quality**
 
-- **FR-025**: The README MUST document how to configure an agent and its read-only mark, what a pending task is and where the thread state lists a thread's agent tasks, how to read agents in the catalog, and how to run the suite, and MUST name one real, published agent that runs locally with no account or key.
+- **FR-025**: The README MUST document how to configure an agent and its read-only mark, what a pending task is and where the thread state lists a thread's agent tasks, how to read agents in the catalog, and how to run the suite, and MUST name one real agent that runs locally with no account or key: an official sample of the A2A project, pinned to a commit.
 - **FR-026**: Automated tests MUST cover: agents and their cards read at startup; a read-only hand-off completing without a pause, directly and through a subagent; a gated hand-off pausing, directly, through a subagent, and in a background run; approve, edit, and reject reaching the agent as specified, including a refused edit; a follow-up, an answer, and a cancel each classified like a hand-off; the card's claims ignored for gating and shown in the catalog as the agent's; only the task message and chosen context reaching the agent; progress updates in the stream; a reply with a part of another kind delivered as text plus a note; one conversation per thread and agent, across a restart, never shared between threads; an agent asking for input and the answer continuing the same task; a task becoming pending at the time limit; a pending task's outcome delivered exactly once by a background run, including across a restart and with two instances sharing persistence; a background run waiting for a busy thread; a user's run delivering an outcome that arrived before it, with no background run delivering it again; a failed background run tried again up to the configured number of attempts without recording the outcome twice or repeating a message to an agent, stopping early once another run completed, and logged when it gives up; a task given up at the maximum age without a cancel being sent; a canceled task's later outcome not delivered; each startup failure in FR-003; an unreachable, failing, rejecting, or unacknowledging agent giving an error result that is not repeated; an agent answering again after it was unavailable; a decision on a pending proposal under a changed configuration in each case of FR-014; the card's address and a redirect to another host not being followed; and the catalog's agent entries. The suite MUST run without a network and without any external agent installed, using a stand-in agent inside the test process.
 
 ### Key Entities
@@ -248,7 +252,7 @@ A developer follows the README to run one real, published agent on their machine
 - **SC-005**: Startup with an unreachable, misdescribed, or colliding agent configuration fails within 30 seconds with an error naming the agent, in 100% of automated runs, and the process serves no requests.
 - **SC-006**: A failing, rejecting, unreachable, or unacknowledging agent ends in an error result and the run continues, in 100% of automated runs; no such hand-off leaves a thread refused or paused, and none is repeated.
 - **SC-007**: The catalog read on a freshly started service lists every configured agent with the classification the configuration implies, in 100% of automated runs, and responds within 1 second.
-- **SC-008**: A developer following only the README goes from a clean clone to a completed read-only hand-off and an approved gated hand-off with a real, published local agent in under 20 minutes, without editing any credential.
+- **SC-008**: A developer following only the README goes from a clean clone to a completed read-only hand-off and an approved gated hand-off with a real local agent, an official A2A sample pinned to a commit, in under 20 minutes, without editing any credential.
 - **SC-009**: The lint, format, and test gates pass on the merged change, and the suite completes with no network access and no external agent installed.
 
 ## Assumptions
@@ -275,5 +279,5 @@ A developer follows the README to run one real, published agent on their machine
 
 - The existing approval gate, thread state, run lease, step limit, resume route, catalog, and the result handling feature 002 introduced are reused. This feature extends the thread state with the thread's agent tasks, extends the catalog with agents, adds hand-off tools to the one construction path, and adds a way for the service to start a run without a user message.
 - Several service instances may share one persistence store; the run lease already keeps two runs off one thread, and the same store is where a pending task is claimed by one instance.
-- A real, published A2A agent exists that runs locally with no account or key and can be configured both with and without the read-only mark; the plan names it, or reports that none exists before implementation starts. The automated suite uses a stand-in inside the test process.
+- No published A2A agent runs locally with no account or key (research R17, 2026-11-09). An official sample of the A2A project does, and can be configured both with and without the read-only mark; the plan names it and pins it to a commit. The automated suite uses a stand-in inside the test process.
 - The service keeps binding to the local interface with no authentication, so anyone who can reach the port can read a thread's agent tasks and approve proposals; that remains acceptable for local development and is documented.
