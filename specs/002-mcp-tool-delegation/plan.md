@@ -114,8 +114,9 @@ specs/002-mcp-tool-delegation/
 │   ├── openapi.yaml     # GET /tools and the changed ActionRequest
 │   └── server-config.md # The FREYJA_MCP_SERVERS shape, rules, and examples
 ├── checklists/
-│   └── requirements.md  # Spec quality checklist (from /speckit-specify)
-└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
+│   ├── requirements.md  # Spec quality checklist (from /speckit-specify)
+│   └── security.md      # Security requirements checklist (from /speckit-checklist), all items ticked
+└── tasks.md             # T001 to T045 in eight phases (from /speckit-tasks), ticked as built
 ```
 
 ### Source Code (repository root)
@@ -296,5 +297,24 @@ None. The Constitution Check passed without deviations before research and after
     itself does not retry. The guide says so.
   - The README's tool server section is new; its example startup line and tool count are the
     ones the run above printed.
+- **Phase 8, compared with the Source Code tree above (2026-11-09)**:
+  - `classify()`, the rule for a server's tool, is in `delegates/mcp_tools.py`, where each
+    listed tool becomes a `DelegateTool`, not in `agent/catalog.py`. `agent/catalog.py` keeps
+    the `Classification` values, the table of Freyja's own tools (`OWN_TOOLS`), the `Catalog`,
+    `UnclassifiedToolError`, and `interrupt_config`, so the gate and the catalog are still
+    generated from one place. The rule itself is one line over the operator's `read_only`
+    list.
+  - `agent/tools.py` holds only `send_notification`. Its interrupt mapping and `GATED_TOOLS`
+    were removed: the catalog's `interrupt_config` replaces them, as planned.
+  - Of the three 001 tests the tree marks as adjusted, only `test_gate.py` changed. The
+    `Orchestrator` return type is absorbed by the `make_runtime` fixture in `conftest.py`, so
+    no other 001 test needed an edit. `test_state.py` already compares the pending proposal in
+    state with the `interrupt` event as a whole, which covers `server`. `test_subagent.py`
+    checks only the name of a `send_notification` proposed through the subagent, not that its
+    `server` is `null`, although T026 names that file; `test_mcp_gate.py` covers `server` for
+    Freyja's own tool on the orchestrator and for server tools through the subagent. The
+    missing assertion is left for the converge step, since this phase changes no tests.
+  - `AGENTS.md` now names the new modules, the `build_agent` return type, the three
+    settings, and the stub, which is the Layout entry the tree's "Also edited" line refers to.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.
