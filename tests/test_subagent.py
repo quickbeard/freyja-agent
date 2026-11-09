@@ -61,6 +61,8 @@ def test_a_proposal_raised_inside_the_subagent_pauses_the_run(
         kind, data = events[-1]
         assert kind == "interrupt"
         assert data["action_requests"][0]["name"] == "send_notification"
+        # Freyja's own tool names no server, also when the subagent proposes it (FR-008).
+        assert data["action_requests"][0]["server"] is None
         assert [r for r in caplog.records if r.name == ACTIONS] == []
         # The subagent's own model call (the second) is told the same thread id as the parent.
         assert "thread `s-1`" in model.seen[0][0].text

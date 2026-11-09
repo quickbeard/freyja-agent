@@ -592,3 +592,11 @@ Task: "JSON Schema validation and the changed-configuration rules in src/freyja_
   state since the analysis of 2026-11-06; feature 001's FR-013 applies the same rule to every
   action.
 - Commit after each phase at least; commits stay manual and use the `type: summary` form.
+
+---
+
+## Phase 9: Convergence
+
+- [X] T046 In `tests/test_subagent.py`, assert that the `send_notification` proposal made through
+      the subagent has `server` set to `null` in the `interrupt` event, as T026 asks, per FR-008
+      (partial)
