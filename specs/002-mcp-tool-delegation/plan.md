@@ -276,5 +276,25 @@ None. The Constitution Check passed without deviations before research and after
     `pid` and `env_has`, a file it appends its process id to on each start, and
     `--chatty-stdout`, which writes one non-protocol line to standard output.
   - The suite takes about 12 seconds; the five transport tests are 3 of them.
+- **Phase 7 as built (2026-11-09)**:
+  - The quickstart was run against the real service with `mcp-server-git` 2026.11.4, which
+    lists 14 tools. Every scenario behaved as expected; only the guide's wording changed, and
+    no code change was needed.
+  - Scenario 2 no longer says a failed tool result "has an error status". The stream and
+    `GET .../state` carry no message status, as noted under Phase 3, so the guide says the
+    error is visible in the result's text and in the `tool_error` warning. The field was not
+    added.
+  - Two of Scenario 4's five refused configurations, both forms and an address not on this
+    machine, are refused when settings are read: the error is a validation error for
+    `mcp_servers.git` and the process exits before uvicorn starts. The other three are
+    refused while tool servers start, with an error beginning `Tool server 'git'`. The guide
+    now says which is which.
+  - Scenario 4 ended the launched server with `pkill -f mcp-server-git`, which also matches
+    any other copy on the machine. The guide's pattern now includes the repository path.
+  - With the launched server gone, the model may propose the same read-only call again within
+    one run. Each attempt is a separate tool call with its own error and warning; the service
+    itself does not retry. The guide says so.
+  - The README's tool server section is new; its example startup line and tool count are the
+    ones the run above printed.
 - **Phasing suggestion for tasks**: configuration and startup first (User Story 4's startup
   half is a prerequisite for everything), then User Story 1, 2, 3, the runtime half of 4, and 5.
