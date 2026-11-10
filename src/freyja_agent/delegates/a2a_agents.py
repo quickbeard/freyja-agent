@@ -28,7 +28,9 @@ from a2a.types import (
     SendMessageConfiguration,
     SendMessageRequest,
     Task,
+    TaskArtifactUpdateEvent,
     TaskState,
+    TaskStatusUpdateEvent,
 )
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, VERSION_HEADER
 
@@ -368,16 +370,31 @@ async def _send(
                     state_name(event.task.status.state),
                     _text(event.task.status.message),
                 )
-        elif kind == "status_update" and outcome.task is not None:
+        elif kind == "status_update":
+            _acknowledged(outcome, event.status_update)
             outcome.task.status.CopyFrom(event.status_update.status)
             update = event.status_update.status
             on_progress(outcome.task.id, state_name(update.state), _text(update.message))
-        elif kind == "artifact_update" and outcome.task is not None:
+        elif kind == "artifact_update":
+            _acknowledged(outcome, event.artifact_update)
             outcome.task.artifacts.append(event.artifact_update.artifact)
         if outcome.state in _STOP:
             return
     if not link.streaming and outcome.task is not None:
         await _poll(link, outcome, on_progress)
+
+
+def _acknowledged(
+    outcome: SendOutcome, update: TaskStatusUpdateEvent | TaskArtifactUpdateEvent
+) -> None:
+    """Start the task from an update when the agent sent no task first.
+
+    A message that continues a task, such as an answer, gets no new task: the agent streams
+    updates for the task it already has, each naming that task and its conversation. The first
+    of them is the acknowledgment (feature 003, FR-016).
+    """
+    if outcome.task is None:
+        outcome.task = Task(id=update.task_id, context_id=update.context_id)
 
 
 async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress) -> None:

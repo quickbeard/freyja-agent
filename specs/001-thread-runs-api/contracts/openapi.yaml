@@ -219,7 +219,7 @@ components:
       description: >
         The latest durable state of the thread. It has no field for a run that ended in an
         error; a failure is reported only on that run's stream.
-      required: [thread_id, run_active, messages, pending]
+      required: [thread_id, run_active, messages, pending, agent_tasks]
       properties:
         thread_id: { type: string }
         run_active:
@@ -240,6 +240,13 @@ components:
         updated_at:
           type: [string, "null"]
           format: date-time
+        agent_tasks:
+          type: array
+          items: { type: object }
+          description: >
+            Added by feature 003. Every agent task the thread has started, pending or ended,
+            oldest first; empty for a thread that has started none. Each entry is an
+            `AgentTask`; see ../../003-a2a-agent-delegation/contracts/openapi.yaml.
     Message:
       type: object
       required: [type, content]

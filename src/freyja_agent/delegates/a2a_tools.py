@@ -219,7 +219,6 @@ def _progress_writer() -> Any:
 
 
 _UNHANDLED = {
-    "input_required": "is waiting for input, which a later phase handles",
     "failed": "failed",
     "rejected": "rejected the task",
     "canceled": "was canceled",
@@ -255,6 +254,14 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 f"Agent '{link.name}' may or may not have received this message; Freyja does "
                 "not know, and will not send it again."
             )
+        if task_id:
+            known = await store.get_task(link.name, task_id)
+            if known is not None and known.thread_id != thread_id:
+                # A task belongs to the thread that started it; conversations are never shared
+                # between threads (FR-008), so an answer cannot reach another thread's task.
+                raise ToolException(
+                    f"Agent '{link.name}' has no task {task_id} on this thread; nothing was sent."
+                )
         context_id = await store.get_context(thread_id, link.name)
         a2a_message = Message(
             message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
@@ -319,22 +326,42 @@ async def _record(
     now = await store.now()
     final = state in ("completed", "failed", "rejected", "canceled", "auth_required")
     text = a2a_result_text(task)
-    await store.record_task(
-        AgentTaskRecord(
-            agent=link.name,
-            task_id=task.id,
-            thread_id=thread_id,
-            context_id=task.context_id,
-            message=message,
-            state="failed" if state == "auth_required" else state,  # type: ignore[arg-type]
-            started_at=now,
+    stored = "failed" if state == "auth_required" else state
+    if await store.get_task(link.name, task.id) is None:
+        await store.record_task(
+            AgentTaskRecord(
+                agent=link.name,
+                task_id=task.id,
+                thread_id=thread_id,
+                context_id=task.context_id,
+                message=message,
+                state=stored,  # type: ignore[arg-type]
+                started_at=now,
+                last_checked_at=now,
+                ended_at=now if final else None,
+                outcome=text,
+            )
+        )
+    else:
+        # An answer continues a task this thread started: the row keeps the message the task
+        # was started with and its start, and takes the state the answer led to (FR-016).
+        await store.update_task(
+            link.name,
+            task.id,
+            state=stored,
             last_checked_at=now,
             ended_at=now if final else None,
             outcome=text,
         )
-    )
     if state == "completed":
         return f"Agent '{link.name}' completed task {task.id}:\n\n{text}", True
+    if state == "input_required":
+        # Returned as the result, so the outcome is delivered with it (FR-015).
+        return (
+            f"Agent '{link.name}' needs input for task {task.id}:\n\n{text}\n\n"
+            "Ask the person this in your own words. To continue this task once they answer, "
+            f"hand off to '{link.name}' again with task_id \"{task.id}\" and their answer."
+        ), True
     if outcome.timed_out:
         return (
             f"Agent '{link.name}' is still working on task {task.id} at the call time limit; "
