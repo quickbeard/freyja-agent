@@ -44,7 +44,7 @@ from freyja_agent.agent.catalog import (
 from freyja_agent.agent.context import ThreadContextMiddleware
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
 from freyja_agent.agent.tools import send_notification
-from freyja_agent.runtime.agent_tasks import AgentTaskStore, InMemoryAgentTaskStore
+from freyja_agent.runtime.agent_tasks import AgentTaskStore
 
 AGENT_NAME = "freyja"
 # Relative to the backend root, which is the workspace directory.
@@ -85,23 +85,28 @@ def build_agent(
     gated on both. A tool that ends up in either tool node without a classification raises
     ``UnclassifiedToolError`` instead of running ungated (feature 002, FR-006, FR-007, FR-011).
 
-    ``agent_tasks`` is the store of the thread's agent tasks. ``check_agent_tasks`` reads it and
-    ``AgentTasksMiddleware`` lists the pending ones on every model call, on the orchestrator and
-    its subagent; without one, both read an empty store (feature 003, FR-018).
+    ``agent_tasks`` is the store of the thread's agent tasks, given when at least one agent is
+    configured. ``check_agent_tasks`` reads it and ``AgentTasksMiddleware`` lists the pending
+    ones on every model call, on the orchestrator and its subagent (feature 003, FR-018).
+    Without it neither is added, so with no agents configured the orchestrator and its catalog
+    are what they were before feature 003 (FR-024).
     """
     root = Path(workspace_dir)
     root.mkdir(parents=True, exist_ok=True)
     backend = FilesystemBackend(root_dir=root, virtual_mode=True)
     delegate_entries = [_delegate_entry(tool) for tool in delegate_tools]
-    task_store = agent_tasks if agent_tasks is not None else InMemoryAgentTaskStore()
-    own_tools: list[BaseTool] = [send_notification, check_agent_tasks(task_store)]
+    own_tools: list[BaseTool] = [send_notification]
+    task_middleware: list[Any] = []
+    if agent_tasks is not None:
+        own_tools.append(check_agent_tasks(agent_tasks))
+        task_middleware.append(AgentTasksMiddleware(agent_tasks))
     tools: list[BaseTool] = [*own_tools, *(entry.tool for entry in delegate_entries)]
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
     chat_model = resolve_model(model)
     subagent_graph, subagent = _general_purpose_subagent(
-        chat_model, tools, backend, max_steps, gate, task_store
+        chat_model, tools, backend, max_steps, gate, agent_tasks
     )
     agent = create_deep_agent(
         model=chat_model,
@@ -110,7 +115,7 @@ def build_agent(
         backend=backend,
         skills=[SKILLS_SOURCE],
         interrupt_on=gate,
-        middleware=[ThreadContextMiddleware(), AgentTasksMiddleware(task_store)],
+        middleware=[ThreadContextMiddleware(), *task_middleware],
         subagents=[subagent],
         checkpointer=checkpointer,
         store=store,
@@ -204,7 +209,7 @@ def _general_purpose_subagent(
     backend: FilesystemBackend,
     max_steps: int,
     gate: dict[str, Any],
-    agent_tasks: AgentTaskStore,
+    agent_tasks: AgentTaskStore | None,
 ) -> tuple[Any, dict[str, Any]]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
@@ -224,7 +229,7 @@ def _general_purpose_subagent(
         PatchToolCallsMiddleware(),
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
         ThreadContextMiddleware(),
-        AgentTasksMiddleware(agent_tasks),
+        *([AgentTasksMiddleware(agent_tasks)] if agent_tasks is not None else []),
     ]
     append_prompt_caching_middleware(middleware)
     spec: dict[str, Any] = {

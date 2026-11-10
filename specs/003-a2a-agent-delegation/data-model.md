@@ -64,7 +64,9 @@ says so, `gated` otherwise.
 
 Added to the fixed table `OWN_TOOLS` as `read_only`. Arguments: `task_ids: list[str] | None`.
 Returns the thread's agent tasks, or the named ones, with status. It is also the tool the
-outcome messages call (below).
+outcome messages call (below). It is offered, together with the pending-task lines on each
+model call, only when at least one agent is configured: with none, the orchestrator and its
+catalog are what they were before this feature (spec FR-024).
 
 ### Agent conversation (`freyja_agent_conversations`)
 

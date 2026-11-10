@@ -137,6 +137,8 @@ class CatalogTool(BaseModel):
     name: str
     # The tool server that provides the tool; None for Freyja's own tools.
     server: str | None
+    # The agent a hand-off or cancel tool belongs to; None for every other tool (feature 003).
+    agent: str | None
     description: str
     # JSON Schema of the tool's arguments; an edit decision is validated against it.
     input_schema: dict[str, Any]
@@ -158,8 +160,38 @@ class ToolServerStatus(BaseModel):
     tool_count: Annotated[int, Field(ge=0)]
 
 
+class AgentSkillClaim(BaseModel):
+    id: str
+    name: str
+    description: str
+    tags: list[str]
+
+
+class AgentCardClaims(BaseModel):
+    """What an agent's card says about itself, read at startup: the agent's own claim, which
+    never affects classification (feature 003 contracts/openapi.yaml)."""
+
+    name: str
+    description: str
+    version: str
+    skills: list[AgentSkillClaim]
+
+
+class AgentStatus(BaseModel):
+    """A configured agent and the outcome of the most recent attempt to use it (FR-024)."""
+
+    name: str
+    reachable: bool
+    checked_at: datetime
+    # Why the last attempt failed, with the agent's address removed; None when reachable.
+    error: Annotated[str | None, Field(max_length=500)]
+    card: AgentCardClaims
+
+
 class ToolCatalog(BaseModel):
     servers: list[ToolServerStatus]
+    # One entry per configured agent, in configuration order; empty when none is (feature 003).
+    agents: list[AgentStatus]
     tools: list[CatalogTool]
 
 

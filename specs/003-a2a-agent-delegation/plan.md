@@ -534,3 +534,38 @@ tables and the worker are justified under the Constitution Check above.
       invalid model id. Two background attempts failed with `model_error`, 10 s apart, as
       logged. After a restart with the real model, the third attempt succeeded. The thread
       held one outcome and one reply, and the retry fields were cleared.
+- **Phase 8 as built (2026-11-10)**:
+  - **`check_agent_tasks` is offered only with agents.** FR-024 says the catalog with no agents
+    configured is exactly what it was before this feature, and T056 tests that the tools then
+    equal feature 002's. Phase 6 offered the tool always, so it, and `AgentTasksMiddleware`,
+    are now added only when at least one agent is configured. `OWN_TOOLS` keeps the row: it
+    is the classification table, and an own tool that is not offered has no catalog entry.
+    - `build_agent(agent_tasks=None)` adds neither; `Runtime.assemble` passes the store only
+      when an agent link exists.
+    - The tests written in Phase 6 for the always-offered tool are back to the 002 list
+      without agents, plus a factory test with a store.
+  - **The one case left without the tool:** a thread whose agents were all removed.
+    - Its given-up report still records Freyja's `check_agent_tasks` call and result in the
+      thread; the tool node never runs them, because the call is already answered.
+    - Calls to a tool not offered in the current request are left in the history. Checked
+      against the `.env` model (`openrouter:anthropic/claude-sonnet-5.5`): one request whose
+      history held such a call and its result, with only `send_notification` offered. It was
+      accepted and answered.
+  - **What changes without agents:** the catalog still gains `agents: []` and `agent: null` on
+    every tool, because both are required by the contract. The tools themselves are 002's.
+  - **The 002 contract:** `CatalogTool` gains `agent` (required, as in 003), and its example
+    tools show `agent: null`. Both contracts' `/tools` examples validate against their own
+    schemas.
+  - `AgentStatus.error` is null when the agent is reachable, and otherwise the text
+    `AgentLink.mark` stored, which already has the address removed and is cut to 500
+    characters.
+  - **Run against the real service.** The `.env` model, the helloworld sample on 9999 marked
+    read-only, the stub on 9998, and the scratch database `freyja_p8`:
+    - Scenario 1: `agents` listed `hello` and `stub`, both reachable, with each card's name,
+      description, version, and skills under `card`. `handoff_to_hello` and
+      `cancel_hello_task` were `read_only` with `agent: hello`; `handoff_to_stub` was `gated`
+      with approve, edit, and reject, and `cancel_stub_task` with approve and reject.
+    - No `127.0.0.1`, `9998`, or `9999` appeared anywhere in the response.
+    - Three reads took under 1 ms each, and the hello agent's log gained no line.
+    - Restarted with `FREYJA_A2A_AGENTS={}`: `agents` was empty, and the tools were exactly
+      feature 002's nine, each with `agent: null`.

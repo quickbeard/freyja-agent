@@ -31,9 +31,13 @@ CONTRACT = (
     / "openapi.yaml"
 )
 STUB = {"stub": {"command": "stub-command", "read_only": ["lookup"]}}
+# Freyja's own tools with no agent configured: check_agent_tasks comes with agents (003 FR-024).
+OWN = {name: kind for name, kind in OWN_TOOLS.items() if name != "check_agent_tasks"}
 TOOL_FIELDS = {
     "name",
     "server",
+    # Added by feature 003: null for every tool that is not an agent's.
+    "agent",
     "description",
     "input_schema",
     "classification",
@@ -93,7 +97,7 @@ def test_freyjas_own_tools_come_first_then_each_server_in_configuration_order(
     }
     catalog = catalog_of(make_mcp_app(ScriptedChatModel(), servers, stubs=stubs))
     assert [(tool["name"], tool["server"]) for tool in catalog["tools"]] == [
-        *((name, None) for name in OWN_TOOLS),
+        *((name, None) for name in OWN),
         # In the order the server lists them.
         ("lookup", "zulu"),
         ("ping", "zulu"),
@@ -106,8 +110,8 @@ def test_each_tool_has_the_classification_the_configuration_implies(
     make_mcp_app: Callable[..., McpApp],
 ) -> None:
     tools = by_name(catalog_of(make_mcp_app(ScriptedChatModel(), STUB)))
-    assert {name: tools[name]["classification"] for name in OWN_TOOLS} == {
-        name: classification.value for name, classification in OWN_TOOLS.items()
+    assert {name: tools[name]["classification"] for name in OWN} == {
+        name: classification.value for name, classification in OWN.items()
     }
     assert tools["lookup"]["classification"] == "read_only"
     assert {tools[name]["classification"] for name in STANDARD_TOOLS if name != "lookup"} == {
@@ -148,7 +152,7 @@ def test_a_servers_own_label_is_shown_and_never_used(
     assert tools["lookup"]["server_hints"] == {"read_only": True, "idempotent": True}
     # A tool whose server publishes none shows none, and so do Freyja's own.
     assert tools["ping"]["server_hints"] is None
-    assert all(tools[name]["server_hints"] is None for name in OWN_TOOLS)
+    assert all(tools[name]["server_hints"] is None for name in OWN)
 
 
 def test_with_no_server_configured_only_freyjas_own_tools_appear(
@@ -157,7 +161,7 @@ def test_with_no_server_configured_only_freyjas_own_tools_appear(
     with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
         catalog = client.get("/tools").json()
     assert catalog["servers"] == []
-    assert [tool["name"] for tool in catalog["tools"]] == list(OWN_TOOLS)
+    assert [tool["name"] for tool in catalog["tools"]] == list(OWN)
     assert all(tool["server"] is None for tool in catalog["tools"])
     notification = by_name(catalog)["send_notification"]
     assert notification["classification"] == "gated"

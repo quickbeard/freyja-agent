@@ -115,7 +115,9 @@ class Runtime:
                         *server_tools,
                         *(tool for link in agents for tool in agent_tools(link, task_store)),
                     ],
-                    agent_tasks=task_store,
+                    # Agent tasks exist only with agents: without any, the orchestrator is
+                    # what it was before feature 003 (FR-024).
+                    agent_tasks=task_store if agents else None,
                 )
                 runtime = cls(
                     agent=orchestrator.agent,
