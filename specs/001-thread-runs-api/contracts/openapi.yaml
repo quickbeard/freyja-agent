@@ -277,7 +277,7 @@ components:
           description: Union of every action request's allowed decisions.
     ActionRequest:
       type: object
-      required: [name, args, server]
+      required: [name, args, server, agent]
       properties:
         name: { type: string }
         server:
@@ -286,6 +286,12 @@ components:
             Added by feature 002. The tool server the proposed tool belongs to; null for one
             of Freyja's own tools, such as `send_notification`, and for a tool that is no
             longer configured. See ../../002-mcp-tool-delegation/contracts/openapi.yaml.
+        agent:
+          type: [string, "null"]
+          description: >
+            Added by feature 003. The agent a hand-off, answer, or cancel goes to; null for
+            every other tool, such as `send_notification`, and for a proposal whose agent is no
+            longer configured. See ../../003-a2a-agent-delegation/contracts/openapi.yaml.
         args: { type: object }
         description: { type: [string, "null"] }
         allowed_decisions:

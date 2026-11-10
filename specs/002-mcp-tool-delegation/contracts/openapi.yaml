@@ -167,10 +167,11 @@ components:
         open_world: { type: boolean }
     ActionRequest:
       type: object
-      required: [name, args, server]
+      required: [name, args, server, agent]
       description: >
-        Changed from 001: adds `server`. Appears in `PendingDecision.action_requests`, which is
-        returned by `GET /threads/{thread_id}/state` and carried by the `interrupt` event.
+        Changed from 001: adds `server`. Feature 003 adds `agent`. Appears in
+        `PendingDecision.action_requests`, which is returned by `GET /threads/{thread_id}/state`
+        and carried by the `interrupt` event.
       properties:
         name: { type: string }
         args: { type: object }
@@ -190,3 +191,9 @@ components:
           description: >
             The tool server the proposed tool belongs to; null for Freyja's own tools, and for
             a proposal whose tool is no longer configured.
+        agent:
+          type: [string, "null"]
+          description: >
+            Added by feature 003. The agent a hand-off, answer, or cancel goes to; null for a
+            tool server's tool and for Freyja's own tools. See
+            ../../003-a2a-agent-delegation/contracts/openapi.yaml.

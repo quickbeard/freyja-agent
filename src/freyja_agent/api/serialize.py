@@ -47,11 +47,12 @@ def update_to_dict(update: Any) -> Any:
 def interrupt_to_pending(interrupt: Interrupt, catalog: Catalog) -> dict[str, Any]:
     """Map a human-in-the-loop interrupt to the ``PendingDecision`` API shape.
 
-    Each action names the tool server its tool belongs to and carries its own allowed
-    decisions, both read from ``catalog``: the tools in force now. A proposal can be shown and
+    Each action names the tool server its tool belongs to, or the agent it is sent to, and
+    carries its own allowed decisions, all read from ``catalog``: the tools in force now. A proposal can be shown and
     decided after a restart with another configuration, and the approval gate runs again under
     that configuration when the thread resumes, so the stored proposal's own lists are not
-    what a decision is checked against (feature 002, FR-008, FR-019; research R9).
+    what a decision is checked against (feature 002, FR-008, FR-019; research R9; feature 003,
+    FR-013, FR-014).
     """
     value = interrupt.value if isinstance(interrupt.value, dict) else {}
     action_requests = []
@@ -62,6 +63,7 @@ def interrupt_to_pending(interrupt: Interrupt, catalog: Catalog) -> dict[str, An
             {
                 "name": name,
                 "server": tool.server if tool is not None else None,
+                "agent": tool.agent if tool is not None else None,
                 "args": to_jsonable(request.get("args", {})),
                 "description": request.get("description"),
                 "allowed_decisions": list(catalog.decisions_for(name)),

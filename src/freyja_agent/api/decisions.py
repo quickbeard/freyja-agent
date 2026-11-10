@@ -5,6 +5,9 @@ arguments, so an edit could otherwise switch tools or pass arguments the tool ca
 This module closes that gap before the run resumes (feature 001: FR-012, FR-013; research R2,
 R16).
 
+An edit may not change a pinned argument, such as the task an agent's answer or cancel is for
+(feature 003: FR-013; research R12).
+
 It also applies a decision under the configuration in force (feature 002: FR-009, FR-019;
 research R9). A proposal can be decided after a restart with another server list, and the gate
 then runs again with the new configuration. A decision for a call the gate no longer asks about
@@ -12,6 +15,7 @@ would be ignored without a word, so such a decision is checked here and left out
 gate receives.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -93,7 +97,7 @@ def build_resume_command(
                 entry["message"] = decision.message
             payload.append(entry)
         else:
-            payload.append(_edit(decision, tool, index))
+            payload.append(_edit(decision, tool, index, request.get("args") or {}))
     return Command(resume={pending["interrupt_id"]: {"decisions": payload}})
 
 
@@ -112,11 +116,14 @@ def _not_allowed(name: str, decision: str, allowed: list[str], tool: CatalogTool
     return f"Decision '{decision}' is not allowed for action '{name}'; {expected}."
 
 
-def _edit(decision: EditDecision, tool: CatalogTool, index: int) -> dict[str, Any]:
+def _edit(
+    decision: EditDecision, tool: CatalogTool, index: int, proposed: Mapping[str, Any]
+) -> dict[str, Any]:
     """Validate edited arguments against the tool's declared input and build the gate's edit.
 
-    The tool name is pinned server-side: an edit changes arguments, never the action or the
-    server it belongs to (FR-009).
+    The tool name is pinned server-side: an edit changes arguments, never the action, the
+    server, or the agent it belongs to (FR-009; feature 003, FR-013). So are the tool's pinned
+    arguments, checked once the arguments are valid.
     """
     schema = tool.tool.args_schema if tool.tool is not None else None
     if isinstance(schema, type) and issubclass(schema, BaseModel):
@@ -133,7 +140,33 @@ def _edit(decision: EditDecision, tool: CatalogTool, index: int) -> dict[str, An
                 }
             ]
         )
+    _check_pinned(args, proposed, tool, index)
     return {"type": "edit", "edited_action": {"name": tool.name, "args": args}}
+
+
+def _check_pinned(
+    args: Mapping[str, Any], proposed: Mapping[str, Any], tool: CatalogTool, index: int
+) -> None:
+    """Refuse an edit whose value for a pinned argument differs from the proposal's.
+
+    An answer or a cancel is for one task of one agent; an edit that named another task would
+    send a message the approver was never shown for that task. An argument left out counts as
+    its default, so it too must equal the proposed value (feature 003, FR-013; research R12).
+    """
+    errors = [
+        {
+            "type": "value_error",
+            "loc": ["body", "decisions", index, "args", key],
+            "msg": (
+                f"Action '{tool.name}': '{key}' cannot be changed by an edit; it must stay "
+                f"{json.dumps(proposed.get(key))}, as proposed."
+            ),
+        }
+        for key in tool.pinned_args
+        if args.get(key) != proposed.get(key)
+    ]
+    if errors:
+        raise _invalid(errors)
 
 
 def _unknown_argument(name: str, key: str, index: int) -> dict[str, Any]:
@@ -147,7 +180,7 @@ def _unknown_argument(name: str, key: str, index: int) -> dict[str, Any]:
 def _validated_by_model(
     args: dict[str, Any], schema: type[BaseModel], name: str, index: int
 ) -> dict[str, Any]:
-    """One of Freyja's own tools: its arguments are described by a pydantic model."""
+    """Freyja's own tool or an agent's: its arguments are described by a pydantic model."""
     errors: list[dict[str, Any]] = []
     try:
         validated = schema.model_validate(args)
@@ -157,7 +190,15 @@ def _validated_by_model(
             for error in exc.errors(include_url=False, include_context=False)
         ]
     # The model ignores keys it does not define, which would drop part of the approver's
-    # instruction without a word. An edit is refused instead (FR-013).
+    # instruction without a word. An edit is refused instead (FR-013). A model that forbids
+    # them, such as an agent's hand-off, reports them too; its entry says less than the one
+    # below, so it is left out and each key is reported once.
+    top_level = ["body", "decisions", index, "args"]
+    errors = [
+        error
+        for error in errors
+        if not (error["type"] == "extra_forbidden" and error["loc"][:-1] == top_level)
+    ]
     errors += [
         _unknown_argument(name, key, index) for key in args if key not in schema.model_fields
     ]

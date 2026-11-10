@@ -135,6 +135,8 @@ def test_a_gated_tool_pauses_and_names_its_server(
         {
             "name": "record_note",
             "server": "stub",
+            # A tool server's tool goes to no agent (feature 003, FR-013).
+            "agent": None,
             "args": NOTE,
             "description": "stub: Record a note on the server.",
             "allowed_decisions": ALL,
