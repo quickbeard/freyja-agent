@@ -340,3 +340,27 @@ tables and the worker are justified under the Constitution Check above.
     received your request (...)" with no pause, and the reply relayed it in Freyja's words. A
     thread kept one context id with the stub across a service restart, and another thread got
     another. The `agent_tasks` check of Scenario 2 waits for Phase 5, which adds the field.
+- **Phase 4 as built (2026-11-10)**:
+  - `ActionRequest.agent` comes from the catalog in force, like `server`: the agent of the tool
+    now, and null for a tool that is not an agent's or is no longer configured. The exact-shape
+    assertion in `tests/test_mcp_gate.py` gained `agent: null` alongside the T029 changes to
+    `test_gate.py` and `test_state.py`.
+  - The pinned check runs after the model has validated the edit, so an edit that leaves
+    `task_id` out is read as `null` and must equal the proposal: for an answer, the edit has to
+    name the proposed task. The refusal says `'task_id' cannot be changed by an edit; it must
+    stay <value>, as proposed`. The quickstart's edit already sends `task_id` explicitly.
+  - `HandOffArgs` forbids unknown keys, so pydantic reported an added key such as `agent` as
+    well as Freyja's own check. Pydantic's top-level `extra_forbidden` entry ("Extra inputs are
+    not permitted") is now dropped, so each unknown key is reported once, as "Action
+    '<tool>' has no argument named '<key>'". Nested errors are unchanged.
+  - The send ledger knows a call by thread and tool call id, so a later call that reused an id
+    on the same thread would get the earlier call's result without a send. A first test draft
+    did this by reusing the scripted id `c1` across runs. Providers give each call its own id,
+    so this needs no code; the tests give each step its own ids.
+  - Run against the real service with the `.env` model (OpenRouter), the compose Postgres, and
+    the stub on 9998 not marked read-only: quickstart Scenario 3 paused with `handoff_to_stub`,
+    `agent: stub`, `server: null`, and the model's message (it gave no context), and the stub
+    had no POST. Edits setting `task_id`, leaving `message` empty, or adding `agent` were each
+    refused with 422 and the proposal stayed; the edited message was the one the stub received,
+    once, and the stream ended with `end`. On a second thread a reject with a reason sent
+    nothing, and the reply repeated the reason.

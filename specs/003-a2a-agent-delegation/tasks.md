@@ -268,7 +268,7 @@ edit, and reject a proposed hand-off; the stub's record shows exactly the expect
 
 ### Tests for User Story 2
 
-- [ ] T027 [P] [US2] Write `tests/test_a2a_gate.py`: the proposal pauses before the stub
+- [X] T027 [P] [US2] Write `tests/test_a2a_gate.py`: the proposal pauses before the stub
       receives anything, and the pause and the thread state name `handoff_to_stub`,
       `agent: "stub"`, `server: null`, the message, and the context; approve sends exactly one
       message as proposed; an edit of message and context sends the edited version; edits that
@@ -277,24 +277,24 @@ edit, and reject a proposed hand-off; the stub's record shows exactly the expect
       card claiming to be read-only is still gated; a subagent's hand-off pauses the same way; a
       step with a gated hand-off and a read-only call runs neither before the decision
       (FR-011, FR-012, FR-013, SC-001, US2 scenarios 1 to 7)
-- [ ] T028 [P] [US2] Add to `tests/test_a2a_gate.py`: a proposal decided after a restart with a
+- [X] T028 [P] [US2] Add to `tests/test_a2a_gate.py`: a proposal decided after a restart with a
       changed configuration: agent removed, approve and reject accepted and nothing sent; agent
       now read-only, approve only; a step whose call became gated, resume fails and the proposal
       stays; a new answer or cancel for a task started before the agent's read-only mark changed
       is classified under the configuration in force (FR-014)
-- [ ] T029 [P] [US2] Add to `tests/test_gate.py` and `tests/test_state.py`: every action request
+- [X] T029 [P] [US2] Add to `tests/test_gate.py` and `tests/test_state.py`: every action request
       carries `agent`, null for Freyja's own tools and for tool server tools
 
 ### Implementation for User Story 2
 
-- [ ] T030 [US2] Add `agent: str | None = None` to `ActionRequest` in
+- [X] T030 [US2] Add `agent: str | None = None` to `ActionRequest` in
       `src/freyja_agent/api/schemas.py`, and fill it in `interrupt_to_pending` in
       `src/freyja_agent/api/serialize.py` from the catalog in force (null when the tool is not an
       agent's or is no longer configured) (FR-013, contracts/openapi.yaml `ActionRequest`)
-- [ ] T031 [US2] Refuse pinned arguments in `src/freyja_agent/api/decisions.py`: after model
+- [X] T031 [US2] Refuse pinned arguments in `src/freyja_agent/api/decisions.py`: after model
       validation, an edit whose value for a pinned argument differs from the proposal's is
       refused with a 422 entry of type `value_error` at that argument (FR-013, R12)
-- [ ] T032 [US2] Add `agent` to `ActionRequest` in
+- [X] T032 [US2] Add `agent` to `ActionRequest` in
       `specs/001-thread-runs-api/contracts/openapi.yaml` and
       `specs/002-mcp-tool-delegation/contracts/openapi.yaml`, matching
       `specs/003-a2a-agent-delegation/contracts/openapi.yaml` (plan Implementation Notes)

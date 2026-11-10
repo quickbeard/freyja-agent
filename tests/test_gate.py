@@ -99,8 +99,9 @@ def test_proposal_pauses_the_run_before_executing(
             "args": PROPOSED,
             "description": "Send a notification to a channel (placeholder: logs only).",
             "allowed_decisions": ["approve", "edit", "reject"],
-            # Freyja's own tool: no tool server provides it.
+            # Freyja's own tool: no tool server provides it, and no agent receives it.
             "server": None,
+            "agent": None,
         }
     ]
     assert data["allowed_decisions"] == ["approve", "edit", "reject"]
@@ -435,6 +436,7 @@ def test_interrupt_to_pending_gives_each_action_its_own_allowed_decisions() -> N
         ["approve", "edit", "reject"],
     ]
     assert [r["server"] for r in pending["action_requests"]] == [None, None]
+    assert [r["agent"] for r in pending["action_requests"]] == [None, None]
     assert pending["allowed_decisions"] == ["approve", "edit", "reject"]
 
 

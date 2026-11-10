@@ -69,6 +69,9 @@ def test_paused_thread_shows_the_proposal_the_stream_reported(
     assert kind == "interrupt"
     assert body["pending"] == interrupt
     assert body["pending"]["action_requests"][0]["args"] == PROPOSED
+    # Freyja's own tool: neither a tool server's nor an agent's (feature 003, FR-013).
+    assert body["pending"]["action_requests"][0]["server"] is None
+    assert body["pending"]["action_requests"][0]["agent"] is None
     assert body["run_active"] is False
     proposal = body["messages"][-1]
     assert proposal["type"] == "ai"
