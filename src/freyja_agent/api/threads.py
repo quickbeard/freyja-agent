@@ -8,7 +8,12 @@ from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
 from freyja_agent.api.decisions import build_resume_command
-from freyja_agent.api.outcomes import mark_delivered, take_undelivered
+from freyja_agent.api.outcomes import (
+    answer_in_flight,
+    mark_delivered,
+    record_answers,
+    take_undelivered,
+)
 from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
     THREAD_ID_PATTERN,
@@ -56,7 +61,8 @@ async def start_run(
 
     Outcomes of agent tasks that arrived and were not delivered go into the input ahead of the
     user's message, and count as delivered once the input is in a checkpoint (feature 003,
-    FR-018, research R10). A resume records none: it finishes a step already under way.
+    FR-018, research R10). Ahead of them go the results of messages to agents that a stop left
+    in flight (FR-017). A resume records neither: it finishes a step already under way.
     """
     runtime = _runtime(request)
     run_id = uuid.uuid4().hex
@@ -71,23 +77,25 @@ async def start_run(
                 "decision_pending",
                 "This thread is paused on a proposal; decide it through resume first.",
             )
+        answers, cut_off = await answer_in_flight(runtime.agent_tasks, thread_id, snapshot)
         outcomes, delivering = await take_undelivered(runtime.agent_tasks, thread_id, snapshot)
     except BaseException:
         await runtime.locks.release(thread_id, owner)
         raise
 
     async def delivered() -> None:
+        await record_answers(runtime.agent_tasks, cut_off)
         await mark_delivered(runtime.agent_tasks, delivering)
 
     return EventSourceResponse(
         run_stream(
             runtime,
             thread_id,
-            input={"messages": [*outcomes, HumanMessage(body.message)]},
+            input={"messages": [*answers, *outcomes, HumanMessage(body.message)]},
             mode="run",
             debug=debug,
             run_id=run_id,
-            on_recorded=delivered if delivering else None,
+            on_recorded=delivered if delivering or cut_off else None,
         )
     )
 

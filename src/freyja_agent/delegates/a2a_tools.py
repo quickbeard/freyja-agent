@@ -17,6 +17,7 @@ runs again never sends twice.
 
 import hashlib
 import json
+import logging
 from typing import Annotated, Any
 
 from a2a.client.errors import A2AClientError, A2AClientTimeoutError
@@ -44,6 +45,8 @@ from freyja_agent.runtime.agent_tasks import (
     AgentTaskRecord,
     AgentTaskStore,
 )
+
+logger = logging.getLogger(__name__)
 
 MESSAGE_LIMIT = 32000
 DESCRIPTION_LIMIT = 2000
@@ -256,9 +259,14 @@ async def _sent_before(
         )
     if earlier.result is not None:
         return earlier.result
-    raise ToolException(
-        f"Agent '{link.name}' may or may not have received this message; Freyja does "
-        "not know, and will not send it again."
+    raise ToolException(may_not_have_received(link.name))
+
+
+def may_not_have_received(agent: str) -> str:
+    """The result of a message whose sending started and was never confirmed (FR-017)."""
+    return (
+        f"Agent '{agent}' may or may not have received this message; Freyja does not know, and "
+        "will not send it again."
     )
 
 
@@ -321,7 +329,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
             task_id=outcome.task.id if outcome.task is not None else None,
         )
         if not ok:
-            raise ToolException(result)
+            raise _failed(link, result)
         return result
 
     return call
@@ -357,6 +365,9 @@ async def _record(
     link: AgentLink, store: AgentTaskStore, thread_id: str, message: str, outcome: SendOutcome
 ) -> tuple[str, bool]:
     """Keep what the send produced, and say what the orchestrator receives."""
+    if outcome.malformed is not None:
+        # Nothing from the reply is kept: an unusable id could not be watched or answered.
+        return f"Agent '{link.name}' replied with something malformed: {outcome.malformed}.", False
     if outcome.context_id is not None:
         await store.set_context(thread_id, link.name, outcome.context_id)
     if outcome.reply is not None:
@@ -367,8 +378,10 @@ async def _record(
                 f"Agent '{link.name}' did not acknowledge the task within "
                 f"{link.call_timeout:g} seconds; it may or may not have received it."
             ), False
+        if outcome.unreachable:
+            return f"Agent '{link.name}' could not be reached: {outcome.error}", False
         return (
-            f"Agent '{link.name}' could not be reached: {outcome.error or 'unknown error'}",
+            f"Agent '{link.name}' answered with an error: {outcome.error or 'unknown error'}",
             False,
         )
     task = outcome.task
@@ -480,7 +493,7 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         result, ok = await _cancel(link, store, task)
         await store.finish_send(thread_id, step, tool_call_id, result=result, task_id=task_id)
         if not ok:
-            raise ToolException(result)
+            raise _failed(link, result)
         return result
 
     return call
@@ -581,3 +594,13 @@ async def _ended(
         f"Agent '{link.name}' task {task.task_id} had already ended, so it was not canceled."
         f"\n\n{outcome}"
     ), True
+
+
+def _failed(link: AgentLink, result: str) -> ToolException:
+    """The error result of a message the agent did not carry out, logged naming the agent.
+
+    The text goes through ``describe`` for the log, so the agent's address is never written
+    (FR-009, research R14); the result itself was built from described text already.
+    """
+    logger.warning("Agent %s: %s", link.name, link.describe(result))
+    return ToolException(result)

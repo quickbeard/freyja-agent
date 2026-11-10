@@ -566,14 +566,16 @@ def retry_app(
     )
 
 
-def ready_outcome(client: TestClient, made: A2aApp, thread: str, outcome: str) -> None:
+def ready_outcome(
+    client: TestClient, made: A2aApp, thread: str, outcome: str, task_id: str = TASK
+) -> None:
     """Record a finished task with its outcome waiting, as the worker does when it sees one."""
     now = client.portal.call(made.store.now)
     client.portal.call(
         made.store.record_task,
         AgentTaskRecord(
             agent="stub",
-            task_id=TASK,
+            task_id=task_id,
             thread_id=thread,
             context_id="ctx",
             message="compile the report",
@@ -688,6 +690,8 @@ def test_a_send_in_flight_when_an_attempt_failed_is_not_sent_again(
     assert [m.text for m in agent.record.messages] == ["follow up: send the summary"]
     (result,) = [m for m in after["messages"] if m["name"] == "handoff_to_stub"]
     assert "may or may not have received" in result["content"]
+    # Freyja's own answer, not Deep Agents' patch for a call cut off.
+    assert not any("did not complete" in str(m["content"]) for m in after["messages"])
     assert len(outcomes(after["messages"])) == 1
     assert after["messages"][-1]["content"] == "Done."
 
@@ -819,3 +823,37 @@ def test_a_retried_attempt_that_proposes_a_gated_hand_off_pauses(
         assert approve(client, "r-8", sse_events)[-1] == ("end", {"status": "completed"})
 
     assert [m.text for m in agent.record.messages] == ["send the summary"]
+
+
+def test_a_background_run_answers_a_hand_off_a_stop_left_in_flight(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("send the summary", call_id="f1")], final_text="The report is ready."
+    )
+    made = retry_app(make_a2a_app, model, agent)
+
+    async def stopped(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the service stopped while the hand-off was in flight")
+
+    with TestClient(made.app) as client:
+        with monkeypatch.context() as patch:
+            patch.setattr(made.store, "finish_send", stopped)
+            assert run(client, "r-9", "Send the summary.", sse_events)[-1][0] == "error"
+        # Another task's outcome, which starts a background run on the thread.
+        ready_outcome(
+            client, made, "r-9", "Agent 'stub' completed task task-9:\n\nThe report.", "task-9"
+        )
+        tick(client, made.runtime)
+        after = state(client, "r-9")
+
+    texts = [str(m["content"]) for m in after["messages"]]
+    assert not any("did not complete" in text for text in texts)
+    (answer,) = [m for m in after["messages"] if m["name"] == "handoff_to_stub"]
+    assert "may or may not have received" in answer["content"]
+    assert [m.text for m in agent.record.messages] == ["send the summary"]
+    assert len(outcomes(after["messages"])) == 1

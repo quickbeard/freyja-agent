@@ -569,3 +569,61 @@ tables and the worker are justified under the Constitution Check above.
     - Three reads took under 1 ms each, and the hello agent's log gained no line.
     - Restarted with `FREYJA_A2A_AGENTS={}`: `agents` was empty, and the tools were exactly
       feature 002's nine, each with `agent: null`.
+- **Phase 9 as built (2026-11-10)**:
+  - **Malformed replies.** An empty, or longer than 256 characters, task id or task context id
+    makes a reply malformed: `Agent '<agent>' replied with something malformed: its <task id |
+    conversation id> is <empty | longer than 256 characters>.`, and the agent is marked
+    unavailable with that reason. Nothing from such a reply is kept, neither a task nor a
+    conversation, because an unusable id could not be watched or answered.
+    - **Direct messages:** a direct message reply may leave its conversation id out, as the
+      protocol allows; it then starts no conversation. An overlong one is malformed.
+    - **Testing an empty id:** the SDK's own server never sends an empty task id (it fails
+      the request with "Task ID mismatch in agent response"), so the empty-id tests blank the
+      id on arrival. The 300-character case is a real reply from the stub.
+  - **Telling failures apart.** An exception whose cause is an `httpx.TransportError` (no
+    connection, or it broke off) is `could not be reached: ...`. Any other failure before
+    acknowledgment is `answered with an error: ...`, such as an error status, a JSON-RPC
+    error, or an unparsable reply. `A2AClientTimeoutError` counts as the time limit.
+  - **Added beyond the table in R5:** a stream that breaks after the agent acknowledged keeps
+    the task as last seen. A task still working becomes pending and is watched, like one
+    still working at the limit, and the agent is marked unavailable with the reason.
+    Reporting an error would have forgotten a task the agent has.
+  - **Reachability (T063).** A task that failed, was rejected, or asked for authentication is
+    an answer from the agent: the agent stays reachable. The worker's status checks already
+    marked the link (Phase 6); T063 adds the test. A failed check is now also logged.
+  - **Logs (T064), each naming the agent and written through `describe()`:**
+    - every hand-off or cancel error result is a warning
+      (`Agent <agent>: <result>`);
+    - a failed status check is a warning with the thread and task ids;
+    - a give-up is a warning saying no cancel was sent;
+    - every background run attempt is logged at its start, with its number of the
+      configured attempts, as well as at its end.
+  - **Messages cut off by a stop (T071).** `answer_in_flight` answers each send with no result
+    whose tool call is in the thread's messages and unanswered. The answer goes first in the
+    input of a user's run, or of a background run, and the sends' results are recorded with the
+    outcomes once the input is in a checkpoint.
+    - **Why first:** a probe showed that new input drops the step left unfinished, and that
+      Deep Agents' `PatchToolCallsMiddleware` otherwise inserts "Tool call ... did not
+      complete - no result was recorded".
+    - **Inside a subagent:** a send made there has no call in the thread's own messages, so it
+      is left to the subagent's step, whose re-run answers it from the ledger.
+    - The text is `may_not_have_received`, shared with the ledger's re-run answer.
+  - `make_a2a_app(network=True)` uses the production transport. Only
+    `tests/test_a2a_transport.py` uses it, with stubs served by uvicorn on free loopback
+    ports.
+  - **Run against the real service.** The `.env` model, the stub on 9998, and the scratch
+    database `freyja_p9`:
+    - Scenario 8, startup: nothing listening on 9997 stopped startup with `Agent 'hello': its
+      card could not be read: ... <address> ...`; `10.0.0.5` failed settings validation for
+      `a2a_agents.hello`; an agent named `git` beside the MCP stub as server `git` stopped
+      startup with `the name is also a tool server's name`. None of them listened, and no log
+      held the address.
+    - Scenario 8, at run time: with the stub stopped, the hand-off returned `Agent 'stub'
+      could not be reached: ...`, the run ended with `end`, a warning named the agent, and
+      `/tools` showed it unreachable. After starting the stub again, the next hand-off
+      completed without a restart, and `/tools` showed it reachable.
+    - **A cut-off hand-off:** the service was killed (`kill -9` of the pid on port 8000)
+      during a `slow 20` hand-off, which left its ledger row with no result after one POST
+      to the stub. After a restart, "Did the stub get the report task?" ran with Freyja's
+      may-or-may-not result in place, directly after the call; the ledger held that text,
+      the stub received no second POST, and no "did not complete" text appeared.

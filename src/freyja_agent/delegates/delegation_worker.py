@@ -27,9 +27,15 @@ import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING
 
+from a2a.client.errors import A2AClientTimeoutError
 from a2a.utils.errors import TaskNotFoundError
 
-from freyja_agent.api.outcomes import mark_delivered, take_undelivered
+from freyja_agent.api.outcomes import (
+    answer_in_flight,
+    mark_delivered,
+    record_answers,
+    take_undelivered,
+)
 from freyja_agent.api.streaming import lease_owner, run_stream
 from freyja_agent.delegates.a2a_agents import AgentLink, state_name
 from freyja_agent.delegates.a2a_tools import a2a_result_text, record_outcome
@@ -128,12 +134,16 @@ class DelegationWorker:
             outcome_ready=True,
             delivered_at=None,
         ):
-            logger.info(
-                "Gave up task %s of agent %s on thread %s: %s",
-                task.task_id,
-                task.agent,
-                task.thread_id,
-                "the agent is no longer configured" if removed else "it reached the maximum age",
+            reason = (
+                "the agent is no longer configured" if removed else "it reached the maximum age"
+            )
+            logger.warning(
+                "%s",
+                self._describe(
+                    task.agent,
+                    f"Agent {task.agent}: gave up task {task.task_id} on thread "
+                    f"{task.thread_id}: {reason}; no cancel was sent",
+                ),
             )
 
     async def _check(self, task: AgentTaskRecord) -> None:
@@ -144,11 +154,11 @@ class DelegationWorker:
         except TaskNotFoundError:
             link.mark(True)
             state, text = "failed", NOT_FOUND
-        except TimeoutError:
-            link.mark(False, f"it did not answer within {link.call_timeout:g} seconds")
+        except (TimeoutError, A2AClientTimeoutError):
+            self._unchecked(link, task, f"it did not answer within {link.call_timeout:g} seconds")
             return
         except Exception as exc:  # unreachable or a protocol error: checked again next tick
-            link.mark(False, str(exc) or type(exc).__name__)
+            self._unchecked(link, task, str(exc) or type(exc).__name__)
             return
         else:
             link.mark(True)
@@ -163,6 +173,23 @@ class DelegationWorker:
         # Recorded only while the task is still pending here: one Freyja canceled meanwhile
         # keeps its state, and its late outcome is ignored (FR-022).
         await record_outcome(store, task, state, text, ready=True)
+
+    def _describe(self, agent: str, text: str) -> str:
+        """Text about an agent that is safe to log: its address removed (FR-009, research R14)."""
+        link = self._links.get(agent)
+        return link.describe(text) if link is not None else text
+
+    @staticmethod
+    def _unchecked(link: AgentLink, task: AgentTaskRecord, why: str) -> None:
+        """A status check that failed: the agent is marked unavailable, and the task stays."""
+        link.mark(False, why)
+        logger.warning(
+            "%s",
+            link.describe(
+                f"Agent {link.name}: could not check task {task.task_id} on thread "
+                f"{task.thread_id}: {why}; checking again next interval"
+            ),
+        )
 
     async def _deliver(self, thread_id: str) -> None:
         """Run one background run on the thread, if it is free: a first delivery or a retry.
@@ -193,15 +220,28 @@ class DelegationWorker:
             messages, delivering = await take_undelivered(store, thread_id, snapshot)
             if not messages and not retrying:
                 return
+            # Messages a stop left in flight are answered first, as at the start of a user's
+            # run (FR-017).
+            answers, cut_off = await answer_in_flight(store, thread_id, snapshot)
+            messages = [*answers, *messages]
             attempted = max((task.followup_attempts for task in retrying), default=0)
             keys = sorted({(t.agent, t.task_id) for t in [*retrying, *delivering]})
 
             async def delivered() -> None:
+                await record_answers(store, cut_off)
                 await mark_delivered(store, delivering)
 
             async def ended(kind: str, code: str | None) -> None:
                 await self._ended(thread_id, run_id, keys, attempted + 1, kind, code)
 
+            logger.info(
+                "Background run %s on thread %s for %s: attempt %d of %d",
+                run_id,
+                thread_id,
+                ", ".join(f"{agent}/{task_id}" for agent, task_id in keys),
+                attempted + 1,
+                runtime.settings.background_run_attempts,
+            )
             stream = run_stream(
                 runtime,
                 thread_id,
@@ -212,7 +252,7 @@ class DelegationWorker:
                 debug=False,
                 run_id=run_id,
                 on_end=ended,
-                on_recorded=delivered if delivering else None,
+                on_recorded=delivered if delivering or cut_off else None,
             )
             # From here the stream owns the lease and releases it however the run ends.
             streaming = True
