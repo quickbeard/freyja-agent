@@ -21,10 +21,12 @@ from tests.test_agent_task_store import (  # noqa: F401 - collected here against
     test_a_pending_task_is_claimed_by_one_instance_until_the_claim_expires,
     test_a_send_is_recorded_once_and_finished,
     test_an_unknown_column_is_refused,
+    test_an_update_can_require_the_state_it_expects,
     test_follow_ups_are_set_and_cleared_per_thread,
     test_ready_outcomes_wait_for_delivery_once,
     test_tasks_are_listed_oldest_first_and_never_dropped,
     test_the_same_tool_call_id_in_another_step_is_another_send,
+    test_threads_with_a_due_retry_are_listed_once_it_is_due,
 )
 
 

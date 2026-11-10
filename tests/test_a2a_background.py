@@ -5,17 +5,22 @@ result. A user's run records it ahead of the user's message; otherwise a backgro
 by the worker records it once the thread is free, and goes through the same gate as any run.
 """
 
+import logging
 import time
 from collections.abc import Callable
+from datetime import timedelta
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.outputs import ChatResult
+from pydantic import Field
 
-from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
+from freyja_agent.runtime.agent_tasks import AgentTaskRecord, InMemoryAgentTaskStore
 from tests.conftest import A2aApp
-from tests.fakes import FakeClock, ScriptedChatModel
+from tests.fakes import FakeClock, LoopingChatModel, ScriptedChatModel
 from tests.test_a2a_pending import (
     INTERVAL,
     PENDING,
@@ -436,6 +441,8 @@ def test_the_model_is_told_how_pending_tasks_are_reported(
     assert "do not hand it off again" in system
     assert "Its outcome is reported later in this thread, as a check_agent_tasks result" in system
     assert "agent tasks, use check_agent_tasks." in system
+    assert "Cancel a pending or given-up task only when the person asks you to" in system
+    assert "never cancel one on your own, also not when a task was given up." in system
 
 
 def test_the_worker_watches_and_delivers_on_its_own(
@@ -519,3 +526,296 @@ def test_a_question_delivered_later_and_its_answer_deliver_each_outcome(
     assert question["id"] != answer["id"]
     assert after["agent_tasks"][0]["status"] == "completed"
     assert after["agent_tasks"][0]["outcome_delivered"] is True
+
+
+# Part 2 (T050): a background run that fails is tried again, and nothing is repeated.
+
+RETRY = 60.0
+WORKER = "freyja_agent.delegates.delegation_worker"
+
+
+class FlakyChatModel(ScriptedChatModel):
+    """Raises on the listed call numbers, as a provider outage does; scripted otherwise."""
+
+    fail_on: set[int] = Field(default_factory=set)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        if self.calls + 1 in self.fail_on:
+            self.calls += 1
+            self.seen.append(list(messages))
+            raise RuntimeError("provider unavailable")
+        return super()._generate(messages, stop, run_manager, **kwargs)
+
+
+def retry_app(
+    make_a2a_app: Callable[..., A2aApp], model: ScriptedChatModel, agent: Any, **options: Any
+) -> A2aApp:
+    return pending_app(
+        make_a2a_app,
+        model,
+        agent,
+        background_retry_seconds=RETRY,
+        background_run_attempts=3,
+        **options,
+    )
+
+
+def ready_outcome(client: TestClient, made: A2aApp, thread: str, outcome: str) -> None:
+    """Record a finished task with its outcome waiting, as the worker does when it sees one."""
+    now = client.portal.call(made.store.now)
+    client.portal.call(
+        made.store.record_task,
+        AgentTaskRecord(
+            agent="stub",
+            task_id=TASK,
+            thread_id=thread,
+            context_id="ctx",
+            message="compile the report",
+            state="completed",
+            started_at=now,
+            last_checked_at=now,
+            ended_at=now,
+            outcome=outcome,
+            outcome_ready=True,
+        ),
+    )
+
+
+def follow_up(client: TestClient, made: A2aApp) -> tuple[int, Any, str | None]:
+    task = record(client, made, TASK)
+    return task.followup_attempts, task.followup_next_at, task.followup_error
+
+
+def test_a_failed_background_run_is_tried_again_until_it_succeeds(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    agent = stub()
+    model = FlakyChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending.")],
+        final_text="The report is ready.",
+        fail_on={3, 4},
+    )
+    made = retry_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        go_pending(client, "r-1", sse_events)
+        agent.release()
+        wait_for(client, made.runtime, TASK, "completed")
+        tick(client, made.runtime)
+        assert model.calls == 3
+        attempts, next_at, error = follow_up(client, made)
+        assert (attempts, error) == (1, "model_error")
+        assert next_at == client.portal.call(made.store.now) + timedelta(seconds=RETRY)
+        # Not before the retry interval.
+        clock.advance(RETRY - 1)
+        tick(client, made.runtime)
+        assert model.calls == 3
+        clock.advance(1)
+        tick(client, made.runtime)
+        assert model.calls == 4
+        assert follow_up(client, made)[0] == 2
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        after = state(client, "r-1")
+        cleared = follow_up(client, made)
+
+    assert model.calls == 5
+    assert len(outcomes(after["messages"])) == 1
+    # Each attempt continued from the last step: the model saw the outcome once each time.
+    assert [len(seen_outcomes(model, call)) for call in (2, 3, 4)] == [1, 1, 1]
+    assert after["messages"][-1]["content"] == "The report is ready."
+    assert len(agent.record.messages) == 1
+    assert cleared == (0, None, None)
+
+
+def test_retries_stop_after_the_configured_attempts_and_the_last_failure_is_logged(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    caplog.set_level(logging.WARNING, logger=WORKER)
+    model = FlakyChatModel(final_text="It is ready.", fail_on={1, 2, 3})
+    made = retry_app(make_a2a_app, model, stub())
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-2", "Agent 'stub' completed task task-1:\n\nThe report.")
+        for _ in range(5):
+            tick(client, made.runtime)
+            clock.advance(RETRY)
+        assert model.calls == 3
+        after = state(client, "r-2")
+        attempts, next_at, error = follow_up(client, made)
+
+    assert (attempts, next_at, error) == (3, None, "model_error")
+    assert len(outcomes(after["messages"])) == 1
+    gave_up = [r.getMessage() for r in caplog.records if "gave up" in r.getMessage()]
+    assert len(gave_up) == 1
+    assert "r-2" in gave_up[0] and TASK in gave_up[0]
+
+
+def test_a_send_in_flight_when_an_attempt_failed_is_not_sent_again(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("follow up: send the summary", call_id="f1")],
+        final_text="Done.",
+    )
+    made = retry_app(make_a2a_app, model, agent)
+
+    async def lost(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the database went away after the send")
+
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-3", "Agent 'stub' completed task task-1:\n\nThe report.")
+        with monkeypatch.context() as patch:
+            patch.setattr(made.store, "finish_send", lost)
+            tick(client, made.runtime)
+        assert follow_up(client, made)[:1] == (1,)
+        assert follow_up(client, made)[2] == "internal"
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        after = state(client, "r-3")
+
+    assert [m.text for m in agent.record.messages] == ["follow up: send the summary"]
+    (result,) = [m for m in after["messages"] if m["name"] == "handoff_to_stub"]
+    assert "may or may not have received" in result["content"]
+    assert len(outcomes(after["messages"])) == 1
+    assert after["messages"][-1]["content"] == "Done."
+
+
+def test_an_attempt_that_failed_before_recording_the_outcome_records_it_on_retry(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    database = shared(clock)
+    saver = database["saver"]
+    model = ScriptedChatModel(final_text="It is ready.")
+    made = retry_app(make_a2a_app, model, stub(), **database)
+    put = saver.aput
+    failures = iter([True])
+
+    async def flaky_put(*args: Any, **kwargs: Any) -> Any:
+        if next(failures, False):
+            raise RuntimeError("the database went away before the input was saved")
+        return await put(*args, **kwargs)
+
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-4", "Agent 'stub' completed task task-1:\n\nThe report.")
+        monkeypatch.setattr(saver, "aput", flaky_put)
+        tick(client, made.runtime)
+        assert model.calls == 0
+        task = record(client, made, TASK)
+        assert (task.delivered_at, task.followup_attempts) == (None, 1)
+        # The retry waits for its interval, not for the next tick.
+        tick(client, made.runtime)
+        assert model.calls == 0
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        after = state(client, "r-4")
+
+    assert model.calls == 1
+    assert len(outcomes(after["messages"])) == 1
+    assert after["agent_tasks"][0]["outcome_delivered"] is True
+
+
+def test_retries_stop_once_another_run_completes_but_not_after_one_that_failed(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    model = FlakyChatModel(final_text="Hello.", fail_on={1, 2})
+    made = retry_app(make_a2a_app, model, stub())
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-5", "Agent 'stub' completed task task-1:\n\nThe report.")
+        tick(client, made.runtime)
+        assert follow_up(client, made)[0] == 1
+        # A user's run that fails does not count: the retry is still due.
+        assert run(client, "r-5", "Are you there?", sse_events)[-1][1]["code"] == "model_error"
+        assert follow_up(client, made)[0] == 1
+        # One that completes does.
+        assert run(client, "r-5", "Hello?", sse_events)[-1][0] == "end"
+        assert follow_up(client, made) == (0, None, None)
+        calls = model.calls
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        after = state(client, "r-5")
+
+    assert model.calls == calls
+    assert len(outcomes(after["messages"])) == 1
+
+
+def test_remaining_attempts_resume_after_a_restart(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    database = shared(clock)
+    failing = FlakyChatModel(fail_on={1})
+    made = retry_app(make_a2a_app, failing, stub(), **database)
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-6", "Agent 'stub' completed task task-1:\n\nThe report.")
+        tick(client, made.runtime)
+        assert follow_up(client, made)[0] == 1
+
+    model = ScriptedChatModel(final_text="The report is ready.")
+    restarted = retry_app(make_a2a_app, model, stub(), instance_id="instance-b", **database)
+    with TestClient(restarted.app) as client:
+        tick(client, restarted.runtime)
+        assert model.calls == 0
+        clock.advance(RETRY)
+        tick(client, restarted.runtime)
+        after = state(client, "r-6")
+
+    assert model.calls == 1
+    assert len(outcomes(after["messages"])) == 1
+    assert after["messages"][-1]["content"] == "The report is ready."
+
+
+def test_a_background_run_at_the_step_limit_is_not_retried(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    model = LoopingChatModel()
+    made = retry_app(make_a2a_app, model, stub(), max_steps=6)
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-7", "Agent 'stub' completed task task-1:\n\nThe report.")
+        tick(client, made.runtime)
+        calls = model.calls
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        after = state(client, "r-7")
+        attempts = follow_up(client, made)
+
+    assert model.calls == calls
+    assert attempts == (0, None, None)
+    # The outcome is in the thread, so it counts as delivered.
+    assert len(outcomes(after["messages"])) == 1
+    assert after["agent_tasks"][0]["outcome_delivered"] is True
+
+
+def test_a_retried_attempt_that_proposes_a_gated_hand_off_pauses(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    agent = stub()
+    model = FlakyChatModel(
+        script=[handoff("send the summary", call_id="f1")], final_text="Sent.", fail_on={1}
+    )
+    made = retry_app(make_a2a_app, model, agent, read_only=False)
+    with TestClient(made.app) as client:
+        ready_outcome(client, made, "r-8", "Agent 'stub' completed task task-1:\n\nThe report.")
+        tick(client, made.runtime)
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        paused = state(client, "r-8")
+        assert [a["name"] for a in paused["pending"]["action_requests"]] == ["handoff_to_stub"]
+        assert agent.record.messages == []
+        assert follow_up(client, made) == (0, None, None)
+        assert approve(client, "r-8", sse_events)[-1] == ("end", {"status": "completed"})
+
+    assert [m.text for m in agent.record.messages] == ["send the summary"]
