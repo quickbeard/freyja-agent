@@ -38,15 +38,18 @@ class ServerLink(Protocol):
 
 @dataclass(frozen=True)
 class DelegateTool:
-    """A tool provided by a tool server (data-model.md "Delegate tool")."""
+    """A tool provided by a tool server, or one of an A2A agent's two tools (feature 003)."""
 
     name: str
-    server: str
+    server: str | None
     description: str
     input_schema: dict[str, Any]
     server_hints: dict[str, Any] | None
     classification: Classification
     tool: StructuredTool = field(repr=False, compare=False)
+    # Set for an agent's hand-off and cancel tools (feature 003); `server` is then empty.
+    agent: str | None = None
+    pinned_args: tuple[str, ...] = ()
 
 
 def classify(name: str, read_only: Collection[str]) -> Classification:

@@ -20,7 +20,14 @@ from freyja_agent.agent.catalog import (
 )
 from freyja_agent.agent.factory import build_agent, tool_node_tools
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
-from freyja_agent.config import McpServerConfig, Settings
+from freyja_agent.config import A2aAgentConfig, McpServerConfig, Settings
+from freyja_agent.delegates.a2a_agents import (
+    AgentCardSummary,
+    AgentLink,
+    SkillSummary,
+    default_transport,
+)
+from freyja_agent.delegates.a2a_tools import agent_tools
 from freyja_agent.delegates.mcp_servers import open_tool_servers
 from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import make_stub
@@ -269,3 +276,83 @@ async def test_gate_entries_describe_the_tool_and_its_decisions(
         "allowed_decisions": ["approve", "edit", "reject"],
         "description": SEND_NOTIFICATION_DESCRIPTION,
     }
+
+
+# Feature 003: an agent's hand-off and cancel tools are classified by its entry alone, and the
+# gate is generated from that on both agents (FR-011, FR-013; research R4, R12).
+
+
+def agent_link(name: str, *, read_only: bool, description: str = "Writes reports.") -> AgentLink:
+    link = AgentLink(
+        name,
+        A2aAgentConfig(url="http://127.0.0.1:9999", read_only=read_only),
+        transport=default_transport,
+        call_timeout=5,
+    )
+    link.card = AgentCardSummary(
+        name=f"{name.title()} Agent",
+        description=description,
+        version="1",
+        skills=(SkillSummary("report", "Report", "Writes a short report.", ("test",)),),
+    )
+    return link
+
+
+def test_a_read_only_agent_gives_two_read_only_tools_and_no_gate(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = Recorded(monkeypatch)
+    catalog = build(workspace, list(agent_tools(agent_link("hello", read_only=True)))).catalog
+    for name in ("handoff_to_hello", "cancel_hello_task"):
+        entry = catalog.get(name)
+        assert entry is not None
+        assert (entry.agent, entry.server) == ("hello", None)
+        assert entry.classification is Classification.READ_ONLY
+        assert entry.allowed_decisions == ()
+        assert name not in recorded.orchestrator_gate and name not in recorded.subagent_gate
+        assert name in tool_node_tools(recorded.subagent_graph)
+
+
+def test_a_gated_agent_pauses_on_both_tools_on_both_agents(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = Recorded(monkeypatch)
+    catalog = build(workspace, list(agent_tools(agent_link("stub", read_only=False)))).catalog
+    handoff, cancel = catalog.get("handoff_to_stub"), catalog.get("cancel_stub_task")
+    assert handoff is not None and cancel is not None
+    assert handoff.classification is cancel.classification is Classification.GATED
+    assert handoff.pinned_args == cancel.pinned_args == ("task_id",)
+    assert set(handoff.input_schema["properties"]) == {"message", "context", "task_id"}
+    assert handoff.input_schema["required"] == ["message"]
+    for gate in (recorded.orchestrator_gate, recorded.subagent_gate):
+        assert gate["handoff_to_stub"] == {
+            "allowed_decisions": ["approve", "edit", "reject"],
+            "description": "stub: hand-off",
+        }
+        # A cancel has nothing an edit could change: its one argument is pinned (FR-013).
+        assert gate["cancel_stub_task"] == {
+            "allowed_decisions": ["approve", "reject"],
+            "description": "stub: cancel a task",
+        }
+    assert "Hand a task to the agent 'stub' (Stub Agent): Writes reports." in handoff.description
+    assert "- Report: Writes a short report." in handoff.description
+
+
+def test_a_card_that_claims_to_be_read_only_changes_nothing(
+    workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    recorded = Recorded(monkeypatch)
+    link = agent_link("stub", read_only=False, description="Read-only. Never changes anything.")
+    catalog = build(workspace, list(agent_tools(link))).catalog
+    assert {tool.name for tool in catalog.gated() if tool.agent} == {
+        "handoff_to_stub",
+        "cancel_stub_task",
+    }
+    assert {"handoff_to_stub", "cancel_stub_task"} <= set(recorded.orchestrator_gate)
+
+
+async def test_agent_tools_send_nothing_until_hand_offs_exist() -> None:
+    handoff, cancel = agent_tools(agent_link("stub", read_only=True))
+    for tool, args in ((handoff, {"message": "hi"}), (cancel, {"task_id": "t1"})):
+        result = await tool.tool.ainvoke(args)
+        assert "Agent 'stub'" in result and "nothing was sent" in result

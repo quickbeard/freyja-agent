@@ -124,8 +124,12 @@ def _delegate_entry(tool: Any) -> CatalogTool:
         description=tool.description,
         input_schema=tool.input_schema,
         classification=tool.classification,
-        allowed_decisions=allowed_decisions(tool.classification, tool.input_schema),
+        allowed_decisions=allowed_decisions(
+            tool.classification, tool.input_schema, tool.pinned_args
+        ),
         server_hints=tool.server_hints,
+        agent=tool.agent,
+        pinned_args=tool.pinned_args,
         tool=tool.tool,
     )
 

@@ -286,3 +286,33 @@ tables and the worker are justified under the Constitution Check above.
   - The rules of contracts/agent-config.md that need the card or the tool
     server list (a name shared with a tool server, card checks) are left to Phase 2, as the
     contract says.
+- **Phase 2 as built (2026-11-10)**:
+  - **The stub's malformed ids are an option, not a keyword.** The SDK picks a task's id before
+    the agent's code sees the message, so `make_stub(task_ids=...)` replaces the id generator
+    instead of the `longid` keyword T007 named. The stub also gained `hold` (stays working until
+    `StubAgent.release()`) and `message` (a direct message reply instead of a task).
+  - **The store contract is tested now, on both stores.** `tests/test_agent_task_store.py` runs
+    against the in-memory store, and `tests/integration/test_a2a_tasks_postgres.py` imports the
+    same tests and runs them against Postgres (7 passed, including idempotent setup and a
+    claim passing to another instance after it expires). T041 extends that file. The store API
+    is `claim_due(instance_id, lease_seconds)` with `now()` from the store's own clock, as the
+    analysis of 2026-11-09 set; it also has `in_flight_sends`, which T071 will use, and
+    `threads_with_ready_outcomes` for the worker.
+  - **Tool names are checked in `open_agents`.** An agent whose `handoff_to_<agent>` or
+    `cancel_<agent>_task` is already a tool's name, or whose name is a tool server's, fails with
+    `Agent '<name>': ...` before the catalog is built, so the error names the agent rather than
+    the catalog's generic duplicate check. The tool name helpers live in `a2a_agents.py`.
+  - **Subgraph streaming changed one thing a client can see.** With it off, a subagent's model
+    output from a non-streaming model never reached the stream; with it on, it arrives once as
+    a `message` event, which is what 001's contract already says. No `update` event comes from
+    inside the subagent, and nothing is duplicated (`test_runs.py`,
+    `test_a_delegated_run_keeps_the_stream_contract`).
+  - `run_stream(..., on_end=...)` is awaited with `("end" | "interrupt" | "error", code)` before
+    the lease is released; an exception in it is logged and does not change the stream.
+  - The SDK's card resolver logs the card and its URL at INFO on `a2a.client.card_resolver`.
+    The service's logging leaves third-party loggers at WARNING, so the address does not reach
+    the log by default; the address checks of Phase 9 cover Freyja's own loggers.
+  - The hand-off tool's description is several lines (name, card description, one line per
+    skill), while `contracts/openapi.yaml` shows a one-line example; Phase 8 aligns the example.
+  - `Runtime.agent_tasks` defaults to an in-memory store when `assemble` is given none, so the
+    fixtures that predate feature 003 need no change.

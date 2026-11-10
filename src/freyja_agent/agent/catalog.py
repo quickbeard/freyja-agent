@@ -77,16 +77,20 @@ def has_declared_input(schema: Mapping[str, Any] | None) -> bool:
 
 
 def allowed_decisions(
-    classification: Classification, input_schema: Mapping[str, Any] | None
+    classification: Classification,
+    input_schema: Mapping[str, Any] | None,
+    pinned_args: Iterable[str] = (),
 ) -> tuple[str, ...]:
     """The decisions a tool's proposal accepts; empty unless the tool is gated.
 
     A gated tool with no declared input offers approve and reject: there is nothing an edit
-    could change.
+    could change. The same holds when every argument it declares is pinned, such as an agent's
+    cancel tool, whose only argument is the task it is for (feature 003, FR-013).
     """
     if classification is not Classification.GATED:
         return ()
-    if has_declared_input(input_schema):
+    editable = set((input_schema or {}).get("properties") or {}) - set(pinned_args)
+    if has_declared_input(input_schema) and editable:
         return (APPROVE, EDIT, REJECT)
     return (APPROVE, REJECT)
 
@@ -104,6 +108,10 @@ class CatalogTool:
     allowed_decisions: tuple[str, ...]
     # What the server says about its own tool. Shown, never used (FR-006, FR-014).
     server_hints: dict[str, Any] | None = None
+    # The agent a hand-off or cancel tool sends to; None for every other tool (feature 003).
+    agent: str | None = None
+    # Arguments an edit may not change, such as the task an answer or a cancel is for.
+    pinned_args: tuple[str, ...] = ()
     # The callable itself, for validating an edit; not part of any API shape.
     tool: BaseTool | None = field(default=None, repr=False, compare=False)
 
@@ -160,7 +168,14 @@ def first_line(text: str) -> str:
 
 
 def gate_description(tool: CatalogTool) -> str:
-    """What the pause says about a gated tool: ``<server>: <first line of its description>``."""
+    """What the pause says about a gated tool: ``<server>: <first line of its description>``.
+
+    An agent's tools say what they send: ``<agent>: hand-off`` or ``<agent>: cancel a task``
+    (feature 003, research R12).
+    """
+    if tool.agent is not None:
+        action = "cancel a task" if tool.name.startswith("cancel_") else "hand-off"
+        return f"{tool.agent}: {action}"
     if tool.server is None:
         if tool.name == "send_notification":
             return SEND_NOTIFICATION_DESCRIPTION
