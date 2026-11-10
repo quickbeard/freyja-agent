@@ -209,7 +209,7 @@ context id.
 
 ### Tests for User Story 1
 
-- [ ] T020 [P] [US1] Write `tests/test_a2a_handoff.py` part 1: a read-only hand-off directly and
+- [X] T020 [P] [US1] Write `tests/test_a2a_handoff.py` part 1: a read-only hand-off directly and
       through the subagent completes without a pause and with the stub's reply in the result;
       the stub received exactly two text parts, the message and the context with metadata
       `{"freyja": "context"}`, and nothing else from the thread; `progress 3` produces three
@@ -219,30 +219,30 @@ context id.
       `parts` gives the text, compact JSON for the data part, `[file omitted: <media type>]` and
       `[file link omitted: <media type>]` notes, and no bytes in the thread (FR-005, FR-006,
       FR-007, SC-002, US1 scenarios 1 to 4, 6)
-- [ ] T021 [P] [US1] Write `tests/test_a2a_handoff.py` part 2: two hand-offs from one thread to
+- [X] T021 [P] [US1] Write `tests/test_a2a_handoff.py` part 2: two hand-offs from one thread to
       one agent carry the same `context_id`, also across a new runtime on the same store; a
       hand-off from another thread gets a different one; a `message` reply (no task) continues
       the conversation and creates no task row (FR-008, FR-017, SC-004, US1 scenario 5)
-- [ ] T022 [P] [US1] Write `tests/test_a2a_handoff.py` part 3: a tool call whose send is already
+- [X] T022 [P] [US1] Write `tests/test_a2a_handoff.py` part 3: a tool call whose send is already
       in the ledger with a result returns that result and sends nothing; one in flight (result
       null) returns an error saying the agent may or may not have received it and sends nothing
       (FR-010, data-model.md "Agent send")
 
 ### Implementation for User Story 1
 
-- [ ] T023 [P] [US1] Implement `a2a_result_text(task_or_message)` in
+- [X] T023 [P] [US1] Implement `a2a_result_text(task_or_message)` in
       `src/freyja_agent/delegates/a2a_tools.py` with the table in research R6: `text` as text,
       `data` as compact JSON, `raw` as `[file omitted: <media type or "unknown type">]`, `url` as
       `[file link omitted: <media type or "unknown type">]`; artifacts in order, then the final
       status message unless it repeats the last artifact's text (FR-006, R6)
-- [ ] T024 [US1] Implement `AgentLink.send(...)` in `src/freyja_agent/delegates/a2a_agents.py`:
+- [X] T024 [US1] Implement `AgentLink.send(...)` in `src/freyja_agent/delegates/a2a_agents.py`:
       the message (role user, `message_id` derived from thread and tool call id, `context_id`,
       optional `task_id`, the two parts); streaming send when the card streams, otherwise
       non-streaming with `return_immediately` and `get_task` every second; report each status
       update with a message and each artifact update to a progress callback; return on a
       terminal state, `input_required`, a direct message, the time limit, or a failure, with
       whether it was acknowledged; mark reachability (R5)
-- [ ] T025 [US1] Implement the hand-off coroutine in `src/freyja_agent/delegates/a2a_tools.py`
+- [X] T025 [US1] Implement the hand-off coroutine in `src/freyja_agent/delegates/a2a_tools.py`
       following research R5 steps 1 to 6: ledger lookup and row before sending; conversation
       read and written on acknowledgment; a task row recorded on acknowledgment; progress
       written with `get_stream_writer()` as `{"agent", "task_id", "state", "text"}`; a completed
@@ -250,7 +250,7 @@ context id.
       ending returns an error result naming the agent and the state until Phases 5, 6, and 9
       handle it. Inject the thread id from the run config and the tool call id
       (FR-005, FR-007, FR-008, FR-010, R5)
-- [ ] T026 [US1] Add one paragraph to `src/freyja_agent/agent/prompts.py`: an agent tool hands
+- [X] T026 [US1] Add one paragraph to `src/freyja_agent/agent/prompts.py`: an agent tool hands
       a self-contained task to another agent; write the message and include only the context
       the agent needs; relay the reply in your own words (FR-005, FR-015)
 

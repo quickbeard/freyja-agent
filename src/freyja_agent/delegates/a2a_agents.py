@@ -21,7 +21,15 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
-from a2a.types import AgentCard
+from a2a.types import (
+    AgentCard,
+    GetTaskRequest,
+    Message,
+    SendMessageConfiguration,
+    SendMessageRequest,
+    Task,
+    TaskState,
+)
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, VERSION_HEADER
 
 from freyja_agent.config import A2aAgentConfig
@@ -133,7 +141,7 @@ class AgentLink:
         self.checked_at = datetime.now(UTC)
         self.error: str | None = None
         self._transport = transport
-        self._call_timeout = call_timeout
+        self.call_timeout = call_timeout
         self._http: httpx.AsyncClient | None = None
         self.client: Client | None = None
 
@@ -172,7 +180,7 @@ class AgentLink:
         self._http = httpx.AsyncClient(
             transport=self._transport(self.name, self.config.url),
             follow_redirects=False,
-            timeout=self._call_timeout,
+            timeout=self.call_timeout,
             headers={VERSION_HEADER: PROTOCOL_VERSION_CURRENT},
         )
         try:
@@ -275,3 +283,132 @@ async def open_agents(
         yield tuple(links)
     finally:
         await _close_all(links)
+
+
+# How often a task of an agent that does not stream is checked while a call waits (research R5).
+POLL_SECONDS = 1.0
+
+# The protocol's task states as the store and the API name them (data-model.md).
+_STATES = {
+    TaskState.TASK_STATE_SUBMITTED: "working",
+    TaskState.TASK_STATE_WORKING: "working",
+    TaskState.TASK_STATE_COMPLETED: "completed",
+    TaskState.TASK_STATE_FAILED: "failed",
+    TaskState.TASK_STATE_CANCELED: "canceled",
+    TaskState.TASK_STATE_REJECTED: "rejected",
+    TaskState.TASK_STATE_INPUT_REQUIRED: "input_required",
+    TaskState.TASK_STATE_AUTH_REQUIRED: "auth_required",
+}
+# A call stops waiting at any of these: the task is final, or waits for someone else.
+_STOP = {"completed", "failed", "canceled", "rejected", "input_required", "auth_required"}
+
+# Receives (task id, state, text) for each progress update the agent reports.
+OnProgress = Callable[[str, str, str], None]
+
+
+def state_name(state: int) -> str:
+    return _STATES.get(state, "working")
+
+
+@dataclass
+class SendOutcome:
+    """What one send produced, within the call time limit (research R5).
+
+    ``task`` is the latest view of the task the agent created, if any; ``reply`` is a direct
+    message reply. ``acknowledged`` is true once either arrived. ``timed_out`` means the limit
+    passed first; ``error`` says why the send failed, in text safe to show.
+    """
+
+    task: Task | None = None
+    reply: Message | None = None
+    timed_out: bool = False
+    error: str | None = None
+
+    @property
+    def acknowledged(self) -> bool:
+        return self.task is not None or self.reply is not None
+
+    @property
+    def state(self) -> str | None:
+        if self.reply is not None:
+            return "completed"
+        return state_name(self.task.status.state) if self.task is not None else None
+
+    @property
+    def context_id(self) -> str | None:
+        source = self.task if self.task is not None else self.reply
+        return (source.context_id or None) if source is not None else None
+
+
+def _text(message: Message | None) -> str:
+    if message is None:
+        return ""
+    return "\n".join(part.text for part in message.parts if part.WhichOneof("content") == "text")
+
+
+async def _send(
+    link: "AgentLink", message: Message, on_progress: OnProgress, outcome: SendOutcome
+) -> None:
+    """Send one message and follow it until it stops, updating ``outcome`` as events arrive."""
+    if link.client is None:
+        raise RuntimeError(f"Agent '{link.name}' is not started.")
+    configuration = None if link.streaming else SendMessageConfiguration(return_immediately=True)
+    request = SendMessageRequest(message=message, configuration=configuration)
+    async for event in link.client.send_message(request):
+        kind = event.WhichOneof("payload")
+        if kind == "message":
+            outcome.reply = event.message
+            return
+        if kind == "task":
+            outcome.task = Task()
+            outcome.task.CopyFrom(event.task)
+            if event.task.status.HasField("message"):
+                on_progress(
+                    event.task.id,
+                    state_name(event.task.status.state),
+                    _text(event.task.status.message),
+                )
+        elif kind == "status_update" and outcome.task is not None:
+            outcome.task.status.CopyFrom(event.status_update.status)
+            update = event.status_update.status
+            on_progress(outcome.task.id, state_name(update.state), _text(update.message))
+        elif kind == "artifact_update" and outcome.task is not None:
+            outcome.task.artifacts.append(event.artifact_update.artifact)
+        if outcome.state in _STOP:
+            return
+    if not link.streaming and outcome.task is not None:
+        await _poll(link, outcome, on_progress)
+
+
+async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress) -> None:
+    """Check a task of an agent that does not stream until it stops; report each change."""
+    if link.client is None or outcome.task is None:
+        raise RuntimeError(f"Agent '{link.name}' has no task to check.")
+    # The protocol's own states, so submitted to working counts as a change.
+    seen = outcome.task.status.state
+    while outcome.state not in _STOP:
+        await asyncio.sleep(POLL_SECONDS)
+        task = await link.client.get_task(GetTaskRequest(id=outcome.task.id))
+        outcome.task = task
+        if task.status.state != seen:
+            seen = task.status.state
+            on_progress(task.id, state_name(seen), _text(task.status.message))
+
+
+async def send_message(link: "AgentLink", message: Message, on_progress: OnProgress) -> SendOutcome:
+    """Send ``message`` to the agent and wait for it within the call time limit (FR-009)."""
+    outcome = SendOutcome()
+    try:
+        async with asyncio.timeout(link.call_timeout):
+            await _send(link, message, on_progress, outcome)
+    except TimeoutError:
+        outcome.timed_out = True
+        if not outcome.acknowledged:
+            link.mark(False, f"it did not answer within {link.call_timeout:g} seconds")
+            return outcome
+    except Exception as exc:  # every failure becomes an outcome; none ends a run
+        outcome.error = link.describe(str(exc) or type(exc).__name__)
+        link.mark(False, outcome.error)
+        return outcome
+    link.mark(True)
+    return outcome

@@ -88,6 +88,7 @@ class Runtime:
             startup_timeout=settings.mcp_startup_timeout_seconds,
         ) as servers:
             server_tools = [tool for server in servers for tool in server.tools]
+            task_store = agent_tasks if agent_tasks is not None else InMemoryAgentTaskStore()
             async with open_agents(
                 settings.a2a_agents,
                 transport=agent_transport,
@@ -104,7 +105,7 @@ class Runtime:
                     max_steps=settings.max_steps,
                     delegate_tools=[
                         *server_tools,
-                        *(tool for link in agents for tool in agent_tools(link)),
+                        *(tool for link in agents for tool in agent_tools(link, task_store)),
                     ],
                 )
                 yield cls(

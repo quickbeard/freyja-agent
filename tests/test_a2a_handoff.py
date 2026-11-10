@@ -1,0 +1,295 @@
+"""003 User Story 1: hand work to an agent and get its answer.
+
+FR-005 to FR-008, FR-010, SC-002, SC-004. Every hand-off goes to the stand-in agent inside the
+test process through the streaming transport, so the message, the parts, the progress, and the
+conversation are the ones the agent really received.
+"""
+
+from collections.abc import Callable
+from datetime import UTC, datetime
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, ToolMessage
+
+from freyja_agent.delegates import a2a_agents
+from freyja_agent.runtime.agent_tasks import AgentSend, InMemoryAgentTaskStore
+from tests.a2a_stub import make_stub, stub_card
+from tests.conftest import A2aApp
+from tests.fakes import ScriptedChatModel
+
+Events = list[tuple[str, Any]]
+
+
+def handoff(
+    message: str, *, context: str | None = None, call_id: str = "h1", agent: str = "hello"
+) -> AIMessage:
+    args: dict[str, Any] = {"message": message}
+    if context is not None:
+        args["context"] = context
+    return AIMessage(
+        content="", tool_calls=[{"id": call_id, "name": f"handoff_to_{agent}", "args": args}]
+    )
+
+
+DONE = AIMessage(content="Done.")
+
+DELEGATE = AIMessage(
+    content="",
+    tool_calls=[
+        {
+            "id": "t1",
+            "name": "task",
+            "args": {"description": "Ask the hello agent.", "subagent_type": "general-purpose"},
+        }
+    ],
+)
+
+
+def run(client: TestClient, thread_id: str, sse_events: Any, message: str = "go") -> Events:
+    with client.stream("POST", f"/threads/{thread_id}/runs", json={"message": message}) as response:
+        assert response.status_code == 200, response.read()
+        return sse_events(response.iter_lines())
+
+
+def tool_results(events: Events, name: str) -> list[dict[str, Any]]:
+    """The tool messages of ``name`` in the run's ``tools`` updates, in order."""
+    return [
+        message
+        for kind, data in events
+        if kind == "update" and data["node"] == "tools"
+        for message in data["data"].get("messages", [])
+        if message["type"] == "tool" and message["name"] == name
+    ]
+
+
+def progress(events: Events) -> list[dict[str, Any]]:
+    return [data["data"] for kind, data in events if kind == "update" and data["node"] == "agent"]
+
+
+def thread_messages(made: A2aApp, thread_id: str) -> list[Any]:
+    state = made.runtime.agent.get_state({"configurable": {"thread_id": thread_id}})
+    return list(state.values["messages"])
+
+
+# Part 1 (T020): what reaches the agent, what comes back, and progress.
+
+
+def test_a_read_only_hand_off_completes_without_a_pause(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            handoff("Say hello to the ops team.", context="The ops team is on call this week.")
+        ],
+        final_text="The agent said hello.",
+    )
+    made = make_a2a_app(model, {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        events = run(client, "h-1", sse_events)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert "interrupt" not in [kind for kind, _ in events]
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"].startswith("Agent 'hello' completed task ")
+    assert "Say hello to the ops team." in result["content"]
+    # Exactly the task message and the chosen context reached the agent, nothing else (FR-005).
+    (received,) = made.stubs["hello"].record.messages
+    assert received.parts == [
+        ("text", "Say hello to the ops team.", {}),
+        ("text", "The ops team is on call this week.", {"freyja": "context"}),
+    ]
+    assert "go" not in received.text
+
+
+def test_a_hand_off_without_context_sends_the_message_alone(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(ScriptedChatModel(script=[handoff("Hi.")]), {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        run(client, "h-2", sse_events)
+    (received,) = made.stubs["hello"].record.messages
+    assert received.parts == [("text", "Hi.", {})]
+
+
+def test_a_hand_off_through_the_subagent_completes_the_same_way(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    # Call 1 delegates, call 2 (inside the subagent) hands off.
+    model = ScriptedChatModel(script=[DELEGATE, handoff("From the subagent.")], final_text="Done.")
+    made = make_a2a_app(model, {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        events = run(client, "h-3", sse_events)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [m.text for m in made.stubs["hello"].record.messages] == ["From the subagent."]
+    # The subagent received the agent's reply as the hand-off's result.
+    subagent_call = model.seen[2]
+    (reply,) = [
+        m for m in subagent_call if isinstance(m, ToolMessage) and m.name == "handoff_to_hello"
+    ]
+    assert "From the subagent." in reply.content
+    # Its progress reached the run's stream from inside the subagent (research R7).
+    assert progress(events)
+
+
+def test_progress_streams_in_order_before_the_result(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("progress 3")]), {"hello": {"read_only": True}}
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "h-4", sse_events)
+
+    updates = progress(events)
+    texts = [update["text"] for update in updates]
+    assert texts[:4] == ["Working on it.", "Step 1", "Step 2", "Step 3"]
+    assert {update["agent"] for update in updates} == {"hello"}
+    task_ids = {update["task_id"] for update in updates}
+    assert len(task_ids) == 1 and "" not in task_ids
+    assert all(update["state"] in ("working", "completed") for update in updates)
+    nodes = [data["node"] for kind, data in events if kind == "update"]
+    assert nodes.index("tools") > max(i for i, node in enumerate(nodes) if node == "agent")
+
+
+def test_an_agent_that_does_not_stream_reports_each_observed_change(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(a2a_agents, "POLL_SECONDS", 0.05)
+    stub = make_stub("hello", card=stub_card("hello", streaming=False))
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("slow 0.3")]),
+        {"hello": {"read_only": True}},
+        stubs={"hello": stub},
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "h-5", sse_events)
+
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"].startswith("Agent 'hello' completed task ")
+    # One event per observed change, not one per check: submitted to working, then completed.
+    assert [update["state"] for update in progress(events)] == ["working", "completed"]
+
+
+def test_parts_of_other_kinds_become_notes(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("parts")]), {"hello": {"read_only": True}}
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "h-6", sse_events)
+
+    (result,) = tool_results(events, "handoff_to_hello")
+    content = result["content"]
+    assert "Here is the report." in content
+    assert '{"ok":true,"total":3}' in content
+    assert "[file omitted: image/png]" in content
+    assert "[file link omitted: application/pdf]" in content
+    # Nothing binary and no link reaches the thread (FR-006).
+    stored = " ".join(str(m.content) for m in thread_messages(made, "h-6"))
+    assert "PNG" not in stored and "files.example" not in stored
+
+
+# Part 2 (T021): one conversation per thread and agent.
+
+
+def test_a_thread_keeps_one_conversation_with_an_agent_across_a_restart(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    store = InMemoryAgentTaskStore()
+    stub = make_stub("hello")
+    # The script is consumed across model calls: a reply ends each run before the next hand-off.
+    script = [handoff("first", call_id="a"), DONE, handoff("second", call_id="b")]
+    first = make_a2a_app(
+        ScriptedChatModel(script=script),
+        {"hello": {"read_only": True}},
+        stubs={"hello": stub},
+        store=store,
+    )
+    with TestClient(first.app) as client:
+        run(client, "conv-1", sse_events)
+        run(client, "conv-1", sse_events)
+    # A new runtime on the same store is the service after a restart.
+    later = make_a2a_app(
+        ScriptedChatModel(
+            script=[handoff("third", call_id="c"), DONE, handoff("other", call_id="d")]
+        ),
+        {"hello": {"read_only": True}},
+        stubs={"hello": stub},
+        store=store,
+    )
+    with TestClient(later.app) as client:
+        run(client, "conv-1", sse_events)
+        run(client, "conv-2", sse_events)
+
+    contexts = {m.text: m.context_id for m in stub.record.messages}
+    assert contexts["first"] == contexts["second"] == contexts["third"]
+    assert contexts["other"] != contexts["first"]
+    assert all(contexts.values())
+
+
+async def test_a_direct_message_reply_continues_the_conversation_and_lists_no_task(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    script = [handoff("message hi", call_id="a"), DONE, handoff("again", call_id="b")]
+    made = make_a2a_app(ScriptedChatModel(script=script), {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        events = run(client, "msg-1", sse_events)
+        run(client, "msg-1", sse_events)
+
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"] == "Agent 'hello' replied:\n\nDirect reply: hi"
+    first, second = made.stubs["hello"].record.messages
+    assert first.context_id and second.context_id == first.context_id
+    assert [task.message for task in await made.store.list_tasks("msg-1")] == ["again"]
+
+
+# Part 3 (T022): the send ledger keeps a step that runs again from sending twice.
+
+
+async def _ledger(store: InMemoryAgentTaskStore, thread_id: str, result: str | None) -> None:
+    await store.start_send(
+        AgentSend(
+            thread_id=thread_id,
+            tool_call_id="h1",
+            agent="hello",
+            kind="handoff",
+            message_id="m-1",
+            sent_at=datetime.now(UTC),
+            result=result,
+        )
+    )
+
+
+async def test_a_send_already_recorded_returns_its_result_and_sends_nothing(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    store = InMemoryAgentTaskStore()
+    await _ledger(store, "led-1", "Agent 'hello' completed task t0:\n\nearlier answer")
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("again")]), {"hello": {"read_only": True}}, store=store
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "led-1", sse_events)
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"].endswith("earlier answer")
+    assert made.stubs["hello"].record.messages == []
+
+
+async def test_a_send_still_in_flight_is_not_sent_again(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    store = InMemoryAgentTaskStore()
+    await _ledger(store, "led-2", None)
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("again")]), {"hello": {"read_only": True}}, store=store
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "led-2", sse_events)
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert "may or may not have received" in result["content"]
+    assert made.stubs["hello"].record.messages == []
+    assert events[-1] == ("end", {"status": "completed"})
