@@ -10,7 +10,7 @@ import asyncio
 import json
 import logging
 import traceback
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any, Literal
 
 import anyio
@@ -28,7 +28,10 @@ from freyja_agent.runtime.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
-RunMode = Literal["run", "resume"]
+# A background run is started by the service, not a client (feature 003, FR-020).
+RunMode = Literal["run", "resume", "background"]
+# Told how a run ended: "end", "interrupt", or "error" with its code (feature 003, FR-027).
+OnEnd = Callable[[str, str | None], Awaitable[None]]
 _MESSAGE_METADATA_KEYS = ("langgraph_node", "langgraph_step")
 
 
@@ -61,12 +64,17 @@ async def run_stream(
     mode: RunMode,
     debug: bool,
     run_id: str,
+    on_end: OnEnd | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
-    """Stream one run. The caller must already hold the lease for ``run_id``."""
+    """Stream one run. The caller must already hold the lease for ``run_id``.
+
+    ``on_end``, when given, is awaited with how the run ended, before the lease is released.
+    A client that disconnects first ends the run without it.
+    """
     owner = lease_owner(runtime, run_id)
     settings = runtime.settings
     config = {"configurable": {"thread_id": thread_id}, "recursion_limit": settings.max_steps}
-    stream_modes = ["updates", "messages"] + (["debug"] if debug else [])
+    stream_modes = ["updates", "messages", "custom"] + (["debug"] if debug else [])
 
     async def heartbeat() -> None:
         interval = settings.run_lock_ttl_seconds / 3
@@ -75,16 +83,25 @@ async def run_stream(
             await runtime.locks.renew(thread_id, owner)
 
     renewals = asyncio.create_task(heartbeat())
+    # How the run ended, for ``on_end``; None while it runs and after a disconnect.
+    ended: tuple[str, str | None] | None = None
     try:
         yield _event(
             "start", {"thread_id": thread_id, "run_id": run_id, "mode": mode, "debug": debug}
         )
         interrupts: tuple[Interrupt, ...] = ()
         try:
-            async for stream_mode, chunk in runtime.agent.astream(
-                input, config, stream_mode=stream_modes, durability="sync"
+            # Subgraph streaming is on so an agent's progress, written by a hand-off made inside
+            # the subagent, reaches the stream. What it adds is filtered back to the 001
+            # contract: updates and interrupts come from the root only (feature 003, R7).
+            async for namespace, stream_mode, chunk in runtime.agent.astream(
+                input, config, stream_mode=stream_modes, durability="sync", subgraphs=True
             ):
-                if stream_mode == "updates":
+                if stream_mode == "custom":
+                    yield _event("update", {"node": "agent", "data": to_jsonable(chunk)})
+                elif namespace and stream_mode in ("updates", "debug"):
+                    continue
+                elif stream_mode == "updates":
                     if "__interrupt__" in chunk:
                         interrupts = tuple(chunk["__interrupt__"])
                         continue
@@ -110,6 +127,7 @@ async def run_stream(
                 thread_id,
                 settings.max_steps,
             )
+            ended = ("error", "step_limit")
             yield _event(
                 "error",
                 {
@@ -124,12 +142,14 @@ async def run_stream(
         except Exception as exc:
             if _is_model_error(exc):
                 logger.warning("run %s on thread %s: model error: %s", run_id, thread_id, exc)
+                ended = ("error", "model_error")
                 yield _event(
                     "error",
                     {"code": "model_error", "message": f"The model request failed: {exc}"},
                 )
             else:
                 logger.exception("run %s on thread %s failed", run_id, thread_id)
+                ended = ("error", "internal")
                 yield _event(
                     "error",
                     {"code": "internal", "message": "The run failed because of an internal error."},
@@ -140,6 +160,7 @@ async def run_stream(
             logger.error(
                 "run %s on thread %s raised %d interrupts", run_id, thread_id, len(interrupts)
             )
+            ended = ("error", "internal")
             yield _event(
                 "error",
                 {
@@ -148,11 +169,18 @@ async def run_stream(
                 },
             )
         elif interrupts:
+            ended = ("interrupt", None)
             yield _event("interrupt", interrupt_to_pending(interrupts[0], runtime.catalog))
         else:
+            ended = ("end", None)
             yield _event("end", {"status": "completed"})
     finally:
         renewals.cancel()
         # A disconnect cancels this generator; shield the release so it completes.
         with anyio.CancelScope(shield=True):
+            if on_end is not None and ended is not None:
+                try:
+                    await on_end(*ended)
+                except Exception:
+                    logger.exception("run %s on thread %s: on_end failed", run_id, thread_id)
             await runtime.locks.release(thread_id, owner)

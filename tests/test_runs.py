@@ -258,3 +258,49 @@ def test_model_failure_ends_the_stream_with_an_error_and_frees_the_thread(
 
         again = run(client, "t-8", "hi again", sse_events)
     assert again[-1] == ("end", {"status": "completed"})
+
+
+DELEGATE = AIMessage(
+    content="",
+    tool_calls=[
+        {
+            "id": "t1",
+            "name": "task",
+            "args": {"description": "Say hi.", "subagent_type": "general-purpose"},
+        }
+    ],
+)
+
+
+def test_a_delegated_run_keeps_the_stream_contract(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+) -> None:
+    """Feature 003 turns on subgraph streaming (research R7); the 001 contract still holds.
+
+    The subagent's steps are not ``update`` events, its model output arrives once as a
+    ``message`` event, and the parent's events keep their order.
+    """
+    model = ScriptedChatModel(script=[DELEGATE], final_text="done here")
+    runtime = make_runtime(model)
+    with (
+        TestClient(make_app(runtime)) as client,
+        client.stream("POST", "/threads/sub-1/runs", json={"message": "go"}) as response,
+    ):
+        events = sse_events(response.iter_lines())
+
+    updates = [data["node"] for kind, data in events if kind == "update"]
+    assert updates == ["SkillsMiddleware.before_agent", "model", "tools", "model"]
+    messages = [
+        (data["message"]["type"], data["message"]["content"], data["metadata"]["langgraph_node"])
+        for kind, data in events
+        if kind == "message"
+    ]
+    assert messages == [
+        ("ai", "", "model"),  # the parent proposes the task
+        ("ai", "done here", "model"),  # the subagent's own answer, once
+        ("tool", "done here", "tools"),  # the task tool's result in the parent
+        ("ai", "done here", "model"),  # the parent's reply
+    ]
+    assert events[-1] == ("end", {"status": "completed"})

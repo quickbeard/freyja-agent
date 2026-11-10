@@ -1,25 +1,37 @@
 """The running service's shared objects: the agent and its catalog, the links to the tool
-servers, the run-lock store, and this instance's id."""
+servers and the A2A agents, the run-lock and agent task stores, and this instance's id."""
 
 import logging
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
-from freyja_agent.agent.catalog import Catalog
+from freyja_agent.agent.catalog import RESERVED_TOOL_NAMES, Catalog
 from freyja_agent.agent.factory import build_agent
 from freyja_agent.config import Settings
+from freyja_agent.delegates.a2a_agents import (
+    AgentLink,
+    AgentTransport,
+    default_transport,
+    open_agents,
+)
+from freyja_agent.delegates.a2a_tools import agent_tools
 from freyja_agent.delegates.mcp_servers import (
     Connect,
     ToolServer,
     default_connect,
     open_tool_servers,
+)
+from freyja_agent.runtime.agent_tasks import (
+    AgentTaskStore,
+    InMemoryAgentTaskStore,
+    PostgresAgentTaskStore,
 )
 from freyja_agent.runtime.locks import PostgresRunLocks, RunLocks
 from freyja_agent.runtime.persistence import open_persistence
@@ -37,6 +49,10 @@ class Runtime:
     catalog: Catalog
     # One link per configured tool server; empty when none is configured.
     servers: tuple[ToolServer, ...] = ()
+    # One link per configured A2A agent; empty when none is configured (feature 003).
+    agents: tuple[AgentLink, ...] = ()
+    # Conversations, sends, and tasks with agents (feature 003, research R8).
+    agent_tasks: AgentTaskStore = field(default_factory=InMemoryAgentTaskStore)
 
     @classmethod
     @asynccontextmanager
@@ -50,8 +66,14 @@ class Runtime:
         model: str | BaseChatModel | None = None,
         instance_id: str | None = None,
         connect: Connect = default_connect,
+        agent_tasks: AgentTaskStore | None = None,
+        agent_transport: AgentTransport = default_transport,
     ) -> AsyncIterator["Runtime"]:
-        """Connect the tool servers, build the agent with their tools, and yield the runtime.
+        """Connect the tool servers and the agents, build the agent with their tools, and yield.
+
+        Feature 003 adds the agents, opened after the tool servers so a name shared with a
+        server is refused naming the agent, and ``agent_transport``, the httpx transport each
+        agent link uses: the one other seam the tests swap (research R15).
 
         This is everything between persistence and serving, and the service and the tests both
         go through it: tests pass in-memory persistence and a ``connect`` that returns a stub
@@ -65,22 +87,38 @@ class Runtime:
             call_timeout=settings.mcp_call_timeout_seconds,
             startup_timeout=settings.mcp_startup_timeout_seconds,
         ) as servers:
-            orchestrator = build_agent(
-                model if model is not None else settings.model,
-                checkpointer=checkpointer,
-                store=store,
-                workspace_dir=settings.workspace_dir,
-                max_steps=settings.max_steps,
-                delegate_tools=[tool for server in servers for tool in server.tools],
-            )
-            yield cls(
-                agent=orchestrator.agent,
-                catalog=orchestrator.catalog,
-                servers=servers,
-                locks=locks,
-                instance_id=instance_id or uuid.uuid4().hex,
-                settings=settings,
-            )
+            server_tools = [tool for server in servers for tool in server.tools]
+            async with open_agents(
+                settings.a2a_agents,
+                transport=agent_transport,
+                startup_timeout=settings.a2a_startup_timeout_seconds,
+                call_timeout=settings.a2a_call_timeout_seconds,
+                server_names=set(settings.mcp_servers),
+                taken_tool_names=RESERVED_TOOL_NAMES | {tool.name for tool in server_tools},
+            ) as agents:
+                orchestrator = build_agent(
+                    model if model is not None else settings.model,
+                    checkpointer=checkpointer,
+                    store=store,
+                    workspace_dir=settings.workspace_dir,
+                    max_steps=settings.max_steps,
+                    delegate_tools=[
+                        *server_tools,
+                        *(tool for link in agents for tool in agent_tools(link)),
+                    ],
+                )
+                yield cls(
+                    agent=orchestrator.agent,
+                    catalog=orchestrator.catalog,
+                    servers=servers,
+                    agents=agents,
+                    agent_tasks=agent_tasks
+                    if agent_tasks is not None
+                    else InMemoryAgentTaskStore(),
+                    locks=locks,
+                    instance_id=instance_id or uuid.uuid4().hex,
+                    settings=settings,
+                )
 
     @classmethod
     @asynccontextmanager
@@ -91,6 +129,7 @@ class Runtime:
         model: str | BaseChatModel | None = None,
         instance_id: str | None = None,
         connect: Connect = default_connect,
+        agent_transport: AgentTransport = default_transport,
     ) -> AsyncIterator["Runtime"]:
         """Open persistence, assemble the runtime, and yield it; close the pool last.
 
@@ -102,6 +141,8 @@ class Runtime:
         try:
             locks = PostgresRunLocks(persistence.pool, settings.run_lock_ttl_seconds)
             await locks.setup()
+            agent_tasks = PostgresAgentTaskStore(persistence.pool)
+            await agent_tasks.setup()
             logger.info("Persistence ready: checkpointer, store, and run-lock table")
             async with cls.assemble(
                 settings,
@@ -111,6 +152,8 @@ class Runtime:
                 model=model,
                 instance_id=instance_id,
                 connect=connect,
+                agent_tasks=agent_tasks,
+                agent_transport=agent_transport,
             ) as runtime:
                 yield runtime
         finally:

@@ -82,11 +82,11 @@ This is the startup half of User Story 6, which every other story needs.
 
 **CRITICAL**: No user story work can begin until this phase is complete.
 
-- [ ] T006 [P] Write the streaming transport in `tests/asgi_stream.py`: an
+- [X] T006 [P] Write the streaming transport in `tests/asgi_stream.py`: an
       `httpx.AsyncBaseTransport` that runs an ASGI app in-process and hands each response body
       chunk to the client as the app sends it, so a streamed reply arrives event by event; it
       also records each request's method, host, port, and path for the address tests (R16 probe)
-- [ ] T007 [P] Write the stub in `tests/a2a_stub.py` with the SDK's server classes
+- [X] T007 [P] Write the stub in `tests/a2a_stub.py` with the SDK's server classes
       (`DefaultRequestHandler`, `InMemoryTaskStore`, `create_agent_card_routes`,
       `create_jsonrpc_routes`): a factory `make_stub(...)` returning the ASGI app and a record of
       every message (parts, `context_id`, `task_id`, `message_id`) and every cancel it received.
@@ -101,7 +101,7 @@ This is the startup half of User Story 6, which every other story needs.
       interface, an advertised address of `http://elsewhere.example:1234/a2a`, no skills, and a
       card that claims to be read-only in its description. Run as
       `python -m tests.a2a_stub --http <port>` it serves on `127.0.0.1:<port>` (R16)
-- [ ] T008 [P] Implement the store protocol and the in-memory store in
+- [X] T008 [P] Implement the store protocol and the in-memory store in
       `src/freyja_agent/runtime/agent_tasks.py`: `AgentTaskStore` with `setup()`; conversations
       (`get_context(thread_id, agent)`, `set_context(...)`); sends keyed by
       `(thread_id, tool_call_id)` with `agent`, `kind` (`handoff`, `answer`, or `cancel`),
@@ -112,23 +112,23 @@ This is the startup half of User Story 6, which every other story needs.
       `claim_due(instance_id, lease_seconds)`; `ready_outcomes(thread_id)`;
       `mark_delivered(...)`; and the follow-up fields; `InMemoryAgentTaskStore` takes an
       injectable clock and uses it for every time it sets or compares (R8)
-- [ ] T009 Implement `PostgresAgentTaskStore` in `src/freyja_agent/runtime/agent_tasks.py`:
+- [X] T009 Implement `PostgresAgentTaskStore` in `src/freyja_agent/runtime/agent_tasks.py`:
       `CREATE TABLE IF NOT EXISTS` for `freyja_agent_conversations`, `freyja_agent_sends`, and
       `freyja_agent_tasks` with the columns and keys in data-model.md and an index on
       `freyja_agent_tasks(thread_id)`; every statement single and parameterized; the claim is one
       `UPDATE ... WHERE (agent, task_id) IN (SELECT ... FOR UPDATE SKIP LOCKED) RETURNING`
       setting `watch_until = now() + lease_seconds` and judging age by the database's `now()`
       (R8, R9, spec Assumptions)
-- [ ] T010 [P] Extend `src/freyja_agent/agent/catalog.py`: `CatalogTool.agent: str | None`
+- [X] T010 [P] Extend `src/freyja_agent/agent/catalog.py`: `CatalogTool.agent: str | None`
       (null for every tool that is not an agent's) and `pinned_args: tuple[str, ...]`;
       `allowed_decisions` gives approve and reject only for a gated tool whose every declared
       argument is pinned; `gate_description` returns `<agent>: hand-off` for a hand-off tool and
       `<agent>: cancel a task` for a cancel tool; `RESERVED_TOOL_NAMES` unchanged (FR-013, R4,
       R12)
-- [ ] T011 [P] Add `agent: str | None = None` and `pinned_args: tuple[str, ...] = ()` to
+- [X] T011 [P] Add `agent: str | None = None` and `pinned_args: tuple[str, ...] = ()` to
       `DelegateTool` in `src/freyja_agent/delegates/mcp_tools.py`, and pass both through
       `_delegate_entry` in `src/freyja_agent/agent/factory.py` (R15)
-- [ ] T012 Implement the links in `src/freyja_agent/delegates/a2a_agents.py`: `AgentLink` owning
+- [X] T012 Implement the links in `src/freyja_agent/delegates/a2a_agents.py`: `AgentLink` owning
       one `httpx.AsyncClient` (`follow_redirects=False`, the SDK's version header, the call time
       limit as timeout, the transport from the seam); `start()` reads the card from
       `<url>/.well-known/agent-card.json` with `A2ACardResolver` within the startup limit, and
@@ -145,7 +145,7 @@ This is the startup half of User Story 6, which every other story needs.
       all links concurrently, refuses a name that is also a tool server's, closes every link on
       the way out, and logs `Agent <name>: read-only|gated, <n> skill(s)` (FR-001, FR-002,
       FR-003, FR-009 address rule, R3, R14)
-- [ ] T013 Build the tools in `src/freyja_agent/delegates/a2a_tools.py`: per link,
+- [X] T013 Build the tools in `src/freyja_agent/delegates/a2a_tools.py`: per link,
       `handoff_to_<agent>` with a pydantic model `message: str` (min length 1, max length
       32,000), `context: str | None` (max length 32,000), `task_id: str | None`, pinned
       `task_id`; and `cancel_<agent>_task` with `task_id: str`, pinned `task_id`; both
@@ -154,14 +154,14 @@ This is the startup half of User Story 6, which every other story needs.
       the agent's name, its card name and description, and one line per skill, cut at 2,000
       characters. Until later phases the coroutines raise `ToolException` naming the agent and
       saying hand-offs are not available yet, so nothing is sent (FR-011, FR-013, R4, R12)
-- [ ] T014 Wire the runtime in `src/freyja_agent/runtime/runtime.py`: `Runtime` gains `agents`
+- [X] T014 Wire the runtime in `src/freyja_agent/runtime/runtime.py`: `Runtime` gains `agents`
       and `agent_tasks`; `Runtime.assemble(..., agent_tasks, agent_transport=default_transport)`
       opens the agent links after the tool servers, passes the server names for the shared
       namespace, and adds the agent tools to `delegate_tools`; `Runtime.open` builds
       `PostgresAgentTaskStore` on the shared pool and runs its `setup()` beside the run-lock
       table. Order: persistence and tables, tool servers, agent links, the agent, yield; close
       the links, the tool servers, the pool (FR-002, R15)
-- [ ] T015 Change `src/freyja_agent/api/streaming.py`: call `astream(..., subgraphs=True)` with
+- [X] T015 Change `src/freyja_agent/api/streaming.py`: call `astream(..., subgraphs=True)` with
       the `custom` mode added; read `updates` and `__interrupt__` from the root namespace only,
       forward `messages` from every namespace as today, and emit every `custom` chunk as an
       `update` event with `node: "agent"` and the chunk as `data`; accept the mode `background`
@@ -169,11 +169,11 @@ This is the startup half of User Story 6, which every other story needs.
       the existing suite before anything else depends on it: `tests/test_runs.py`,
       `tests/test_subagent.py`, `tests/test_gate.py`, and `tests/test_state.py` must pass
       unchanged (contracts/sse-events.md, R7)
-- [ ] T016 Add fixtures to `tests/conftest.py`: a fake clock; `make_a2a_app(model, agents=...,
+- [X] T016 Add fixtures to `tests/conftest.py`: a fake clock; `make_a2a_app(model, agents=...,
       read_only=..., store=..., servers=...)` assembling the app the production way with
       `InMemoryRunLocks`, an `InMemoryAgentTaskStore`, and `agent_transport` returning the
       streaming transport bound to each agent's stub app; and access to each stub's record
-- [ ] T017 [P] Write `tests/test_a2a_startup.py`: one agent's card is read, its two tools reach
+- [X] T017 [P] Write `tests/test_a2a_startup.py`: one agent's card is read, its two tools reach
       the orchestrator and the subagent, and the log line names it, its classification, and its
       skill count; startup fails within the startup limit with an error beginning `Agent '<name>'`
       for an agent that is not answering, a card fetch that is redirected, a card with security
@@ -182,12 +182,12 @@ This is the startup half of User Story 6, which every other story needs.
       with no skills starts; a card advertising `elsewhere.example` gets every request sent to
       the configured host and port with the card's path, as the streaming transport records; no
       error text contains the configured address (FR-002, FR-003, FR-009 address rule, SC-005)
-- [ ] T018 [P] Add to `tests/test_factory.py`: an agent marked read-only gives two `read_only`
+- [X] T018 [P] Add to `tests/test_factory.py`: an agent marked read-only gives two `read_only`
       tools and nothing in `interrupt_on`; an agent not marked gives two `gated` tools in
       `interrupt_on` on the orchestrator and the subagent, the hand-off with approve, edit, and
       reject, the cancel with approve and reject; a card that claims to be read-only changes
       nothing (FR-011, FR-013, US2 scenario 5)
-- [ ] T019 [P] Add to `tests/test_runs.py`: with subgraph streaming on, a run through the
+- [X] T019 [P] Add to `tests/test_runs.py`: with subgraph streaming on, a run through the
       subagent still produces no `update` event from inside the subagent, the `interrupt` event
       is unchanged, and `message` events from the subagent still arrive (contracts/sse-events.md
       "Steps inside a subagent", R7)

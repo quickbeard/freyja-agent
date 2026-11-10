@@ -22,8 +22,12 @@ from langgraph.store.memory import InMemoryStore
 from freyja_agent.agent.factory import build_agent
 from freyja_agent.api.app import create_app
 from freyja_agent.config import Settings
+from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
+from tests.a2a_stub import StubAgent
+from tests.a2a_stub import make_stub as make_a2a_stub
+from tests.asgi_stream import StreamingASGITransport
 from tests.fakes import FakeClock
 from tests.mcp_stub import StubServer, make_stub
 
@@ -176,6 +180,96 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
                 model=model,
                 instance_id=instance_id,
                 connect=connect,
+            ) as runtime:
+                made.runtimes.append(runtime)
+                yield runtime
+
+        made.app = create_app(open_runtime=open_runtime)
+        return made
+
+    return _make
+
+
+@dataclass
+class A2aApp:
+    """An app assembled the production way, with stand-in A2A agents behind it (003)."""
+
+    app: FastAPI
+    settings: Settings
+    stubs: dict[str, StubAgent]
+    # One streaming transport per agent; records requests and can play a stopped agent.
+    transports: dict[str, StreamingASGITransport]
+    store: InMemoryAgentTaskStore
+    runtimes: list[Runtime] = field(default_factory=list)
+
+    @property
+    def runtime(self) -> Runtime:
+        return self.runtimes[-1]
+
+
+@pytest.fixture
+def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
+    """Build an app whose runtime is assembled by ``Runtime.assemble``, with stand-in agents.
+
+    ``agents`` is the configuration in the shape of ``FREYJA_A2A_AGENTS``; an entry may omit
+    ``url`` and gets ``http://127.0.0.1:9999``. ``stubs`` supplies a stand-in per agent name, and
+    an agent without one gets ``make_stub(name)``. Each agent's link reaches its stand-in through
+    the streaming in-process transport, so the card read, the checks, the tools, the gate, and
+    the routes are the production code (003 research R16). Pass ``store``, ``saver``, or
+    ``locks`` from an earlier app to simulate a restart or a second instance.
+    """
+
+    def _make(
+        model: BaseChatModel,
+        agents: dict[str, dict[str, Any]],
+        *,
+        stubs: dict[str, StubAgent] | None = None,
+        servers: dict[str, dict[str, Any]] | None = None,
+        server_stubs: dict[str, StubServer] | None = None,
+        instance_id: str = "instance-a",
+        saver: InMemorySaver | None = None,
+        store: InMemoryAgentTaskStore | None = None,
+        locks: InMemoryRunLocks | None = None,
+        **overrides: Any,
+    ) -> A2aApp:
+        entries = {
+            name: {"url": "http://127.0.0.1:9999", **entry} for name, entry in agents.items()
+        }
+        settings = Settings(
+            workspace_dir=str(workspace),
+            a2a_agents=entries,
+            mcp_servers=servers or {},
+            **overrides,
+        )
+        stand_ins = {name: (stubs or {}).get(name) or make_a2a_stub(name) for name in agents}
+        transports = {name: StreamingASGITransport(stub.app) for name, stub in stand_ins.items()}
+        server_links = {
+            name: StubLink((server_stubs or {}).get(name) or make_stub(name))
+            for name in servers or {}
+        }
+        task_store = store or InMemoryAgentTaskStore(clock=clock.now)
+        checkpointer = saver or InMemorySaver()
+        lock_store = locks or InMemoryRunLocks(settings.run_lock_ttl_seconds, clock=clock.now)
+        made = A2aApp(
+            app=FastAPI(),
+            settings=settings,
+            stubs=stand_ins,
+            transports=transports,
+            store=task_store,
+        )
+
+        @asynccontextmanager
+        async def open_runtime(_settings: Settings) -> AsyncIterator[Runtime]:
+            async with Runtime.assemble(
+                settings,
+                checkpointer=checkpointer,
+                store=InMemoryStore(),
+                locks=lock_store,
+                model=model,
+                instance_id=instance_id,
+                connect=lambda name, _config, _on_error_output: server_links[name].target(),
+                agent_tasks=task_store,
+                agent_transport=lambda name, _url: transports[name],
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
