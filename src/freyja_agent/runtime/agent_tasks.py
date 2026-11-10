@@ -4,8 +4,9 @@ Three record kinds live in the service's database next to the run lease, so ever
 the same state:
 
 - a conversation maps a thread and an agent to the A2A context id (FR-008);
-- a send is one message Freyja sent to an agent, keyed by the thread and the tool call that
-  sent it. A step that runs again finds its send and does not send twice (FR-010, FR-027);
+- a send is one message Freyja sent to an agent, keyed by the thread, the step, and the tool
+  call that sent it. A step that runs again finds its send and does not send twice (FR-010,
+  FR-027);
 - a task is one task an agent created for a thread: its state, the outcome waiting to be
   delivered, the instance watching it, and the background run's retries (FR-017 to FR-027).
   Rows are never deleted: the thread state lists every task the thread started.
@@ -36,13 +37,23 @@ FINAL_STATES: tuple[TaskState, ...] = ("completed", "failed", "rejected", "cance
 
 @dataclass(frozen=True)
 class AgentSend:
-    """One message sent to an agent (data-model.md "Agent send")."""
+    """One message sent to an agent (data-model.md "Agent send").
+
+    A call is known by its thread, its ``step``, and its tool call id. The step is the graph
+    namespace the call ran in: LangGraph gives each tool call its own, and the same one again
+    when that call's step runs again. The tool call id alone is the model provider's, and
+    nothing makes a provider keep it unique on a thread.
+    """
 
     thread_id: str
+    step: str
     tool_call_id: str
     agent: str
     kind: SendKind
     message_id: str
+    # A digest of what was sent: the agent, the kind, and the arguments. A step that runs
+    # again sends the same; a different digest under the same key is refused, not replayed.
+    request: str
     sent_at: datetime
     task_id: str | None = None
     # The text the tool returned; None while the request may still be in flight.
@@ -96,12 +107,18 @@ class AgentTaskStore(Protocol):
 
     async def set_context(self, thread_id: str, agent: str, context_id: str) -> None: ...
 
-    async def get_send(self, thread_id: str, tool_call_id: str) -> AgentSend | None: ...
+    async def get_send(self, thread_id: str, step: str, tool_call_id: str) -> AgentSend | None: ...
 
     async def start_send(self, send: AgentSend) -> bool: ...
 
     async def finish_send(
-        self, thread_id: str, tool_call_id: str, *, result: str, task_id: str | None = None
+        self,
+        thread_id: str,
+        step: str,
+        tool_call_id: str,
+        *,
+        result: str,
+        task_id: str | None = None,
     ) -> None: ...
 
     async def in_flight_sends(self, thread_id: str) -> list[AgentSend]: ...
@@ -146,7 +163,7 @@ class InMemoryAgentTaskStore:
     def __init__(self, clock: Callable[[], float] = time.time) -> None:
         self._clock = clock
         self._contexts: dict[tuple[str, str], str] = {}
-        self._sends: dict[tuple[str, str], AgentSend] = {}
+        self._sends: dict[tuple[str, str, str], AgentSend] = {}
         self._tasks: dict[tuple[str, str], AgentTaskRecord] = {}
 
     async def setup(self) -> None:
@@ -162,20 +179,26 @@ class InMemoryAgentTaskStore:
         # The first acknowledged reply decides the conversation (FR-008).
         self._contexts.setdefault((thread_id, agent), context_id)
 
-    async def get_send(self, thread_id: str, tool_call_id: str) -> AgentSend | None:
-        return self._sends.get((thread_id, tool_call_id))
+    async def get_send(self, thread_id: str, step: str, tool_call_id: str) -> AgentSend | None:
+        return self._sends.get((thread_id, step, tool_call_id))
 
     async def start_send(self, send: AgentSend) -> bool:
-        key = (send.thread_id, send.tool_call_id)
+        key = (send.thread_id, send.step, send.tool_call_id)
         if key in self._sends:
             return False
         self._sends[key] = send
         return True
 
     async def finish_send(
-        self, thread_id: str, tool_call_id: str, *, result: str, task_id: str | None = None
+        self,
+        thread_id: str,
+        step: str,
+        tool_call_id: str,
+        *,
+        result: str,
+        task_id: str | None = None,
     ) -> None:
-        key = (thread_id, tool_call_id)
+        key = (thread_id, step, tool_call_id)
         send = self._sends[key]
         self._sends[key] = replace(send, result=result, task_id=task_id or send.task_id)
 
@@ -269,14 +292,16 @@ _CREATE = (
     """
     CREATE TABLE IF NOT EXISTS freyja_agent_sends (
         thread_id    text NOT NULL,
+        step         text NOT NULL,
         tool_call_id text NOT NULL,
         agent        text NOT NULL,
         kind         text NOT NULL,
         message_id   text NOT NULL,
+        request      text NOT NULL,
         task_id      text,
         sent_at      timestamptz NOT NULL,
         result       text,
-        PRIMARY KEY (thread_id, tool_call_id)
+        PRIMARY KEY (thread_id, step, tool_call_id)
     )
     """,
     """
@@ -360,13 +385,13 @@ class PostgresAgentTaskStore:
             {"thread_id": thread_id, "agent": agent, "context_id": context_id},
         )
 
-    async def get_send(self, thread_id: str, tool_call_id: str) -> AgentSend | None:
+    async def get_send(self, thread_id: str, step: str, tool_call_id: str) -> AgentSend | None:
         rows = await self._rows(
             sql.SQL(
-                "SELECT {} FROM freyja_agent_sends"
-                " WHERE thread_id = %(thread_id)s AND tool_call_id = %(tool_call_id)s"
+                "SELECT {} FROM freyja_agent_sends WHERE thread_id = %(thread_id)s"
+                " AND step = %(step)s AND tool_call_id = %(tool_call_id)s"
             ).format(_columns(_SEND_COLUMNS)),
-            {"thread_id": thread_id, "tool_call_id": tool_call_id},
+            {"thread_id": thread_id, "step": step, "tool_call_id": tool_call_id},
         )
         return _send(rows[0]) if rows else None
 
@@ -384,14 +409,22 @@ class PostgresAgentTaskStore:
         return inserted == 1
 
     async def finish_send(
-        self, thread_id: str, tool_call_id: str, *, result: str, task_id: str | None = None
+        self,
+        thread_id: str,
+        step: str,
+        tool_call_id: str,
+        *,
+        result: str,
+        task_id: str | None = None,
     ) -> None:
         await self._execute(
             "UPDATE freyja_agent_sends SET result = %(result)s,"
             " task_id = COALESCE(%(task_id)s, task_id)"
-            " WHERE thread_id = %(thread_id)s AND tool_call_id = %(tool_call_id)s",
+            " WHERE thread_id = %(thread_id)s AND step = %(step)s"
+            " AND tool_call_id = %(tool_call_id)s",
             {
                 "thread_id": thread_id,
+                "step": step,
                 "tool_call_id": tool_call_id,
                 "result": result,
                 "task_id": task_id,

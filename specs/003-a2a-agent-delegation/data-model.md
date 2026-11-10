@@ -84,10 +84,11 @@ The ledger that keeps a step that runs again from sending twice (FR-010, FR-027)
 
 | Column | Type | Rule |
 |---|---|---|
-| `thread_id`, `tool_call_id` | text | primary key |
+| `thread_id`, `step`, `tool_call_id` | text | primary key; `step` is the graph namespace the tool call ran in |
 | `agent` | text | |
 | `kind` | text | `handoff`, `answer`, or `cancel` |
-| `message_id` | text | the A2A message id sent |
+| `message_id` | text | the A2A message id sent: `freyja-<thread>-<tool call id>-<step digest>` |
+| `request` | text | SHA-256 of the agent, the kind, and the arguments; a row found with another digest is refused |
 | `task_id` | text, null | known once acknowledged |
 | `sent_at` | timestamptz | written before the request leaves |
 | `result` | text, null | the result text the tool returned; null while in flight |

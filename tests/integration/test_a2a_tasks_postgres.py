@@ -21,6 +21,7 @@ from tests.test_agent_task_store import (  # noqa: F401 - collected here against
     test_follow_ups_are_set_and_cleared_per_thread,
     test_ready_outcomes_wait_for_delivery_once,
     test_tasks_are_listed_oldest_first_and_never_dropped,
+    test_the_same_tool_call_id_in_another_step_is_another_send,
 )
 
 

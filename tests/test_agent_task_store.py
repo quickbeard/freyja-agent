@@ -8,6 +8,7 @@ forward: the fake clock here, real waiting there.
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
 from datetime import timedelta
+from typing import Any
 
 import pytest
 
@@ -59,23 +60,50 @@ async def test_a_conversation_is_kept_by_its_first_context(store: AgentTaskStore
     assert await store.get_context("th-1", "other") is None
 
 
-async def test_a_send_is_recorded_once_and_finished(store: AgentTaskStore) -> None:
+async def a_send(store: AgentTaskStore, step: str = "tools:a", **changes: Any) -> AgentSend:
     send = AgentSend(
         thread_id="th-1",
+        step=step,
         tool_call_id="call-1",
         agent="stub",
         kind="handoff",
-        message_id="m-1",
+        message_id=f"m-{step}",
+        request="digest-1",
         sent_at=await store.now(),
     )
+    return replace(send, **changes)
+
+
+async def test_a_send_is_recorded_once_and_finished(store: AgentTaskStore) -> None:
+    send = await a_send(store)
     assert await store.start_send(send) is True
     assert await store.start_send(replace(send, message_id="m-2")) is False
     assert [s.tool_call_id for s in await store.in_flight_sends("th-1")] == ["call-1"]
-    await store.finish_send("th-1", "call-1", result="done", task_id="t1")
-    finished = await store.get_send("th-1", "call-1")
+    await store.finish_send("th-1", "tools:a", "call-1", result="done", task_id="t1")
+    finished = await store.get_send("th-1", "tools:a", "call-1")
     assert finished is not None
-    assert (finished.message_id, finished.result, finished.task_id) == ("m-1", "done", "t1")
+    assert (finished.message_id, finished.request, finished.result, finished.task_id) == (
+        "m-tools:a",
+        "digest-1",
+        "done",
+        "t1",
+    )
     assert await store.in_flight_sends("th-1") == []
+
+
+async def test_the_same_tool_call_id_in_another_step_is_another_send(
+    store: AgentTaskStore,
+) -> None:
+    # A provider may give two calls on one thread the same id; the step tells them apart.
+    assert await store.start_send(await a_send(store, "tools:a")) is True
+    assert await store.start_send(await a_send(store, "tools:b", request="digest-2")) is True
+    await store.finish_send("th-1", "tools:a", "call-1", result="first")
+    first = await store.get_send("th-1", "tools:a", "call-1")
+    second = await store.get_send("th-1", "tools:b", "call-1")
+    assert first is not None and second is not None
+    assert (first.result, second.result, second.request) == ("first", None, "digest-2")
+    assert await store.get_send("th-1", "tools:c", "call-1") is None
+    assert [s.step for s in await store.in_flight_sends("th-1")] == ["tools:b"]
 
 
 async def test_tasks_are_listed_oldest_first_and_never_dropped(
