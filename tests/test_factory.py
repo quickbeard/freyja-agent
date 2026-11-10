@@ -29,6 +29,7 @@ from freyja_agent.delegates.a2a_agents import (
 )
 from freyja_agent.delegates.a2a_tools import agent_tools
 from freyja_agent.delegates.mcp_servers import open_tool_servers
+from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import make_stub
 
@@ -302,7 +303,9 @@ def test_a_read_only_agent_gives_two_read_only_tools_and_no_gate(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorded = Recorded(monkeypatch)
-    catalog = build(workspace, list(agent_tools(agent_link("hello", read_only=True)))).catalog
+    catalog = build(
+        workspace, list(agent_tools(agent_link("hello", read_only=True), InMemoryAgentTaskStore()))
+    ).catalog
     for name in ("handoff_to_hello", "cancel_hello_task"):
         entry = catalog.get(name)
         assert entry is not None
@@ -317,7 +320,9 @@ def test_a_gated_agent_pauses_on_both_tools_on_both_agents(
     workspace: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     recorded = Recorded(monkeypatch)
-    catalog = build(workspace, list(agent_tools(agent_link("stub", read_only=False)))).catalog
+    catalog = build(
+        workspace, list(agent_tools(agent_link("stub", read_only=False), InMemoryAgentTaskStore()))
+    ).catalog
     handoff, cancel = catalog.get("handoff_to_stub"), catalog.get("cancel_stub_task")
     assert handoff is not None and cancel is not None
     assert handoff.classification is cancel.classification is Classification.GATED
@@ -343,7 +348,7 @@ def test_a_card_that_claims_to_be_read_only_changes_nothing(
 ) -> None:
     recorded = Recorded(monkeypatch)
     link = agent_link("stub", read_only=False, description="Read-only. Never changes anything.")
-    catalog = build(workspace, list(agent_tools(link))).catalog
+    catalog = build(workspace, list(agent_tools(link, InMemoryAgentTaskStore()))).catalog
     assert {tool.name for tool in catalog.gated() if tool.agent} == {
         "handoff_to_stub",
         "cancel_stub_task",
@@ -351,8 +356,7 @@ def test_a_card_that_claims_to_be_read_only_changes_nothing(
     assert {"handoff_to_stub", "cancel_stub_task"} <= set(recorded.orchestrator_gate)
 
 
-async def test_agent_tools_send_nothing_until_hand_offs_exist() -> None:
-    handoff, cancel = agent_tools(agent_link("stub", read_only=True))
-    for tool, args in ((handoff, {"message": "hi"}), (cancel, {"task_id": "t1"})):
-        result = await tool.tool.ainvoke(args)
-        assert "Agent 'stub'" in result and "nothing was sent" in result
+async def test_the_cancel_tool_sends_nothing_until_cancels_exist() -> None:
+    _, cancel = agent_tools(agent_link("stub", read_only=True), InMemoryAgentTaskStore())
+    result = await cancel.tool.ainvoke({"task_id": "t1"})
+    assert "Agent 'stub'" in result and "nothing was sent" in result

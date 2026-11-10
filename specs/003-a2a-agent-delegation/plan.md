@@ -316,3 +316,27 @@ tables and the worker are justified under the Constitution Check above.
     skill), while `contracts/openapi.yaml` shows a one-line example; Phase 8 aligns the example.
   - `Runtime.agent_tasks` defaults to an in-memory store when `assemble` is given none, so the
     fixtures that predate feature 003 need no change.
+- **Phase 3 as built (2026-11-10)**:
+  - The hand-off coroutine gets its tool call id from LangChain's `InjectedToolCallId` in its own
+    signature. A probe showed the injected argument stays out of `HandOffArgs`, so the model's
+    schema and the edit validation of Phase 4 see only `message`, `context`, and `task_id`.
+  - For an agent that does not stream, a change is judged on the protocol's own states, so
+    `submitted` to `working` is reported even though both read `working` to Freyja. T020's test
+    found this: the first observed change was being dropped.
+  - A data part is rendered with sorted keys, because a protobuf `Struct` keeps no key order
+    and the same reply came back in different orders (a flaky test showed it), and whole numbers
+    are turned back into integers, since protobuf keeps every number as a double.
+  - The A2A message id is `freyja-<thread>-<tool call id>`, so an agent that de-duplicates by
+    message id also sees a replayed step as the same message.
+  - A step replayed from the send ledger returns the recorded text as a normal result, even if
+    the first attempt was an error result; the ledger keeps text, not the error flag.
+  - Every acknowledged task gets a row with the state it ended the call in. Endings other than
+    completed or a direct reply (input required, failed, rejected, canceled, authentication
+    required, still working at the limit) are error results naming the agent until Phases 5, 6,
+    and 9; a task still working at the limit stays `working` with no watcher until Phase 6.
+  - Run against the real service with the `.env` model (OpenRouter) and the compose Postgres:
+    quickstart Scenario 2 with the `helloworld` agent at `1bb0871294` streamed "Processing
+    request..." then "Request is completed!" as progress events, returned "Hello, World! I have
+    received your request (...)" with no pause, and the reply relayed it in Freyja's words. A
+    thread kept one context id with the stub across a service restart, and another thread got
+    another. The `agent_tasks` check of Scenario 2 waits for Phase 5, which adds the field.

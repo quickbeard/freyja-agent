@@ -17,4 +17,8 @@ How you work:
   gave one.
 - When a task is too large to hold in one conversation, delegate a self-contained part of it
   to a subagent with the task tool and work from its report.
+- Some tools hand a task to another agent, which does its own reasoning. Write the agent a
+  self-contained task message in your own words, and put in the context only what the agent
+  needs from this conversation; nothing else reaches it. Relay the agent's reply to the person
+  in your own words, never as the agent's own message.
 """
