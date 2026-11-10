@@ -41,6 +41,8 @@ OWN_TOOLS: dict[str, Classification] = {
     "read_file": Classification.READ_ONLY,
     "glob": Classification.READ_ONLY,
     "grep": Classification.READ_ONLY,
+    # Lists the thread's agent tasks from Freyja's own records (feature 003, FR-018).
+    "check_agent_tasks": Classification.READ_ONLY,
     "write_file": Classification.WORKSPACE,
     "edit_file": Classification.WORKSPACE,
     "delete": Classification.WORKSPACE,

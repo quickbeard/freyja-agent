@@ -1,5 +1,6 @@
 """The running service's shared objects: the agent and its catalog, the links to the tool
-servers and the A2A agents, the run-lock and agent task stores, and this instance's id."""
+servers and the A2A agents, the run-lock and agent task stores, the delegation worker, and this
+instance's id."""
 
 import logging
 import uuid
@@ -22,6 +23,7 @@ from freyja_agent.delegates.a2a_agents import (
     open_agents,
 )
 from freyja_agent.delegates.a2a_tools import agent_tools
+from freyja_agent.delegates.delegation_worker import DelegationWorker
 from freyja_agent.delegates.mcp_servers import (
     Connect,
     ToolServer,
@@ -53,6 +55,8 @@ class Runtime:
     agents: tuple[AgentLink, ...] = ()
     # Conversations, sends, and tasks with agents (feature 003, research R8).
     agent_tasks: AgentTaskStore = field(default_factory=InMemoryAgentTaskStore)
+    # Watches pending agent tasks and delivers their outcomes (feature 003, research R9).
+    worker: DelegationWorker | None = None
 
     @classmethod
     @asynccontextmanager
@@ -68,12 +72,16 @@ class Runtime:
         connect: Connect = default_connect,
         agent_tasks: AgentTaskStore | None = None,
         agent_transport: AgentTransport = default_transport,
+        run_worker: bool = True,
     ) -> AsyncIterator["Runtime"]:
         """Connect the tool servers and the agents, build the agent with their tools, and yield.
 
         Feature 003 adds the agents, opened after the tool servers so a name shared with a
         server is refused naming the agent, and ``agent_transport``, the httpx transport each
-        agent link uses: the one other seam the tests swap (research R15).
+        agent link uses: the one other seam the tests swap (research R15). The delegation
+        worker is built after the agent and its loop runs while the runtime is open; it stops
+        before the links close. ``run_worker=False`` builds it without its loop, for tests
+        that call ``worker.tick()`` themselves.
 
         This is everything between persistence and serving, and the service and the tests both
         go through it: tests pass in-memory persistence and a ``connect`` that returns a stub
@@ -107,19 +115,25 @@ class Runtime:
                         *server_tools,
                         *(tool for link in agents for tool in agent_tools(link, task_store)),
                     ],
+                    agent_tasks=task_store,
                 )
-                yield cls(
+                runtime = cls(
                     agent=orchestrator.agent,
                     catalog=orchestrator.catalog,
                     servers=servers,
                     agents=agents,
-                    agent_tasks=agent_tasks
-                    if agent_tasks is not None
-                    else InMemoryAgentTaskStore(),
+                    agent_tasks=task_store,
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
                 )
+                runtime.worker = DelegationWorker(runtime)
+                if run_worker:
+                    runtime.worker.start()
+                try:
+                    yield runtime
+                finally:
+                    await runtime.worker.stop()
 
     @classmethod
     @asynccontextmanager

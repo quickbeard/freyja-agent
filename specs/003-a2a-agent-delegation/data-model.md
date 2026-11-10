@@ -151,10 +151,17 @@ Recorded in the thread's checkpointed messages to deliver one or more outcomes (
 
 | Message | Id | Content |
 |---|---|---|
-| `AIMessage` with one `check_agent_tasks` call | `a2a-outcome-call-<first agent>-<first task id>` | tool call args `{"task_ids": [...]}` |
-| one `ToolMessage` per task | `a2a-outcome-<agent>-<task id>` | the outcome text, headed with the agent, task id, and state |
+| `AIMessage` with one `check_agent_tasks` call per task, named `freyja` | `a2a-outcome-call-<first agent>-<first task id>-<arrived>` | each call's args `{"task_ids": [<task id>]}`; each call's id `a2a_` and 24 hex characters of a digest of its result's id |
+| one `ToolMessage` per task, answering its call | `a2a-outcome-<agent>-<task id>-<arrived>` | the outcome text, headed with the agent, task id, and state, as the hand-off's result would have been; an error result for `failed`, `rejected`, `canceled`, and `given_up` |
 
-The ids make delivery idempotent: a run finds an outcome already recorded and skips it.
+`<arrived>` is when the outcome arrived (the task's `last_checked_at`), in microseconds since
+the epoch. A task can have a second outcome: one that asked a question through the worker, was
+answered, and went pending again. That outcome must not share the first one's ids.
+
+The ids make delivery idempotent: a run finds an outcome already recorded and skips it. There is
+one call per task because a provider takes exactly one result for each tool call. The tool call
+ids are short and plain because providers limit them (OpenAI to 40 characters), and a task id
+can be up to 256 characters long.
 
 ### Background run
 

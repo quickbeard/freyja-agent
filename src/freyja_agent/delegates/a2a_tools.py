@@ -303,6 +303,32 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
     return call
 
 
+def outcome_text(agent: str, task_id: str, state: str, text: str) -> tuple[str, bool]:
+    """What the orchestrator receives for a task in ``state``, and whether that is a success.
+
+    The same words whether the hand-off saw the state itself or the worker found it later and a
+    run records it as the outcome of a pending task (FR-020: as the hand-off would have).
+    """
+    if state == "completed":
+        return f"Agent '{agent}' completed task {task_id}:\n\n{text}", True
+    if state == "input_required":
+        return (
+            f"Agent '{agent}' needs input for task {task_id}:\n\n{text}\n\n"
+            "Ask the person this in your own words. To continue this task once they answer, "
+            f"hand off to '{agent}' again with task_id \"{task_id}\" and their answer."
+        ), True
+    why = _UNHANDLED.get(state, f"ended as {state}")
+    detail = f"\n\n{text}" if text else ""
+    return f"Agent '{agent}' task {task_id} {why}.{detail}", False
+
+
+def pending_text(agent: str, task_id: str) -> str:
+    return (
+        f"Agent '{agent}' is still working on task {task_id}; it is pending, and Freyja will "
+        "report its outcome in this thread."
+    )
+
+
 async def _record(
     link: AgentLink, store: AgentTaskStore, thread_id: str, message: str, outcome: SendOutcome
 ) -> tuple[str, bool]:
@@ -323,10 +349,25 @@ async def _record(
         )
     task = outcome.task
     state = outcome.state or "working"
+    if outcome.timed_out or state == "working":
+        # Acknowledged and still working at the limit: pending, watched by the worker, and
+        # reported in this thread once it changes (FR-017, FR-019).
+        result, ok = pending_text(link.name, task.id), True
+    else:
+        result, ok = outcome_text(link.name, task.id, state, a2a_result_text(task))
     now = await store.now()
     final = state in ("completed", "failed", "rejected", "canceled", "auth_required")
-    text = a2a_result_text(task)
     stored = "failed" if state == "auth_required" else state
+    # A result the hand-off returns is delivered with it, so nothing waits to be delivered; a
+    # pending task gets its outcome from the worker (data-model.md "Agent task").
+    known = {
+        "state": stored,
+        "last_checked_at": now,
+        "ended_at": now if final else None,
+        "outcome": None if stored == "working" else result,
+        "outcome_ready": False,
+        "delivered_at": None,
+    }
     if await store.get_task(link.name, task.id) is None:
         await store.record_task(
             AgentTaskRecord(
@@ -335,38 +376,13 @@ async def _record(
                 thread_id=thread_id,
                 context_id=task.context_id,
                 message=message,
-                state=stored,  # type: ignore[arg-type]
                 started_at=now,
-                last_checked_at=now,
-                ended_at=now if final else None,
-                outcome=text,
+                **known,
             )
         )
     else:
         # An answer continues a task this thread started: the row keeps the message the task
-        # was started with and its start, and takes the state the answer led to (FR-016).
-        await store.update_task(
-            link.name,
-            task.id,
-            state=stored,
-            last_checked_at=now,
-            ended_at=now if final else None,
-            outcome=text,
-        )
-    if state == "completed":
-        return f"Agent '{link.name}' completed task {task.id}:\n\n{text}", True
-    if state == "input_required":
-        # Returned as the result, so the outcome is delivered with it (FR-015).
-        return (
-            f"Agent '{link.name}' needs input for task {task.id}:\n\n{text}\n\n"
-            "Ask the person this in your own words. To continue this task once they answer, "
-            f"hand off to '{link.name}' again with task_id \"{task.id}\" and their answer."
-        ), True
-    if outcome.timed_out:
-        return (
-            f"Agent '{link.name}' is still working on task {task.id} at the call time limit; "
-            "pending tasks arrive in a later phase."
-        ), False
-    why = _UNHANDLED.get(state, f"ended as {state}")
-    detail = f"\n\n{text}" if text else ""
-    return f"Agent '{link.name}' task {task.id} {why}.{detail}", False
+        # was started with and its start, and takes the state the answer led to (FR-016). An
+        # outcome delivered before the answer is history: the next one is delivered anew.
+        await store.update_task(link.name, task.id, **known)
+    return result, ok

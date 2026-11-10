@@ -8,6 +8,7 @@ from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
 from freyja_agent.api.decisions import build_resume_command
+from freyja_agent.api.outcomes import mark_delivered, take_undelivered
 from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
     THREAD_ID_PATTERN,
@@ -52,6 +53,10 @@ async def start_run(
     The lease is taken first so two racing requests resolve to exactly one stream; state is
     read under the lease, and a thread paused on a proposal is refused rather than having its
     proposal silently discarded (research R9, constitution principle I).
+
+    Outcomes of agent tasks that arrived and were not delivered go into the input ahead of the
+    user's message, and count as delivered once the input is in a checkpoint (feature 003,
+    FR-018, research R10). A resume records none: it finishes a step already under way.
     """
     runtime = _runtime(request)
     run_id = uuid.uuid4().hex
@@ -66,17 +71,23 @@ async def start_run(
                 "decision_pending",
                 "This thread is paused on a proposal; decide it through resume first.",
             )
+        outcomes, delivering = await take_undelivered(runtime.agent_tasks, thread_id, snapshot)
     except BaseException:
         await runtime.locks.release(thread_id, owner)
         raise
+
+    async def delivered() -> None:
+        await mark_delivered(runtime.agent_tasks, delivering)
+
     return EventSourceResponse(
         run_stream(
             runtime,
             thread_id,
-            input={"messages": [HumanMessage(body.message)]},
+            input={"messages": [*outcomes, HumanMessage(body.message)]},
             mode="run",
             debug=debug,
             run_id=run_id,
+            on_recorded=delivered if delivering else None,
         )
     )
 

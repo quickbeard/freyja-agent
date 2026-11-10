@@ -179,10 +179,19 @@ Expected: the task is `completed` with `outcome_delivered: true`; the messages e
 `check_agent_tasks` call, its result holding the stub's report, and the reply from a background
 run. Exactly one such result is in the thread (User Story 4, scenarios 2 and 6).
 
-A message sent on a thread whose task finished while the thread was idle gets the outcome in
-that run instead (scenario 11): start another `slow 30` task on `a2a-6`, wait until it is done,
-and send "Is the report ready?" before the next poll. The reply answers with the report, and no
-background run adds it again.
+A message sent on a thread whose outcome is waiting gets the outcome in that run instead
+(scenario 11). An outcome is recorded at a poll, and a free thread gets its background run in
+that same poll, so the thread has to be busy at that poll. Hold its run lease the way a run on
+another instance does, while another `slow 30` task finishes on `a2a-6`:
+
+```bash
+docker compose exec -T postgres psql -U freyja -d freyja -c \
+  "INSERT INTO freyja_run_locks VALUES ('a2a-6', 'another-instance:run', now(), now() + interval '10 minutes')"
+```
+
+Once `agent_tasks` lists the task as `completed` with `outcome_delivered: false`, delete that
+row and send "Is the report ready?". The reply answers with the report, the transcript holds
+the outcome just before the message, and no background run adds it again.
 
 ## Scenario 7: cancel and give up (User Story 4)
 

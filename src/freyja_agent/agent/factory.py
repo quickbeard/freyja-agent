@@ -30,6 +30,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
+from freyja_agent.agent.agent_tasks import AgentTasksMiddleware, check_agent_tasks
 from freyja_agent.agent.catalog import (
     NOT_OFFERED,
     OWN_TOOLS,
@@ -43,6 +44,7 @@ from freyja_agent.agent.catalog import (
 from freyja_agent.agent.context import ThreadContextMiddleware
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
 from freyja_agent.agent.tools import send_notification
+from freyja_agent.runtime.agent_tasks import AgentTaskStore, InMemoryAgentTaskStore
 
 AGENT_NAME = "freyja"
 # Relative to the backend root, which is the workspace directory.
@@ -66,6 +68,7 @@ def build_agent(
     max_steps: int,
     delegate_tools: Sequence[Any] = (),
     system_prompt: str = DEFAULT_PROMPT,
+    agent_tasks: AgentTaskStore | None = None,
 ) -> Orchestrator:
     """Build the orchestrator and its catalog.
 
@@ -81,18 +84,24 @@ def build_agent(
     and on its subagent, and every one of them that the operator did not list as read-only is
     gated on both. A tool that ends up in either tool node without a classification raises
     ``UnclassifiedToolError`` instead of running ungated (feature 002, FR-006, FR-007, FR-011).
+
+    ``agent_tasks`` is the store of the thread's agent tasks. ``check_agent_tasks`` reads it and
+    ``AgentTasksMiddleware`` lists the pending ones on every model call, on the orchestrator and
+    its subagent; without one, both read an empty store (feature 003, FR-018).
     """
     root = Path(workspace_dir)
     root.mkdir(parents=True, exist_ok=True)
     backend = FilesystemBackend(root_dir=root, virtual_mode=True)
     delegate_entries = [_delegate_entry(tool) for tool in delegate_tools]
-    tools: list[BaseTool] = [send_notification, *(entry.tool for entry in delegate_entries)]
+    task_store = agent_tasks if agent_tasks is not None else InMemoryAgentTaskStore()
+    own_tools: list[BaseTool] = [send_notification, check_agent_tasks(task_store)]
+    tools: list[BaseTool] = [*own_tools, *(entry.tool for entry in delegate_entries)]
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
-    gate = interrupt_config([_own_entry(send_notification), *delegate_entries])
+    gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
     chat_model = resolve_model(model)
     subagent_graph, subagent = _general_purpose_subagent(
-        chat_model, tools, backend, max_steps, gate
+        chat_model, tools, backend, max_steps, gate, task_store
     )
     agent = create_deep_agent(
         model=chat_model,
@@ -101,7 +110,7 @@ def build_agent(
         backend=backend,
         skills=[SKILLS_SOURCE],
         interrupt_on=gate,
-        middleware=[ThreadContextMiddleware()],
+        middleware=[ThreadContextMiddleware(), AgentTasksMiddleware(task_store)],
         subagents=[subagent],
         checkpointer=checkpointer,
         store=store,
@@ -195,6 +204,7 @@ def _general_purpose_subagent(
     backend: FilesystemBackend,
     max_steps: int,
     gate: dict[str, Any],
+    agent_tasks: AgentTaskStore,
 ) -> tuple[Any, dict[str, Any]]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
@@ -214,6 +224,7 @@ def _general_purpose_subagent(
         PatchToolCallsMiddleware(),
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
         ThreadContextMiddleware(),
+        AgentTasksMiddleware(agent_tasks),
     ]
     append_prompt_caching_middleware(middleware)
     spec: dict[str, Any] = {

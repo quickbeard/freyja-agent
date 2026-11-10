@@ -180,6 +180,7 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
                 model=model,
                 instance_id=instance_id,
                 connect=connect,
+                run_worker=False,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
@@ -200,6 +201,9 @@ class A2aApp:
     # One streaming transport per agent; records requests and can play a stopped agent.
     transports: dict[str, StreamingASGITransport]
     store: InMemoryAgentTaskStore
+    # Opens this app's runtime; a test enters it in another app's event loop to run a second
+    # instance beside it (``TestClient.portal.wrap_async_context_manager``).
+    open_runtime: Callable[[Settings], Any] = lambda _settings: nullcontext()
     runtimes: list[Runtime] = field(default_factory=list)
 
     @property
@@ -216,7 +220,9 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
     an agent without one gets ``make_stub(name)``. Each agent's link reaches its stand-in through
     the streaming in-process transport, so the card read, the checks, the tools, the gate, and
     the routes are the production code (003 research R16). Pass ``store``, ``saver``, or
-    ``locks`` from an earlier app to simulate a restart or a second instance.
+    ``locks`` from an earlier app to simulate a restart or a second instance. The delegation
+    worker is built but its loop is not started unless ``run_worker`` is true: tests call
+    ``runtime.worker.tick()`` themselves.
     """
 
     def _make(
@@ -230,6 +236,7 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         saver: InMemorySaver | None = None,
         store: InMemoryAgentTaskStore | None = None,
         locks: InMemoryRunLocks | None = None,
+        run_worker: bool = False,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -270,10 +277,12 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 connect=lambda name, _config, _on_error_output: server_links[name].target(),
                 agent_tasks=task_store,
                 agent_transport=lambda name, _url: transports[name],
+                run_worker=run_worker,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
 
+        made.open_runtime = open_runtime
         made.app = create_app(open_runtime=open_runtime)
         return made
 

@@ -315,11 +315,12 @@ dropped stream needs polling anyway); push notifications (out of scope).
 
 ## R10. Delivering outcomes and background runs (FR-018, FR-020, FR-027)
 
-**Decision**: an outcome is delivered by adding two messages to the thread: an `AIMessage`
-calling Freyja's own read-only tool `check_agent_tasks` for the task ids, and one `ToolMessage`
-per task with the outcome text. Their ids are derived from the task id
-(`a2a-outcome-<agent>-<task id>`). The tool also exists for the orchestrator to call on
-demand; it lists the thread's agent tasks and their status.
+**Decision**: an outcome is delivered by adding messages to the thread: an `AIMessage`
+calling Freyja's own read-only tool `check_agent_tasks` once per task, and one `ToolMessage`
+per task with the outcome text, answering its call. Their ids are derived from the agent, the
+task id, and when the outcome arrived (`a2a-outcome-<agent>-<task id>-<arrived>`, data-model.md
+"Outcome messages"). The tool also exists for the orchestrator to call on demand; it lists the
+thread's agent tasks and their status.
 
 Delivery happens at the start of two kinds of run:
 
