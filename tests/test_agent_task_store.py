@@ -181,3 +181,26 @@ async def test_follow_ups_are_set_and_cleared_per_thread(store: AgentTaskStore) 
     task = await store.get_task("stub", "t1")
     assert task is not None
     assert (task.followup_attempts, task.followup_next_at, task.followup_error) == (0, None, None)
+
+
+async def test_an_update_can_require_the_state_it_expects(store: AgentTaskStore) -> None:
+    # A cancel and a late status check can cross; the one that finds the task moved on loses.
+    await store.record_task(await a_task(store))
+    assert await store.update_task("stub", "t1", when_state=("working",), state="canceled")
+    assert not await store.update_task("stub", "t1", when_state=("working",), state="completed")
+    task = await store.get_task("stub", "t1")
+    assert task is not None and task.state == "canceled"
+    assert await store.update_task("stub", "t1", outcome="any state")
+
+
+async def test_threads_with_a_due_retry_are_listed_once_it_is_due(
+    store: AgentTaskStore, advance: Advance
+) -> None:
+    await store.record_task(await a_task(store, "t1"))
+    await store.record_task(await a_task(store, "t2", thread_id="th-2"))
+    soon = await store.now() + timedelta(seconds=1)
+    await store.set_followup([("stub", "t1")], attempts=1, next_at=soon, error="model_error")
+    await store.set_followup([("stub", "t2")], attempts=3, next_at=None, error="model_error")
+    assert await store.threads_with_due_followups() == []
+    await advance(1.5)
+    assert await store.threads_with_due_followups() == ["th-1"]

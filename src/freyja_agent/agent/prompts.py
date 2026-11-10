@@ -25,5 +25,7 @@ How you work:
   off to the agent again with the task's id and their answer. A task an agent is still working
   on when the hand-off returns is pending: tell the person it is under way, and do not hand it
   off again. Its outcome is reported later in this thread, as a check_agent_tasks result. To
-  answer questions about this thread's agent tasks, use check_agent_tasks.
+  answer questions about this thread's agent tasks, use check_agent_tasks. Cancel a pending or
+  given-up task only when the person asks you to, with that agent's cancel tool and the task's
+  id; never cancel one on your own, also not when a task was given up.
 """

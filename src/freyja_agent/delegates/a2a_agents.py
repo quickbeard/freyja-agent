@@ -23,6 +23,7 @@ import httpx
 from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
 from a2a.types import (
     AgentCard,
+    CancelTaskRequest,
     GetTaskRequest,
     Message,
     SendMessageConfiguration,
@@ -201,6 +202,23 @@ class AgentLink:
         self.card = AgentCardSummary.from_card(card)
         self.streaming = card.capabilities.streaming
         self.mark(True)
+
+    async def get_task(self, task_id: str) -> Task:
+        """Read a task's status within the call time limit; raises what the agent raised.
+
+        Reading sends the agent no new work (FR-019).
+        """
+        if self.client is None:
+            raise RuntimeError(f"Agent '{self.name}' is not started.")
+        async with asyncio.timeout(self.call_timeout):
+            return await self.client.get_task(GetTaskRequest(id=task_id))
+
+    async def cancel(self, task_id: str) -> Task:
+        """Ask the agent to cancel a task within the call time limit; raises what it raised."""
+        if self.client is None:
+            raise RuntimeError(f"Agent '{self.name}' is not started.")
+        async with asyncio.timeout(self.call_timeout):
+            return await self.client.cancel_task(CancelTaskRequest(id=task_id))
 
     async def close(self) -> None:
         client, self.client = self.client, None

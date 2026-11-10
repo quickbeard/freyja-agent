@@ -17,7 +17,7 @@ the injected clock, so instances never compare their own clocks (spec Assumption
 """
 
 import time
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
@@ -133,7 +133,9 @@ class AgentTaskStore(Protocol):
 
     async def get_task(self, agent: str, task_id: str) -> AgentTaskRecord | None: ...
 
-    async def update_task(self, agent: str, task_id: str, **changes: Any) -> None: ...
+    async def update_task(
+        self, agent: str, task_id: str, *, when_state: Collection[str] | None = None, **changes: Any
+    ) -> bool: ...
 
     async def list_tasks(self, thread_id: str) -> list[AgentTaskRecord]: ...
 
@@ -142,6 +144,8 @@ class AgentTaskStore(Protocol):
     async def ready_outcomes(self, thread_id: str) -> list[AgentTaskRecord]: ...
 
     async def threads_with_ready_outcomes(self) -> list[str]: ...
+
+    async def threads_with_due_followups(self) -> list[str]: ...
 
     async def mark_delivered(self, agent: str, task_id: str) -> None: ...
 
@@ -218,10 +222,15 @@ class InMemoryAgentTaskStore:
     async def get_task(self, agent: str, task_id: str) -> AgentTaskRecord | None:
         return self._tasks.get((agent, task_id))
 
-    async def update_task(self, agent: str, task_id: str, **changes: Any) -> None:
+    async def update_task(
+        self, agent: str, task_id: str, *, when_state: Collection[str] | None = None, **changes: Any
+    ) -> bool:
         _check_columns(changes)
         key = (agent, task_id)
+        if when_state is not None and self._tasks[key].state not in when_state:
+            return False
         self._tasks[key] = replace(self._tasks[key], **changes)
+        return True
 
     async def list_tasks(self, thread_id: str) -> list[AgentTaskRecord]:
         tasks = [task for task in self._tasks.values() if task.thread_id == thread_id]
@@ -253,6 +262,15 @@ class InMemoryAgentTaskStore:
             task.thread_id
             for task in self._tasks.values()
             if task.outcome_ready and task.delivered_at is None
+        }
+        return sorted(threads)
+
+    async def threads_with_due_followups(self) -> list[str]:
+        now = await self.now()
+        threads = {
+            task.thread_id
+            for task in self._tasks.values()
+            if task.followup_next_at is not None and task.followup_next_at <= now
         }
         return sorted(threads)
 
@@ -468,21 +486,31 @@ class PostgresAgentTaskStore:
         )
         return _task(rows[0]) if rows else None
 
-    async def update_task(self, agent: str, task_id: str, **changes: Any) -> None:
+    async def update_task(
+        self, agent: str, task_id: str, *, when_state: Collection[str] | None = None, **changes: Any
+    ) -> bool:
         _check_columns(changes)
         if not changes:
-            return
+            return False
         assignments = sql.SQL(", ").join(
             sql.SQL("{} = {}").format(sql.Identifier(name), sql.Placeholder(name))
             for name in changes
         )
-        await self._execute(
+        # One statement, so a change another instance made in between is never overwritten.
+        condition = sql.SQL(" AND state = ANY(%(key_states)s)" if when_state is not None else "")
+        updated = await self._execute(
             sql.SQL(
                 "UPDATE freyja_agent_tasks SET {}"
-                " WHERE agent = %(key_agent)s AND task_id = %(key_task_id)s"
-            ).format(assignments),
-            {**changes, "key_agent": agent, "key_task_id": task_id},
+                " WHERE agent = %(key_agent)s AND task_id = %(key_task_id)s{}"
+            ).format(assignments, condition),
+            {
+                **changes,
+                "key_agent": agent,
+                "key_task_id": task_id,
+                "key_states": list(when_state or ()),
+            },
         )
+        return updated == 1
 
     async def list_tasks(self, thread_id: str) -> list[AgentTaskRecord]:
         rows = await self._rows(
@@ -527,6 +555,14 @@ class PostgresAgentTaskStore:
         rows = await self._rows(
             "SELECT DISTINCT thread_id FROM freyja_agent_tasks"
             " WHERE outcome_ready AND delivered_at IS NULL ORDER BY thread_id",
+            {},
+        )
+        return [row["thread_id"] for row in rows]
+
+    async def threads_with_due_followups(self) -> list[str]:
+        rows = await self._rows(
+            "SELECT DISTINCT thread_id FROM freyja_agent_tasks"
+            " WHERE followup_next_at IS NOT NULL AND followup_next_at <= now() ORDER BY thread_id",
             {},
         )
         return [row["thread_id"] for row in rows]

@@ -65,11 +65,13 @@ def pending_app(
     make_a2a_app: Callable[..., A2aApp],
     model: ScriptedChatModel,
     agent: StubAgent,
+    *,
+    read_only: bool = True,
     **options: Any,
 ) -> A2aApp:
     return make_a2a_app(
         model,
-        {"stub": {"read_only": True}},
+        {"stub": {"read_only": read_only}},
         stubs={"stub": agent},
         a2a_call_timeout_seconds=LIMIT,
         a2a_poll_interval_seconds=INTERVAL,
@@ -366,3 +368,328 @@ def test_a_task_whose_watcher_stops_is_delivered_within_a_minute(
 
 def record_count(messages: list[dict[str, Any]], kind: str, name: str) -> int:
     return sum(1 for m in messages if m["type"] == kind and m["name"] == name)
+
+
+# Part 2 (T049): cancels and give-ups.
+
+MAX_AGE = 100.0
+CANCELED = f"Agent 'stub' canceled task {TASK}."
+DELEGATE = AIMessage(
+    content="",
+    tool_calls=[
+        {
+            "id": "t1",
+            "name": "task",
+            "args": {"description": "Cancel the stub's task.", "subagent_type": "general-purpose"},
+        }
+    ],
+)
+
+
+def cancel(task_id: str = TASK, *, call_id: str = "x1") -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"id": call_id, "name": "cancel_stub_task", "args": {"task_id": task_id}}],
+    )
+
+
+def decide(client: TestClient, thread: str, decision: str, sse_events: Any) -> Events:
+    body = {
+        "interrupt_id": state(client, thread)["pending"]["interrupt_id"],
+        "decisions": [{"type": decision}],
+    }
+    with client.stream("POST", f"/threads/{thread}/resume", json=body) as response:
+        assert response.status_code == 200, response.read()
+        return sse_events(response.iter_lines())
+
+
+def gated_pending(client: TestClient, thread: str, sse_events: Any) -> None:
+    """Hand off a ``hold`` task to the gated stub and approve it, so it is pending."""
+    assert run(client, thread, "Compile the report.", sse_events)[-1][0] == "interrupt"
+    assert decide(client, thread, "approve", sse_events)[-1] == ("end", {"status": "completed"})
+    assert tasks(client, thread) == [(TASK, "working", False)]
+
+
+def test_a_cancel_pauses_for_approve_or_reject_and_cancels_the_task(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="Canceled.",
+    )
+    made = pending_app(make_a2a_app, model, agent, read_only=False)
+    with TestClient(made.app) as client:
+        gated_pending(client, "c-1", sse_events)
+        stale = record(client, made, TASK)
+        kind, pause = run(client, "c-1", "Cancel that task.", sse_events)[-1]
+        assert kind == "interrupt"
+        (action,) = pause["action_requests"]
+        assert (action["name"], action["agent"], action["args"]) == (
+            "cancel_stub_task",
+            "stub",
+            {"task_id": TASK},
+        )
+        assert action["allowed_decisions"] == ["approve", "reject"]
+        assert action["description"] == "stub: cancel a task"
+        assert agent.record.cancels == []
+        events = decide(client, "c-1", "approve", sse_events)
+        assert events[-1] == ("end", {"status": "completed"})
+        (task,) = state(client, "c-1")["agent_tasks"]
+        # An outcome that arrives for the task afterwards is ignored: here a check that was
+        # under way when the cancel landed, which finds the task canceled at the agent.
+        assert made.runtime.worker is not None
+        client.portal.call(made.runtime.worker._check, stale)
+        calls = model.calls
+        tick(client, made.runtime)
+        after = record(client, made, TASK)
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"] == CANCELED
+    assert agent.record.cancels == [TASK]
+    assert (task["status"], task["outcome_delivered"]) == ("canceled", True)
+    assert task["ended_at"] is not None
+    assert (after.state, after.outcome_ready) == ("canceled", False)
+    assert model.calls == calls
+
+
+def test_a_rejected_cancel_sends_nothing_and_the_task_stays_pending(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="Not canceled.",
+    )
+    made = pending_app(make_a2a_app, model, agent, read_only=False)
+    with TestClient(made.app) as client:
+        gated_pending(client, "c-2", sse_events)
+        run(client, "c-2", "Cancel that task.", sse_events)
+        assert decide(client, "c-2", "reject", sse_events)[-1][0] == "end"
+        listed = tasks(client, "c-2")
+        agent.release()
+    assert agent.record.cancels == []
+    assert listed == [(TASK, "working", False)]
+
+
+def test_an_unreachable_cancel_is_an_error_and_is_not_repeated(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="The agent could not be reached.",
+    )
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        go_pending(client, "c-3", sse_events)
+        made.transports["stub"].down = True
+        events = run(client, "c-3", "Cancel that task.", sse_events)
+        made.transports["stub"].down = False
+        listed = tasks(client, "c-3")
+        clock.advance(INTERVAL)
+        with busy(client, made.runtime, "c-3"):
+            tick(client, made.runtime)
+        agent.release()
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"].startswith("Agent 'stub' could not be reached")
+    assert events[-1] == ("end", {"status": "completed"})
+    assert listed == [(TASK, "working", False)]
+    assert agent.record.cancels == []
+
+
+def test_a_cancel_for_a_task_that_already_ended_reports_it_with_its_outcome(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="It had already finished.",
+    )
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        go_pending(client, "c-4", sse_events)
+        agent.release()
+        # The agent finished; Freyja has not checked yet, so its records still say working.
+        wait_for(client, made.runtime, TASK, "completed")
+        events = run(client, "c-4", "Cancel that task.", sse_events)
+        listed = tasks(client, "c-4")
+        calls = model.calls
+        tick(client, made.runtime)
+        after = state(client, "c-4")
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"].startswith(
+        f"Agent 'stub' task {TASK} had already ended, so it was not canceled."
+    )
+    assert f"Agent 'stub' completed task {TASK}:" in result["content"]
+    assert "hold: report" in result["content"]
+    # The outcome came with the cancel's result: nothing is left to deliver.
+    assert listed == [(TASK, "completed", True)]
+    assert model.calls == calls
+    assert [m for m in after["messages"] if m["name"] == "check_agent_tasks"] == []
+
+
+def test_a_cancel_for_a_task_known_to_have_ended_sends_nothing(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("report"), AIMessage(content="Done."), cancel()],
+        final_text="It had already finished.",
+    )
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        run(client, "c-5", "Compile the report.", sse_events)
+        seen = len(made.transports["stub"].requests)
+        events = run(client, "c-5", "Cancel that task.", sse_events)
+        sent = len(made.transports["stub"].requests) - seen
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"] == (
+        f"Agent 'stub' task {TASK} already ended as completed; nothing was sent."
+    )
+    assert sent == 0
+    assert agent.record.cancels == []
+
+
+def test_a_cancel_for_a_task_of_another_thread_is_refused(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="That is not a task of this thread.",
+    )
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        go_pending(client, "c-6", sse_events)
+        events = run(client, "c-7", "Cancel task-1.", sse_events)
+        listed = tasks(client, "c-6")
+        agent.release()
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"] == f"Agent 'stub' has no task {TASK} on this thread; nothing was sent."
+    assert listed == [(TASK, "working", False)]
+    assert agent.record.cancels == []
+
+
+@pytest.mark.parametrize("message", ["hold: report", "hold ask: report"])
+def test_a_task_past_the_maximum_age_is_given_up_without_a_cancel(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock, message: str
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(script=[handoff(message)], final_text="The stub task was given up.")
+    made = pending_app(make_a2a_app, model, agent, a2a_task_max_age_seconds=MAX_AGE)
+    with TestClient(made.app) as client:
+        go_pending(client, "c-8", sse_events)
+        started = record(client, made, TASK).started_at
+        waited = 0.0
+        if "ask" in message:
+            # Time spent waiting for input counts toward the age too: counted from the start,
+            # not from when the question arrived.
+            agent.release()
+            wait_for(client, made.runtime, TASK, "input_required")
+            waited = MAX_AGE / 2
+            clock.advance(waited)
+            tick(client, made.runtime)
+            assert tasks(client, "c-8") == [(TASK, "input_required", True)]
+        clock.advance(MAX_AGE - 1 - waited)
+        with busy(client, made.runtime, "c-8"):
+            tick(client, made.runtime)
+        assert record(client, made, TASK).state != "given_up"
+        clock.advance(2)
+        tick(client, made.runtime)
+        task = record(client, made, TASK)
+        after = state(client, "c-8")
+        agent.release()
+
+    assert task.state == "given_up"
+    assert task.ended_at is not None and (task.ended_at - started).total_seconds() >= MAX_AGE
+    assert agent.record.cancels == []
+    report = [m for m in after["messages"] if m["name"] == "check_agent_tasks"][-1]
+    assert report["content"] == (
+        f"Freyja stopped waiting for task {TASK} of agent 'stub'; the agent may still be working "
+        "on it. Ask to cancel it if it should stop."
+    )
+    assert after["agent_tasks"][0]["status"] == "given_up"
+    assert after["agent_tasks"][0]["outcome_delivered"] is True
+    assert after["messages"][-1]["content"] == "The stub task was given up."
+
+
+def test_a_given_up_task_can_be_canceled(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="Pending."), cancel()],
+        final_text="Canceled.",
+    )
+    made = pending_app(make_a2a_app, model, agent, a2a_task_max_age_seconds=MAX_AGE)
+    with TestClient(made.app) as client:
+        go_pending(client, "c-9", sse_events)
+        clock.advance(MAX_AGE + 1)
+        with busy(client, made.runtime, "c-9"):
+            tick(client, made.runtime)
+        assert record(client, made, TASK).state == "given_up"
+        events = run(client, "c-9", "Cancel it.", sse_events)
+
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert result["content"] == CANCELED
+    assert agent.record.cancels == [TASK]
+
+
+def test_a_cancel_from_the_subagent_pauses_and_works_the_same(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[
+            handoff("hold: report"),
+            AIMessage(content="Pending."),
+            DELEGATE,
+            cancel(call_id="s1"),
+        ],
+        final_text="Canceled.",
+    )
+    made = pending_app(make_a2a_app, model, agent, read_only=False)
+    with TestClient(made.app) as client:
+        gated_pending(client, "c-10", sse_events)
+        kind, pause = run(client, "c-10", "Have the subagent cancel it.", sse_events)[-1]
+        assert kind == "interrupt"
+        assert [a["name"] for a in pause["action_requests"]] == ["cancel_stub_task"]
+        assert pause["action_requests"][0]["allowed_decisions"] == ["approve", "reject"]
+        assert agent.record.cancels == []
+        assert decide(client, "c-10", "approve", sse_events)[-1][0] == "end"
+        listed = tasks(client, "c-10")
+    assert agent.record.cancels == [TASK]
+    assert listed == [(TASK, "canceled", True)]
+
+
+def test_after_a_restart_without_its_agent_a_pending_task_is_given_up(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    agent = stub()
+    database = shared(clock)
+    made = pending_app(
+        make_a2a_app, ScriptedChatModel(script=[handoff("hold: report")]), agent, **database
+    )
+    with TestClient(made.app) as client:
+        go_pending(client, "c-11", sse_events)
+        agent.release()
+
+    model = ScriptedChatModel(final_text="The stub agent is gone.")
+    restarted = make_a2a_app(model, {}, instance_id="instance-b", **database)
+    with TestClient(restarted.app) as client:
+        tick(client, restarted.runtime)
+        after = state(client, "c-11")
+
+    assert after["agent_tasks"][0]["status"] == "given_up"
+    report = [m for m in after["messages"] if m["name"] == "check_agent_tasks"][-1]
+    assert report["content"] == (
+        f"Freyja stopped waiting for task {TASK} of agent 'stub', which is no longer "
+        "configured; the agent may still be working on it."
+    )
+    assert after["messages"][-1]["content"] == "The stub agent is gone."
+    assert agent.record.cancels == []

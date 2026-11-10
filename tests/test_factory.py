@@ -360,7 +360,9 @@ def test_a_card_that_claims_to_be_read_only_changes_nothing(
     assert {"handoff_to_stub", "cancel_stub_task"} <= set(recorded.orchestrator_gate)
 
 
-async def test_the_cancel_tool_sends_nothing_until_cancels_exist() -> None:
+async def test_the_cancel_tool_sends_nothing_outside_a_thread() -> None:
     _, cancel = agent_tools(agent_link("stub", read_only=True), InMemoryAgentTaskStore())
-    result = await cancel.tool.ainvoke({"task_id": "t1"})
-    assert "Agent 'stub'" in result and "nothing was sent" in result
+    call = {"args": {"task_id": "t1"}, "name": cancel.name, "type": "tool_call", "id": "x1"}
+    result = await cancel.tool.ainvoke(call)
+    assert result.status == "error"
+    assert "nothing was sent" in result.content

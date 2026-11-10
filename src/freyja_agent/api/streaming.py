@@ -76,7 +76,8 @@ async def run_stream(
     """Stream one run. The caller must already hold the lease for ``run_id``.
 
     ``on_end``, when given, is awaited with how the run ended, before the lease is released.
-    A client that disconnects first ends the run without it.
+    A client that disconnects first ends the run without it. A run that ends normally, pauses,
+    or reaches the step limit first clears the thread's background run retries.
 
     ``on_recorded``, when given, is awaited once, at the run's first update. With
     ``durability="sync"`` the checkpoint holding the input is written before any node runs, so
@@ -198,6 +199,15 @@ async def run_stream(
         renewals.cancel()
         # A disconnect cancels this generator; shield the release so it completes.
         with anyio.CancelScope(shield=True):
+            if ended is not None and (ended[0] != "error" or ended[1] == "step_limit"):
+                # A run that completed, paused, or reached the step limit had the thread's
+                # outcomes: a background run's pending retries stop (feature 003, FR-027).
+                try:
+                    await runtime.agent_tasks.clear_followups(thread_id)
+                except Exception:
+                    logger.exception(
+                        "run %s on thread %s: clearing retries failed", run_id, thread_id
+                    )
             if on_end is not None and ended is not None:
                 try:
                     await on_end(*ended)

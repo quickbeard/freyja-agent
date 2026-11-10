@@ -483,3 +483,54 @@ tables and the worker are justified under the Constitution Check above.
     - Scenario 11, held as above: the poll recorded the `quick` task's outcome and did not
       deliver it. "Is the report ready?" recorded it just before the message, and the reply
       answered from it. No background run followed for that thread.
+- **Phase 7 as built (2026-11-10)**:
+  - **The cancel tool.** It refuses, sending nothing, a task that this thread did not start or
+    that Freyja does not know. An answer with an unknown task id is still sent (Phase 5), but a
+    cancel only ever stops a task this thread owns. A task Freyja already knows has ended is
+    reported as ended (`already ended as <state>; nothing was sent.`), also without sending.
+  - **A cancel the agent cannot honor because the task ended** (`TaskNotCancelableError`):
+    the tool reads the task and returns its outcome with the cancel's result, recorded as
+    delivered. Leaving it to the worker would lose it for a given-up task, which nobody
+    watches any more.
+  - **Errors the SDK raises for a cancel:**
+    - `A2AClientError` (no answer, such as a refused connection) means the agent could not
+      be reached, and `A2AClientTimeoutError` means the time limit;
+    - any other `A2AError` is the agent's own refusal;
+    - in each case the task stays pending, and the ledger keeps a re-run step from sending
+      again.
+  - **Late outcomes for canceled tasks.** `update_task` gains `when_state`, one conditional
+    statement on Postgres. The worker records a check, and the tools a cancel or an ended
+    task, only while the task is still pending (or given up, for a cancel). An outcome that
+    arrives for a task Freyja canceled meanwhile is ignored, also when a check was already
+    under way.
+  - **Give-ups.** A task whose agent is no longer configured is reported without the offer to
+    cancel, because there is no cancel tool for it: `Freyja stopped waiting for task <id> of
+    agent '<agent>', which is no longer configured; the agent may still be working on it.`
+    A given-up task has an `ended_at`.
+  - **Where retry state lives.** It goes on every row the failed attempt tried to deliver,
+    and on those of earlier attempts, not only on the rows it marked delivered. An attempt
+    that failed before its input reached a checkpoint left its rows unmarked; without this,
+    the next tick would deliver them again at once instead of after the retry interval.
+  - **How retries run.** Normal delivery skips a thread whose retry is not due yet. A due
+    retry runs with input `None`, or with the outcome messages when the failed attempt never
+    recorded them. The store gains `threads_with_due_followups()`. `run_stream` clears a
+    thread's retries itself when a run ends with `end`, `interrupt`, or `step_limit`.
+  - The thread-less tool error now reads "A message to an agent needs the thread it is sent
+    on; none was given, so nothing was sent." for both tools. The Phase 2 placeholder test
+    for the cancel tool became a test of that.
+  - **Run against the real service.** The `.env` model (OpenRouter), the stub on 9998 not
+    marked read-only, a 5 s call limit and poll interval, and the scratch database
+    `freyja_p7`:
+    - Scenario 7, cancel: after the approved `slow 600` went pending, "Cancel that task."
+      paused on `cancel_stub_task` with the task id, approve and reject only, described as
+      `stub: cancel a task`. On approval the task was `canceled` in `agent_tasks` and at the
+      stub.
+    - Scenario 7, give-up, with the maximum age at 20 s: a background run reported
+      `Freyja stopped waiting ...` 23 s after the start, and the reply offered a cancel
+      without making one. The task was `given_up`, and the stub still had it working, so no
+      cancel was sent. "Yes, cancel it." then paused on the cancel, and approving it canceled
+      the task at the stub.
+    - Retries, with a 10 s interval: a `slow 25` task finished while the service ran with an
+      invalid model id. Two background attempts failed with `model_error`, 10 s apart, as
+      logged. After a restart with the real model, the third attempt succeeded. The thread
+      held one outcome and one reply, and the retry fields were cleared.

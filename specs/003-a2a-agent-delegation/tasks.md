@@ -455,7 +455,7 @@ outcome, one message to the stub, and the third attempt succeed.
 
 ### Tests for User Story 4, part 2
 
-- [ ] T049 [P] [US4] Add to `tests/test_a2a_pending.py`: `cancel_stub_task` pauses with approve
+- [X] T049 [P] [US4] Add to `tests/test_a2a_pending.py`: `cancel_stub_task` pauses with approve
       and reject only, and once approved the task is `canceled` and a later outcome is ignored;
       a cancel for a task that already ended reports that and its outcome is delivered; a
       rejected or unreachable cancel leaves the task pending and is not repeated; a task that
@@ -465,7 +465,7 @@ outcome, one message to the stub, and the third attempt succeed.
       cancel proposed by the subagent pauses and works the same way; after
       a restart without its agent, a pending task is given up and reported (FR-021, FR-022,
       FR-023, SC-011, US4 scenarios 8, 9, Edge Cases)
-- [ ] T050 [P] [US4] Add to `tests/test_a2a_background.py`: a background run that ends with
+- [X] T050 [P] [US4] Add to `tests/test_a2a_background.py`: a background run that ends with
       `model_error` is tried again after the retry interval, at most the configured number of
       attempts, each continuing from the last checkpoint; across the attempts the outcome appears
       once and the stub receives each message once, including a step whose send was in flight;
@@ -478,26 +478,26 @@ outcome, one message to the stub, and the third attempt succeed.
 
 ### Implementation for User Story 4, part 2
 
-- [ ] T051 [US4] Implement the cancel coroutine in `src/freyja_agent/delegates/a2a_tools.py` and
+- [X] T051 [US4] Implement the cancel coroutine in `src/freyja_agent/delegates/a2a_tools.py` and
       `AgentLink.cancel` in `src/freyja_agent/delegates/a2a_agents.py`: ledger as for a hand-off
       with kind `cancel`; on success record `canceled` with no outcome to deliver; when the agent
       says the task cannot be canceled because it ended, say so and leave the outcome to the
       worker; every failure an error result, never repeated (FR-022)
-- [ ] T052 [US4] Give tasks up in `src/freyja_agent/delegates/delegation_worker.py`: a claimed
+- [X] T052 [US4] Give tasks up in `src/freyja_agent/delegates/delegation_worker.py`: a claimed
       `working` or `input_required` task older than the maximum age, or whose agent is no longer
       configured, becomes `given_up` with the outcome `Freyja stopped waiting for task <task_id>
       of agent '<agent>'; the agent may still be working on it. Ask to cancel it if it should
       stop.`; no cancel is sent; an outcome arriving for a `canceled` task is ignored (FR-021,
       FR-022, FR-023)
-- [ ] T053 [US4] Retry background runs in `src/freyja_agent/delegates/delegation_worker.py`: on a
+- [X] T053 [US4] Retry background runs in `src/freyja_agent/delegates/delegation_worker.py`: on a
       terminal `model_error` or `internal`, set `followup_attempts`, `followup_next_at`, and
       `followup_error` on the delivered rows; a due retry repeats the delivery check, then runs
       with input `None`; give up after `background_run_attempts` with a log line naming the
       thread and the task ids (FR-027, R10)
-- [ ] T054 [US4] Clear the follow-up fields of a thread when any run on it ends with `end`,
+- [X] T054 [US4] Clear the follow-up fields of a thread when any run on it ends with `end`,
       `interrupt`, or `step_limit`, through the terminal callback in
       `src/freyja_agent/api/streaming.py` (FR-027)
-- [ ] T055 [US4] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: cancel a pending or
+- [X] T055 [US4] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: cancel a pending or
       given-up task only when the user asks, with the cancel tool and the task id (FR-022)
 
 **Checkpoint**: quickstart Scenario 7 works; User Story 4 is complete.

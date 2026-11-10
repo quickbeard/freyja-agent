@@ -10,15 +10,18 @@ and an unknown key is refused; ``task_id`` is pinned, so an answer or a cancel s
 task (FR-013).
 
 A hand-off sends the orchestrator's message and chosen context in the thread's conversation with
-the agent and returns the reply (research R5). Until cancels are implemented, the cancel tool
-raises a tool error naming the agent, so it sends nothing.
+the agent and returns the reply (research R5). A cancel asks the agent to cancel one of this
+thread's pending or given-up tasks (FR-022). Both go through the send ledger, so a step that
+runs again never sends twice.
 """
 
 import hashlib
 import json
 from typing import Annotated, Any
 
+from a2a.client.errors import A2AClientError, A2AClientTimeoutError
 from a2a.types import Message, Part, Role, Task
+from a2a.utils.errors import A2AError, TaskNotCancelableError, TaskNotFoundError
 from google.protobuf.json_format import MessageToDict
 from langchain_core.tools import InjectedToolCallId, StructuredTool, ToolException
 from langchain_core.utils.function_calling import convert_to_openai_tool
@@ -32,9 +35,15 @@ from freyja_agent.delegates.a2a_agents import (
     cancel_tool_name,
     handoff_tool_name,
     send_message,
+    state_name,
 )
 from freyja_agent.delegates.mcp_tools import DelegateTool
-from freyja_agent.runtime.agent_tasks import AgentSend, AgentTaskRecord, AgentTaskStore
+from freyja_agent.runtime.agent_tasks import (
+    PENDING_STATES,
+    AgentSend,
+    AgentTaskRecord,
+    AgentTaskStore,
+)
 
 MESSAGE_LIMIT = 32000
 DESCRIPTION_LIMIT = 2000
@@ -87,13 +96,6 @@ def handoff_description(link: AgentLink) -> str:
     return "\n".join(lines)[:DESCRIPTION_LIMIT]
 
 
-def _not_available(agent: str, what: str) -> Any:
-    async def call(**_arguments: Any) -> str:
-        raise ToolException(f"Agent '{agent}': {what} are not available yet; nothing was sent.")
-
-    return call
-
-
 def _delegate(
     tool: StructuredTool, link: AgentLink, classification: Classification
 ) -> DelegateTool:
@@ -128,7 +130,7 @@ def agent_tools(link: AgentLink, store: AgentTaskStore) -> tuple[DelegateTool, D
         name=cancel_tool_name(link.name),
         description=f"Ask the agent '{link.name}' to cancel one of its tasks.",
         args_schema=CancelArgs,
-        coroutine=_not_available(link.name, "cancels"),
+        coroutine=_cancel_coroutine(link, store),
         handle_tool_error=True,
     )
     return _delegate(handoff, link, classification), _delegate(cancel, link, classification)
@@ -191,7 +193,10 @@ def _context_part(context: str) -> Part:
 def _thread_id() -> str:
     thread_id = get_config().get("configurable", {}).get("thread_id")
     if not thread_id:
-        raise ToolException("A hand-off needs the thread it is made on; none was given.")
+        raise ToolException(
+            "A message to an agent needs the thread it is sent on; none was given, so nothing "
+            "was sent."
+        )
     return str(thread_id)
 
 
@@ -226,6 +231,37 @@ _UNHANDLED = {
 }
 
 
+async def _sent_before(
+    link: AgentLink,
+    store: AgentTaskStore,
+    thread_id: str,
+    step: str,
+    tool_call_id: str,
+    request: str,
+) -> str | None:
+    """The recorded result when this call's step already sent its message; None if it did not.
+
+    Raises instead when the ledger holds another message under this call's key, or when the
+    message left and its result was never recorded: nothing is sent again (FR-010, FR-027).
+    """
+    earlier = await store.get_send(thread_id, step, tool_call_id)
+    if earlier is None:
+        return None
+    if earlier.request != request:
+        # The same key for another message: not a step running again. Returning the earlier
+        # result would answer this call with another one's (FR-010).
+        raise ToolException(
+            f"Agent '{link.name}': Freyja has already recorded a different message "
+            "under this call's id, so it sent nothing."
+        )
+    if earlier.result is not None:
+        return earlier.result
+    raise ToolException(
+        f"Agent '{link.name}' may or may not have received this message; Freyja does "
+        "not know, and will not send it again."
+    )
+
+
 def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
     async def call(
         message: str,
@@ -239,21 +275,9 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         step = _step()
         kind = "answer" if task_id else "handoff"
         request = _digest(link.name, kind, message, context, task_id)
-        earlier = await store.get_send(thread_id, step, tool_call_id)
+        earlier = await _sent_before(link, store, thread_id, step, tool_call_id, request)
         if earlier is not None:
-            if earlier.request != request:
-                # The same key for another message: not a step running again. Returning the
-                # earlier result would answer this call with another one's (FR-010).
-                raise ToolException(
-                    f"Agent '{link.name}': Freyja has already recorded a different message "
-                    "under this call's id, so it sent nothing."
-                )
-            if earlier.result is not None:
-                return earlier.result
-            raise ToolException(
-                f"Agent '{link.name}' may or may not have received this message; Freyja does "
-                "not know, and will not send it again."
-            )
+            return earlier
         if task_id:
             known = await store.get_task(link.name, task_id)
             if known is not None and known.thread_id != thread_id:
@@ -386,3 +410,174 @@ async def _record(
         # outcome delivered before the answer is history: the next one is delivered anew.
         await store.update_task(link.name, task.id, **known)
     return result, ok
+
+
+# What a task was in before it could be canceled: pending, or given up by Freyja (FR-022).
+CANCELABLE = (*PENDING_STATES, "given_up")
+
+
+async def record_outcome(
+    store: AgentTaskStore,
+    task: AgentTaskRecord,
+    state: str,
+    text: str,
+    *,
+    ready: bool,
+) -> tuple[str, bool]:
+    """Record that ``task`` moved to ``state`` at the agent, unless it already moved on.
+
+    ``ready`` marks the outcome to be delivered by a run; a result a tool returns is delivered
+    with it, so it is not. The update applies only while the task is still pending or given
+    up, so an outcome that arrives for a task Freyja canceled is ignored (FR-022).
+    """
+    outcome, ok = outcome_text(task.agent, task.task_id, state, text)
+    stored = "failed" if state == "auth_required" else state
+    now = await store.now()
+    await store.update_task(
+        task.agent,
+        task.task_id,
+        when_state=CANCELABLE,
+        state=stored,
+        last_checked_at=now,
+        ended_at=None if stored == "input_required" else now,
+        outcome=outcome,
+        outcome_ready=ready,
+        delivered_at=None,
+    )
+    return outcome, ok
+
+
+def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
+    async def call(task_id: str, *, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
+        """One cancel of one of this thread's tasks (FR-022)."""
+        thread_id = _thread_id()
+        step = _step()
+        request = _digest(link.name, "cancel", task_id)
+        earlier = await _sent_before(link, store, thread_id, step, tool_call_id, request)
+        if earlier is not None:
+            return earlier
+        task = await store.get_task(link.name, task_id)
+        if task is None or task.thread_id != thread_id:
+            # Only a task this thread started can be canceled from it (FR-008).
+            raise ToolException(
+                f"Agent '{link.name}' has no task {task_id} on this thread; nothing was sent."
+            )
+        if task.state not in CANCELABLE:
+            return f"Agent '{link.name}' task {task_id} already ended as {task.state}; nothing was sent."
+        await store.start_send(
+            AgentSend(
+                thread_id=thread_id,
+                step=step,
+                tool_call_id=tool_call_id,
+                agent=link.name,
+                kind="cancel",
+                message_id=f"freyja-cancel-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
+                request=request,
+                sent_at=await store.now(),
+                task_id=task_id,
+            )
+        )
+        result, ok = await _cancel(link, store, task)
+        await store.finish_send(thread_id, step, tool_call_id, result=result, task_id=task_id)
+        if not ok:
+            raise ToolException(result)
+        return result
+
+    return call
+
+
+async def _cancel(
+    link: AgentLink, store: AgentTaskStore, task: AgentTaskRecord
+) -> tuple[str, bool]:
+    """Send the cancel and record what the agent answered; never repeated (FR-022)."""
+    name, task_id = link.name, task.task_id
+    try:
+        answer = await link.cancel(task_id)
+    except TaskNotCancelableError:
+        # The task ended at the agent first: report its outcome with this result.
+        link.mark(True)
+        return await _already_ended(link, store, task)
+    except TaskNotFoundError:
+        link.mark(True)
+        outcome, _ok = await record_outcome(
+            store, task, "failed", "The agent no longer knows this task.", ready=False
+        )
+        return (
+            f"Agent '{name}' no longer knows task {task_id}; nothing was canceled.\n\n{outcome}",
+            False,
+        )
+    except (TimeoutError, A2AClientTimeoutError):
+        link.mark(False, f"it did not answer within {link.call_timeout:g} seconds")
+        return (
+            f"Agent '{name}' did not answer the cancel for task {task_id} within "
+            f"{link.call_timeout:g} seconds; it may or may not have canceled it. The task stays "
+            "pending."
+        ), False
+    except A2AClientError as exc:  # the request never got an answer from the agent
+        error = link.describe(str(exc) or type(exc).__name__)
+        link.mark(False, error)
+        return f"Agent '{name}' could not be reached: {error}. The task stays pending.", False
+    except A2AError as exc:  # the agent answered with a refusal
+        link.mark(True)
+        why = link.describe(str(exc) or type(exc).__name__)
+        return (
+            f"Agent '{name}' did not cancel task {task_id}: {why}. The task stays pending.",
+            False,
+        )
+    except Exception as exc:  # unreachable or a protocol error; the task stays pending
+        error = link.describe(str(exc) or type(exc).__name__)
+        link.mark(False, error)
+        return f"Agent '{name}' could not be reached: {error}. The task stays pending.", False
+    link.mark(True)
+    state = state_name(answer.status.state)
+    if state == "canceled":
+        now = await store.now()
+        result = f"Agent '{name}' canceled task {task_id}."
+        # Nothing to deliver: the orchestrator has this result (data-model.md "Agent task").
+        await store.update_task(
+            name,
+            task_id,
+            when_state=CANCELABLE,
+            state="canceled",
+            last_checked_at=now,
+            ended_at=now,
+            outcome=result,
+            outcome_ready=False,
+            delivered_at=None,
+        )
+        return result, True
+    if state in ("completed", "failed", "rejected", "auth_required"):
+        return await _ended(link, store, task, state, a2a_result_text(answer))
+    return (
+        f"Agent '{name}' accepted the cancel for task {task_id}, and the task is still {state}; "
+        "Freyja keeps watching it."
+    ), True
+
+
+async def _already_ended(
+    link: AgentLink, store: AgentTaskStore, task: AgentTaskRecord
+) -> tuple[str, bool]:
+    try:
+        found = await link.get_task(task.task_id)
+    except Exception as exc:  # the outcome is then left to the watcher
+        link.mark(False, str(exc) or type(exc).__name__)
+        return (
+            f"Agent '{link.name}' task {task.task_id} had already ended, so it was not canceled."
+        ), True
+    state = state_name(found.status.state)
+    if state in PENDING_STATES:  # not ended after all: the watcher reports it when it is
+        return (
+            f"Agent '{link.name}' did not cancel task {task.task_id}; it is still {state}, and "
+            "Freyja keeps watching it."
+        ), True
+    return await _ended(link, store, task, state, a2a_result_text(found))
+
+
+async def _ended(
+    link: AgentLink, store: AgentTaskStore, task: AgentTaskRecord, state: str, text: str
+) -> tuple[str, bool]:
+    outcome, _ok = await record_outcome(store, task, state, text, ready=False)
+    return (
+        f"Agent '{link.name}' task {task.task_id} had already ended, so it was not canceled."
+        f"\n\n{outcome}"
+    ), True
