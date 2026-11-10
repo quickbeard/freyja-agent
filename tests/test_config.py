@@ -87,3 +87,57 @@ def test_mcp_time_limits_must_be_positive(
     monkeypatch.setenv(name, value)
     with pytest.raises(ValidationError, match=name.removeprefix("FREYJA_").lower()):
         Settings()
+
+
+A2A_LIMITS = {
+    "FREYJA_A2A_CALL_TIMEOUT_SECONDS": ("a2a_call_timeout_seconds", 30),
+    "FREYJA_A2A_STARTUP_TIMEOUT_SECONDS": ("a2a_startup_timeout_seconds", 20),
+    "FREYJA_A2A_POLL_INTERVAL_SECONDS": ("a2a_poll_interval_seconds", 10),
+    "FREYJA_A2A_TASK_MAX_AGE_SECONDS": ("a2a_task_max_age_seconds", 86400),
+    "FREYJA_BACKGROUND_RUN_ATTEMPTS": ("background_run_attempts", 3),
+    "FREYJA_BACKGROUND_RETRY_SECONDS": ("background_retry_seconds", 60),
+}
+
+
+def test_a2a_settings_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
+    for name in ("FREYJA_A2A_AGENTS", *A2A_LIMITS):
+        monkeypatch.delenv(name, raising=False)
+    settings = Settings()
+    assert settings.a2a_agents == {}
+    for field, default in A2A_LIMITS.values():
+        assert getattr(settings, field) == default, field
+
+
+def test_a2a_settings_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(
+        "FREYJA_A2A_AGENTS",
+        '{"hello": {"url": "http://127.0.0.1:9999", "read_only": true},'
+        ' "stub": {"url": "http://localhost:9998"}}',
+    )
+    monkeypatch.setenv("FREYJA_A2A_CALL_TIMEOUT_SECONDS", "5")
+    monkeypatch.setenv("FREYJA_A2A_POLL_INTERVAL_SECONDS", "2.5")
+    monkeypatch.setenv("FREYJA_BACKGROUND_RUN_ATTEMPTS", "1")
+    settings = Settings()
+    assert list(settings.a2a_agents) == ["hello", "stub"]
+    assert settings.a2a_agents["hello"].read_only is True
+    assert settings.a2a_agents["stub"].read_only is False
+    assert settings.a2a_agents["stub"].url == "http://localhost:9998"
+    assert settings.a2a_call_timeout_seconds == 5
+    assert settings.a2a_poll_interval_seconds == 2.5
+    assert settings.background_run_attempts == 1
+
+
+@pytest.mark.parametrize("name", list(A2A_LIMITS))
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_a2a_limits_must_be_positive(
+    monkeypatch: pytest.MonkeyPatch, name: str, value: str
+) -> None:
+    monkeypatch.setenv(name, value)
+    with pytest.raises(ValidationError, match=name.removeprefix("FREYJA_").lower()):
+        Settings()
+
+
+def test_background_run_attempts_is_a_whole_number(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREYJA_BACKGROUND_RUN_ATTEMPTS", "2.5")
+    with pytest.raises(ValidationError, match="background_run_attempts"):
+        Settings()

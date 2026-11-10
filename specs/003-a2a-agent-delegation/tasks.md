@@ -44,28 +44,28 @@ Single project, src layout: `src/freyja_agent/`, `tests/`, repo-root files.
 
 **Purpose**: The dependency, the seven settings, and their documentation.
 
-- [ ] T001 Add `a2a-sdk>=1.3,<2` and `httpx>=0.28.1` to `[project].dependencies` and
+- [X] T001 Add `a2a-sdk>=1.3,<2` and `httpx>=0.28.1` to `[project].dependencies` and
       `a2a-sdk[http-server]>=1.3,<2` to the `dev` group in `pyproject.toml`, then run `uv lock`;
       confirm the lock gains exactly `a2a-sdk`, `aiologic`, `culsans`, `google-api-core`,
       `json-rpc`, `proto-plus`, and `wrapt`, and that no other version moves (R1)
-- [ ] T002 [P] Add tests for the new settings to `tests/test_config.py`: defaults
+- [X] T002 [P] Add tests for the new settings to `tests/test_config.py`: defaults
       `a2a_agents == {}`, `a2a_call_timeout_seconds == 30`, `a2a_startup_timeout_seconds == 20`,
       `a2a_poll_interval_seconds == 10`, `a2a_task_max_age_seconds == 86400`,
       `background_run_attempts == 3`, `background_retry_seconds == 60`; `FREYJA_A2A_AGENTS`
       parses from one JSON value; each limit refuses zero and a negative number (FR-004, R2)
-- [ ] T003 [P] Write `tests/test_a2a_config.py` for one agent entry: accepted with `url`
+- [X] T003 [P] Write `tests/test_a2a_config.py` for one agent entry: accepted with `url`
       `http://localhost:9999`, `http://127.0.0.1:9999`, `http://[::1]:9999`, and
       `http://[::ffff:127.0.0.1]:9999`, with `read_only` omitted (then `false`) and set; refused,
       with an error located at `a2a_agents.<name>`: a missing `url`, a scheme other than `http`
       or `https`, the hosts `10.0.0.5`, `0.0.0.0`, `::ffff:10.0.0.5`, and `example.com`, an
       unknown field, and a name that does not match `^[a-z][a-z0-9_-]{0,31}$`; no refusal echoes
       the entry's values (FR-001, contracts/agent-config.md "Rules")
-- [ ] T004 Implement the settings in `src/freyja_agent/config.py`: `A2aAgentConfig` with
+- [X] T004 Implement the settings in `src/freyja_agent/config.py`: `A2aAgentConfig` with
       `extra="forbid"`, `hide_input_in_errors=True`, `url: str` (scheme `http` or `https`, host
       accepted by the existing `is_local_host`), and `read_only: bool = False`; on `Settings`,
       `a2a_agents: dict[ServerName, A2aAgentConfig]` defaulting to empty, and the six limits with
       the defaults in T002, each `Field(gt=0)` (attempts as an int) (FR-001, FR-004, R2)
-- [ ] T005 [P] Document the seven settings in `.env.example` with their defaults and one
+- [X] T005 [P] Document the seven settings in `.env.example` with their defaults and one
       commented `FREYJA_A2A_AGENTS` example taken from contracts/agent-config.md (FR-004,
       principle IV)
 
