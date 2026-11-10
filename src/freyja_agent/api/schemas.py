@@ -84,12 +84,38 @@ class PendingDecision(BaseModel):
     allowed_decisions: list[AllowedDecision]
 
 
+AgentTaskStatus = Literal[
+    "working", "input_required", "completed", "failed", "rejected", "canceled", "given_up"
+]
+
+
+class AgentTask(BaseModel):
+    """One task an agent created for the thread (feature 003, FR-017)."""
+
+    agent: str
+    # The agent's own id for the task.
+    task_id: str
+    # The task message the task was started with.
+    message: str
+    # ``working`` and ``input_required`` are pending.
+    status: AgentTaskStatus
+    started_at: datetime
+    last_checked_at: datetime
+    # None while the task is pending.
+    ended_at: datetime | None
+    # True once a run recorded the task's outcome in the thread's messages, and from the start
+    # for a task whose outcome the hand-off itself returned.
+    outcome_delivered: bool
+
+
 class ThreadState(BaseModel):
     thread_id: str
     run_active: bool
     messages: list[Message]
     pending: PendingDecision | None
     updated_at: str | None = None
+    # Every agent task the thread has started, pending or ended, oldest first (feature 003).
+    agent_tasks: list[AgentTask] = Field(default_factory=list)
 
 
 class ServerHints(BaseModel):

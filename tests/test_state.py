@@ -2,12 +2,15 @@
 
 import threading
 from collections.abc import Callable
+from dataclasses import replace
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+from freyja_agent.runtime.agent_tasks import AgentTaskRecord
 from freyja_agent.runtime.runtime import Runtime
 from tests.fakes import FailingChatModel, ScriptedChatModel
 
@@ -76,6 +79,89 @@ def test_paused_thread_shows_the_proposal_the_stream_reported(
     proposal = body["messages"][-1]
     assert proposal["type"] == "ai"
     assert proposal["tool_calls"][0]["name"] == "send_notification"
+
+
+AGENT_TASK_FIELDS = {
+    "agent",
+    "task_id",
+    "message",
+    "status",
+    "started_at",
+    "last_checked_at",
+    "ended_at",
+    "outcome_delivered",
+}
+
+
+def test_a_thread_without_agent_tasks_lists_none(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+) -> None:
+    with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
+        run(client, "st-at-1", "hi", sse_events)
+        assert state(client, "st-at-1")["agent_tasks"] == []
+
+
+def test_agent_tasks_are_listed_oldest_first_with_every_field(
+    make_runtime: Callable[..., Runtime],
+    make_app: Callable[[Runtime], FastAPI],
+    sse_events: Any,
+) -> None:
+    runtime = make_runtime(ScriptedChatModel())
+    start = datetime(2026, 11, 10, 9, 0, tzinfo=UTC)
+
+    def task(task_id: str, minutes: int, **changes: Any) -> AgentTaskRecord:
+        record = AgentTaskRecord(
+            agent="stub",
+            task_id=task_id,
+            thread_id="st-at-2",
+            context_id="ctx-1",
+            message=f"message {task_id}",
+            state="working",
+            started_at=start + timedelta(minutes=minutes),
+            last_checked_at=start + timedelta(minutes=minutes),
+        )
+        return replace(record, **changes)
+
+    async def record() -> None:
+        # Recorded newest first; listed oldest first. Another thread's task is not listed.
+        ended = start + timedelta(minutes=30)
+        await runtime.agent_tasks.record_task(
+            task("t-2", 20, state="completed", ended_at=ended, outcome="done", outcome_ready=True)
+        )
+        await runtime.agent_tasks.record_task(task("t-1", 10, state="input_required"))
+        await runtime.agent_tasks.record_task(replace(task("t-0", 0), thread_id="elsewhere"))
+
+    with TestClient(make_app(runtime)) as client:
+        run(client, "st-at-2", "hi", sse_events)
+        client.portal.call(record)
+        tasks = state(client, "st-at-2")["agent_tasks"]
+
+    assert all(set(entry) == AGENT_TASK_FIELDS for entry in tasks)
+    assert tasks == [
+        {
+            "agent": "stub",
+            "task_id": "t-1",
+            "message": "message t-1",
+            "status": "input_required",
+            "started_at": "2026-11-10T09:10:00Z",
+            "last_checked_at": "2026-11-10T09:10:00Z",
+            "ended_at": None,
+            "outcome_delivered": True,
+        },
+        {
+            "agent": "stub",
+            "task_id": "t-2",
+            "message": "message t-2",
+            "status": "completed",
+            "started_at": "2026-11-10T09:20:00Z",
+            "last_checked_at": "2026-11-10T09:20:00Z",
+            "ended_at": "2026-11-10T09:30:00Z",
+            # Ready and not yet recorded in the thread by a run.
+            "outcome_delivered": False,
+        },
+    ]
 
 
 def test_failed_run_leaves_the_turn_with_nothing_pending(

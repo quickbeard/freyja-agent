@@ -11,6 +11,7 @@ from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
     THREAD_ID_PATTERN,
+    AgentTask,
     ResumeRequest,
     RunRequest,
     ThreadState,
@@ -129,7 +130,8 @@ async def resume_run(
 
 @router.get("/{thread_id}/state")
 async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
-    """Read the transcript, the run marker, and any pending proposal (FR-007, research R8).
+    """Read the transcript, the run marker, any pending proposal (FR-007, research R8), and
+    the thread's agent tasks (feature 003, FR-017).
 
     A thread exists once its first checkpoint is written; before that it is not found, so a
     mistyped id is not mistaken for a fresh thread. ``run_active`` comes from the shared
@@ -152,4 +154,17 @@ async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
             else None
         ),
         updated_at=snapshot.created_at,
+        agent_tasks=[
+            AgentTask(
+                agent=task.agent,
+                task_id=task.task_id,
+                message=task.message,
+                status=task.state,
+                started_at=task.started_at,
+                last_checked_at=task.last_checked_at,
+                ended_at=task.ended_at,
+                outcome_delivered=task.outcome_delivered,
+            )
+            for task in await runtime.agent_tasks.list_tasks(thread_id)
+        ],
     )

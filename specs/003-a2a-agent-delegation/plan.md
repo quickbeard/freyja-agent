@@ -391,3 +391,33 @@ tables and the worker are justified under the Constitution Check above.
   - Run against the real service with the `.env` model (OpenRouter) and the `helloworld` agent
     on a scratch database: two hand-offs on one thread completed, and each row had its own
     step, message id, and digest.
+- **Phase 5 as built (2026-11-10)**:
+  - A message that continues a task gets no task event first. The SDK's `DefaultRequestHandler`
+    streams status and artifact updates for the existing task, which is what the official
+    samples' executors do too. `_send` ignored updates that came before a task, so every
+    answer looked unacknowledged ("could not be reached"). T033's tests found this. The first
+    update now starts the task from its `task_id` and `context_id`, and counts as the
+    acknowledgment.
+  - An answer updates the task's existing row (state, `last_checked_at`, `ended_at`,
+    outcome). The row keeps the message the task was started with and its start time, so the
+    thread state shows one task from question to completion.
+  - The needing-input result is headed `Agent '<agent>' needs input for task <task id>:`,
+    followed by the question. It ends with a line telling the orchestrator to ask the person
+    and to hand off again with that `task_id`. It is a normal result, not an error result, and
+    the task's outcome counts as delivered, because the hand-off returned it.
+  - **Added beyond the tasks:** an answer naming a task that another thread started is
+    refused before anything is sent ("Agent '<agent>' has no task <id> on this thread;
+    nothing was sent."). Otherwise the reply would have overwritten that thread's task row, and
+    conversations are never shared between threads (FR-008). A task id Freyja does not know is
+    still sent and left to the agent; malformed ids are Phase 9's (T060 to T064).
+  - `ThreadState.agent_tasks` defaults to an empty list, so a thread with no agent tasks, and
+    every thread from before feature 003, reads as before plus `agent_tasks: []`.
+  - Run against the real service with the `.env` model (OpenRouter), the stub on 9998 not
+    marked read-only, and a scratch database (the dev database still has the send table from
+    before T072):
+    - Quickstart Scenario 5: the approved hand-off of `ask: plan the release` returned the
+      needing-input result, the reply asked for the date in Freyja's own words, and
+      `agent_tasks` listed the task as `input_required`.
+    - "Friday at 10." led to a pause on `handoff_to_stub` with the model's answer and the same
+      `task_id`, and the stub had one POST. On approval the stub completed the same task, and
+      `agent_tasks` showed it `completed` with its first message and an `ended_at`.

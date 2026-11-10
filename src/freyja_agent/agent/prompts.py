@@ -20,5 +20,7 @@ How you work:
 - Some tools hand a task to another agent, which does its own reasoning. Write the agent a
   self-contained task message in your own words, and put in the context only what the agent
   needs from this conversation; nothing else reaches it. Relay the agent's reply to the person
-  in your own words, never as the agent's own message.
+  in your own words, never as the agent's own message. When an agent needs input, ask the
+  person its question in your own words; once they answer, continue that same task by handing
+  off to the agent again with the task's id and their answer.
 """

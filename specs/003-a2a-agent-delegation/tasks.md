@@ -323,31 +323,31 @@ as `input_required` in the thread state, answer, approve, and see the same task 
 
 ### Tests for User Story 3
 
-- [ ] T033 [P] [US3] Write `tests/test_a2a_input.py`: the result carries the stub's question,
+- [X] T033 [P] [US3] Write `tests/test_a2a_input.py`: the result carries the stub's question,
       is marked as needing input, and names the task id; the scripted reply asks the user; the
       thread state lists the task as `input_required`; the next user message leads to a hand-off
       with that `task_id`, which pauses for a gated agent with the answer as the orchestrator
       wrote it, and on approval the stub completes the same task; an unrelated message leaves
       the task `input_required`; an answer from the subagent continues the task the same way
       (FR-015, FR-016, US3 scenarios 1 to 4)
-- [ ] T034 [P] [US3] Add to `tests/test_state.py`: `agent_tasks` is present, empty for a thread
+- [X] T034 [P] [US3] Add to `tests/test_state.py`: `agent_tasks` is present, empty for a thread
       with no agent tasks, and lists tasks oldest first with every field of `AgentTask` in
       contracts/openapi.yaml (FR-017)
 
 ### Implementation for User Story 3
 
-- [ ] T035 [US3] Handle `input_required` in the hand-off coroutine in
+- [X] T035 [US3] Handle `input_required` in the hand-off coroutine in
       `src/freyja_agent/delegates/a2a_tools.py`: return the question headed
       `Agent '<agent>' needs input for task <task_id>:`, record the task as `input_required`
       with the outcome marked delivered; with `task_id` set, send in that task and conversation,
       and record the send as `answer` (FR-015, FR-016)
-- [ ] T036 [US3] Add `AgentTask` (fields `agent`, `task_id`, `message`, `status` one of
+- [X] T036 [US3] Add `AgentTask` (fields `agent`, `task_id`, `message`, `status` one of
       `working`, `input_required`, `completed`, `failed`, `rejected`, `canceled`, `given_up`,
       `started_at`, `last_checked_at`, `ended_at`, `outcome_delivered`) and
       `ThreadState.agent_tasks` to `src/freyja_agent/api/schemas.py`, and fill it from the store
       in `read_state` in `src/freyja_agent/api/threads.py`; add `agent_tasks` to `ThreadState`
       in `specs/001-thread-runs-api/contracts/openapi.yaml` (FR-017, contracts/openapi.yaml)
-- [ ] T037 [US3] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: when an agent
+- [X] T037 [US3] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: when an agent
       needs input, ask the user in your own words and continue the same task with its id once
       they answer (FR-015, FR-016)
 
