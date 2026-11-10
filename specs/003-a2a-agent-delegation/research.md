@@ -351,6 +351,13 @@ conversation is not accepted by every provider.
 the run (a write outside a run, which the gate and the lease do not see); delivering outcomes
 only through background runs (contradicts the clarification of 2026-11-09).
 
+**Sends left in flight by a stop** (added by the analysis of 2026-11-09): a crash between
+sending and recording a result leaves the tool call unanswered in the thread. At the start of
+the next user or background run, the run answers it from the send ledger before the input
+reaches the agent, because Deep Agents' `PatchToolCallsMiddleware`
+(`deepagents/middleware/patch_tool_calls.py`) would otherwise answer it with a generic
+"cancelled or interrupted" text that hides the uncertainty (spec FR-017).
+
 ## R11. Telling the orchestrator about pending tasks (FR-018)
 
 **Decision**: `AgentTasksMiddleware`, next to `ThreadContextMiddleware` on the orchestrator and
