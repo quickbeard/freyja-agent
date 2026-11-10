@@ -9,9 +9,12 @@ It records every message and every cancel it receives, and behaves by a keyword 
 the message text:
 
 - (default) completes with the message and the conversation's context id;
-- ``ask``: asks one question (input required) and completes once answered in the same task;
+- ``ask``: asks one question (input required) and completes once answered in the same task,
+  after ``<seconds>`` when the answer starts with ``slow <seconds>``;
 - ``slow <seconds>``: stays working that long, then completes;
-- ``hold``: stays working until the test calls ``StubAgent.release()``;
+- ``hold``: stays working until the test calls ``StubAgent.release()``, then completes; ``hold
+  <ending>`` ends as ``fail``, ``reject``, ``auth``, ``ask``, or ``cancel`` instead, so a task
+  that is already pending can end each way;
 - ``fail``, ``reject``, ``auth``: fails, rejects, or asks for authentication;
 - ``parts``: completes with a text, a data, a raw-bytes, and a URL part;
 - ``progress <n>``: sends n status updates before completing;
@@ -129,24 +132,18 @@ class _Executor(AgentExecutor):
         def say(words: str) -> Any:
             return new_text_message(words, context_id=task.context_id, task_id=task.id)
 
-        # An answer to an earlier question continues that task.
+        # An answer to an earlier question continues that task; one starting with ``slow
+        # <seconds>`` takes that long.
         if task.status.state == TaskState.TASK_STATE_INPUT_REQUIRED:
+            if keyword == "slow":
+                await updater.update_status(TaskState.TASK_STATE_WORKING)
+                await asyncio.sleep(float(rest.split()[0].rstrip(":")))
             await updater.add_artifact(parts=[new_text_part(f"Answered: {text}")])
             await updater.complete()
             return
 
         await updater.update_status(TaskState.TASK_STATE_WORKING, message=say("Working on it."))
-        if keyword == "ask":
-            await updater.requires_input(message=say(self.stub.question))
-            return
-        if keyword == "fail":
-            await updater.failed(message=say("The stub failed this task on purpose."))
-            return
-        if keyword == "reject":
-            await updater.reject(message=say("The stub does not take this task."))
-            return
-        if keyword == "auth":
-            await updater.requires_auth(message=say("The stub needs you to sign in."))
+        if await self._ended(keyword, updater, say):
             return
         if keyword == "progress":
             for step in range(1, int(rest.split()[0]) + 1):
@@ -167,6 +164,12 @@ class _Executor(AgentExecutor):
             stopper.cancel()
             if stop.is_set():
                 return
+            ending = rest.split()[0].rstrip(":").lower() if keyword == "hold" and rest else ""
+            if ending == "cancel":
+                await updater.cancel(message=say("The stub canceled this task itself."))
+                return
+            if await self._ended(ending, updater, say):
+                return
         if keyword == "parts":
             parts = [
                 new_text_part("Here is the report."),
@@ -178,6 +181,20 @@ class _Executor(AgentExecutor):
             parts = [new_text_part(f"Received in context {task.context_id}: {text}")]
         await updater.add_artifact(parts=parts)
         await updater.complete()
+
+    async def _ended(self, keyword: str, updater: TaskUpdater, say: Any) -> bool:
+        """End the task the way ``keyword`` asks, if it names an ending; True when it did."""
+        if keyword == "ask":
+            await updater.requires_input(message=say(self.stub.question))
+        elif keyword == "fail":
+            await updater.failed(message=say("The stub failed this task on purpose."))
+        elif keyword == "reject":
+            await updater.reject(message=say("The stub does not take this task."))
+        elif keyword == "auth":
+            await updater.requires_auth(message=say("The stub needs you to sign in."))
+        else:
+            return False
+        return True
 
     async def cancel(self, context: RequestContext, event_queue: EventQueue) -> None:
         task_id = context.task_id or ""

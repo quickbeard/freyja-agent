@@ -6,12 +6,14 @@ and client disconnect. The caller acquires the lease before starting the stream 
 answer 409 without opening a response (research R9, R12).
 """
 
+from __future__ import annotations
+
 import asyncio
 import json
 import logging
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
-from typing import Any, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 import anyio
 from langgraph.errors import GraphRecursionError
@@ -24,7 +26,9 @@ from freyja_agent.api.serialize import (
     to_jsonable,
     update_to_dict,
 )
-from freyja_agent.runtime.runtime import Runtime
+
+if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
+    from freyja_agent.runtime.runtime import Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +36,8 @@ logger = logging.getLogger(__name__)
 RunMode = Literal["run", "resume", "background"]
 # Told how a run ended: "end", "interrupt", or "error" with its code (feature 003, FR-027).
 OnEnd = Callable[[str, str | None], Awaitable[None]]
+# Told once that the run's input is in a checkpoint (feature 003, FR-018, research R10).
+OnRecorded = Callable[[], Awaitable[None]]
 _MESSAGE_METADATA_KEYS = ("langgraph_node", "langgraph_step")
 
 
@@ -65,11 +71,16 @@ async def run_stream(
     debug: bool,
     run_id: str,
     on_end: OnEnd | None = None,
+    on_recorded: OnRecorded | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream one run. The caller must already hold the lease for ``run_id``.
 
     ``on_end``, when given, is awaited with how the run ended, before the lease is released.
     A client that disconnects first ends the run without it.
+
+    ``on_recorded``, when given, is awaited once, at the run's first update. With
+    ``durability="sync"`` the checkpoint holding the input is written before any node runs, so
+    the input is in the thread by then: outcomes it carried count as delivered (FR-020).
     """
     owner = lease_owner(runtime, run_id)
     settings = runtime.settings
@@ -97,6 +108,15 @@ async def run_stream(
             async for namespace, stream_mode, chunk in runtime.agent.astream(
                 input, config, stream_mode=stream_modes, durability="sync", subgraphs=True
             ):
+                if on_recorded is not None and not namespace and stream_mode == "updates":
+                    recorded, on_recorded = on_recorded, None
+                    try:
+                        await recorded()
+                    except Exception:
+                        # What was not marked is found in the thread by the next run's check.
+                        logger.exception(
+                            "run %s on thread %s: on_recorded failed", run_id, thread_id
+                        )
                 if stream_mode == "custom":
                     yield _event("update", {"node": "agent", "data": to_jsonable(chunk)})
                 elif namespace and stream_mode in ("updates", "debug"):

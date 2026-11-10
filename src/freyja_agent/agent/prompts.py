@@ -22,5 +22,8 @@ How you work:
   needs from this conversation; nothing else reaches it. Relay the agent's reply to the person
   in your own words, never as the agent's own message. When an agent needs input, ask the
   person its question in your own words; once they answer, continue that same task by handing
-  off to the agent again with the task's id and their answer.
+  off to the agent again with the task's id and their answer. A task an agent is still working
+  on when the hand-off returns is pending: tell the person it is under way, and do not hand it
+  off again. Its outcome is reported later in this thread, as a check_agent_tasks result. To
+  answer questions about this thread's agent tasks, use check_agent_tasks.
 """

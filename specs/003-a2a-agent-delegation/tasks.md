@@ -367,7 +367,7 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
 
 ### Tests for User Story 4, part 1
 
-- [ ] T038 [P] [US4] Write `tests/test_a2a_pending.py`: at the call limit after acknowledgment
+- [X] T038 [P] [US4] Write `tests/test_a2a_pending.py`: at the call limit after acknowledgment
       the result says the task is pending and names the agent and task id, the run ends with
       `end`, and the thread state lists the task `working` with `outcome_delivered: false`;
       before acknowledgment nothing becomes pending (covered in Phase 9); a tick claims the task
@@ -378,7 +378,7 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       holding the claim stops ticking, the other runtime claims the task once `watch_until`
       passes (3 × the interval), and the outcome is delivered within 60 s of the task changing
       (FR-017, FR-019, FR-020, SC-003, US4 scenarios 1, 3, 4, 6, 7)
-- [ ] T039 [P] [US4] Write `tests/test_a2a_background.py`: a ready outcome on a free thread is
+- [X] T039 [P] [US4] Write `tests/test_a2a_background.py`: a ready outcome on a free thread is
       delivered by one background run whose input is one `check_agent_tasks` call and one tool
       result per task with ids `a2a-outcome-<agent>-<task id>`, followed by the reply; a second
       tick delivers nothing; across a restart it is still delivered once; a thread with a run in
@@ -389,41 +389,41 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       delivered by one run in the order they were recorded; a pending task started by a
       subagent's hand-off is delivered to the orchestrator of its thread (FR-018, FR-020,
       SC-003, US4 scenarios 2, 5, 6, 11, Edge Cases)
-- [ ] T040 [P] [US4] Add to `tests/test_a2a_background.py`: on each model call the system message
+- [X] T040 [P] [US4] Add to `tests/test_a2a_background.py`: on each model call the system message
       lists the thread's pending tasks (agent, task id, status, start time), and nothing when
       there are none; `check_agent_tasks` lists the thread's tasks, or the named ones, and is
       `read_only` with no pause (FR-018, US4 scenario 10)
-- [ ] T041 [P] [US4] Write `tests/integration/test_a2a_tasks_postgres.py`: the three tables are
+- [X] T041 [P] [US4] Write `tests/integration/test_a2a_tasks_postgres.py`: the three tables are
       created idempotently; two runtimes on one database claim a task once; an expired claim
       passes to the other instance; the ledger and conversations survive a new pool (FR-019,
       R8, R9)
 
 ### Implementation for User Story 4, part 1
 
-- [ ] T042 [P] [US4] Implement `src/freyja_agent/agent/agent_tasks.py`: `AgentTasksMiddleware`,
+- [X] T042 [P] [US4] Implement `src/freyja_agent/agent/agent_tasks.py`: `AgentTasksMiddleware`,
       which appends one line per pending task of the current thread (from the run config) to the
       system message on every model call, and the `check_agent_tasks(task_ids: list[str] | None)`
       tool reading the store; add `check_agent_tasks` to `OWN_TOOLS` in
       `src/freyja_agent/agent/catalog.py` as `READ_ONLY`; pass the store to both through
       `build_agent(..., agent_tasks=...)` in `src/freyja_agent/agent/factory.py`, on the
       orchestrator and the subagent (FR-018, R10, R11)
-- [ ] T043 [US4] Handle the time limit after acknowledgment in the hand-off coroutine in
+- [X] T043 [US4] Handle the time limit after acknowledgment in the hand-off coroutine in
       `src/freyja_agent/delegates/a2a_tools.py`: record the task `working` with
       `outcome_ready = false`, and return `Agent '<agent>' is still working on task <task_id>;
       it is pending, and Freyja will report its outcome in this thread.` (FR-017)
-- [ ] T044 [US4] Implement `src/freyja_agent/api/outcomes.py`: build the outcome messages of
+- [X] T044 [US4] Implement `src/freyja_agent/api/outcomes.py`: build the outcome messages of
       data-model.md "Outcome messages" (an `AIMessage` with one `check_agent_tasks` call and
       one `ToolMessage` per task, ids `a2a-outcome-call-<first agent>-<first task id>` and
       `a2a-outcome-<agent>-<task id>`, content headed with agent, task id, and state); and
       `take_undelivered(runtime, thread_id, snapshot)`, which marks as delivered every ready
       outcome already in the snapshot and returns the messages for the rest (FR-020, R10)
-- [ ] T045 [US4] In `start_run` in `src/freyja_agent/api/threads.py`, after the paused-thread
+- [X] T045 [US4] In `start_run` in `src/freyja_agent/api/threads.py`, after the paused-thread
       check, prepend the undelivered outcome messages to the input and mark them delivered when
       the run's first `update` event arrives, which with `durability="sync"` comes after the
       checkpoint holding the input; if the run fails before that, they stay marked undelivered
       and the next run's check (T044) finds them already in the thread; `resume_run` records
       nothing (FR-018, R10)
-- [ ] T046 [US4] Implement `src/freyja_agent/delegates/delegation_worker.py`:
+- [X] T046 [US4] Implement `src/freyja_agent/delegates/delegation_worker.py`:
       `DelegationWorker(runtime, clock)` with `tick()` and a loop at the poll interval; each
       tick claims due tasks (`watch_until = now + 3 × interval`), checks each `working` task with
       `get_task`, records the new state and the outcome text (`a2a_result_text`), treats a
@@ -432,10 +432,10 @@ worker, and see one outcome and one reply in the thread; repeat with a restart i
       then for each thread with ready outcomes takes the run lease, skips it if a proposal is
       pending, and runs `run_stream(..., mode="background")` to completion with the outcome
       messages as input (FR-019, FR-020, R9, R10)
-- [ ] T047 [US4] Start the worker in `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py`
+- [X] T047 [US4] Start the worker in `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py`
       after the agent is built and stop it before the links close; tests get it without its
       loop and call `tick()` (R15)
-- [ ] T048 [US4] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: a pending task is
+- [X] T048 [US4] Extend the paragraph in `src/freyja_agent/agent/prompts.py`: a pending task is
       reported later in this thread; use `check_agent_tasks` to answer questions about it
       (FR-018)
 

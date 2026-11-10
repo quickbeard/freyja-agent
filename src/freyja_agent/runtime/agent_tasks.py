@@ -88,8 +88,14 @@ class AgentTaskRecord:
 
     @property
     def outcome_delivered(self) -> bool:
-        """What the thread state reports: nothing is waiting to be delivered."""
-        return not self.outcome_ready or self.delivered_at is not None
+        """What the thread state reports: the task's latest outcome is in the thread.
+
+        True once a run recorded it, or when the hand-off returned it itself; false while the
+        task is still working, and while an outcome waits to be delivered.
+        """
+        if self.delivered_at is not None:
+            return True
+        return not self.outcome_ready and self.state != "working"
 
 
 # The columns an update may set; the key and the thread never change.

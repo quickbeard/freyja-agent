@@ -421,3 +421,65 @@ tables and the worker are justified under the Constitution Check above.
     - "Friday at 10." led to a pause on `handoff_to_stub` with the model's answer and the same
       `task_id`, and the stub had one POST. On approval the stub completed the same task, and
       `agent_tasks` showed it `completed` with its first message and an `ended_at`.
+- **Phase 6 as built (2026-11-10)**:
+  - **Outcome messages, corrected.** data-model.md had one `check_agent_tasks` call answered by
+    one result per task. A provider takes exactly one result for each tool call, so the
+    `AIMessage` now carries one call per task, each with `{"task_ids": [<task id>]}`, and each
+    `ToolMessage` answers its own call. Each id also carries the time the outcome arrived
+    (`a2a-outcome-<agent>-<task id>-<arrived>`). A task can have a second outcome, and with
+    the documented ids the exactly-once check would have taken the first for the second and
+    skipped it. That happens when a task asks a question through the worker, is answered,
+    and goes pending again. Tool call ids are `a2a_` plus 24 hex characters, because
+    providers limit them (OpenAI to 40 characters). data-model.md and research R10 are
+    updated.
+  - An outcome reaches the orchestrator in the same words the hand-off would have returned
+    (`outcome_text`, shared by the hand-off and the worker). A failure is an error result,
+    as the hand-off's would have been.
+  - **`outcome_delivered`, corrected.** The Phase 5 rule reported a task still `working` as
+    delivered, because nothing was waiting yet. It is now false while the task works, and
+    while an outcome waits; true once a run recorded it, or when the hand-off returned it
+    itself. A hand-off that continues a task resets the row's delivery, so the next outcome
+    is delivered anew.
+  - An acknowledged task whose stream ends while it is still working is pending too, like one
+    still working at the limit. It used to be an "ended as working" error.
+  - `check_agent_tasks` is in the fixed table, so it is always offered, with or without
+    agents. Without a store, `build_agent` gives it and the middleware an empty in-memory
+    one. The middleware reads the store asynchronously. A synchronous invocation passes
+    through unchanged, because the service only runs the agent with `astream`.
+  - `run_stream` gains `on_recorded`, awaited at the run's first root update: the input is in
+    a checkpoint by then. A failure to mark is logged and the run goes on, because the next
+    run's check finds the outcome in the thread.
+  - **The worker.**
+    - It ticks at start and then at every interval. Checks and deliveries within a tick run
+      concurrently.
+    - A failed tick is logged and the loop goes on.
+    - A claimed task whose agent is no longer configured is left for Phase 7's give-up.
+    - It takes no clock: every time it sets or compares comes from the store.
+    - `streaming.py` and the worker import `Runtime` only for type checking, because the
+      runtime builds the worker and the worker runs the stream.
+  - `Runtime.assemble` gains `run_worker` (default true). The suite passes false and calls
+    `worker.tick()` itself.
+  - **Bug fixed:** `assemble` gave the `Runtime` a second, empty store when none was passed,
+    while the tools used the first. Now one store is used throughout.
+  - The stand-in gains `hold <ending>` (`fail`, `reject`, `auth`, `ask`, `cancel`), so a
+    pending task can end each way. An answer starting with `slow <seconds>` takes that long.
+  - **Quickstart, corrected.** Its scenario-11 step said to "send before the next poll". An
+    outcome is recorded at a poll, and a free thread gets its background run in that same
+    poll, so that step never catches one. It now holds the thread's run lease, as a run on
+    another instance would.
+  - **Observation, unchanged:** `started_at` is when the hand-off recorded the task, at the
+    end of the call (5 s after the acknowledgment in the real run below). That matters
+    little for the maximum age (Phase 7, default 24 h).
+  - **Run against the real service.** The `.env` model (OpenRouter), the stub on 9998 as
+    `stub` (gated) and again as `quick` (read-only), a 5 s call limit and poll interval, and
+    the scratch database `freyja_p6`:
+    - Scenario 6: the approved `slow 60` hand-off returned the pending note after 5 s, and
+      the run ended with `end`. `agent_tasks` listed it as `working` with
+      `outcome_delivered: false`.
+    - The service was stopped by its port and the stub finished, then the service was
+      started again. Within a second the task was `completed` and delivered. The thread
+      ended with the `check_agent_tasks` call, its result holding the stub's report, and a
+      background run's reply. Exactly one result, and still one after two more polls.
+    - Scenario 11, held as above: the poll recorded the `quick` task's outcome and did not
+      deliver it. "Is the report ready?" recorded it just before the message, and the reply
+      answered from it. No background run followed for that thread.

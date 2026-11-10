@@ -119,7 +119,7 @@ def test_model_string_is_passed_through_unchanged(
         max_steps=7,
     )
     assert isinstance(result.agent, FakeGraph)
-    assert [tool.name for tool in result.catalog] == ["send_notification"]
+    assert [tool.name for tool in result.catalog] == ["check_agent_tasks", "send_notification"]
     assert seen["model"] == "anthropic:claude-sonnet-5-5"
     assert captured["model"] is resolved
     assert captured["skills"] == ["/skills/"]
@@ -129,8 +129,11 @@ def test_model_string_is_passed_through_unchanged(
         "reject",
     ]
     assert Path(captured["backend"].cwd) == workspace.resolve()
-    assert [tool.name for tool in captured["tools"]] == ["send_notification"]
-    assert [type(m).__name__ for m in captured["middleware"]] == ["ThreadContextMiddleware"]
+    assert [tool.name for tool in captured["tools"]] == ["send_notification", "check_agent_tasks"]
+    assert [type(m).__name__ for m in captured["middleware"]] == [
+        "ThreadContextMiddleware",
+        "AgentTasksMiddleware",
+    ]
     assert captured["subagents"][0]["name"] == "general-purpose"
     assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7
 
@@ -188,7 +191,7 @@ def build(workspace: Path, delegate_tools: list[Any] | None = None) -> factory.O
 def test_without_tool_servers_the_catalog_is_the_fixed_table(workspace: Path) -> None:
     catalog = build(workspace).catalog
     assert [tool.name for tool in catalog] == list(OWN_TOOLS)
-    assert len(catalog) == 9
+    assert len(catalog) == 10
     assert {tool.name: tool.classification for tool in catalog} == OWN_TOOLS
     assert all(tool.server is None and tool.server_hints is None for tool in catalog)
     assert {tool.name: list(tool.allowed_decisions) for tool in catalog if tool.gated} == {
@@ -212,8 +215,9 @@ async def test_every_compiled_tool_is_classified(
     classified = {tool.name for tool in orchestrator.catalog}
     assert compiled - classified == {"execute"}
     assert {tool.name for tool in tools} <= set(tool_node_tools(recorded.subagent_graph))
-    assert [tool.name for tool in orchestrator.catalog][:9] == list(OWN_TOOLS)
-    assert [tool.name for tool in orchestrator.catalog][9:] == [tool.name for tool in tools]
+    own = len(OWN_TOOLS)
+    assert [tool.name for tool in orchestrator.catalog][:own] == list(OWN_TOOLS)
+    assert [tool.name for tool in orchestrator.catalog][own:] == [tool.name for tool in tools]
 
 
 def test_an_own_tool_missing_from_the_table_stops_the_build(
