@@ -272,3 +272,17 @@ tables and the worker are justified under the Constitution Check above.
 - **Phasing suggestion for tasks**: setup and configuration; the store, the links, and the
   startup checks (the startup half of User Story 6 is a prerequisite for everything); the stream
   change; then User Story 1, 2, 3, 4, 5, the runtime half of 6, and 7.
+- **Phase 1 as built (2026-11-10)**:
+  - The lock gained exactly the seven packages research R1 names (`a2a-sdk` 1.3.0, `aiologic`
+    0.17.1, `culsans` 0.11.0, `google-api-core` 2.44.0, `json-rpc` 1.15.0, `proto-plus` 1.29.0,
+    `wrapt` 2.5.2); no other version moved. `httpx` is now declared in both the runtime
+    dependencies and the `dev` group.
+  - `A2aAgentConfig.read_only` is a `StrictBool`, so `"read_only": "maybe"` or `"yes"` is
+    refused rather than read as a truthy string. A JSON `true` from the environment still works.
+  - The entry sets `hide_input_in_errors` like `McpServerConfig`, although `Settings` already
+    hides input for nested values: a probe showed the echo test fails only when both are
+    removed. The entry's own setting keeps a refusal quiet if the model is ever validated on
+    its own.
+  - The rules of contracts/agent-config.md that need the card or the tool
+    server list (a name shared with a tool server, card checks) are left to Phase 2, as the
+    contract says.

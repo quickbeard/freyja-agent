@@ -2,7 +2,14 @@ import ipaddress
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    StrictBool,
+    StringConstraints,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Shown in proposals, logs, and the catalog, so it is kept short and plain (FR-001).
@@ -67,6 +74,31 @@ class McpServerConfig(BaseModel):
         return self
 
 
+class A2aAgentConfig(BaseModel):
+    """One agent in ``FREYJA_A2A_AGENTS`` (feature 003, contracts/agent-config.md).
+
+    Where the agent runs on this machine, and whether messages to it skip approval. Like a tool
+    server entry, no error raised here repeats a value from the entry.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    url: str
+    # True exempts every hand-off, answer, and cancel to this agent from approval (FR-011).
+    read_only: StrictBool = False
+
+    @model_validator(mode="after")
+    def _local_address(self) -> Self:
+        parts = urlsplit(self.url)
+        if parts.scheme not in ("http", "https"):
+            raise ValueError("'url' must use http or https")
+        if not is_local_host(parts.hostname):
+            raise ValueError(
+                "'url' must be an address on this machine: localhost or a loopback IP address"
+            )
+        return self
+
+
 class Settings(BaseSettings):
     """Runtime configuration, read from FREYJA_* environment variables."""
 
@@ -94,6 +126,21 @@ class Settings(BaseSettings):
     mcp_call_timeout_seconds: Annotated[float, Field(gt=0)] = 30
     # Time limit per server for connecting and listing its tools at startup (002 SC-004).
     mcp_startup_timeout_seconds: Annotated[float, Field(gt=0)] = 20
+    # A2A agents, as one JSON object of agent name to entry. Empty means none (003 FR-001).
+    a2a_agents: dict[ServerName, A2aAgentConfig] = Field(default_factory=dict)
+    # How long one hand-off, answer, or cancel waits within a run; a task still working then
+    # becomes pending (003 FR-009, FR-017).
+    a2a_call_timeout_seconds: Annotated[float, Field(gt=0)] = 30
+    # Time limit per agent for reading its card at startup (003 SC-005).
+    a2a_startup_timeout_seconds: Annotated[float, Field(gt=0)] = 20
+    # How often pending tasks are checked and outcomes delivered (003 FR-019, SC-003).
+    a2a_poll_interval_seconds: Annotated[float, Field(gt=0)] = 10
+    # A pending task older than this, counted from its start, is given up (003 FR-021).
+    a2a_task_max_age_seconds: Annotated[float, Field(gt=0)] = 86400
+    # Attempts for one background run, the first included (003 FR-027).
+    background_run_attempts: Annotated[int, Field(gt=0)] = 3
+    # Wait between background run attempts (003 FR-027).
+    background_retry_seconds: Annotated[float, Field(gt=0)] = 60
 
 
 settings = Settings()
