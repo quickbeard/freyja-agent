@@ -513,7 +513,7 @@ reachability, and every agent tool with its agent.
 
 ### Tests for User Story 5
 
-- [ ] T056 [P] [US5] Write `tests/test_a2a_catalog.py`: `agents` lists each configured agent in
+- [X] T056 [P] [US5] Write `tests/test_a2a_catalog.py`: `agents` lists each configured agent in
       configuration order with `reachable`, `checked_at`, `error`, and `card` (`name`,
       `description`, `version`, `skills` with `id`, `name`, `description`, `tags`); agent tools
       carry `agent` and the classification the entry implies; a card's read-only claim leaves the
@@ -525,12 +525,12 @@ reachability, and every agent tool with its agent.
 
 ### Implementation for User Story 5
 
-- [ ] T057 [US5] Add `AgentCardClaims`, `AgentStatus`, `ToolCatalog.agents`, and
+- [X] T057 [US5] Add `AgentCardClaims`, `AgentStatus`, `ToolCatalog.agents`, and
       `CatalogTool.agent` to `src/freyja_agent/api/schemas.py` (`AgentStatus.error` at most 500
       characters, null when reachable) (contracts/openapi.yaml)
-- [ ] T058 [US5] List the agents and fill `agent` in `src/freyja_agent/api/tools.py`, from memory
+- [X] T058 [US5] List the agents and fill `agent` in `src/freyja_agent/api/tools.py`, from memory
       only (FR-024)
-- [ ] T059 [US5] Add `agent` to `CatalogTool` in
+- [X] T059 [US5] Add `agent` to `CatalogTool` in
       `specs/002-mcp-tool-delegation/contracts/openapi.yaml`, matching the 003 contract (plan
       Implementation Notes)
 

@@ -33,6 +33,9 @@ from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import make_stub
 
+# Freyja's own tools without an agent task store: check_agent_tasks comes with agents (003).
+OWN = {name: kind for name, kind in OWN_TOOLS.items() if name != "check_agent_tasks"}
+
 
 def _run_once(workspace: Path) -> ScriptedChatModel:
     model = ScriptedChatModel()
@@ -119,7 +122,7 @@ def test_model_string_is_passed_through_unchanged(
         max_steps=7,
     )
     assert isinstance(result.agent, FakeGraph)
-    assert [tool.name for tool in result.catalog] == ["check_agent_tasks", "send_notification"]
+    assert [tool.name for tool in result.catalog] == ["send_notification"]
     assert seen["model"] == "anthropic:claude-sonnet-5-5"
     assert captured["model"] is resolved
     assert captured["skills"] == ["/skills/"]
@@ -129,11 +132,8 @@ def test_model_string_is_passed_through_unchanged(
         "reject",
     ]
     assert Path(captured["backend"].cwd) == workspace.resolve()
-    assert [tool.name for tool in captured["tools"]] == ["send_notification", "check_agent_tasks"]
-    assert [type(m).__name__ for m in captured["middleware"]] == [
-        "ThreadContextMiddleware",
-        "AgentTasksMiddleware",
-    ]
+    assert [tool.name for tool in captured["tools"]] == ["send_notification"]
+    assert [type(m).__name__ for m in captured["middleware"]] == ["ThreadContextMiddleware"]
     assert captured["subagents"][0]["name"] == "general-purpose"
     assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7
 
@@ -190,9 +190,9 @@ def build(workspace: Path, delegate_tools: list[Any] | None = None) -> factory.O
 
 def test_without_tool_servers_the_catalog_is_the_fixed_table(workspace: Path) -> None:
     catalog = build(workspace).catalog
-    assert [tool.name for tool in catalog] == list(OWN_TOOLS)
-    assert len(catalog) == 10
-    assert {tool.name: tool.classification for tool in catalog} == OWN_TOOLS
+    assert [tool.name for tool in catalog] == list(OWN)
+    assert len(catalog) == 9
+    assert {tool.name: tool.classification for tool in catalog} == OWN
     assert all(tool.server is None and tool.server_hints is None for tool in catalog)
     assert {tool.name: list(tool.allowed_decisions) for tool in catalog if tool.gated} == {
         "send_notification": ["approve", "edit", "reject"]
@@ -215,8 +215,8 @@ async def test_every_compiled_tool_is_classified(
     classified = {tool.name for tool in orchestrator.catalog}
     assert compiled - classified == {"execute"}
     assert {tool.name for tool in tools} <= set(tool_node_tools(recorded.subagent_graph))
-    own = len(OWN_TOOLS)
-    assert [tool.name for tool in orchestrator.catalog][:own] == list(OWN_TOOLS)
+    own = len(OWN)
+    assert [tool.name for tool in orchestrator.catalog][:own] == list(OWN)
     assert [tool.name for tool in orchestrator.catalog][own:] == [tool.name for tool in tools]
 
 
@@ -366,3 +366,18 @@ async def test_the_cancel_tool_sends_nothing_outside_a_thread() -> None:
     result = await cancel.tool.ainvoke(call)
     assert result.status == "error"
     assert "nothing was sent" in result.content
+
+
+def test_with_an_agent_task_store_the_check_tool_joins_the_fixed_table(workspace: Path) -> None:
+    orchestrator = build_agent(
+        ScriptedChatModel(),
+        checkpointer=InMemorySaver(),
+        store=InMemoryStore(),
+        workspace_dir=workspace,
+        max_steps=Settings().max_steps,
+        agent_tasks=InMemoryAgentTaskStore(),
+    )
+    catalog = orchestrator.catalog
+    assert [tool.name for tool in catalog] == list(OWN_TOOLS)
+    assert catalog.get("check_agent_tasks").classification is Classification.READ_ONLY
+    assert "check_agent_tasks" in tool_node_tools(orchestrator.agent)
