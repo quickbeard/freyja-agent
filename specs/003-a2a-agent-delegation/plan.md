@@ -327,7 +327,8 @@ tables and the worker are justified under the Constitution Check above.
     and the same reply came back in different orders (a flaky test showed it), and whole numbers
     are turned back into integers, since protobuf keeps every number as a double.
   - The A2A message id is `freyja-<thread>-<tool call id>`, so an agent that de-duplicates by
-    message id also sees a replayed step as the same message.
+    message id also sees a replayed step as the same message. (T072 adds a digest of the step;
+    see "Send key" below.)
   - A step replayed from the send ledger returns the recorded text as a normal result, even if
     the first attempt was an error result; the ledger keeps text, not the error flag.
   - Every acknowledged task gets a row with the state it ended the call in. Endings other than
@@ -355,8 +356,8 @@ tables and the worker are justified under the Constitution Check above.
     '<tool>' has no argument named '<key>'". Nested errors are unchanged.
   - The send ledger knows a call by thread and tool call id, so a later call that reused an id
     on the same thread would get the earlier call's result without a send. A first test draft
-    did this by reusing the scripted id `c1` across runs. Providers give each call its own id,
-    so this needs no code; the tests give each step its own ids.
+    did this by reusing the scripted id `c1` across runs. Not every provider behind an
+    OpenAI-compatible route promises unique ids, so T072 fixed it; see "Send key" below.
   - Run against the real service with the `.env` model (OpenRouter), the compose Postgres, and
     the stub on 9998 not marked read-only: quickstart Scenario 3 paused with `handoff_to_stub`,
     `agent: stub`, `server: null`, and the model's message (it gave no context), and the stub
@@ -364,3 +365,29 @@ tables and the worker are justified under the Constitution Check above.
     refused with 422 and the proposal stayed; the edited message was the one the stub received,
     once, and the stream ended with `end`. On a second thread a reject with a reason sent
     nothing, and the reply repeated the reason.
+- **Send key (2026-11-10, T072)**:
+  - A send is known by `(thread_id, step, tool_call_id)`. `step` is the `checkpoint_ns` the
+    tool call runs in. A probe showed LangGraph runs each tool call as its own task with its own
+    namespace (`tools:<task id>`, nested for the subagent). Two calls sharing an id in one reply
+    got different namespaces, as did a later step. A call whose step failed and ran again from
+    the last checkpoint got the same one, and a sibling that had finished was not run again.
+  - Running again from an older checkpoint (time travel) forks it, so the call gets a new
+    namespace and would send again. Freyja has no such path: a retry continues from the last
+    checkpoint (FR-027).
+  - Each send keeps `request`, a SHA-256 of the agent, the kind, and the arguments. A row
+    found with another digest is not a step running again. The tool returns an error naming
+    the agent and sends nothing, rather than answer with the other call's result.
+  - The A2A message id gains the first eight hex characters of the step's digest, so an agent
+    that de-duplicates by message id does not drop the second of two calls sharing an id.
+  - The middleware that would have rewritten repeated tool call ids was not built. A subagent
+    starts with its own messages, so it could not see the ids the orchestrator had used.
+    Rewriting an id would also have to rewrite it in the provider's content blocks. For
+    Anthropic, a `tool_use` block keeping the old id next to the rewritten call would leave a
+    call with no result.
+  - A database that ran earlier 003 phases has the old `freyja_agent_sends`, which
+    `CREATE TABLE IF NOT EXISTS` leaves as it is. 003 has not been released, so there is no
+    migration. Drop the table once: `docker compose exec postgres psql -U freyja -d freyja -c
+    'DROP TABLE freyja_agent_sends'`.
+  - Run against the real service with the `.env` model (OpenRouter) and the `helloworld` agent
+    on a scratch database: two hand-offs on one thread completed, and each row had its own
+    step, message id, and digest.

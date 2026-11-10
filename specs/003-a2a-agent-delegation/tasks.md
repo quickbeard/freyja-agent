@@ -254,6 +254,15 @@ context id.
       a self-contained task to another agent; write the message and include only the context
       the agent needs; relay the reply in your own words (FR-005, FR-015)
 
+- [X] T072 [US1] Key the send ledger by `(thread_id, step, tool_call_id)`, where `step` is the
+      tool call's `checkpoint_ns`, and keep a digest of each request: a recorded send with
+      another digest is refused and nothing is sent; the A2A message id adds a digest of the
+      step. Amends T008, T022, T024, and T025. Tests in `tests/test_a2a_handoff.py` part 3 and
+      `tests/test_agent_task_store.py`: a reused tool call id in a later run, twice in one
+      reply, and in the orchestrator and the subagent each reaches the agent; a step that runs
+      again after its send returns the recorded result, or the in-flight error, and sends
+      nothing (FR-010, FR-027, research R5, R8)
+
 **Checkpoint**: quickstart Scenario 2 works against the stub; User Story 1 is complete.
 
 ---

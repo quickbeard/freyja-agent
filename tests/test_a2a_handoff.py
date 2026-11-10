@@ -13,7 +13,7 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 
-from freyja_agent.delegates import a2a_agents
+from freyja_agent.delegates import a2a_agents, a2a_tools
 from freyja_agent.runtime.agent_tasks import AgentSend, InMemoryAgentTaskStore
 from tests.a2a_stub import make_stub, stub_card
 from tests.conftest import A2aApp
@@ -247,23 +247,38 @@ async def test_a_direct_message_reply_continues_the_conversation_and_lists_no_ta
     assert [task.message for task in await made.store.list_tasks("msg-1")] == ["again"]
 
 
-# Part 3 (T022): the send ledger keeps a step that runs again from sending twice.
+# Part 3 (T022, T072): the send ledger keeps a step that runs again from sending twice, and
+# tells apart the calls a provider gave the same id.
+
+# The pre-recorded sends below are filed under a step these tests pin, as a call in a step
+# that runs again would find them.
+PINNED_STEP = "tools:pinned"
 
 
-async def _ledger(store: InMemoryAgentTaskStore, thread_id: str, result: str | None) -> None:
+@pytest.fixture
+def pinned_step(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(a2a_tools, "_step", lambda: PINNED_STEP)
+
+
+async def _ledger(
+    store: InMemoryAgentTaskStore, thread_id: str, result: str | None, message: str = "again"
+) -> None:
     await store.start_send(
         AgentSend(
             thread_id=thread_id,
+            step=PINNED_STEP,
             tool_call_id="h1",
             agent="hello",
             kind="handoff",
             message_id="m-1",
+            request=a2a_tools._digest("hello", "handoff", message, None, None),
             sent_at=datetime.now(UTC),
             result=result,
         )
     )
 
 
+@pytest.mark.usefixtures("pinned_step")
 async def test_a_send_already_recorded_returns_its_result_and_sends_nothing(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any
 ) -> None:
@@ -279,6 +294,7 @@ async def test_a_send_already_recorded_returns_its_result_and_sends_nothing(
     assert made.stubs["hello"].record.messages == []
 
 
+@pytest.mark.usefixtures("pinned_step")
 async def test_a_send_still_in_flight_is_not_sent_again(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any
 ) -> None:
@@ -293,3 +309,123 @@ async def test_a_send_still_in_flight_is_not_sent_again(
     assert "may or may not have received" in result["content"]
     assert made.stubs["hello"].record.messages == []
     assert events[-1] == ("end", {"status": "completed"})
+
+
+@pytest.mark.usefixtures("pinned_step")
+async def test_a_recorded_send_of_another_message_is_refused_and_nothing_is_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    # The same key for a different message is not a step running again (research R5).
+    store = InMemoryAgentTaskStore()
+    await _ledger(store, "led-3", "Agent 'hello' replied:\n\nsomething else", message="earlier")
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("again")]), {"hello": {"read_only": True}}, store=store
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "led-3", sse_events)
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert "already recorded a different message" in result["content"]
+    assert "something else" not in result["content"]
+    assert made.stubs["hello"].record.messages == []
+
+
+def test_a_step_that_runs_again_returns_the_recorded_result(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Unpinned: the step LangGraph gives the call must be the same when its step runs again,
+    # here after the result was recorded but before the step itself was saved.
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("once", call_id="c1")]), {"hello": {"read_only": True}}
+    )
+    finish = made.store.finish_send
+
+    async def recorded_then_lost(*args: Any, **kwargs: Any) -> None:
+        await finish(*args, **kwargs)
+        raise RuntimeError("the service stopped before the step was saved")
+
+    config = {"configurable": {"thread_id": "rerun-1"}}
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.store, "finish_send", recorded_then_lost)
+        assert run(client, "rerun-1", sse_events)[-1][0] == "error"
+        monkeypatch.undo()
+        messages = client.portal.call(made.runtime.agent.ainvoke, None, config)["messages"]
+
+    assert [m.text for m in made.stubs["hello"].record.messages] == ["once"]
+    (result,) = [m for m in messages if isinstance(m, ToolMessage)]
+    assert result.content.startswith("Agent 'hello' completed task ")
+    assert "once" in result.content
+
+
+def test_a_step_that_failed_after_sending_is_not_sent_again(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("once", call_id="c1")]), {"hello": {"read_only": True}}
+    )
+
+    async def lost(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("the database went away after the send")
+
+    config = {"configurable": {"thread_id": "rerun-2"}}
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.store, "finish_send", lost)
+        assert run(client, "rerun-2", sse_events)[-1][0] == "error"
+        monkeypatch.undo()
+        messages = client.portal.call(made.runtime.agent.ainvoke, None, config)["messages"]
+
+    assert [m.text for m in made.stubs["hello"].record.messages] == ["once"]
+    (result,) = [m for m in messages if isinstance(m, ToolMessage)]
+    assert "may or may not have received" in result.content
+
+
+def test_a_reused_tool_call_id_in_a_later_run_is_still_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    script = [handoff("first", call_id="c1"), DONE, handoff("second", call_id="c1")]
+    made = make_a2a_app(ScriptedChatModel(script=script), {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        run(client, "reuse-1", sse_events)
+        events = run(client, "reuse-1", sse_events)
+
+    assert [m.text for m in made.stubs["hello"].record.messages] == ["first", "second"]
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"].endswith("second") and "first" not in result["content"]
+    # The agent sees two messages, not one sent twice.
+    first, second = made.stubs["hello"].record.messages
+    assert first.message_id != second.message_id
+
+
+def test_two_calls_with_one_id_in_one_reply_are_both_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    step = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "c1", "name": "handoff_to_hello", "args": {"message": "one"}},
+            {"id": "c1", "name": "handoff_to_hello", "args": {"message": "two"}},
+        ],
+    )
+    made = make_a2a_app(ScriptedChatModel(script=[step]), {"hello": {"read_only": True}})
+    with TestClient(made.app) as client:
+        run(client, "reuse-2", sse_events)
+    assert sorted(m.text for m in made.stubs["hello"].record.messages) == ["one", "two"]
+
+
+def test_the_orchestrator_and_the_subagent_reusing_an_id_are_both_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    script = [
+        handoff("from the orchestrator", call_id="c1"),
+        DELEGATE,
+        handoff("from the subagent", call_id="c1"),
+    ]
+    made = make_a2a_app(
+        ScriptedChatModel(script=script, final_text="Done."), {"hello": {"read_only": True}}
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "reuse-3", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [m.text for m in made.stubs["hello"].record.messages] == [
+        "from the orchestrator",
+        "from the subagent",
+    ]

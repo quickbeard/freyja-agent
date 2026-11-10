@@ -159,10 +159,13 @@ read); a cancel that is never gated (contradicts FR-022).
 **Decision**: the hand-off tool's coroutine does the following, all bounded by the call time
 limit:
 
-1. Look up `(thread_id, tool_call_id)` in the send ledger (R8). If the message was already
-   sent, return the recorded result and send nothing. This is what makes a retried step safe
-   (FR-010, FR-027).
-2. Build the A2A `Message`: role user; `message_id` derived from thread and tool call id;
+1. Look up `(thread_id, step, tool_call_id)` in the send ledger (R8), where `step` is the
+   graph namespace the tool call runs in. If the message was already sent, return the recorded
+   result and send nothing. This is what makes a retried step safe (FR-010, FR-027). A recorded
+   send whose digest of agent, kind, and arguments differs is another call under the same key:
+   the tool returns an error result and sends nothing.
+2. Build the A2A `Message`: role user; `message_id` derived from the thread, the tool call id,
+   and a short digest of the step;
    `context_id` from the thread's conversation with this agent, if there is one; `task_id` when
    continuing a task; parts: the message text, then the context as a second text part with
    metadata `{"freyja": "context"}`. Nothing else from the thread is included (FR-005).
@@ -253,8 +256,11 @@ in-memory one for the suite (`runtime/agent_tasks.py`). Columns are in
 
 - `freyja_agent_conversations`: `(thread_id, agent)` to `context_id` (FR-008).
 - `freyja_agent_sends`: one row per message sent to an agent, keyed by
-  `(thread_id, tool_call_id)`, with the result text once known. A step that runs again finds
-  its row and does not send again (R5, FR-010, FR-027).
+  `(thread_id, step, tool_call_id)`, with a digest of the request and the result text once
+  known. A step that runs again finds its row and does not send again (R5, FR-010, FR-027).
+  The step is the namespace LangGraph gives the tool call: the same when the call's step runs
+  again from the last checkpoint, and different for every other call. The tool call id alone
+  is not enough, because nothing makes a model provider keep it unique on a thread.
 - `freyja_agent_tasks`: one row per agent task a thread started: state, timestamps, the
   outcome waiting to be delivered, the watcher's claim, and the background run's attempts
   (FR-017, FR-019, FR-020, FR-027).

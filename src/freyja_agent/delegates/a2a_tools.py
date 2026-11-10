@@ -14,6 +14,7 @@ the agent and returns the reply (research R5). Until cancels are implemented, th
 raises a tool error naming the agent, so it sends nothing.
 """
 
+import hashlib
 import json
 from typing import Annotated, Any
 
@@ -194,6 +195,22 @@ def _thread_id() -> str:
     return str(thread_id)
 
 
+def _step() -> str:
+    """The graph namespace this tool call runs in, which tells it apart on the thread.
+
+    LangGraph runs each tool call as its own task, whose namespace names the node and the task
+    id. The task id is derived from the checkpoint and the call's place in the step, so a call
+    whose step runs again gets the same namespace, and every other call, in another step, in the
+    same reply, or in a subagent, gets another. The provider's tool call id does not have that
+    guarantee, so it is not enough on its own to know a call again.
+    """
+    return str(get_config().get("configurable", {}).get("checkpoint_ns") or "")
+
+
+def _digest(*parts: Any) -> str:
+    return hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
+
+
 def _progress_writer() -> Any:
     try:
         return get_stream_writer()
@@ -220,8 +237,18 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
     ) -> str:
         """One hand-off, answer, or follow-up (research R5)."""
         thread_id = _thread_id()
-        earlier = await store.get_send(thread_id, tool_call_id)
+        step = _step()
+        kind = "answer" if task_id else "handoff"
+        request = _digest(link.name, kind, message, context, task_id)
+        earlier = await store.get_send(thread_id, step, tool_call_id)
         if earlier is not None:
+            if earlier.request != request:
+                # The same key for another message: not a step running again. Returning the
+                # earlier result would answer this call with another one's (FR-010).
+                raise ToolException(
+                    f"Agent '{link.name}': Freyja has already recorded a different message "
+                    "under this call's id, so it sent nothing."
+                )
             if earlier.result is not None:
                 return earlier.result
             raise ToolException(
@@ -230,7 +257,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
             )
         context_id = await store.get_context(thread_id, link.name)
         a2a_message = Message(
-            message_id=f"freyja-{thread_id}-{tool_call_id}",
+            message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
             role=Role.ROLE_USER,
             parts=[Part(text=message), *([_context_part(context)] if context else [])],
             context_id=context_id or "",
@@ -239,10 +266,12 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         await store.start_send(
             AgentSend(
                 thread_id=thread_id,
+                step=step,
                 tool_call_id=tool_call_id,
                 agent=link.name,
-                kind="answer" if task_id else "handoff",
+                kind=kind,
                 message_id=a2a_message.message_id,
+                request=request,
                 sent_at=await store.now(),
             )
         )
@@ -255,6 +284,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         result, ok = await _record(link, store, thread_id, message, outcome)
         await store.finish_send(
             thread_id,
+            step,
             tool_call_id,
             result=result,
             task_id=outcome.task.id if outcome.task is not None else None,
