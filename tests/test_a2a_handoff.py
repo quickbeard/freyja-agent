@@ -545,9 +545,11 @@ def test_a_reply_with_a_malformed_id_is_an_error_result(
         # reply is blanked on arrival, as if the agent had sent it so.
         send = a2a_agents._send
 
-        async def blanked(*args: Any) -> None:
-            await send(*args)
-            setattr(args[-1].task, blank, "")
+        async def blanked(
+            link: Any, message: Any, on_progress: Any, outcome: Any, *rest: Any
+        ) -> None:
+            await send(link, message, on_progress, outcome, *rest)
+            setattr(outcome.task, blank, "")
 
         monkeypatch.setattr(a2a_agents, "_send", blanked)
         stub = make_stub("hello")

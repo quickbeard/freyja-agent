@@ -743,3 +743,14 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
 - T015 changes the stream for every run. It is in Phase 2 so the existing stream and subagent
   tests guard it before any hand-off test relies on it (plan Implementation Notes).
 - Commit after each phase at least; commits stay manual and use the `type: summary` form.
+
+---
+
+## Phase 12: Convergence
+
+- [X] T073 Record a hand-off's task `started_at` as the moment the agent acknowledged it, on the
+      store's clock (the store's `now()` less the time elapsed since the acknowledgment), not
+      when the call ended, in `src/freyja_agent/delegates/a2a_agents.py` and
+      `src/freyja_agent/delegates/a2a_tools.py`, with a test in `tests/test_a2a_pending.py` that
+      a task still working at the limit lists a start before the call ended and is given up at
+      the maximum age counted from it, per FR-017, FR-021 (partial)
