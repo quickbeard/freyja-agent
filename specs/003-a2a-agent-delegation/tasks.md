@@ -608,14 +608,14 @@ provider, local Postgres, the reference agent at commit `1bb0871294`, and the st
 
 ### Implementation for User Story 7
 
-- [ ] T065 [US7] Document the feature in `README.md` as it now exists: describing an agent in
+- [X] T065 [US7] Document the feature in `README.md` as it now exists: describing an agent in
       `FREYJA_A2A_AGENTS`, what the read-only mark means and that silence means gated, the six
       limits, the hand-off and cancel tools and that answers are gated too, what a pending task
       is and where `agent_tasks` lists it, background runs and that no client is told about
       them, reading agents in `GET /tools`, startup and runtime failures, the reference
       `helloworld` agent at commit `1bb0871294` as the one to try, and that the suite needs no
       network and no running agent (FR-025)
-- [ ] T066 [US7] Run every scenario of `specs/003-a2a-agent-delegation/quickstart.md` against
+- [X] T066 [US7] Run every scenario of `specs/003-a2a-agent-delegation/quickstart.md` against
       the real service and record the outcome of each in the pull request description; correct
       `quickstart.md` or `README.md` where an instruction or an expected result is wrong, and add
       a fix task to this phase for anything that needs a code change (US7 scenarios 1 and 2,

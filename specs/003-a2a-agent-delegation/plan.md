@@ -627,3 +627,40 @@ tables and the worker are justified under the Constitution Check above.
       to the stub. After a restart, "Did the stub get the report task?" ran with Freyja's
       may-or-may-not result in place, directly after the call; the ledger held that text,
       the stub received no second POST, and no "did not complete" text appeared.
+- **Phase 10 as built (2026-11-11)**:
+  - **README (T065).** A new "Agents" section covers:
+    - trying the reference `helloworld` agent at `1bb0871294`, read-only and then gated;
+    - describing an agent, and that silence means gated;
+    - the hand-off and cancel tools, with answers gated too;
+    - pending tasks and `agent_tasks`;
+    - background runs, and that no client is told of them;
+    - give-ups;
+    - startup and runtime failures;
+    - agents in `GET /tools`.
+
+    The Configuration table gains the seven settings. The startup paragraph names the three
+    agent tables. The tests paragraph adds the stand-in agent, and that the suite needs no
+    running agent.
+  - **README, Setup:** uv stops reading `.env` at the first line it cannot parse, and only
+    warns. A model block left with its `<...>` placeholder therefore silently drops every
+    line after it, the agents line included. This happened in the clean-clone pass when the
+    OpenRouter lines were appended without commenting out the active OpenAI block. The README
+    now says so.
+  - **Quickstart (T066), corrected:**
+    - **Setup said to "add" the two limits:** uv keeps the first value of a repeated name, so
+      the copies after `.env.example`'s own lines were ignored, and the call limit stayed
+      30 s. It now says to change the existing lines, also for the maximum age in Scenario 7,
+      and Cleanup says to set them back.
+    - **Scenario 3:** the proposal shows `context` only when the orchestrator gives one, and
+      the stub's terminal shows a `POST /`, not the message text.
+  - **The run (T066).** Every scenario ran against the real service, from a clean clone of the
+    branch with its own compose Postgres on a fresh volume, removed afterwards. The `.env`
+    model (OpenRouter), the helloworld sample fetched at `1bb0871294` (both files read before
+    running), and the stub on 9998. Following the README alone, the clone reached a completed
+    read-only hand-off and an approved gated hand-off 85 s after the first command (SC-008),
+    with uv's package cache warm. Outcomes are in the pull request. No scenario needed a
+    code change, so no fix task was added.
+  - **Not done:** Scenario 9's "with the network disconnected" could not be checked here, because
+    this machine does not allow unprivileged network namespaces (`unshare -rn` is refused).
+    The suite, Ruff, and the hook passed in the clean clone with no agent or service running.
+    T069 repeats the check.
