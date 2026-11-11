@@ -42,7 +42,9 @@ cd /tmp/freyja-hello && uv run --no-project --with 'a2a-sdk[http-server]==1.1.0'
 uv run python -m tests.a2a_stub --http 9998
 ```
 
-Add three lines to `.env`. The short call limit makes a slow task become pending quickly:
+Add the agents line to `.env`, and change the two limits that `.env.example` already put
+there to these values; adding second copies does nothing, because uv keeps the first value of
+a repeated name. The short call limit makes a slow task become pending quickly:
 
 ```bash
 FREYJA_A2A_AGENTS='{"hello": {"url": "http://127.0.0.1:9999", "read_only": true}, "stub": {"url": "http://127.0.0.1:9998"}}'
@@ -104,8 +106,8 @@ curl -N -X POST localhost:8000/threads/a2a-2/runs \
 ```
 
 Expected: the stream ends with `event: interrupt`; the action request names
-`handoff_to_stub`, `agent: stub`, `server: null`, and shows `message` and `context`. The stub's
-terminal (B) shows no request yet.
+`handoff_to_stub`, `agent: stub`, `server: null`, and shows `message`, and `context` when the
+orchestrator gives one. The stub's terminal (B) shows no request yet.
 
 Approve, with an edit:
 
@@ -116,8 +118,8 @@ curl -N -X POST localhost:8000/threads/a2a-2/resume \
   -d "{\"interrupt_id\": \"$id\", \"decisions\": [{\"type\": \"edit\", \"args\": {\"message\": \"Summarize last week's deployments in three bullets.\", \"context\": null, \"task_id\": null}}]}"
 ```
 
-Expected: the stub logs one received message with the edited text, and the stream ends with
-`event: end`. An edit that sets a `task_id`, an empty `message`, or a key such as `agent` is
+Expected: the stub's terminal shows one `POST /`, the `tools` result echoes the edited text,
+and the stream ends with `event: end`. An edit that sets a `task_id`, an empty `message`, or a key such as `agent` is
 refused with 422 and the proposal stays (User Story 2, scenario 3). On a new thread, a reject
 with a reason sends nothing and the reply repeats the reason (scenario 4).
 
@@ -206,7 +208,8 @@ curl -N -X POST localhost:8000/threads/a2a-7/runs \
 Expected: the run pauses on `cancel_stub_task` with the task id and offers approve and reject
 only; approve, and the task is listed as `canceled`.
 
-To see a give-up, restart the service with `FREYJA_A2A_TASK_MAX_AGE_SECONDS=20`, start
+To see a give-up, change `FREYJA_A2A_TASK_MAX_AGE_SECONDS` in `.env` to `20`, restart the
+service, start
 `slow 600` on `a2a-8`, and wait half a minute. Expected: a background run reports the task as
 given up, says the agent may still be working, and offers a cancel; the task is `given_up`; the
 stub received no cancel.
@@ -241,7 +244,8 @@ stand-in agent inside the test process; one transport test serves it on loopback
 
 ## Cleanup
 
-Stop both agents and the service, remove the three lines from `.env`, then:
+Stop both agents and the service, remove the agents line from `.env` and set the two limits
+(and the maximum age, if you changed it) back to the values in `.env.example`, then:
 
 ```bash
 rm -rf /tmp/freyja-hello

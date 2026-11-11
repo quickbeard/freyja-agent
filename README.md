@@ -11,7 +11,7 @@ docker compose up -d postgres   # local Postgres; its credentials equal FREYJA_D
 uv run pre-commit install       # one-time per clone: runs Ruff and the unit tests on every commit
 ```
 
-`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in.
+`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
 
 ## Run the dev server
 
@@ -27,7 +27,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables plus the `freyja_run_locks` table if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving.
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, and the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`) if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving.
 
 Check it is up:
 
@@ -156,6 +156,95 @@ Each tool has its `name`, its `server` (`null` for Freyja's own tools), `descrip
 
 A proposal for a server tool names its server: each entry of `action_requests` in the `interrupt` event and in the thread state's `pending` has `server` set to the server's name, and `null` for Freyja's own tools.
 
+## Agents
+
+The orchestrator can also hand work to agents that do their own reasoning, over the [A2A protocol](https://a2a-protocol.org). At startup the service reads the card of every agent listed in `FREYJA_A2A_AGENTS` and gives the orchestrator two tools per agent: one to hand it a task and one to cancel a task. The full contract is in `specs/003-a2a-agent-delegation/contracts/agent-config.md`.
+
+### Try it with the reference hello agent
+
+The A2A project's own sample `helloworld` agent runs locally and needs no account or key. Fetch its two files at the pinned commit and run it; it listens on `127.0.0.1:9999`:
+
+```bash
+mkdir -p /tmp/freyja-hello && cd /tmp/freyja-hello
+base=https://raw.githubusercontent.com/a2aproject/a2a-samples/1bb0871294/samples/python/agents/helloworld
+curl -sSfO "$base/__main__.py" && curl -sSfO "$base/agent_executor.py"
+uv run --no-project --with 'a2a-sdk[http-server]==1.1.0' --with uvicorn python __main__.py
+```
+
+In another terminal, add one line to `.env` and start the service:
+
+```bash
+FREYJA_A2A_AGENTS='{"hello": {"url": "http://127.0.0.1:9999", "read_only": true}}'
+```
+
+```bash
+uv run --env-file .env freyja-api
+# ... Agent hello: read-only, 1 skill
+```
+
+A hand-off to a read-only agent runs without a pause. The stream shows the agent's progress as `update` events with `node: "agent"`, then the tool result with its answer, and the reply relays it:
+
+```bash
+curl -N -X POST localhost:8000/threads/hello-1/runs -H 'content-type: application/json' \
+  -d '{"message": "Ask the hello agent to say hello to the ops team."}'
+```
+
+Remove `"read_only": true` from the entry and restart the service. The same request now ends with an `interrupt` event for `handoff_to_hello` that shows the message Freyja wrote, and nothing reaches the agent until you approve it as described under "Decide on a proposal" above. Then the agent's answer reaches the reply.
+
+Remove the line from `.env` to go back to a service with no agents.
+
+### Describe an agent
+
+`FREYJA_A2A_AGENTS` is one JSON object on one line, in single quotes, mapping an agent name (lowercase letters, digits, hyphen, underscore; starting with a letter; at most 32 characters) to an entry with two fields:
+
+- `url`: where the agent serves its card, `http` or `https`, on `localhost` or a loopback address; any other host is refused without a lookup. Every request goes to that host and port: from the card the service keeps only the path of the agent's JSON-RPC interface, and it follows no redirect.
+- `read_only`: `true` lets every message to the agent run without approval. Without it, every hand-off, answer, and cancel to that agent pauses for a decision, on the orchestrator and on its subagent. **Silence means gated**, and nothing the agent's card says about itself changes that.
+
+```bash
+FREYJA_A2A_AGENTS='{"hello": {"url": "http://127.0.0.1:9999", "read_only": true}, "planner": {"url": "http://localhost:9998"}}'
+```
+
+Agent names and tool server names share one namespace: an agent may not be named like a configured server.
+
+### Hand-offs, answers, and cancels
+
+Each agent contributes two tools:
+
+- `handoff_to_<agent>` with `message` (1 to 32,000 characters), an optional `context` (up to 32,000), and an optional `task_id`. Only the message and the context reach the agent; nothing else from the thread does. Every hand-off from a thread to the same agent belongs to one conversation with it, which survives a restart; another thread has another conversation.
+- `cancel_<agent>_task` with the `task_id` to cancel. It cancels only a task this thread started, and a gated cancel offers approve and reject only.
+
+When the agent needs more input, the hand-off's result carries its question, the orchestrator asks you in its own words, and your answer goes back as a hand-off with that task's `task_id`. An answer is a message to the agent like any other: to a gated agent it pauses for a decision. An edit may change the message and the context, never the `task_id`, so an answer or a cancel stays bound to its task.
+
+The agent's answer comes back as the tool result, in the orchestrator's voice: text and structured data as text, and a note in place of each file or link. A hand-off waits at most `FREYJA_A2A_CALL_TIMEOUT_SECONDS`.
+
+### Pending tasks
+
+A task the agent has acknowledged and is still working on at the call limit is **pending**: the hand-off's result says so, and the run ends normally. The service checks pending tasks every `FREYJA_A2A_POLL_INTERVAL_SECONDS`, each by exactly one service instance, also across restarts; a check only reads the task's status and never sends the agent new work.
+
+The thread state lists every agent task the thread has started, pending or ended, under `agent_tasks`, and never drops one:
+
+```bash
+curl -s localhost:8000/threads/hello-1/state | jq .agent_tasks
+```
+
+Each entry has the `agent`, the `task_id`, the `message` it was started with, its `status` (`working`, `input_required`, `completed`, `failed`, `rejected`, `canceled`, or `given_up`), `started_at`, `last_checked_at`, `ended_at`, and `outcome_delivered`. The orchestrator is told on every model call which of the thread's tasks are pending, and its own read-only tool `check_agent_tasks` lists them on demand; the tool exists only when at least one agent is configured.
+
+When a pending task finishes, fails, needs input, or is canceled by the agent, its outcome is recorded in the thread exactly once, as Freyja's `check_agent_tasks` call followed by its result. Your next message gets it at the start of its run, ahead of what you wrote. If no message comes first, a **background run** delivers it as soon as the thread is free: no run in progress and no pending proposal. A background run is a run like any other, with the same gate, step limit, and run lease, so a proposal in it pauses it and you decide it through resume. No client is told that a background run happened: read the thread state to see its reply or its pause. A background run that fails with a model or internal error is tried again after `FREYJA_BACKGROUND_RETRY_SECONDS`, up to `FREYJA_BACKGROUND_RUN_ATTEMPTS` attempts in all, without recording the outcome or sending any message twice.
+
+A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its start, is **given up**: the service stops watching it and reports that the agent may still be working on it. It sends no cancel by itself: ask for one, and the cancel goes through the gate like any message to that agent. A pending task whose agent was removed from the configuration is given up after the restart that applies the change.
+
+### When an agent fails
+
+At startup, an agent the service cannot use stops it with an error that names the agent, and nothing listens: a card that cannot be read within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` or is redirected, a card that requires authentication, accepts no text, or offers no JSON-RPC interface, an address not on this machine, a name shared with a tool server, or a tool name already taken.
+
+During a run, a hand-off to an agent that cannot be reached, does not acknowledge within the call limit, fails or rejects the task, asks for authentication, or replies with something malformed becomes an error result naming the agent; the run goes on, and a warning names the agent. An unacknowledged hand-off's result says the agent may or may not have received it. Nothing is ever sent twice: an approval authorizes one attempt. If the service stops while a message to an agent is under way, the next run on that thread records that the agent may or may not have received it, and the message is not sent again. An agent that answers again is usable without a restart. No error result, log line, thread message, or catalog entry contains an agent's address.
+
+### Agents in the catalog
+
+`GET /tools` lists each configured agent under `agents`: its `name`, `reachable`, `checked_at`, and `error` from the most recent attempt to use it (at startup, in a hand-off or cancel, or while checking a task), and its `card`: the card's name, description, version, and skills. The card is the agent's own claim and never changes the classification. Each agent's two tools are in `tools` with `agent` set to its name; every other tool has `agent: null`. The catalog answers from memory, never contacts an agent, and never shows its address. With no agents configured, `agents` is empty and the tools are as before.
+
+A proposal for an agent's tool names its agent: each entry of `action_requests` has `agent` set, and `null` for every other tool.
+
 ## Lint and format
 
 Ruff handles both linting and formatting. Configuration lives in `pyproject.toml` under `[tool.ruff]`.
@@ -181,7 +270,15 @@ uv run pytest -q               # quiet output
 uv run pytest tests/test_health.py::test_healthz   # a single test
 ```
 
-Tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. The suite needs no network and no installed MCP server.
+Tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. The suite needs no network, no installed MCP server, and no running agent.
+
+To try the stand-in by hand, serve it on loopback and list it as an agent:
+
+```bash
+uv run python -m tests.a2a_stub --http 9998   # http://127.0.0.1:9998
+```
+
+It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`.
 
 The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
 
@@ -206,6 +303,13 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_MCP_SERVERS` | `{}` | Tool servers as a JSON object; see [Tool servers](#tool-servers). The default is none. |
 | `FREYJA_MCP_CALL_TIMEOUT_SECONDS` | `30` | Time limit for one tool server call, including connecting. A call over it returns an error result and the run continues. |
 | `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` | `20` | Time limit per server for connecting and listing its tools at startup. Servers connect concurrently. |
+| `FREYJA_A2A_AGENTS` | `{}` | Agents as a JSON object; see [Agents](#agents). The default is none. |
+| `FREYJA_A2A_CALL_TIMEOUT_SECONDS` | `30` | How long one hand-off, answer, or cancel waits within a run. A task still working at the limit becomes pending. |
+| `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` | `20` | Time limit per agent for reading its card at startup. Agents start concurrently. |
+| `FREYJA_A2A_POLL_INTERVAL_SECONDS` | `10` | How often pending tasks are checked and waiting outcomes delivered. |
+| `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up, counted from its start. No cancel is sent. |
+| `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |
+| `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between background run attempts. |
 | `OPENAI_API_KEY`, `OPENAI_API_BASE` | | Key for `openai:` models. `OPENAI_API_BASE` is optional: set it for self-hosted OpenAI-compatible servers or to route through a gateway. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | | Key for `anthropic:` models. `ANTHROPIC_API_URL` is optional: set it to route through a gateway. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | | Key for `openrouter:` models; the model id is OpenRouter's slug. `OPENROUTER_API_BASE` is optional: set it to route through a proxy. |
