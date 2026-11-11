@@ -138,7 +138,8 @@ specs/003-a2a-agent-delegation/
 ├── checklists/
 │   ├── requirements.md  # Spec quality checklist (from /speckit-specify)
 │   └── security-reliability.md  # Security and reliability checklist (from /speckit-checklist), reviewed
-└── tasks.md             # Phase 2 output (/speckit-tasks command - NOT created by /speckit-plan)
+└── tasks.md             # T001 to T072 in 11 phases (/speckit-tasks; T071 added by the analysis,
+                         #   T072 after Phase 4); each ticked as its phase was built
 ```
 
 ### Source Code (repository root)
@@ -148,10 +149,11 @@ src/freyja_agent/
 ├── config.py                  # + A2aAgentConfig; a2a_agents and six limits; agent and server
 │                              #   names share one namespace
 ├── agent/
-│   ├── factory.py             # build_agent(..., agent_tasks=...); AgentTasksMiddleware on both
-│   │                          #   agents; check_agent_tasks added to Freyja's tools
-│   ├── catalog.py             # CatalogTool.agent and .pinned_args; OWN_TOOLS + check_agent_tasks;
-│   │                          #   gate description for agent tools
+│   ├── factory.py             # build_agent(..., agent_tasks=...); with a store (agents
+│   │                          #   configured), AgentTasksMiddleware on both agents and
+│   │                          #   check_agent_tasks added to Freyja's tools
+│   ├── catalog.py             # CatalogTool.agent and .pinned_args; OWN_TOOLS + check_agent_tasks
+│   │                          #   (offered only with agents); gate description for agent tools
 │   ├── agent_tasks.py         # NEW: AgentTasksMiddleware (pending tasks in the prompt) and the
 │   │                          #   check_agent_tasks tool
 │   ├── context.py, prompts.py # prompts: one paragraph on hand-offs, answers, pending tasks
@@ -209,12 +211,16 @@ tests/
 │                              #   not; proposal in a background run; retries and their limits
 ├── test_a2a_catalog.py        # NEW: agents and agent tools; no address; read contacts no agent;
 │                              #   contract validated against contracts/openapi.yaml
-├── test_a2a_transport.py      # NEW: the stub over loopback: hand-off, pending, stop and restart
+├── test_a2a_transport.py      # NEW: the stub over loopback: hand-off, pending, a redirected
+│                              #   card, stop and restart
+├── test_agent_task_store.py   # NEW: the store contract on the in-memory store
 ├── integration/
-│   └── test_a2a_tasks_postgres.py  # NEW: tables, claim across two runtimes, ledger
-└── test_factory.py, test_runs.py, test_subagent.py, test_catalog.py, test_state.py
+│   └── test_a2a_tasks_postgres.py  # NEW: the same contract on Postgres; tables, claim across
+│                                   #   two instances, ledger
+└── test_factory.py, test_runs.py, test_catalog.py, test_state.py, test_gate.py,
+    test_mcp_gate.py, test_config.py
                                # adjusted for check_agent_tasks, the agent field, agent_tasks,
-                               #   and subgraph streaming; behavior unchanged
+                               #   subgraph streaming, and the new settings; behavior unchanged
 ```
 
 Also edited: `pyproject.toml` and `uv.lock` (`a2a-sdk`, and `httpx` declared at runtime), `.env.example` (seven
@@ -664,3 +670,27 @@ tables and the worker are justified under the Constitution Check above.
     this machine does not allow unprivileged network namespaces (`unshare -rn` is refused).
     The suite, Ruff, and the hook passed in the clean clone with no agent or service running.
     T069 repeats the check.
+- **Phase 11 as built (2026-11-11)**:
+  - **AGENTS.md (T067)** describes the agent modules, the stand-in and its streaming transport,
+    `make_a2a_app`, the `agent_transport` seam beside `connect`, the agent entry and its six
+    limits, and the command that serves the stand-in on 9998.
+  - **The trees above (T068)** now match what was built:
+    - `tasks.md` is listed as it is;
+    - `check_agent_tasks` and `AgentTasksMiddleware` are noted as added only with agents
+      (Phase 8);
+    - the tests list gains `test_agent_task_store.py`, and the adjusted tests are the ones 003
+      changed. `test_subagent.py` needed no change, while `test_gate.py`, `test_mcp_gate.py`,
+      and `test_config.py` did.
+  - **The one Ruff suppression is gone (T069).** The Postgres test file imported the store
+    contract's tests with `# noqa: F401`, since Phase 2. It now lists them in `__all__`, which
+    Ruff counts as use, and still collects all ten. No other suppression was added in 003, and
+    `pyproject.toml` gained only the dependencies.
+  - **The suite with the network disconnected (SC-009):** `unshare -rn` is refused here
+    (AppArmor restricts unprivileged user namespaces), but `bwrap --unshare-net` is allowed.
+    Run that way on the working tree, the process saw only `lo` in `/proc/net/dev`, and a
+    connection to an outside address failed with "Network is unreachable". The suite passed
+    twice (429 passed, 19 skipped). As a second check, a copy of the tree synced in uv's
+    Python 3.12 image passed the suite twice and Ruff in a container with `--network none`.
+    The loopback transport tests need only `lo`.
+  - **Constitution Check, re-run against the code (T070):** every principle still passes, with
+    no deviation; the evidence is in the pull request.

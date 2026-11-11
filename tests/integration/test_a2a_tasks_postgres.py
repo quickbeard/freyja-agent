@@ -13,7 +13,7 @@ import pytest
 from freyja_agent.config import Settings
 from freyja_agent.runtime.agent_tasks import AgentTaskStore, PostgresAgentTaskStore
 from freyja_agent.runtime.persistence import open_persistence
-from tests.test_agent_task_store import (  # noqa: F401 - collected here against Postgres
+from tests.test_agent_task_store import (
     Advance,
     a_send,
     a_task,
@@ -28,6 +28,20 @@ from tests.test_agent_task_store import (  # noqa: F401 - collected here against
     test_the_same_tool_call_id_in_another_step_is_another_send,
     test_threads_with_a_due_retry_are_listed_once_it_is_due,
 )
+
+# The contract's tests, collected here against Postgres.
+__all__ = [
+    "test_a_conversation_is_kept_by_its_first_context",
+    "test_a_pending_task_is_claimed_by_one_instance_until_the_claim_expires",
+    "test_a_send_is_recorded_once_and_finished",
+    "test_an_unknown_column_is_refused",
+    "test_an_update_can_require_the_state_it_expects",
+    "test_follow_ups_are_set_and_cleared_per_thread",
+    "test_ready_outcomes_wait_for_delivery_once",
+    "test_tasks_are_listed_oldest_first_and_never_dropped",
+    "test_the_same_tool_call_id_in_another_step_is_another_send",
+    "test_threads_with_a_due_retry_are_listed_once_it_is_due",
+]
 
 
 @pytest.fixture
