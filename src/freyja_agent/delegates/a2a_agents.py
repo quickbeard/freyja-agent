@@ -12,8 +12,9 @@ the configured address (FR-009).
 """
 
 import asyncio
+import contextlib
 import logging
-from collections.abc import AsyncIterator, Callable, Collection, Mapping, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -325,6 +326,8 @@ _STOP = {"completed", "failed", "canceled", "rejected", "input_required", "auth_
 
 # Receives (task id, state, text) for each progress update the agent reports.
 OnProgress = Callable[[str, str, str], None]
+# The clock an acknowledgment is timed by: the shared store's, so every instance agrees.
+Clock = Callable[[], Awaitable[datetime]]
 
 
 def state_name(state: int) -> str:
@@ -340,7 +343,9 @@ class SendOutcome:
     passed first; ``error`` says why the send failed, in text safe to show, and ``unreachable``
     whether the request got no answer at all, rather than an answer Freyja could not use.
     ``malformed`` says what was wrong with a reply that carried an unusable identifier; nothing
-    from such a reply is kept (FR-009).
+    from such a reply is kept (FR-009). ``acknowledged_at`` is when the acknowledgment arrived,
+    read from the clock ``send_message`` was given: a task starts then, not when the call ends
+    (FR-017, FR-021).
     """
 
     task: Task | None = None
@@ -349,6 +354,7 @@ class SendOutcome:
     error: str | None = None
     unreachable: bool = False
     malformed: str | None = None
+    acknowledged_at: datetime | None = None
 
     @property
     def acknowledged(self) -> bool:
@@ -372,8 +378,24 @@ def _text(message: Message | None) -> str:
     return "\n".join(part.text for part in message.parts if part.WhichOneof("content") == "text")
 
 
+async def _note_acknowledgment(outcome: SendOutcome, clock: Clock | None) -> None:
+    """Time the acknowledgment once, when it arrives.
+
+    A clock that fails leaves it untimed, and the task then starts when it is recorded: the
+    failure is the store's, and must not be reported as the agent's.
+    """
+    if clock is None or outcome.acknowledged_at is not None or not outcome.acknowledged:
+        return
+    with contextlib.suppress(Exception):  # the store's failure, not the agent's (see above)
+        outcome.acknowledged_at = await clock()
+
+
 async def _send(
-    link: "AgentLink", message: Message, on_progress: OnProgress, outcome: SendOutcome
+    link: "AgentLink",
+    message: Message,
+    on_progress: OnProgress,
+    outcome: SendOutcome,
+    clock: Clock | None,
 ) -> None:
     """Send one message and follow it until it stops, updating ``outcome`` as events arrive."""
     if link.client is None:
@@ -384,6 +406,7 @@ async def _send(
         kind = event.WhichOneof("payload")
         if kind == "message":
             outcome.reply = event.message
+            await _note_acknowledgment(outcome, clock)
             return
         if kind == "task":
             outcome.task = Task()
@@ -402,6 +425,7 @@ async def _send(
         elif kind == "artifact_update":
             _acknowledged(outcome, event.artifact_update)
             outcome.task.artifacts.append(event.artifact_update.artifact)
+        await _note_acknowledgment(outcome, clock)
         if outcome.state in _STOP:
             return
     if not link.streaming and outcome.task is not None:
@@ -436,13 +460,18 @@ async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress
             on_progress(task.id, state_name(seen), _text(task.status.message))
 
 
-async def send_message(link: "AgentLink", message: Message, on_progress: OnProgress) -> SendOutcome:
-    """Send ``message`` to the agent and wait for it within the call time limit (FR-009)."""
+async def send_message(
+    link: "AgentLink", message: Message, on_progress: OnProgress, clock: Clock | None = None
+) -> SendOutcome:
+    """Send ``message`` to the agent and wait for it within the call time limit (FR-009).
+
+    ``clock`` times the acknowledgment (``SendOutcome.acknowledged_at``).
+    """
     outcome = SendOutcome()
     broke = False
     try:
         async with asyncio.timeout(link.call_timeout):
-            await _send(link, message, on_progress, outcome)
+            await _send(link, message, on_progress, outcome, clock)
     except (TimeoutError, A2AClientTimeoutError):
         outcome.timed_out = True
         if not outcome.acknowledged:

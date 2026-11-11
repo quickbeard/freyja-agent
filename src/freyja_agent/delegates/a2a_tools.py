@@ -319,7 +319,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         def on_progress(task: str, state: str, text: str) -> None:
             writer({"agent": link.name, "task_id": task, "state": state, "text": text})
 
-        outcome = await send_message(link, a2a_message, on_progress)
+        outcome = await send_message(link, a2a_message, on_progress, clock=store.now)
         result, ok = await _record(link, store, thread_id, message, outcome)
         await store.finish_send(
             thread_id,
@@ -413,7 +413,9 @@ async def _record(
                 thread_id=thread_id,
                 context_id=task.context_id,
                 message=message,
-                started_at=now,
+                # When the agent acknowledged it, on the store's clock, so its age counts from
+                # then on every instance (FR-017, FR-021).
+                started_at=outcome.acknowledged_at or now,
                 **known,
             )
         )

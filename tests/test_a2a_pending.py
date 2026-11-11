@@ -11,15 +11,16 @@ import itertools
 import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
+from datetime import datetime
 from typing import Any
 
 import pytest
-from a2a.types import GetTaskRequest
+from a2a.types import GetTaskRequest, Task
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 
-from freyja_agent.delegates.a2a_agents import state_name
+from freyja_agent.delegates.a2a_agents import SendOutcome, _note_acknowledgment, state_name
 from freyja_agent.runtime.agent_tasks import AgentTaskRecord, InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
@@ -616,6 +617,89 @@ def test_a_task_past_the_maximum_age_is_given_up_without_a_cancel(
     assert after["agent_tasks"][0]["status"] == "given_up"
     assert after["agent_tasks"][0]["outcome_delivered"] is True
     assert after["messages"][-1]["content"] == "The stub task was given up."
+
+
+class RunningClock:
+    """Real time plus an offset a test moves forward: the store's clock in a test that needs
+    time to pass during a call, which the fake clock never does."""
+
+    def __init__(self) -> None:
+        self.offset = 0.0
+
+    def now(self) -> float:
+        return time.time() + self.offset
+
+    def advance(self, seconds: float) -> None:
+        self.offset += seconds
+
+
+def test_a_task_starts_when_the_agent_acknowledged_it(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    """T073, FR-017, FR-021: a task starts at its acknowledgment, not at the end of the call.
+
+    The stand-in acknowledges at once and the call then waits out its limit, so the start lies
+    about one limit before the task was recorded, and the maximum age counts from there.
+    """
+    agent = stub()
+    model = ScriptedChatModel(script=[handoff("hold: report")], final_text="Given up.")
+    clock = RunningClock()
+    made = pending_app(
+        make_a2a_app,
+        model,
+        agent,
+        a2a_task_max_age_seconds=MAX_AGE,
+        store=InMemoryAgentTaskStore(clock=clock.now),
+    )
+    with TestClient(made.app) as client:
+        go_pending(client, "c-8b", sse_events)
+        task = record(client, made, TASK)
+        listed = state(client, "c-8b")["agent_tasks"][0]
+        # Short of the maximum age counted from the end of the call; past it counted from the
+        # acknowledgment.
+        clock.advance(MAX_AGE - LIMIT / 2)
+        tick(client, made.runtime)
+        given_up = record(client, made, TASK)
+        agent.release()
+
+    before_the_call_ended = (task.last_checked_at - task.started_at).total_seconds()
+    assert LIMIT / 2 <= before_the_call_ended < LIMIT + 1
+    assert datetime.fromisoformat(listed["started_at"]) == task.started_at
+    assert given_up.state == "given_up"
+    assert agent.record.cancels == []
+
+
+def test_later_updates_do_not_move_a_tasks_start(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    """T073: a task that completes within the call keeps the start of its acknowledgment; the
+    updates and the completion that follow it do not move it."""
+    clock = RunningClock()
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("slow 0.5: report")], final_text="Done."),
+        {"stub": {"read_only": True}},
+        stubs={"stub": stub()},
+        a2a_call_timeout_seconds=5,
+        store=InMemoryAgentTaskStore(clock=clock.now),
+    )
+    with TestClient(made.app) as client:
+        go_pending(client, "c-8c", sse_events)
+        task = record(client, made, TASK)
+
+    assert task.state == "completed"
+    assert task.ended_at is not None
+    assert (task.ended_at - task.started_at).total_seconds() >= 0.25
+
+
+async def test_a_clock_that_fails_leaves_the_acknowledgment_untimed() -> None:
+    """T073: the store's failure is not the agent's; the task then starts when it is recorded."""
+
+    async def failing() -> datetime:
+        raise RuntimeError("the store is down")
+
+    outcome = SendOutcome(task=Task(id=TASK))
+    await _note_acknowledgment(outcome, failing)
+    assert outcome.acknowledged_at is None
 
 
 def test_a_given_up_task_can_be_canceled(

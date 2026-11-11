@@ -694,3 +694,28 @@ tables and the worker are justified under the Constitution Check above.
     The loopback transport tests need only `lo`.
   - **Constitution Check, re-run against the code (T070):** every principle still passes, with
     no deviation; the evidence is in the pull request.
+- **Phase 12 as built (2026-11-11, convergence)**:
+  - **A task starts at its acknowledgment (T073).** The hand-off passes the store's `now` to
+    `send_message`, which reads it once, when the first task, update, or direct reply arrives
+    (`SendOutcome.acknowledged_at`). The task's row takes that as `started_at`, so the listed
+    start and the maximum age count from the acknowledgment rather than from the end of the
+    call. This corrects the Phase 6 observation above. An answer still keeps the start of the
+    task it continues.
+  - **Read at the acknowledgment, not computed afterwards.** T073 suggested the store's `now()`
+    at recording less the time elapsed since the acknowledgment. Built that way first, it
+    mixed the process's clock with the store's. Under the suite's frozen store clock, two
+    tasks started 0.3 s apart got starts ordered by jitter, and
+    `test_several_outcomes_are_delivered_by_one_run_in_the_order_they_arrived` failed in two
+    of ten full runs. Reading the store's clock at the acknowledgment uses one clock, the one
+    every instance shares. It costs one `now()` per message to an agent, inside the call's
+    time limit.
+  - **A failing clock is the store's failure, not the agent's.** If reading the clock fails,
+    the acknowledgment stays untimed and the task starts when it is recorded. The failure is
+    not reported as the agent's, and the agent is not marked unavailable.
+  - **The Phase 9 empty-id tests** wrapped `_send` and took the outcome as its last argument;
+    the wrapper now names its arguments.
+  - **Run against the real service.** The `.env` model, the stub on 9998 marked read-only, a
+    5 s call limit and poll interval, and the scratch database `freyja_p12`, dropped
+    afterwards. The `slow 20` hand-off went pending with `started_at` exactly 5.00 s before
+    `last_checked_at`; before this change the two were equal. The task completed and was
+    delivered once, 24.2 s after its start: 20 s of work and up to one poll interval.
