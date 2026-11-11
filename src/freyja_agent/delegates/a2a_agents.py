@@ -21,6 +21,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
+from a2a.client.errors import A2AClientTimeoutError
 from a2a.types import (
     AgentCard,
     CancelTaskRequest,
@@ -336,13 +337,18 @@ class SendOutcome:
 
     ``task`` is the latest view of the task the agent created, if any; ``reply`` is a direct
     message reply. ``acknowledged`` is true once either arrived. ``timed_out`` means the limit
-    passed first; ``error`` says why the send failed, in text safe to show.
+    passed first; ``error`` says why the send failed, in text safe to show, and ``unreachable``
+    whether the request got no answer at all, rather than an answer Freyja could not use.
+    ``malformed`` says what was wrong with a reply that carried an unusable identifier; nothing
+    from such a reply is kept (FR-009).
     """
 
     task: Task | None = None
     reply: Message | None = None
     timed_out: bool = False
     error: str | None = None
+    unreachable: bool = False
+    malformed: str | None = None
 
     @property
     def acknowledged(self) -> bool:
@@ -433,17 +439,60 @@ async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress
 async def send_message(link: "AgentLink", message: Message, on_progress: OnProgress) -> SendOutcome:
     """Send ``message`` to the agent and wait for it within the call time limit (FR-009)."""
     outcome = SendOutcome()
+    broke = False
     try:
         async with asyncio.timeout(link.call_timeout):
             await _send(link, message, on_progress, outcome)
-    except TimeoutError:
+    except (TimeoutError, A2AClientTimeoutError):
         outcome.timed_out = True
         if not outcome.acknowledged:
             link.mark(False, f"it did not answer within {link.call_timeout:g} seconds")
             return outcome
     except Exception as exc:  # every failure becomes an outcome; none ends a run
-        outcome.error = link.describe(str(exc) or type(exc).__name__)
-        link.mark(False, outcome.error)
+        error = link.describe(str(exc) or type(exc).__name__)
+        link.mark(False, error)
+        if not outcome.acknowledged:
+            outcome.error = error
+            outcome.unreachable = unreachable(exc)
+            return outcome
+        # Acknowledged, then the stream broke: the agent has the task, so it is kept as last
+        # seen and watched like a task still working at the limit (FR-017).
+        broke = True
+    outcome.malformed = malformed(outcome)
+    if outcome.malformed is not None:
+        link.mark(False, f"it replied with something malformed: {outcome.malformed}")
         return outcome
-    link.mark(True)
+    if not broke:
+        link.mark(True)
     return outcome
+
+
+# A task or conversation id longer than this makes a reply malformed (FR-009).
+ID_LIMIT = 256
+
+
+def malformed(outcome: SendOutcome) -> str | None:
+    """What makes a reply unusable, or None: an empty or overlong task or conversation id."""
+    checks: list[tuple[str, str]] = []
+    if outcome.reply is not None:
+        # A direct message may leave its conversation out; it then starts none.
+        if outcome.reply.context_id:
+            checks.append(("conversation id", outcome.reply.context_id))
+    elif outcome.task is not None:
+        checks += [("task id", outcome.task.id), ("conversation id", outcome.task.context_id)]
+    for name, value in checks:
+        if not value:
+            return f"its {name} is empty"
+        if len(value) > ID_LIMIT:
+            return f"its {name} is longer than {ID_LIMIT} characters"
+    return None
+
+
+def unreachable(exc: BaseException) -> bool:
+    """True when the request got no answer from the agent: no connection, or it broke off.
+
+    Any other failure is an answer Freyja could not use: an error status, a protocol error the
+    agent sent, or a reply that does not parse.
+    """
+    cause = exc if isinstance(exc, httpx.TransportError) else exc.__cause__
+    return isinstance(cause, httpx.TransportError)

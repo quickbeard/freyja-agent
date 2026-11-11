@@ -548,7 +548,7 @@ task id; each gives an error result and the run continues; start it again and ha
 
 ### Tests for User Story 6
 
-- [ ] T060 [P] [US6] Add to `tests/test_a2a_handoff.py`: `fail`, `reject`, and `auth` give error
+- [X] T060 [P] [US6] Add to `tests/test_a2a_handoff.py`: `fail`, `reject`, and `auth` give error
       results naming the agent and the state, the run ends with `end`, and a warning names the
       agent; an agent that does not acknowledge within the limit gives an error saying it may or
       may not have received the task and leaves nothing pending; `longid` and an empty task id
@@ -559,7 +559,7 @@ task id; each gives an error result and the run continues; start it again and ha
       is in flight, then a new runtime on the same store: the next user's run gives the
       orchestrator the may-or-may-not result for that call, not Deep Agents' cancelled text, and
       the stub received the message once (FR-009, FR-010, FR-017, SC-006, US6 scenarios 4 and 5)
-- [ ] T061 [P] [US6] Write `tests/test_a2a_transport.py`: the stub served by uvicorn on a free
+- [X] T061 [P] [US6] Write `tests/test_a2a_transport.py`: the stub served by uvicorn on a free
       loopback port, through the production httpx transport: a read-only hand-off with progress
       arriving before the result; a `slow` task becoming pending and delivered by a tick; a
       redirect from the card URL to a second listener fails startup and the second listener
@@ -568,21 +568,21 @@ task id; each gives an error result and the run continues; start it again and ha
 
 ### Implementation for User Story 6
 
-- [ ] T062 [US6] Complete the error endings in the hand-off coroutine in
+- [X] T062 [US6] Complete the error endings in the hand-off coroutine in
       `src/freyja_agent/delegates/a2a_tools.py` and `AgentLink.send` in
       `src/freyja_agent/delegates/a2a_agents.py`, per the table in research R5: `failed`,
       `rejected`, `canceled`, `auth_required`, unacknowledged at the limit, unreachable, protocol
       error, and malformed (a task or context id that is empty or longer than 256 characters),
       each an error result through `describe()`, a warning log naming the agent, and a status
       update (FR-009)
-- [ ] T063 [US6] Make the worker's status checks update the agent's reachability in
+- [X] T063 [US6] Make the worker's status checks update the agent's reachability in
       `src/freyja_agent/delegates/delegation_worker.py`, so the catalog reflects the most recent
       attempt at startup, in a hand-off, or while watching (FR-024)
-- [ ] T064 [US6] Log, through `describe()` in `src/freyja_agent/delegates/delegation_worker.py`,
+- [X] T064 [US6] Log, through `describe()` in `src/freyja_agent/delegates/delegation_worker.py`,
       every give-up and every background run attempt with the agent, thread, and task ids and
       never the address, and add those log records to the address check in
       `tests/test_a2a_handoff.py` (FR-009, R14)
-- [ ] T071 [US6] Answer sends left in flight at the start of a run, in
+- [X] T071 [US6] Answer sends left in flight at the start of a run, in
       `src/freyja_agent/api/outcomes.py` and `src/freyja_agent/api/threads.py`: when a user's run
       or a background run starts, for every send of the thread whose `result` is null and whose
       tool call has no answer in the snapshot, add a `ToolMessage` for that tool call id saying

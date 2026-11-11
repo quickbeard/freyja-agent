@@ -22,6 +22,7 @@ from langgraph.store.memory import InMemoryStore
 from freyja_agent.agent.factory import build_agent
 from freyja_agent.api.app import create_app
 from freyja_agent.config import Settings
+from freyja_agent.delegates.a2a_agents import default_transport
 from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
@@ -237,6 +238,7 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         store: InMemoryAgentTaskStore | None = None,
         locks: InMemoryRunLocks | None = None,
         run_worker: bool = False,
+        network: bool = False,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -276,7 +278,11 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 instance_id=instance_id,
                 connect=lambda name, _config, _on_error_output: server_links[name].target(),
                 agent_tasks=task_store,
-                agent_transport=lambda name, _url: transports[name],
+                # ``network``: the production transport, to agents served on loopback
+                # (tests/test_a2a_transport.py only).
+                agent_transport=(
+                    default_transport if network else lambda name, _url: transports[name]
+                ),
                 run_worker=run_worker,
             ) as runtime:
                 made.runtimes.append(runtime)

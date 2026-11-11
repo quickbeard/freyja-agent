@@ -20,7 +20,8 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from freyja_agent.agent.agent_tasks import CHECK_AGENT_TASKS
 from freyja_agent.agent.factory import AGENT_NAME
-from freyja_agent.runtime.agent_tasks import AgentTaskRecord, AgentTaskStore
+from freyja_agent.delegates.a2a_tools import may_not_have_received
+from freyja_agent.runtime.agent_tasks import AgentSend, AgentTaskRecord, AgentTaskStore
 
 _EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 # Outcomes that the hand-off would have returned as an error result.
@@ -102,3 +103,53 @@ async def take_undelivered(
 async def mark_delivered(store: AgentTaskStore, tasks: Sequence[AgentTaskRecord]) -> None:
     for task in tasks:
         await store.mark_delivered(task.agent, task.task_id)
+
+
+async def answer_in_flight(
+    store: AgentTaskStore, thread_id: str, snapshot: Any
+) -> tuple[list[BaseMessage], list[AgentSend]]:
+    """Results for the thread's messages to agents left in flight by a stop (FR-017, T071).
+
+    A send whose result was never recorded, and whose tool call in the thread has no answer,
+    was cut off: the agent may or may not have received it. Without an answer, Deep Agents'
+    ``PatchToolCallsMiddleware`` would add its own "did not complete" text, which hides that.
+    The run's input carries these results ahead of everything else; the caller records them as
+    the sends' results once the input is in a checkpoint (``record_answers``), so nothing is
+    sent again. A send made inside a subagent has no call in the thread's own messages and is
+    left alone: the subagent's call is answered when its step runs again.
+    """
+    messages = (snapshot.values or {}).get("messages", [])
+    answered = {message.tool_call_id for message in messages if isinstance(message, ToolMessage)}
+    calls = {
+        call["id"]: call
+        for message in messages
+        if isinstance(message, AIMessage)
+        for call in message.tool_calls
+    }
+    results: list[BaseMessage] = []
+    sends: list[AgentSend] = []
+    for send in await store.in_flight_sends(thread_id):
+        call = calls.get(send.tool_call_id)
+        if call is None or send.tool_call_id in answered:
+            continue
+        answered.add(send.tool_call_id)
+        results.append(
+            ToolMessage(
+                content=may_not_have_received(send.agent),
+                name=call["name"],
+                tool_call_id=send.tool_call_id,
+                status="error",
+            )
+        )
+        sends.append(send)
+    return results, sends
+
+
+async def record_answers(store: AgentTaskStore, sends: Sequence[AgentSend]) -> None:
+    for send in sends:
+        await store.finish_send(
+            send.thread_id,
+            send.step,
+            send.tool_call_id,
+            result=may_not_have_received(send.agent),
+        )
