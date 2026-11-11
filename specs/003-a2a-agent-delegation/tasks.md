@@ -628,19 +628,19 @@ agent in under 20 minutes, following the README alone.
 
 ## Phase 11: Polish & Cross-Cutting Concerns
 
-- [ ] T067 [P] Update `AGENTS.md`: the Layout entries for `delegates/a2a_agents.py`,
+- [X] T067 [P] Update `AGENTS.md`: the Layout entries for `delegates/a2a_agents.py`,
       `delegates/a2a_tools.py`, `delegates/delegation_worker.py`, `runtime/agent_tasks.py`,
       `agent/agent_tasks.py`, `api/outcomes.py`, `tests/a2a_stub.py`, and `tests/asgi_stream.py`;
       the `agent_transport` seam; the seven settings; and the Commands entry
       `uv run python -m tests.a2a_stub --http 9998`
-- [ ] T068 [P] Update the documentation tree in `specs/003-a2a-agent-delegation/plan.md` to list
+- [X] T068 [P] Update the documentation tree in `specs/003-a2a-agent-delegation/plan.md` to list
       `tasks.md` as it exists, and record under Implementation Notes anything the implementation
       settled differently from the plan
-- [ ] T069 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
+- [X] T069 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
       `FREYJA_TEST_DATABASE_URI=... uv run pytest tests/integration`, and
       `uv run pre-commit run --all-files`; confirm no Ruff suppression was added and that the
       default suite passes with the network disconnected (SC-009, principle V)
-- [ ] T070 Re-run the plan's Constitution Check against the implemented code and note the
+- [X] T070 Re-run the plan's Constitution Check against the implemented code and note the
       result in the pull request description (principles I to VI)
 
 ---
