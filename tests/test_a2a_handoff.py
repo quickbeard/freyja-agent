@@ -15,6 +15,7 @@ from typing import Any
 
 import httpx
 import pytest
+from a2a.types import Artifact, Part, Task, TaskArtifactUpdateEvent
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
@@ -197,6 +198,54 @@ def test_parts_of_other_kinds_become_notes(
     # Nothing binary and no link reaches the thread (FR-006).
     stored = " ".join(str(m.content) for m in thread_messages(made, "h-6"))
     assert "PNG" not in stored and "files.example" not in stored
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_an_artifact_sent_in_chunks_reads_as_one_text(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    streaming: bool,
+) -> None:
+    """T074: the same text whether Freyja followed the stream or read the finished task."""
+    monkeypatch.setattr(a2a_agents, "POLL_SECONDS", 0.05)
+    stub = make_stub("hello", card=stub_card("hello", streaming=streaming))
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("chunks")]),
+        {"hello": {"read_only": True}},
+        stubs={"hello": stub},
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "h-6b", sse_events)
+
+    (result,) = tool_results(events, "handoff_to_hello")
+    heading, _, body = result["content"].partition(":\n\n")
+    assert heading.startswith("Agent 'hello' completed task ")
+    # The draft was replaced, the chunks read as one sentence, and the data part stays apart.
+    assert body == 'The quarterly report is ready.\n\n{"pages":4}'
+
+
+def _artifact_update(text: str, artifact_id: str, *, append: bool) -> TaskArtifactUpdateEvent:
+    return TaskArtifactUpdateEvent(
+        task_id="t",
+        context_id="c",
+        append=append,
+        artifact=Artifact(artifact_id=artifact_id, parts=[Part(text=text)]),
+    )
+
+
+def test_a_chunk_that_cannot_be_placed_is_kept_as_its_own_artifact() -> None:
+    """T074: an append for an artifact never sent, and an update without an id, lose nothing."""
+    task = Task(id="t", context_id="c")
+    for update in (
+        _artifact_update("One.", "a", append=False),
+        _artifact_update("Two.", "never-sent", append=True),
+        _artifact_update("Three.", "", append=False),
+        _artifact_update("Four.", "", append=False),
+    ):
+        a2a_agents._merge_artifact(task, update)
+
+    assert a2a_tools.a2a_result_text(task) == "One.\n\nTwo.\n\nThree.\n\nFour."
 
 
 # Part 2 (T021): one conversation per thread and agent.

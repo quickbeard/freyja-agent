@@ -77,5 +77,6 @@ FREYJA_A2A_AGENTS='{"hello": {"url": "http://10.0.0.5:9999"}}'
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up. |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between background run attempts. |
+| `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one service instance; further ones wait their turn. |
 
 All must be greater than zero.

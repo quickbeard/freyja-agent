@@ -17,6 +17,8 @@ the message text:
   that is already pending can end each way;
 - ``fail``, ``reject``, ``auth``: fails, rejects, or asks for authentication;
 - ``parts``: completes with a text, a data, a raw-bytes, and a URL part;
+- ``chunks``: completes with one artifact sent in several updates: a draft, then its
+  replacement, then two chunks appended to it, with a data part after the text;
 - ``progress <n>``: sends n status updates before completing;
 - ``message``: answers with a direct message instead of a task.
 
@@ -170,6 +172,26 @@ class _Executor(AgentExecutor):
                 return
             if await self._ended(ending, updater, say):
                 return
+        if keyword == "chunks":
+            # One artifact id throughout: the draft is replaced, and the chunks are appended.
+            await updater.add_artifact(parts=[new_text_part("A draft.")], artifact_id="report")
+            await updater.add_artifact(
+                parts=[new_text_part("The quarterly ")], artifact_id="report", last_chunk=False
+            )
+            await updater.add_artifact(
+                parts=[new_text_part("report is ")],
+                artifact_id="report",
+                append=True,
+                last_chunk=False,
+            )
+            await updater.add_artifact(
+                parts=[new_text_part("ready."), new_data_part({"pages": 4})],
+                artifact_id="report",
+                append=True,
+                last_chunk=True,
+            )
+            await updater.complete()
+            return
         if keyword == "parts":
             parts = [
                 new_text_part("Here is the report."),

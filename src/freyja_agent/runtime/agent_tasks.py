@@ -227,9 +227,13 @@ class InMemoryAgentTaskStore:
     ) -> bool:
         _check_columns(changes)
         key = (agent, task_id)
-        if when_state is not None and self._tasks[key].state not in when_state:
+        task = self._tasks.get(key)
+        # As the Postgres store answers: no row, or nothing to set, updates nothing.
+        if task is None or not changes:
             return False
-        self._tasks[key] = replace(self._tasks[key], **changes)
+        if when_state is not None and task.state not in when_state:
+            return False
+        self._tasks[key] = replace(task, **changes)
         return True
 
     async def list_tasks(self, thread_id: str) -> list[AgentTaskRecord]:
@@ -276,7 +280,10 @@ class InMemoryAgentTaskStore:
 
     async def mark_delivered(self, agent: str, task_id: str) -> None:
         key = (agent, task_id)
-        self._tasks[key] = replace(self._tasks[key], delivered_at=await self.now())
+        task = self._tasks.get(key)
+        # The first delivery is the one kept, and a task that does not exist is left alone.
+        if task is not None and task.delivered_at is None:
+            self._tasks[key] = replace(task, delivered_at=await self.now())
 
     async def set_followup(
         self,
@@ -286,9 +293,10 @@ class InMemoryAgentTaskStore:
         next_at: datetime | None,
         error: str | None,
     ) -> None:
-        for key in keys:
-            self._tasks[key] = replace(
-                self._tasks[key],
+        for agent, task_id in keys:
+            await self.update_task(
+                agent,
+                task_id,
                 followup_attempts=attempts,
                 followup_next_at=next_at,
                 followup_error=error,

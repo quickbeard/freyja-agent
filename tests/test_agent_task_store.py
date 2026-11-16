@@ -193,6 +193,34 @@ async def test_an_update_can_require_the_state_it_expects(store: AgentTaskStore)
     assert await store.update_task("stub", "t1", outcome="any state")
 
 
+async def test_a_task_that_does_not_exist_is_left_alone(store: AgentTaskStore) -> None:
+    """T078: both stores answer the same way, so the suite sees what the service would."""
+    assert not await store.update_task("stub", "missing", state="completed")
+    assert not await store.update_task(
+        "stub", "missing", when_state=("working",), state="completed"
+    )
+    await store.mark_delivered("stub", "missing")
+    await store.set_followup([("stub", "missing")], attempts=1, next_at=None, error="internal")
+    assert await store.get_task("stub", "missing") is None
+    assert await store.list_tasks("th-1") == []
+    # An update that sets nothing reports that nothing was updated.
+    await store.record_task(await a_task(store))
+    assert not await store.update_task("stub", "t1")
+    assert not await store.update_task("stub", "t1", when_state=("working",))
+
+
+async def test_an_outcome_is_marked_delivered_once(store: AgentTaskStore, advance: Advance) -> None:
+    """T078: a second mark keeps the time of the first delivery."""
+    await store.record_task(await a_task(store, outcome="done", outcome_ready=True))
+    await store.mark_delivered("stub", "t1")
+    first = await store.get_task("stub", "t1")
+    assert first is not None and first.delivered_at is not None
+    await advance(0.05)
+    await store.mark_delivered("stub", "t1")
+    second = await store.get_task("stub", "t1")
+    assert second is not None and second.delivered_at == first.delivered_at
+
+
 async def test_threads_with_a_due_retry_are_listed_once_it_is_due(
     store: AgentTaskStore, advance: Advance
 ) -> None:

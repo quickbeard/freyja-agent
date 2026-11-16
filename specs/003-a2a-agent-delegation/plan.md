@@ -146,7 +146,7 @@ specs/003-a2a-agent-delegation/
 
 ```text
 src/freyja_agent/
-├── config.py                  # + A2aAgentConfig; a2a_agents and six limits; agent and server
+├── config.py                  # + A2aAgentConfig; a2a_agents and seven limits; agent and server
 │                              #   names share one namespace
 ├── agent/
 │   ├── factory.py             # build_agent(..., agent_tasks=...); with a store (agents
@@ -719,3 +719,49 @@ tables and the worker are justified under the Constitution Check above.
     afterwards. The `slow 20` hand-off went pending with `started_at` exactly 5.00 s before
     `last_checked_at`; before this change the two were equal. The task completed and was
     delivered once, 24.2 s after its start: 20 s of work and up to one poll interval.
+- **Phase 13 as built (2026-11-16, convergence after a review of the A2A code)**:
+  - **Where the gaps came from.** Not from a `/speckit-converge` run: a read of the A2A code
+    found them, and each is recorded in tasks.md against the requirement it falls short of.
+    Each task is one commit, so one can be dropped without the others.
+  - **An artifact sent in chunks reads as one text (T074, FR-006).** The stream kept every
+    artifact update as its own artifact, so a sentence streamed in three chunks reached the
+    orchestrator in three pieces. The stream now replaces or extends the artifact with the
+    update's id, and text parts that follow one another in one artifact are joined with nothing
+    between them (research R6). The second half matters as much as the first: the SDK's server
+    keeps each chunk as a further part, so a task read with `get_task`, by polling or by the
+    worker, had the same fault. The stand-in gained the `chunks` keyword.
+  - **The loop does not wait for a delivery (T075, SC-003).** `tick()` awaited every background
+    run it started. On one instance, a run of a few minutes meant no other task was checked and
+    no other thread delivered to for that long. The round is now `watch()` and
+    `start_deliveries()`; each delivery is its own task, one per thread at a time, and at most
+    `FREYJA_BACKGROUND_RUN_CONCURRENCY` (default 4) run at once. `tick()` is the same round
+    followed by a wait, so the suite's tests read the result right after it and the service
+    and the suite still share one code path (principle III). The semaphore, not a count taken
+    at the start of a round, enforces the limit: deliveries that return at once, for a paused
+    thread or a retry not yet due, would otherwise take the slots in every round.
+  - **No lease on a paused thread (T076, FR-020).** `_deliver` took the run lease before it
+    read the state, on every tick, for every thread paused on a proposal with an outcome
+    waiting. A resume arriving in that moment got `run_active`. The state is now read first,
+    and again under the lease.
+  - **A task waiting for input is watched (T077, FR-019).** This reverses a sentence of
+    research R9, which held that nothing changes at the agent until the person answers. An
+    agent can end such a task on its own, and the spec's edge case "The agent cancels a task
+    itself" asks for the outcome to be delivered. Only an ending is recorded. While the agent
+    reports the task waiting, or working on an answer, the row is not written: an outcome's
+    message id is derived from `last_checked_at`, so moving it would let a question already in
+    the thread be recorded a second time. `test_a_task_waiting_for_input_is_not_checked` is
+    replaced by two tests. The cost is one `get_task` per waiting task per poll interval.
+  - **Not done: a question asked again.** If an answer's hand-off is cut off and the agent
+    then asks a second question, the worker sees `input_required` both times and records
+    nothing new. Telling the two apart by the question's text was considered and left out: an
+    agent whose waiting message changes by itself would start a background run every poll
+    interval.
+  - **The in-memory store answers like Postgres (T078, research R8).** `update_task`,
+    `set_followup`, and `mark_delivered` raised `KeyError` for a task that does not exist where
+    Postgres updates no row; an update that sets nothing returned true; a second
+    `mark_delivered` moved the time. Two contract tests, collected for both stores, cover it.
+  - **Constitution Check for this phase.** I: no path around the gate was added; a background
+    run is still `run_stream`, and a paused thread is still left to its decision. III: the
+    loop and `tick()` share `watch()` and `start_deliveries()`. IV: the one new setting goes
+    through `Settings` with a default and is in `.env.example`. V: every task has a test that
+    fails without its change. II and VI are not touched.

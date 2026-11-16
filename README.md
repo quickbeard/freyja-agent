@@ -219,7 +219,7 @@ The agent's answer comes back as the tool result, in the orchestrator's voice: t
 
 ### Pending tasks
 
-A task the agent has acknowledged and is still working on at the call limit is **pending**: the hand-off's result says so, and the run ends normally. The service checks pending tasks every `FREYJA_A2A_POLL_INTERVAL_SECONDS`, each by exactly one service instance, also across restarts; a check only reads the task's status and never sends the agent new work.
+A task the agent has acknowledged and is still working on at the call limit is **pending**: the hand-off's result says so, and the run ends normally. The service checks pending tasks every `FREYJA_A2A_POLL_INTERVAL_SECONDS`, each by exactly one service instance, also across restarts; a check only reads the task's status and never sends the agent new work. A task that waits for your answer is checked too, so one the agent ends meanwhile is reported instead of waiting until it is given up.
 
 The thread state lists every agent task the thread has started, pending or ended, under `agent_tasks`, and never drops one:
 
@@ -229,7 +229,7 @@ curl -s localhost:8000/threads/hello-1/state | jq .agent_tasks
 
 Each entry has the `agent`, the `task_id`, the `message` it was started with, its `status` (`working`, `input_required`, `completed`, `failed`, `rejected`, `canceled`, or `given_up`), `started_at`, `last_checked_at`, `ended_at`, and `outcome_delivered`. The orchestrator is told on every model call which of the thread's tasks are pending, and its own read-only tool `check_agent_tasks` lists them on demand; the tool exists only when at least one agent is configured.
 
-When a pending task finishes, fails, needs input, or is canceled by the agent, its outcome is recorded in the thread exactly once, as Freyja's `check_agent_tasks` call followed by its result. Your next message gets it at the start of its run, ahead of what you wrote. If no message comes first, a **background run** delivers it as soon as the thread is free: no run in progress and no pending proposal. A background run is a run like any other, with the same gate, step limit, and run lease, so a proposal in it pauses it and you decide it through resume. No client is told that a background run happened: read the thread state to see its reply or its pause. A background run that fails with a model or internal error is tried again after `FREYJA_BACKGROUND_RETRY_SECONDS`, up to `FREYJA_BACKGROUND_RUN_ATTEMPTS` attempts in all, without recording the outcome or sending any message twice.
+When a pending task finishes, fails, needs input, or is canceled by the agent, its outcome is recorded in the thread exactly once, as Freyja's `check_agent_tasks` call followed by its result. Your next message gets it at the start of its run, ahead of what you wrote. If no message comes first, a **background run** delivers it as soon as the thread is free: no run in progress and no pending proposal. A background run is a run like any other, with the same gate, step limit, and run lease, so a proposal in it pauses it and you decide it through resume. Background runs do not hold up the checks of other pending tasks, and one service instance runs at most `FREYJA_BACKGROUND_RUN_CONCURRENCY` of them at once; further ones wait their turn. No client is told that a background run happened: read the thread state to see its reply or its pause. A background run that fails with a model or internal error is tried again after `FREYJA_BACKGROUND_RETRY_SECONDS`, up to `FREYJA_BACKGROUND_RUN_ATTEMPTS` attempts in all, without recording the outcome or sending any message twice.
 
 A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its start, is **given up**: the service stops watching it and reports that the agent may still be working on it. It sends no cancel by itself: ask for one, and the cancel goes through the gate like any message to that agent. A pending task whose agent was removed from the configuration is given up after the restart that applies the change.
 
@@ -310,6 +310,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up, counted from its start. No cancel is sent. |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between background run attempts. |
+| `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one service instance; further ones wait their turn. |
 | `OPENAI_API_KEY`, `OPENAI_API_BASE` | | Key for `openai:` models. `OPENAI_API_BASE` is optional: set it for self-hosted OpenAI-compatible servers or to route through a gateway. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | | Key for `anthropic:` models. `ANTHROPIC_API_URL` is optional: set it to route through a gateway. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | | Key for `openrouter:` models; the model id is OpenRouter's slug. `OPENROUTER_API_BASE` is optional: set it to route through a proxy. |

@@ -56,7 +56,8 @@ step verified by the transport test (R16).
 
 **Decision**: one setting, `FREYJA_A2A_AGENTS`, a JSON object from agent name to entry, parsed
 into `A2aAgentConfig` (`url`, `read_only`). The full shape and the refusal rules are in
-[contracts/agent-config.md](contracts/agent-config.md). Six more settings carry the limits:
+[contracts/agent-config.md](contracts/agent-config.md). Seven more settings carry the limits
+(the last was added on 2026-11-16, T075):
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -67,6 +68,7 @@ into `A2aAgentConfig` (`url`, `read_only`). The full shape and the refusal rules
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up (FR-021) |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included (FR-027) |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between attempts (FR-027) |
+| `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one instance (SC-003) |
 
 **Rationale**:
 
@@ -218,6 +220,25 @@ The notes use the wording of feature 002's MCP notes (002 research R6), so the o
 one vocabulary. Bytes and URLs never reach the model or the thread. A status message that
 repeats the last artifact's text is not added twice.
 
+**An artifact sent in several updates** (added 2026-11-16, T074): an agent may stream one
+artifact as a first update and further updates marked `append`, all naming one artifact id.
+While it follows the stream, the hand-off replaces the artifact held under that id, or adds the
+update's parts to it when it is marked `append`, as the SDK's server does for the task it keeps
+(`append_artifact_to_task` in `a2a/server/tasks/task_manager.py`). The task in hand is then the
+one `get_task` returns, so the result is the same from the stream, from polling, and from the
+worker (FR-020). An `append` for an artifact never sent, and an update without an artifact id,
+are kept as new artifacts rather than refused.
+
+Within one artifact, text parts that follow one another are one text and are joined with nothing
+between them: that is how a streamed text is held, by the agent and here. Parts of other kinds,
+separate artifacts, and the parts of a message are joined with blank lines as before. The cost:
+an agent that puts two unrelated texts side by side in one artifact gets them joined without a
+break.
+
+**Probe**: three updates carrying `The quarterly `, `report is `, and `ready.` for one artifact
+id reached the orchestrator as `The quarterly \n\nreport is \n\nready.` before this change, and
+the stand-in's finished task, read with `get_task`, held the three chunks as three text parts.
+
 ## R7. Progress in the run's stream (FR-007)
 
 **Decision**: the hand-off tool writes each progress update with LangGraph's stream writer
@@ -287,12 +308,27 @@ the agent is built and stopped before the links close. Each tick, every poll int
 1. Claim the due rows: state `working` or `input_required`, not given up, and unclaimed or
    whose claim has expired. The claim is `watcher = <instance id>`,
    `watch_until = now + 3 × interval`.
-2. For each claimed `working` task: if its agent is no longer configured, or its age exceeds
-   the maximum, give it up. Otherwise call `get_task` and store the new state. A terminal state
-   or `input_required` records the outcome text and marks it ready for delivery. An `input_required` task is not
-   polled again until it is answered, because nothing changes at the agent until then, but the
-   maximum age still applies to it.
+2. For each claimed task: if its agent is no longer configured, or its age exceeds the
+   maximum, give it up. Otherwise call `get_task` and store the new state. For a `working`
+   task, a terminal state or `input_required` records the outcome text and marks it ready for
+   delivery. An `input_required` task is polled too (revised 2026-11-16, T077): the agent can
+   cancel it, fail it, or forget it before the person answers, and the spec's edge case "The
+   agent cancels a task itself" asks for that outcome to be delivered like any other. For such
+   a task only an ending is recorded. While the agent still reports `input_required`, or
+   `working` on an answer whose hand-off is still following it, nothing is written: the
+   question is in the record already, and `last_checked_at` must stay the time the question
+   arrived, because the outcome's message id is derived from it (R10).
 3. Deliver ready outcomes (R10).
+
+**The loop does not wait for a delivery** (revised 2026-11-16, T075). Steps 1 and 2 finish
+within one call time limit. Step 3 starts each delivery as its own asyncio task and returns: a
+background run is a whole run of the orchestrator and can take minutes, and a loop that waited
+for it would check no other task and deliver to no other thread meanwhile, against SC-003 on a
+single instance. A thread the instance is already delivering to is not started again, and at
+most `FREYJA_BACKGROUND_RUN_CONCURRENCY` deliveries are under way at once; the others wait for
+a slot in the order they were started. `tick()`, which the suite calls, is the same round and
+then waits for the deliveries. Stopping the worker cancels the deliveries under way, and each
+run releases its lease as it does when a client disconnects.
 
 A failed `get_task` marks the agent unavailable and leaves the task pending; it is checked again
 on the next tick. An answer that the task is not found ends it as `failed` with that reason
@@ -326,9 +362,12 @@ Delivery happens at the start of two kinds of run:
 
 - **A user's run** (`POST /threads/{id}/runs`): under the lease and after the paused-thread
   check, undelivered outcomes are prepended to the run's input, before the user's message.
-- **A background run**, started by the worker for a thread with undelivered outcomes once it
-  can take the thread's run lease and the thread has no pending proposal. Its input is the
-  outcome messages alone. It goes through `run_stream` with mode `background`, the same agent,
+- **A background run**, started by the worker for a thread with undelivered outcomes once the
+  thread has no pending proposal and it can take the thread's run lease. The worker reads the
+  thread's state before it takes the lease and leaves a paused thread alone (revised
+  2026-11-16, T076): taking the lease first would refuse a resume arriving in that moment as
+  `run_active`, on every tick for as long as the proposal waits. It reads the state again
+  under the lease, which decides. Its input is the outcome messages alone. It goes through `run_stream` with mode `background`, the same agent,
   gate, step limit, and lease heartbeat as any run (principle III); the worker consumes the
   events and reads only the terminal one.
 

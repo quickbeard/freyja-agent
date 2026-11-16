@@ -754,3 +754,39 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
       `src/freyja_agent/delegates/a2a_tools.py`, with a test in `tests/test_a2a_pending.py` that
       a task still working at the limit lists a start before the call ended and is given up at
       the maximum age counted from it, per FR-017, FR-021 (partial)
+
+---
+
+## Phase 13: Convergence
+
+- [X] T074 Read an artifact an agent sends in several updates as one artifact: in the stream,
+      an update replaces the artifact with its id or, marked `append`, adds its parts to it, in
+      `src/freyja_agent/delegates/a2a_agents.py`; and text parts that follow one another in one
+      artifact are one text, in `src/freyja_agent/delegates/a2a_tools.py`, so the result is the
+      same from the stream and from `get_task`. Add the `chunks` keyword to
+      `tests/a2a_stub.py` and tests in `tests/test_a2a_handoff.py` for an agent that streams
+      and one that does not, per FR-006, FR-020 (partial)
+- [X] T075 Keep watching while a background run is in progress: the worker's loop starts each
+      delivery as its own task and does not wait for it, starts none for a thread it is already
+      delivering to, and runs at most `FREYJA_BACKGROUND_RUN_CONCURRENCY` (default 4) at once,
+      in `src/freyja_agent/delegates/delegation_worker.py` and `src/freyja_agent/config.py`;
+      `tick()` still waits, for the suite. Document the setting in `.env.example`, `README.md`,
+      `AGENTS.md`, and `contracts/agent-config.md`, with tests in
+      `tests/test_a2a_background.py` that another thread's task is checked and delivered while
+      a background run is held, and that the limit holds, per SC-003, FR-019 (partial)
+- [X] T076 Leave a thread paused on a proposal alone without taking its run lease, so a resume
+      that arrives during a tick is not refused as `run_active`, in
+      `src/freyja_agent/delegates/delegation_worker.py`; the check under the lease stays. Test
+      in `tests/test_a2a_background.py` that a tick takes no lease on a paused thread, per
+      FR-020 and the edge case "The thread is busy when a pending task changes" (partial)
+- [X] T077 Keep checking a task that waits for input, and record its outcome when the agent
+      ended it meanwhile (canceled, failed, rejected, finished, or no longer known); a task
+      still waiting, or working on an answer, changes nothing in its record, in
+      `src/freyja_agent/delegates/delegation_worker.py`. Replace
+      `test_a_task_waiting_for_input_is_not_checked` in `tests/test_a2a_pending.py` and correct
+      research R9, per FR-019 and the edge case "The agent cancels a task itself" (partial)
+- [X] T078 Make `InMemoryAgentTaskStore` answer like the Postgres store for a task that does not
+      exist or an update that changes nothing: `update_task` returns false, and `set_followup`
+      and `mark_delivered` do nothing, in `src/freyja_agent/runtime/agent_tasks.py`, with a
+      contract test in `tests/test_agent_task_store.py` collected by
+      `tests/integration/test_a2a_tasks_postgres.py`, per research R8 (partial)

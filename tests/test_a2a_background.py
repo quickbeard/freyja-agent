@@ -6,8 +6,10 @@ by the worker records it once the thread is free, and goes through the same gate
 """
 
 import logging
+import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from datetime import timedelta
 from typing import Any
 
@@ -15,8 +17,8 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
-from langchain_core.outputs import ChatResult
-from pydantic import Field
+from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field, PrivateAttr
 
 from freyja_agent.runtime.agent_tasks import AgentTaskRecord, InMemoryAgentTaskStore
 from tests.conftest import A2aApp
@@ -239,6 +241,37 @@ def test_a_paused_thread_waits_and_a_resume_records_nothing(
 
     assert len(outcomes(after["messages"])) == 1
     assert after["agent_tasks"][0]["outcome_delivered"] is True
+
+
+def test_a_tick_takes_no_lease_on_a_paused_thread(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T076: a resume arriving during a tick must not be refused as ``run_active``."""
+    agent = stub()
+    model = ScriptedChatModel(script=[handoff("hold: report"), NOTIFY], final_text="Noted.")
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        assert run(client, "b-5b", "Report, then notify.", sse_events)[-1][0] == "interrupt"
+        ready(client, made, "b-5b", agent.release)
+        locks = made.runtime.locks
+        acquire, taken = locks.acquire, []
+
+        async def recorded(thread_id: str, owner: str) -> bool:
+            taken.append(thread_id)
+            return await acquire(thread_id, owner)
+
+        monkeypatch.setattr(locks, "acquire", recorded)
+        tick(client, made.runtime)
+        assert taken == []
+        assert outcomes(state(client, "b-5b")["messages"]) == []
+        # Once it is decided, the thread is free and the next tick delivers.
+        assert approve(client, "b-5b", sse_events)[-1] == ("end", {"status": "completed"})
+        taken.clear()
+        tick(client, made.runtime)
+        after = state(client, "b-5b")
+
+    assert taken == ["b-5b"]
+    assert len(outcomes(after["messages"])) == 1
 
 
 def test_a_users_run_records_the_outcome_before_the_message(
@@ -467,6 +500,110 @@ def test_the_worker_watches_and_delivers_on_its_own(
             time.sleep(0.05)
         after = state(client, "b-14")
     assert len(outcomes(after["messages"])) == 1
+
+
+class HeldChatModel(ScriptedChatModel):
+    """Hands off what the user wrote, and holds the reply to task-1's outcome until released.
+
+    The model runs in a worker thread, so holding it holds one background run and nothing
+    else: the event loop, and with it the delegation worker, stays free.
+    """
+
+    _reached: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _release: threading.Event = PrivateAttr(default_factory=threading.Event)
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> ChatResult:
+        self.calls += 1
+        self.seen.append(list(messages))
+        last = messages[-1]
+        if isinstance(last, HumanMessage):
+            reply = handoff(str(last.content))
+        elif isinstance(last, ToolMessage) and last.name == "check_agent_tasks":
+            if f"task {TASK}" in str(last.content):
+                self._reached.set()
+                assert self._release.wait(10), "the held background run was never released"
+            reply = AIMessage(content="Delivered.")
+        else:
+            reply = AIMessage(content="Under way.")
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+    @contextmanager
+    def held(self) -> Iterator[None]:
+        """Inside: the background run for task-1 has reached the model and waits there."""
+        try:
+            assert self._reached.wait(5), "the background run for task-1 never started"
+            yield
+        finally:
+            self._release.set()
+
+
+def held_app(
+    make_a2a_app: Callable[..., A2aApp], model: ScriptedChatModel, **options: Any
+) -> A2aApp:
+    """The worker runs its own loop here, as in the service, with a short interval."""
+    return make_a2a_app(
+        model,
+        {"stub": {"read_only": True}},
+        stubs={"stub": stub()},
+        a2a_call_timeout_seconds=0.3,
+        a2a_poll_interval_seconds=0.05,
+        run_worker=True,
+        **options,
+    )
+
+
+def until(client: TestClient, thread: str, wanted: list[tuple[str, str, bool]]) -> None:
+    deadline = time.monotonic() + 5
+    while tasks(client, thread) != wanted:
+        assert time.monotonic() < deadline, tasks(client, thread)
+        time.sleep(0.02)
+
+
+def test_a_background_run_in_progress_does_not_stop_the_worker(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    """T075: another thread's task is checked and delivered while a background run is held."""
+    model = HeldChatModel()
+    made = held_app(make_a2a_app, model)
+    with TestClient(made.app) as client:
+        run(client, "c-1", "slow 0.4: first report", sse_events)
+        with model.held():
+            assert state(client, "c-1")["run_active"] is True
+            # A task that starts, ends, and is delivered while the first run is still going.
+            run(client, "c-2", "slow 0.4: second report", sse_events)
+            until(client, "c-2", [("task-2", "completed", True)])
+            # Delivered means recorded in the thread; the run's reply follows it.
+            deadline = time.monotonic() + 5
+            while state(client, "c-2")["messages"][-1]["content"] != "Delivered.":
+                assert time.monotonic() < deadline, state(client, "c-2")["messages"][-1]
+                time.sleep(0.02)
+            assert state(client, "c-1")["run_active"] is True
+        until(client, "c-1", [(TASK, "completed", True)])
+
+
+def test_background_runs_beyond_the_limit_wait_their_turn(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    """T075: with a limit of one, the second outcome is recorded at once and delivered after."""
+    model = HeldChatModel()
+    made = held_app(make_a2a_app, model, background_run_concurrency=1)
+    with TestClient(made.app) as client:
+        run(client, "c-3", "slow 0.4: first report", sse_events)
+        with model.held():
+            run(client, "c-4", "slow 0.4: second report", sse_events)
+            # Watching goes on: the change is recorded. Its delivery waits for the slot.
+            until(client, "c-4", [("task-2", "completed", False)])
+            time.sleep(0.3)
+            waiting = state(client, "c-4")
+            assert (waiting["run_active"], outcomes(waiting["messages"])) == (False, [])
+        until(client, "c-4", [("task-2", "completed", True)])
+        until(client, "c-3", [(TASK, "completed", True)])
 
 
 def test_a_failure_is_delivered_as_an_error_result(
