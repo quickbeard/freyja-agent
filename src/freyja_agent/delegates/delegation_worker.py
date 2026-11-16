@@ -1,6 +1,6 @@
 """Watching pending agent tasks and delivering their outcomes (feature 003, research R9, R10).
 
-One ``DelegationWorker`` runs per service instance. Each tick, at the poll interval:
+One ``DelegationWorker`` runs per service instance. Each round, at the poll interval:
 
 1. it claims the pending tasks no other instance holds (``watch_until = now + 3 * interval``),
    so each task is watched by exactly one instance, and another instance takes it over once a
@@ -17,11 +17,18 @@ One ``DelegationWorker`` runs per service instance. Each tick, at the poll inter
    internal error is tried again after the retry interval, up to the configured attempts,
    continuing from its last checkpoint (FR-027).
 
-The suite calls ``tick()`` itself; the service runs ``start()``'s loop.
+Steps 1 and 2 are ``watch()`` and step 3 is ``start_deliveries()``. Each delivery is its own
+task, so a background run that takes minutes does not keep the next round from watching the
+other tasks or from delivering to other threads (SC-003). At most
+``FREYJA_BACKGROUND_RUN_CONCURRENCY`` background runs are under way at once on an instance, and
+a thread this instance is already delivering to is not started again.
+
+The service runs ``start()``'s loop, which never waits for a delivery. The suite calls
+``tick()``, which is one round that also waits for the deliveries, so a test reads the result
+right after it.
 """
 
 import asyncio
-import contextlib
 import logging
 import uuid
 from datetime import timedelta
@@ -60,33 +67,45 @@ class DelegationWorker:
         self.runtime = runtime
         self.interval = runtime.settings.a2a_poll_interval_seconds
         self._loop: asyncio.Task[None] | None = None
+        # The deliveries under way or waiting for a slot, by thread.
+        self._deliveries: dict[str, asyncio.Task[None]] = {}
+        self._slots = asyncio.Semaphore(runtime.settings.background_run_concurrency)
 
     @property
     def _links(self) -> dict[str, AgentLink]:
         return {link.name: link for link in self.runtime.agents}
 
     def start(self) -> None:
-        """Tick now and then at every poll interval, until ``stop``."""
+        """Watch and start deliveries now and then at every poll interval, until ``stop``."""
         if self._loop is None:
             self._loop = asyncio.create_task(self._run(), name="freyja-delegation-worker")
 
     async def stop(self) -> None:
+        """Stop the loop and the deliveries under way; each run releases its lease."""
         loop, self._loop = self._loop, None
-        if loop is not None:
-            loop.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await loop
+        stopping = [*([loop] if loop is not None else []), *self._deliveries.values()]
+        self._deliveries.clear()
+        for task in stopping:
+            task.cancel()
+        await asyncio.gather(*stopping, return_exceptions=True)
 
     async def _run(self) -> None:
         while True:
             try:
-                await self.tick()
-            except Exception:  # one failed tick must not stop the watching
-                logger.exception("Delegation worker: the tick failed; trying again next interval")
+                await self.watch()
+                await self.start_deliveries()
+            except Exception:  # one failed round must not stop the watching
+                logger.exception("Delegation worker: the round failed; trying again next interval")
             await asyncio.sleep(self.interval)
 
     async def tick(self) -> None:
-        """Claim, check or give up, then deliver and retry, once (research R9, R10)."""
+        """One round, waited for: claim, check or give up, then deliver and retry (R9, R10)."""
+        await self.watch()
+        await self.start_deliveries()
+        await asyncio.gather(*self._deliveries.values())
+
+    async def watch(self) -> None:
+        """Claim this instance's share of pending tasks, and check or give up each (R9)."""
         store = self.runtime.agent_tasks
         claimed = await store.claim_due(self.runtime.instance_id, CLAIM_INTERVALS * self.interval)
         now = await store.now()
@@ -101,9 +120,30 @@ class DelegationWorker:
             elif task.state == "working":
                 watching.append(self._check(task))
         await asyncio.gather(*watching)
+
+    async def start_deliveries(self) -> None:
+        """Start a delivery for each thread with an outcome waiting or a retry due (R10).
+
+        Nothing here waits for a background run. A thread this instance is still delivering to
+        is left to that delivery; a later round finds whatever arrived for it meanwhile.
+        """
+        store = self.runtime.agent_tasks
         threads = set(await store.threads_with_ready_outcomes())
         threads |= set(await store.threads_with_due_followups())
-        await asyncio.gather(*(self._deliver(thread_id) for thread_id in sorted(threads)))
+        for thread_id in sorted(threads - set(self._deliveries)):
+            self._deliveries[thread_id] = asyncio.create_task(
+                self._deliver_in_turn(thread_id), name=f"freyja-delivery-{thread_id}"
+            )
+
+    async def _deliver_in_turn(self, thread_id: str) -> None:
+        """Deliver to one thread once a slot is free; a failure is logged, never raised."""
+        try:
+            async with self._slots:
+                await self._deliver(thread_id)
+        except Exception:
+            logger.exception("Delegation worker: delivery on thread %s failed", thread_id)
+        finally:
+            self._deliveries.pop(thread_id, None)
 
     async def _give_up(self, task: AgentTaskRecord, *, removed: bool) -> None:
         """Stop watching a task: past the maximum age, or its agent is gone (FR-021, FR-023).

@@ -141,6 +141,8 @@ class Settings(BaseSettings):
     background_run_attempts: Annotated[int, Field(gt=0)] = 3
     # Wait between background run attempts (003 FR-027).
     background_retry_seconds: Annotated[float, Field(gt=0)] = 60
+    # Background runs under way at once on one instance; further ones wait (003 SC-003).
+    background_run_concurrency: Annotated[int, Field(gt=0)] = 4
 
 
 settings = Settings()

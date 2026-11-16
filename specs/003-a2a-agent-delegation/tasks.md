@@ -766,7 +766,7 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
       same from the stream and from `get_task`. Add the `chunks` keyword to
       `tests/a2a_stub.py` and tests in `tests/test_a2a_handoff.py` for an agent that streams
       and one that does not, per FR-006, FR-020 (partial)
-- [ ] T075 Keep watching while a background run is in progress: the worker's loop starts each
+- [X] T075 Keep watching while a background run is in progress: the worker's loop starts each
       delivery as its own task and does not wait for it, starts none for a thread it is already
       delivering to, and runs at most `FREYJA_BACKGROUND_RUN_CONCURRENCY` (default 4) at once,
       in `src/freyja_agent/delegates/delegation_worker.py` and `src/freyja_agent/config.py`;

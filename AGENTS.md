@@ -46,10 +46,11 @@ startup and exits with an error naming the connection when it is unreachable.
   the shared `settings` instance. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
   `FREYJA_MCP_CALL_TIMEOUT_SECONDS` and `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` are the two time
   limits for tool servers. `A2aAgentConfig` is one entry of `FREYJA_A2A_AGENTS` (a loopback
-  `url` and `read_only`); agent and server names share one namespace. Six limits go with it:
+  `url` and `read_only`); agent and server names share one namespace. Seven limits go with it:
   `FREYJA_A2A_CALL_TIMEOUT_SECONDS`, `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS`,
   `FREYJA_A2A_POLL_INTERVAL_SECONDS`, `FREYJA_A2A_TASK_MAX_AGE_SECONDS`,
-  `FREYJA_BACKGROUND_RUN_ATTEMPTS`, and `FREYJA_BACKGROUND_RETRY_SECONDS`.
+  `FREYJA_BACKGROUND_RUN_ATTEMPTS`, `FREYJA_BACKGROUND_RETRY_SECONDS`, and
+  `FREYJA_BACKGROUND_RUN_CONCURRENCY`.
 - `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
   (`build_agent`; the service, the tests, and any future CLI call it). `build_agent` takes the
   tool server tools as `delegate_tools` and returns an `Orchestrator`: the compiled graph as
@@ -71,8 +72,9 @@ startup and exits with an error naming the connection when it is unreachable.
   removes the address from everything it emits (`describe`). `a2a_tools.py` builds each
   agent's `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step
   that runs again never sends twice, and turns a reply into text. `delegation_worker.py` is the
-  `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and delivers
-  ready outcomes through a background run of `run_stream`, retrying a failed one.
+  `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
+  delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
+  loop never waits for a delivery; `tick()` does, for the tests.
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, and agent

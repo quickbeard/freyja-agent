@@ -56,7 +56,8 @@ step verified by the transport test (R16).
 
 **Decision**: one setting, `FREYJA_A2A_AGENTS`, a JSON object from agent name to entry, parsed
 into `A2aAgentConfig` (`url`, `read_only`). The full shape and the refusal rules are in
-[contracts/agent-config.md](contracts/agent-config.md). Six more settings carry the limits:
+[contracts/agent-config.md](contracts/agent-config.md). Seven more settings carry the limits
+(the last was added on 2026-11-16, T075):
 
 | Setting | Default | Meaning |
 |---|---|---|
@@ -67,6 +68,7 @@ into `A2aAgentConfig` (`url`, `read_only`). The full shape and the refusal rules
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up (FR-021) |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included (FR-027) |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between attempts (FR-027) |
+| `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one instance (SC-003) |
 
 **Rationale**:
 
@@ -312,6 +314,16 @@ the agent is built and stopped before the links close. Each tick, every poll int
    polled again until it is answered, because nothing changes at the agent until then, but the
    maximum age still applies to it.
 3. Deliver ready outcomes (R10).
+
+**The loop does not wait for a delivery** (revised 2026-11-16, T075). Steps 1 and 2 finish
+within one call time limit. Step 3 starts each delivery as its own asyncio task and returns: a
+background run is a whole run of the orchestrator and can take minutes, and a loop that waited
+for it would check no other task and deliver to no other thread meanwhile, against SC-003 on a
+single instance. A thread the instance is already delivering to is not started again, and at
+most `FREYJA_BACKGROUND_RUN_CONCURRENCY` deliveries are under way at once; the others wait for
+a slot in the order they were started. `tick()`, which the suite calls, is the same round and
+then waits for the deliveries. Stopping the worker cancels the deliveries under way, and each
+run releases its lease as it does when a client disconnects.
 
 A failed `get_task` marks the agent unavailable and leaves the task pending; it is checked again
 on the next tick. An answer that the task is not found ends it as `failed` with that reason

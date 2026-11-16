@@ -96,6 +96,7 @@ A2A_LIMITS = {
     "FREYJA_A2A_TASK_MAX_AGE_SECONDS": ("a2a_task_max_age_seconds", 86400),
     "FREYJA_BACKGROUND_RUN_ATTEMPTS": ("background_run_attempts", 3),
     "FREYJA_BACKGROUND_RETRY_SECONDS": ("background_retry_seconds", 60),
+    "FREYJA_BACKGROUND_RUN_CONCURRENCY": ("background_run_concurrency", 4),
 }
 
 
@@ -137,7 +138,12 @@ def test_a2a_limits_must_be_positive(
         Settings()
 
 
-def test_background_run_attempts_is_a_whole_number(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("FREYJA_BACKGROUND_RUN_ATTEMPTS", "2.5")
-    with pytest.raises(ValidationError, match="background_run_attempts"):
+@pytest.mark.parametrize(
+    "name", ["FREYJA_BACKGROUND_RUN_ATTEMPTS", "FREYJA_BACKGROUND_RUN_CONCURRENCY"]
+)
+def test_background_run_counts_are_whole_numbers(
+    monkeypatch: pytest.MonkeyPatch, name: str
+) -> None:
+    monkeypatch.setenv(name, "2.5")
+    with pytest.raises(ValidationError, match=name.removeprefix("FREYJA_").lower()):
         Settings()
