@@ -43,7 +43,9 @@ startup and exits with an error naming the connection when it is unreachable.
 ## Layout
 
 - `src/freyja_agent/config.py`: the `Settings` class (pydantic-settings, `FREYJA_*` prefix) and
-  the shared `settings` instance. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
+  the shared `settings` instance. `FREYJA_MODEL` names the model, and
+  `FREYJA_OPENAI_RESPONSES_API` says whether an `openai:` model is called through the Responses
+  API or through chat completions. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
   `FREYJA_MCP_CALL_TIMEOUT_SECONDS` and `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` are the two time
   limits for tool servers. `A2aAgentConfig` is one entry of `FREYJA_A2A_AGENTS` (a loopback
   `url` and `read_only`); agent and server names share one namespace. Seven limits go with it:

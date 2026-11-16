@@ -45,6 +45,27 @@ def test_feature_settings_overrides(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.run_lock_ttl_seconds == 15
 
 
+def test_an_openai_model_uses_the_responses_api_unless_told_otherwise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("FREYJA_OPENAI_RESPONSES_API", raising=False)
+    assert Settings().openai_responses_api is True
+
+
+@pytest.mark.parametrize(("value", "expected"), [("false", False), ("0", False), ("true", True)])
+def test_the_responses_api_setting_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch, value: str, expected: bool
+) -> None:
+    monkeypatch.setenv("FREYJA_OPENAI_RESPONSES_API", value)
+    assert Settings().openai_responses_api is expected
+
+
+def test_the_responses_api_setting_must_be_true_or_false(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREYJA_OPENAI_RESPONSES_API", "chat")
+    with pytest.raises(ValidationError, match="openai_responses_api"):
+        Settings()
+
+
 MCP_VARS = (
     "FREYJA_MCP_SERVERS",
     "FREYJA_MCP_CALL_TIMEOUT_SECONDS",

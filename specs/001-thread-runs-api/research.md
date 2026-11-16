@@ -111,6 +111,14 @@ installed providers work through the one string and FR-016 holds: the identifier
 settings. `ChatOpenRouter` requires `OPENROUTER_API_KEY` at construction (`chat_models.py:477-481`),
 which is why tests must never resolve a real provider string.
 
+**One override** (added 2026-11-16): `FREYJA_OPENAI_RESPONSES_API=false` turns the Responses API
+off where the provider profile turned it on, so an `openai:` model is called through chat
+completions. A self-hosted OpenAI-compatible server answered a first message over the Responses
+API and refused every later one with a 422: its Responses API took no earlier assistant message,
+tool call, or tool result as input, so no run got past its first model call. The same model
+worked over chat completions. The default keeps Deep Agents' choice, a provider whose profile
+does not name the API is resolved as before, and the identifier still appears only in settings.
+
 **Alternatives considered**: building the model in Freyja to pass temperature or timeouts.
 Nothing in the spec needs that, and it would duplicate the provider-profile logic.
 

@@ -49,6 +49,8 @@ from freyja_agent.runtime.agent_tasks import AgentTaskStore
 AGENT_NAME = "freyja"
 # Relative to the backend root, which is the workspace directory.
 SKILLS_SOURCE = "/skills/"
+# The argument Deep Agents' provider profile sets for ``openai:`` models (``resolve_model``).
+RESPONSES_API = "use_responses_api"
 
 
 @dataclass(frozen=True)
@@ -69,12 +71,15 @@ def build_agent(
     delegate_tools: Sequence[Any] = (),
     system_prompt: str = DEFAULT_PROMPT,
     agent_tasks: AgentTaskStore | None = None,
+    openai_responses_api: bool = True,
 ) -> Orchestrator:
     """Build the orchestrator and its catalog.
 
     ``model`` is the provider-prefixed string from settings in production and a chat model
     instance in tests; Deep Agents resolves the string itself, so the identifier never
-    appears here (FR-016). File tools are confined to ``workspace_dir`` and skills are read
+    appears here (FR-016). ``openai_responses_api`` is ``FREYJA_OPENAI_RESPONSES_API``: false
+    has an ``openai:`` string resolved to a model that is called through chat completions
+    (``resolve_model``). File tools are confined to ``workspace_dir`` and skills are read
     from its ``skills/`` folder (FR-017). ``max_steps`` bounds the general-purpose subagent;
     the parent run is bounded per call by the same value (FR-004a). ``ThreadContextMiddleware``
     tells the model, and every subagent, which thread it is working on.
@@ -104,7 +109,7 @@ def build_agent(
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
-    chat_model = resolve_model(model)
+    chat_model = resolve_model(model, openai_responses_api=openai_responses_api)
     subagent_graph, subagent = _general_purpose_subagent(
         chat_model, tools, backend, max_steps, gate, agent_tasks
     )
@@ -191,16 +196,29 @@ def _build_catalog(agent: Any, subagent_graph: Any, delegates: Sequence[CatalogT
     return Catalog(tools=(*own_entries, *delegates))
 
 
-def resolve_model(model: str | BaseChatModel) -> BaseChatModel:
+def resolve_model(
+    model: str | BaseChatModel, *, openai_responses_api: bool = True
+) -> BaseChatModel:
     """Resolve a provider-prefixed string the way Deep Agents does; pass instances through.
 
     ``apply_provider_profile`` supplies the provider-specific defaults Deep Agents registers
     (for example OpenRouter attribution headers), so a string resolves identically whether
     Deep Agents or this factory does it.
+
+    The one exception is ``openai_responses_api``. Deep Agents turns on OpenAI's Responses API
+    for every ``openai:`` model. An OpenAI-compatible server may answer a first message over
+    that API and refuse every later one, because its Responses API takes no earlier assistant
+    message, tool call, or tool result as input. False turns the API off where the profile
+    turned it on, and the model is then called through chat completions. A provider whose
+    profile does not name the API is resolved as before, so the setting cannot hand another
+    provider's client an argument it does not know.
     """
     if isinstance(model, BaseChatModel):
         return model
-    return init_chat_model(model, **apply_provider_profile(model))
+    defaults = dict(apply_provider_profile(model))
+    if not openai_responses_api and RESPONSES_API in defaults:
+        defaults[RESPONSES_API] = False
+    return init_chat_model(model, **defaults)
 
 
 def _general_purpose_subagent(
