@@ -308,11 +308,16 @@ the agent is built and stopped before the links close. Each tick, every poll int
 1. Claim the due rows: state `working` or `input_required`, not given up, and unclaimed or
    whose claim has expired. The claim is `watcher = <instance id>`,
    `watch_until = now + 3 × interval`.
-2. For each claimed `working` task: if its agent is no longer configured, or its age exceeds
-   the maximum, give it up. Otherwise call `get_task` and store the new state. A terminal state
-   or `input_required` records the outcome text and marks it ready for delivery. An `input_required` task is not
-   polled again until it is answered, because nothing changes at the agent until then, but the
-   maximum age still applies to it.
+2. For each claimed task: if its agent is no longer configured, or its age exceeds the
+   maximum, give it up. Otherwise call `get_task` and store the new state. For a `working`
+   task, a terminal state or `input_required` records the outcome text and marks it ready for
+   delivery. An `input_required` task is polled too (revised 2026-11-16, T077): the agent can
+   cancel it, fail it, or forget it before the person answers, and the spec's edge case "The
+   agent cancels a task itself" asks for that outcome to be delivered like any other. For such
+   a task only an ending is recorded. While the agent still reports `input_required`, or
+   `working` on an answer whose hand-off is still following it, nothing is written: the
+   question is in the record already, and `last_checked_at` must stay the time the question
+   arrived, because the outcome's message id is derived from it (R10).
 3. Deliver ready outcomes (R10).
 
 **The loop does not wait for a delivery** (revised 2026-11-16, T075). Steps 1 and 2 finish

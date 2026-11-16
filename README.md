@@ -219,7 +219,7 @@ The agent's answer comes back as the tool result, in the orchestrator's voice: t
 
 ### Pending tasks
 
-A task the agent has acknowledged and is still working on at the call limit is **pending**: the hand-off's result says so, and the run ends normally. The service checks pending tasks every `FREYJA_A2A_POLL_INTERVAL_SECONDS`, each by exactly one service instance, also across restarts; a check only reads the task's status and never sends the agent new work.
+A task the agent has acknowledged and is still working on at the call limit is **pending**: the hand-off's result says so, and the run ends normally. The service checks pending tasks every `FREYJA_A2A_POLL_INTERVAL_SECONDS`, each by exactly one service instance, also across restarts; a check only reads the task's status and never sends the agent new work. A task that waits for your answer is checked too, so one the agent ends meanwhile is reported instead of waiting until it is given up.
 
 The thread state lists every agent task the thread has started, pending or ended, under `agent_tasks`, and never drops one:
 

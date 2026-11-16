@@ -6,10 +6,10 @@ One ``DelegationWorker`` runs per service instance. Each round, at the poll inte
    so each task is watched by exactly one instance, and another instance takes it over once a
    claim lapses (FR-019);
 2. it gives up each claimed task past the maximum age, or whose agent is no longer configured,
-   without sending the agent anything (FR-021, FR-023), and checks each other ``working`` one
-   with the agent, recording a change with its outcome ready to deliver. A task waiting for
-   input is not checked: nothing changes at the agent until the person answers. Watching only
-   reads; it never sends the agent new work;
+   without sending the agent anything (FR-021, FR-023), and checks each other one with the
+   agent, recording a change with its outcome ready to deliver. A task waiting for input is
+   checked too, because the agent can end it before the person answers; while it still waits,
+   nothing about it is recorded. Watching only reads; it never sends the agent new work;
 3. for each thread with an outcome waiting, it leaves a thread paused on a proposal alone,
    without taking its lease, and otherwise takes the thread's run lease and runs a background
    run whose input is the outcome messages.
@@ -118,7 +118,7 @@ class DelegationWorker:
                 watching.append(self._give_up(task, removed=True))
             elif (now - task.started_at).total_seconds() >= max_age:
                 watching.append(self._give_up(task, removed=False))
-            elif task.state == "working":
+            else:
                 watching.append(self._check(task))
         await asyncio.gather(*watching)
 
@@ -188,7 +188,7 @@ class DelegationWorker:
             )
 
     async def _check(self, task: AgentTaskRecord) -> None:
-        """Ask the agent about one working task and record what changed (FR-019)."""
+        """Ask the agent about one pending task and record what changed (FR-019)."""
         link = self._links[task.agent]
         try:
             found = await link.get_task(task.task_id)
@@ -205,6 +205,13 @@ class DelegationWorker:
             link.mark(True)
             state, text = state_name(found.status.state), a2a_result_text(found)
         store = self.runtime.agent_tasks
+        if task.state == "input_required" and state in PENDING_STATES:
+            # Still waiting, or working on an answer whose hand-off is still following it: the
+            # question is recorded already, and that hand-off records what the answer leads
+            # to. Nothing is written, so the record keeps the time its question arrived, which
+            # names the question's outcome in the thread (``outcome_id``). Only an ending the
+            # agent decided on its own is news here.
+            return
         if state == "working":
             now = await store.now()
             await store.update_task(

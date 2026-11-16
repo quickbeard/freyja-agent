@@ -314,9 +314,10 @@ def test_a_task_the_agent_no_longer_knows_ends_failed(
     assert task.outcome_ready is True
 
 
-def test_a_task_waiting_for_input_is_not_checked(
-    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+def test_a_task_still_waiting_for_input_is_checked_and_its_record_is_left_alone(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
 ) -> None:
+    """T077: the agent is asked, and a task that still waits changes nothing."""
     agent = stub()
     made = pending_app(make_a2a_app, ScriptedChatModel(script=[handoff("hold ask: report")]), agent)
     with TestClient(made.app) as client:
@@ -325,11 +326,52 @@ def test_a_task_waiting_for_input_is_not_checked(
         wait_for(client, made.runtime, TASK, "input_required")
         with busy(client, made.runtime, "p-6"):
             tick(client, made.runtime)
+        question = record(client, made, TASK)
         seen = len(made.transports["stub"].requests)
+        clock.advance(INTERVAL)
         with busy(client, made.runtime, "p-6"):
             tick(client, made.runtime)
-        # Nothing changes at the agent until the person answers; it is not asked again.
-        assert len(made.transports["stub"].requests) == seen
+        again = record(client, made, TASK)
+
+    assert len(made.transports["stub"].requests) == seen + 1
+    # The time the question arrived names its outcome in the thread, so it must not move.
+    assert (again.state, again.outcome, again.last_checked_at) == (
+        "input_required",
+        question.outcome,
+        question.last_checked_at,
+    )
+    assert (again.outcome_ready, again.delivered_at) == (True, None)
+
+
+def test_a_task_the_agent_ends_while_it_waits_for_input_is_reported(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    """T077 and the edge case "The agent cancels a task itself", for a task that waits."""
+    agent = stub()
+    model = ScriptedChatModel(
+        script=[handoff("ask: plan the release"), AIMessage(content="Which date should it be?")],
+        final_text="The stub dropped the task.",
+    )
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        run(client, "p-6b", "Plan the release with the stub.", sse_events)
+        assert tasks(client, "p-6b") == [(TASK, "input_required", True)]
+        # Nobody answers, and the agent ends the task on its own.
+        (link,) = made.runtime.agents
+        client.portal.call(link.cancel, TASK)
+        tick(client, made.runtime)
+        after = state(client, "p-6b")
+
+    (task,) = after["agent_tasks"]
+    assert (task["status"], task["outcome_delivered"]) == ("canceled", True)
+    assert task["ended_at"] is not None
+    reported = [m for m in after["messages"] if m["type"] == "tool"][-1]
+    assert reported["name"] == "check_agent_tasks"
+    assert reported["content"].startswith(f"Agent 'stub' task {TASK} was canceled.")
+    # The orchestrator received it as an error result, as a hand-off would have returned it.
+    delivered = [m for m in model.seen[-1] if isinstance(m, ToolMessage)][-1]
+    assert (delivered.content, delivered.status) == (reported["content"], "error")
+    assert after["messages"][-1]["content"] == "The stub dropped the task."
 
 
 def test_a_task_whose_watcher_stops_is_delivered_within_a_minute(

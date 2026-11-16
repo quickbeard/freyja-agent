@@ -779,7 +779,7 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
       `src/freyja_agent/delegates/delegation_worker.py`; the check under the lease stays. Test
       in `tests/test_a2a_background.py` that a tick takes no lease on a paused thread, per
       FR-020 and the edge case "The thread is busy when a pending task changes" (partial)
-- [ ] T077 Keep checking a task that waits for input, and record its outcome when the agent
+- [X] T077 Keep checking a task that waits for input, and record its outcome when the agent
       ended it meanwhile (canceled, failed, rejected, finished, or no longer known); a task
       still waiting, or working on an answer, changes nothing in its record, in
       `src/freyja_agent/delegates/delegation_worker.py`. Replace

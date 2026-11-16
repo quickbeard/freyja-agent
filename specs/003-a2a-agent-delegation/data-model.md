@@ -138,8 +138,12 @@ One row per task an agent created for a thread, kept for good (clarification of 
   from the agent, and a task the agent answers as not found, are stored as `failed`, with the
   reason in the outcome (spec FR-019). A cancel the agent made itself is `canceled` with an
   outcome to deliver (spec FR-020).
-- `input_required` is not final: the task is waiting for the user's answer and is not polled,
-  but the maximum age still applies.
+- `input_required` is not final: the task is waiting for the user's answer. It is still
+  polled, and only an ending the agent decided meanwhile is recorded; while it waits, the row
+  is not written, so `last_checked_at` stays the time its question arrived (research R9). The
+  maximum age applies to it too.
+- Every move away from `input_required` that the worker finds sets `outcome` and
+  `outcome_ready`, like a move away from `working`.
 - `given_up` is Freyja's own state: it stopped watching. The agent may still be working; a
   cancel can still be sent (FR-022).
 - Every move away from `working`, including into `given_up`, sets `outcome` and
