@@ -774,7 +774,7 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
       `AGENTS.md`, and `contracts/agent-config.md`, with tests in
       `tests/test_a2a_background.py` that another thread's task is checked and delivered while
       a background run is held, and that the limit holds, per SC-003, FR-019 (partial)
-- [ ] T076 Leave a thread paused on a proposal alone without taking its run lease, so a resume
+- [X] T076 Leave a thread paused on a proposal alone without taking its run lease, so a resume
       that arrives during a tick is not refused as `run_active`, in
       `src/freyja_agent/delegates/delegation_worker.py`; the check under the lease stays. Test
       in `tests/test_a2a_background.py` that a tick takes no lease on a paused thread, per

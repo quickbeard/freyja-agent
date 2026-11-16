@@ -10,8 +10,9 @@ One ``DelegationWorker`` runs per service instance. Each round, at the poll inte
    with the agent, recording a change with its outcome ready to deliver. A task waiting for
    input is not checked: nothing changes at the agent until the person answers. Watching only
    reads; it never sends the agent new work;
-3. for each thread with an outcome waiting, it takes the thread's run lease, leaves a thread
-   paused on a proposal alone, and runs a background run whose input is the outcome messages.
+3. for each thread with an outcome waiting, it leaves a thread paused on a proposal alone,
+   without taking its lease, and otherwise takes the thread's run lease and runs a background
+   run whose input is the outcome messages.
    The run goes through ``run_stream`` like any other: the same agent, gate, step limit, and
    lease heartbeat (FR-020, constitution principles I and III). One that fails with a model or
    internal error is tried again after the retry interval, up to the configured attempts,
@@ -243,6 +244,13 @@ class DelegationWorker:
         now = await store.now()
         if any(task.followup_next_at and task.followup_next_at > now for task in retrying):
             return  # a failed attempt waits for its retry interval
+        config = {"configurable": {"thread_id": thread_id}}
+        # A thread paused on a proposal is left alone without its lease. Taking the lease to
+        # find that out would refuse a resume arriving meanwhile as "run_active", every poll
+        # interval for as long as the pause lasts. The check under the lease below still
+        # decides: this one only keeps the worker off threads it cannot deliver to.
+        if (await runtime.agent.aget_state(config)).interrupts:
+            return
         run_id = uuid.uuid4().hex
         owner = lease_owner(runtime, run_id)
         try:
@@ -253,10 +261,9 @@ class DelegationWorker:
             return
         streaming = False
         try:
-            config = {"configurable": {"thread_id": thread_id}}
             snapshot = await runtime.agent.aget_state(config)
             if snapshot.interrupts:
-                return  # paused on a proposal: delivered once it is decided
+                return  # paused since the check above: delivered once it is decided
             messages, delivering = await take_undelivered(store, thread_id, snapshot)
             if not messages and not retrying:
                 return

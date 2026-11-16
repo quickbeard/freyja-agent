@@ -243,6 +243,37 @@ def test_a_paused_thread_waits_and_a_resume_records_nothing(
     assert after["agent_tasks"][0]["outcome_delivered"] is True
 
 
+def test_a_tick_takes_no_lease_on_a_paused_thread(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T076: a resume arriving during a tick must not be refused as ``run_active``."""
+    agent = stub()
+    model = ScriptedChatModel(script=[handoff("hold: report"), NOTIFY], final_text="Noted.")
+    made = pending_app(make_a2a_app, model, agent)
+    with TestClient(made.app) as client:
+        assert run(client, "b-5b", "Report, then notify.", sse_events)[-1][0] == "interrupt"
+        ready(client, made, "b-5b", agent.release)
+        locks = made.runtime.locks
+        acquire, taken = locks.acquire, []
+
+        async def recorded(thread_id: str, owner: str) -> bool:
+            taken.append(thread_id)
+            return await acquire(thread_id, owner)
+
+        monkeypatch.setattr(locks, "acquire", recorded)
+        tick(client, made.runtime)
+        assert taken == []
+        assert outcomes(state(client, "b-5b")["messages"]) == []
+        # Once it is decided, the thread is free and the next tick delivers.
+        assert approve(client, "b-5b", sse_events)[-1] == ("end", {"status": "completed"})
+        taken.clear()
+        tick(client, made.runtime)
+        after = state(client, "b-5b")
+
+    assert taken == ["b-5b"]
+    assert len(outcomes(after["messages"])) == 1
+
+
 def test_a_users_run_records_the_outcome_before_the_message(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any
 ) -> None:

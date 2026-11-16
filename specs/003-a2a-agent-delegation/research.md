@@ -357,9 +357,12 @@ Delivery happens at the start of two kinds of run:
 
 - **A user's run** (`POST /threads/{id}/runs`): under the lease and after the paused-thread
   check, undelivered outcomes are prepended to the run's input, before the user's message.
-- **A background run**, started by the worker for a thread with undelivered outcomes once it
-  can take the thread's run lease and the thread has no pending proposal. Its input is the
-  outcome messages alone. It goes through `run_stream` with mode `background`, the same agent,
+- **A background run**, started by the worker for a thread with undelivered outcomes once the
+  thread has no pending proposal and it can take the thread's run lease. The worker reads the
+  thread's state before it takes the lease and leaves a paused thread alone (revised
+  2026-11-16, T076): taking the lease first would refuse a resume arriving in that moment as
+  `run_active`, on every tick for as long as the proposal waits. It reads the state again
+  under the lease, which decides. Its input is the outcome messages alone. It goes through `run_stream` with mode `background`, the same agent,
   gate, step limit, and lease heartbeat as any run (principle III); the worker consumes the
   events and reads only the terminal one.
 
