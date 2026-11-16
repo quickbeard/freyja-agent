@@ -267,7 +267,7 @@ pnpm format                    # format in place
 
 The pre-commit hook runs `ruff check --fix` and `ruff format` on staged Python files, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes.
 
-The web hooks call the scripts in `web/package.json` through npm, which comes with Node, so they need Node on the path and the dependencies installed in `web/`. Without Node they fail with ``Executable `npm` not found``. To run the hook over the whole repo:
+The web hooks run the scripts in `web/package.json` with pnpm, so they need Node and pnpm on the path and the dependencies installed in `web/`. Without pnpm they fail with ``Executable `pnpm` not found``. To run the hook over the whole repo:
 
 ```bash
 uv run pre-commit run --all-files

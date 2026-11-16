@@ -34,7 +34,7 @@ Always go through uv. Never call python, pip, or pytest directly.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: Ruff and
   pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
-  staged and need Node on the path and the dependencies installed in `web/`.
+  staged and need Node and pnpm on the path and the dependencies installed in `web/`.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
