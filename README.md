@@ -8,7 +8,8 @@ General-purpose agent orchestrator built on [Deep Agents](https://docs.langchain
 uv sync                         # creates .venv and installs runtime + dev dependencies
 cp .env.example .env            # pick one model block and set its key; leave the database line as is
 docker compose up -d postgres   # local Postgres; its credentials equal FREYJA_DATABASE_URI in .env.example
-uv run pre-commit install       # one-time per clone: runs Ruff and the unit tests on every commit
+uv run pre-commit install       # one-time per clone: runs the linters and the unit tests on every commit
+(cd web && pnpm install)        # web app dependencies; needs Node and pnpm
 ```
 
 `.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
@@ -247,7 +248,7 @@ A proposal for an agent's tool names its agent: each entry of `action_requests` 
 
 ## Lint and format
 
-Ruff handles both linting and formatting. Configuration lives in `pyproject.toml` under `[tool.ruff]`.
+Ruff handles both linting and formatting for Python. Configuration lives in `pyproject.toml` under `[tool.ruff]`.
 
 ```bash
 uv run ruff check .            # lint
@@ -256,7 +257,17 @@ uv run ruff format .           # format in place
 uv run ruff format --check .   # report unformatted files without changing them (CI mode)
 ```
 
-The pre-commit hook runs `ruff check --fix` and `ruff format` on staged files, then the unit test suite. If Ruff changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes. To run the hook over the whole repo:
+Biome does the same for the web app. Configuration lives in `web/biome.json`.
+
+```bash
+cd web
+pnpm lint                      # biome check: lint and report unformatted files
+pnpm format                    # format in place
+```
+
+The pre-commit hook runs `ruff check --fix` and `ruff format` on staged Python files, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes.
+
+The web hooks call the scripts in `web/package.json` through npm, which comes with Node, so they need Node on the path and the dependencies installed in `web/`. Without Node they fail with ``Executable `npm` not found``. To run the hook over the whole repo:
 
 ```bash
 uv run pre-commit run --all-files
@@ -270,7 +281,16 @@ uv run pytest -q               # quiet output
 uv run pytest tests/test_health.py::test_healthz   # a single test
 ```
 
-Tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. The suite needs no network, no installed MCP server, and no running agent.
+The web app's unit tests run with Vitest:
+
+```bash
+cd web
+pnpm test                      # vitest run
+```
+
+They are `*.test.ts` files next to the code they cover and run in Node. Component tests would need jsdom and Vitest's React plugin, which are not installed.
+
+The Python tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. The suite needs no network, no installed MCP server, and no running agent.
 
 To try the stand-in by hand, serve it on loopback and list it as an agent:
 

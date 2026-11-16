@@ -32,7 +32,12 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
   tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
-- `uv run pre-commit run --all-files` runs the commit hook over the whole repo.
+- `uv run pre-commit run --all-files` runs the commit hook over the whole repo: Ruff and
+  pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  staged and need Node on the path and the dependencies installed in `web/`.
+- In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
+  run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
+  `pnpm test` runs the unit tests with Vitest.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 
@@ -99,9 +104,9 @@ startup and exits with an error naming the connection when it is unreachable.
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), so far the `create-next-app` start
   page with shadcn/ui set up: `components.json`, components under `web/components/ui/`, and
-  the `cn` helper in `web/lib/utils.ts`. Its commands run inside `web/`: `pnpm dev`,
-  `pnpm build`, `pnpm lint`, and `pnpm format`, which generated components need after they
-  are added.
+  the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they
+  are added. Unit tests are `*.test.ts` files next to the code they cover, run by Vitest in
+  Node.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
@@ -126,7 +131,8 @@ startup and exits with an error naming the connection when it is unreachable.
 - Configuration goes through `Settings`. Never hardcode hosts, ports, connection strings, or
   model ids; add a field with a safe local default, or no default when the value carries a
   credential, and document it in `.env.example`.
-- New behavior ships with a test in `tests/`.
+- New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` file next to
+  the code for the web app.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.
 - The README documents only what exists in the repo, never planned work.

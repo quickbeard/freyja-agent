@@ -13,3 +13,18 @@ repos:
         language: system
         pass_filenames: false
         always_run: true
+      # The web app's gates run when a file under web/ is staged. They go through npm, which
+      # comes with Node and only runs the scripts in web/package.json, so the hook needs Node on
+      # the path and `pnpm install` done in web/, and no pnpm on the path.
+      - id: biome
+        name: biome check (web)
+        entry: npm --prefix web run lint -- --write
+        language: system
+        files: ^web/
+        pass_filenames: false
+      - id: vitest
+        name: vitest (web)
+        entry: npm --prefix web run test
+        language: system
+        files: ^web/
+        pass_filenames: false
