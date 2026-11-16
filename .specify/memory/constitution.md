@@ -52,7 +52,9 @@ interfaces on a developer machine is an exposure.
 ### V. Automated Quality Gates
 
 `ruff check` and `ruff format --check` MUST pass, enforced by the pre-commit hook, and
-`pytest` MUST pass before merge. New behavior MUST ship with tests. The `S` (security) and
+`pytest` MUST pass before merge. For the web app under `web/`, `biome check` MUST pass,
+enforced by the same hook, and its unit tests (Vitest) MUST pass before merge. New behavior
+MUST ship with tests. The `S` (security) and
 `ASYNC` rule sets are mandatory; blocking I/O inside an async handler is a defect, not a
 style issue. Rule suppressions MUST carry a reason and SHOULD be removed when the cause is
 fixed.
@@ -78,8 +80,11 @@ not wait on it.
   `langgraph-checkpoint-postgres`; streaming over server-sent events via `sse-starlette`.
 - Model selected by a provider-prefixed string in settings, default
   `anthropic:claude-sonnet-5-5`.
-- Ruff is the only linter and formatter, line length 100, configuration in
+- Ruff is the only linter and formatter for Python, line length 100, configuration in
   `pyproject.toml`.
+- The web app lives under `web/`: Next.js with TypeScript, dependencies managed by pnpm with a
+  committed `pnpm-lock.yaml`. Biome is its only linter and formatter, configuration in
+  `web/biome.json`, and Vitest runs its unit tests.
 - Agent skills under `workspace/skills/` are source and are committed; working files written at
   runtime under `workspace/cases/` are not.
 
@@ -102,4 +107,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.1.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-10-29
+**Version**: 1.2.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-16
