@@ -785,7 +785,7 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
       `src/freyja_agent/delegates/delegation_worker.py`. Replace
       `test_a_task_waiting_for_input_is_not_checked` in `tests/test_a2a_pending.py` and correct
       research R9, per FR-019 and the edge case "The agent cancels a task itself" (partial)
-- [ ] T078 Make `InMemoryAgentTaskStore` answer like the Postgres store for a task that does not
+- [X] T078 Make `InMemoryAgentTaskStore` answer like the Postgres store for a task that does not
       exist or an update that changes nothing: `update_task` returns false, and `set_followup`
       and `mark_delivered` do nothing, in `src/freyja_agent/runtime/agent_tasks.py`, with a
       contract test in `tests/test_agent_task_store.py` collected by
