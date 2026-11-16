@@ -167,6 +167,25 @@ def part_text(part: Any) -> str:
     return f"[{kind or 'unknown'} content omitted]"
 
 
+def artifact_texts(artifact: Any) -> list[str]:
+    """One artifact's parts as text, with text parts that follow one another read as one text.
+
+    An agent that streams an artifact in chunks adds each chunk as a further part of it, and
+    the task it keeps holds them that way. Joined like separate parts, a streamed sentence
+    would come apart at every chunk (FR-006).
+    """
+    texts: list[str] = []
+    after_text = False
+    for part in artifact.parts:
+        is_text = part.WhichOneof("content") == "text"
+        if is_text and after_text:
+            texts[-1] += part.text
+        else:
+            texts.append(part_text(part))
+        after_text = is_text
+    return texts
+
+
 def a2a_result_text(source: Task | Message | None) -> str:
     """A reply as the one string the orchestrator receives (FR-006, research R6).
 
@@ -179,7 +198,7 @@ def a2a_result_text(source: Task | Message | None) -> str:
     if isinstance(source, Message):
         parts = [part_text(part) for part in source.parts]
     else:
-        parts = [part_text(part) for artifact in source.artifacts for part in artifact.parts]
+        parts = [text for artifact in source.artifacts for text in artifact_texts(artifact)]
         if source.status.HasField("message"):
             status = "\n".join(part_text(part) for part in source.status.message.parts)
             if status and (not parts or status != parts[-1]):

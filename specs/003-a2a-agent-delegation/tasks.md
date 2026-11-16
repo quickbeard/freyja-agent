@@ -759,7 +759,7 @@ Task: "The worker in src/freyja_agent/delegates/delegation_worker.py (T046), the
 
 ## Phase 13: Convergence
 
-- [ ] T074 Read an artifact an agent sends in several updates as one artifact: in the stream,
+- [X] T074 Read an artifact an agent sends in several updates as one artifact: in the stream,
       an update replaces the artifact with its id or, marked `append`, adds its parts to it, in
       `src/freyja_agent/delegates/a2a_agents.py`; and text parts that follow one another in one
       artifact are one text, in `src/freyja_agent/delegates/a2a_tools.py`, so the result is the

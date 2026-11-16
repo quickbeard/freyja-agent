@@ -218,6 +218,25 @@ The notes use the wording of feature 002's MCP notes (002 research R6), so the o
 one vocabulary. Bytes and URLs never reach the model or the thread. A status message that
 repeats the last artifact's text is not added twice.
 
+**An artifact sent in several updates** (added 2026-11-16, T074): an agent may stream one
+artifact as a first update and further updates marked `append`, all naming one artifact id.
+While it follows the stream, the hand-off replaces the artifact held under that id, or adds the
+update's parts to it when it is marked `append`, as the SDK's server does for the task it keeps
+(`append_artifact_to_task` in `a2a/server/tasks/task_manager.py`). The task in hand is then the
+one `get_task` returns, so the result is the same from the stream, from polling, and from the
+worker (FR-020). An `append` for an artifact never sent, and an update without an artifact id,
+are kept as new artifacts rather than refused.
+
+Within one artifact, text parts that follow one another are one text and are joined with nothing
+between them: that is how a streamed text is held, by the agent and here. Parts of other kinds,
+separate artifacts, and the parts of a message are joined with blank lines as before. The cost:
+an agent that puts two unrelated texts side by side in one artifact gets them joined without a
+break.
+
+**Probe**: three updates carrying `The quarterly `, `report is `, and `ready.` for one artifact
+id reached the orchestrator as `The quarterly \n\nreport is \n\nready.` before this change, and
+the stand-in's finished task, read with `get_task`, held the three chunks as three text parts.
+
 ## R7. Progress in the run's stream (FR-007)
 
 **Decision**: the hand-off tool writes each progress update with LangGraph's stream writer

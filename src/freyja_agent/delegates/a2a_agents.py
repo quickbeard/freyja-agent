@@ -424,7 +424,7 @@ async def _send(
             on_progress(outcome.task.id, state_name(update.state), _text(update.message))
         elif kind == "artifact_update":
             _acknowledged(outcome, event.artifact_update)
-            outcome.task.artifacts.append(event.artifact_update.artifact)
+            _merge_artifact(outcome.task, event.artifact_update)
         await _note_acknowledgment(outcome, clock)
         if outcome.state in _STOP:
             return
@@ -443,6 +443,34 @@ def _acknowledged(
     """
     if outcome.task is None:
         outcome.task = Task(id=update.task_id, context_id=update.context_id)
+
+
+def _merge_artifact(task: Task, update: TaskArtifactUpdateEvent) -> None:
+    """Put a streamed artifact update into ``task`` the way the agent's own record holds it.
+
+    An agent may send one artifact in several updates, all naming the same artifact id: the
+    first replaces whatever the task held under that id, and each one marked ``append`` adds its
+    parts to it. The task then holds what ``get_task`` would return for it, so a result reads
+    the same whether the hand-off followed the stream or the worker found the task later
+    (FR-006, FR-020). An update marked ``append`` for an artifact never sent before, and one
+    that names no artifact id, is kept as a new artifact: nothing an agent sends ends a run
+    (FR-009).
+    """
+    artifact = update.artifact
+    held = next(
+        (
+            a
+            for a in task.artifacts
+            if artifact.artifact_id and a.artifact_id == artifact.artifact_id
+        ),
+        None,
+    )
+    if held is None:
+        task.artifacts.append(artifact)
+    elif update.append:
+        held.parts.extend(artifact.parts)
+    else:
+        held.CopyFrom(artifact)
 
 
 async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress) -> None:
