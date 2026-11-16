@@ -243,3 +243,6 @@ Thumbs.db
 
 # Claude Code per-user settings
 .claude/settings.local.json
+
+# The Python packaging rules above ignore every lib/ directory. The web app's is source.
+!/web/lib/
