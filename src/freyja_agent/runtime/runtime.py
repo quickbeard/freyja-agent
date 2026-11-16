@@ -118,6 +118,7 @@ class Runtime:
                     # Agent tasks exist only with agents: without any, the orchestrator is
                     # what it was before feature 003 (FR-024).
                     agent_tasks=task_store if agents else None,
+                    openai_responses_api=settings.openai_responses_api,
                 )
                 runtime = cls(
                     agent=orchestrator.agent,

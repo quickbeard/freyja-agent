@@ -1,12 +1,14 @@
 """FR-015, FR-016, FR-017: one construction path, model from settings, workspace confinement."""
 
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from deepagents.profiles.provider.provider_profiles import apply_provider_profile
+from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage, SystemMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
@@ -18,7 +20,7 @@ from freyja_agent.agent.catalog import (
     Classification,
     UnclassifiedToolError,
 )
-from freyja_agent.agent.factory import build_agent, tool_node_tools
+from freyja_agent.agent.factory import build_agent, resolve_model, tool_node_tools
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
 from freyja_agent.config import A2aAgentConfig, McpServerConfig, Settings
 from freyja_agent.delegates.a2a_agents import (
@@ -136,6 +138,88 @@ def test_model_string_is_passed_through_unchanged(
     assert [type(m).__name__ for m in captured["middleware"]] == ["ThreadContextMiddleware"]
     assert captured["subagents"][0]["name"] == "general-purpose"
     assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7
+
+
+# FREYJA_OPENAI_RESPONSES_API: the one default of a provider profile that Freyja overrides
+# (001 research R3).
+
+PROVIDER_STRINGS = [
+    "openai:served-model",
+    "anthropic:claude-sonnet-5-5",
+    "openrouter:anthropic/claude-sonnet-5.5",
+]
+
+
+def client_arguments(monkeypatch: pytest.MonkeyPatch, model: str, **options: Any) -> dict[str, Any]:
+    """The arguments ``resolve_model`` builds the provider's client with; none is built."""
+    seen: dict[str, Any] = {}
+
+    def fake_init(_model: str, **kwargs: Any) -> ScriptedChatModel:
+        seen.update(kwargs)
+        return ScriptedChatModel()
+
+    monkeypatch.setattr(factory, "init_chat_model", fake_init)
+    resolve_model(model, **options)
+    return seen
+
+
+@pytest.mark.parametrize("model", PROVIDER_STRINGS)
+def test_by_default_a_model_is_resolved_as_deep_agents_resolves_it(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    assert client_arguments(monkeypatch, model) == apply_provider_profile(model)
+
+
+def test_an_openai_model_is_called_through_the_responses_api_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert client_arguments(monkeypatch, "openai:served-model")["use_responses_api"] is True
+
+
+def test_the_setting_turns_the_responses_api_off_for_an_openai_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    arguments = client_arguments(monkeypatch, "openai:served-model", openai_responses_api=False)
+    assert arguments["use_responses_api"] is False
+
+
+@pytest.mark.parametrize("model", PROVIDER_STRINGS[1:])
+def test_the_setting_hands_another_provider_no_argument_it_does_not_know(
+    monkeypatch: pytest.MonkeyPatch, model: str
+) -> None:
+    arguments = client_arguments(monkeypatch, model, openai_responses_api=False)
+    assert arguments == apply_provider_profile(model)
+    assert "use_responses_api" not in arguments
+
+
+def test_the_openai_client_takes_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The key only lets the client be built; nothing is sent.
+    monkeypatch.setenv("OPENAI_API_KEY", "not-a-key")
+    assert resolve_model("openai:served-model").use_responses_api is True
+    off = resolve_model("openai:served-model", openai_responses_api=False)
+    assert off.use_responses_api is False
+
+
+def test_a_model_instance_is_passed_through_whatever_the_setting() -> None:
+    model = ScriptedChatModel()
+    assert resolve_model(model, openai_responses_api=False) is model
+
+
+@pytest.mark.parametrize("responses_api", [True, False])
+def test_the_setting_reaches_the_model_the_service_builds(
+    monkeypatch: pytest.MonkeyPatch, make_mcp_app: Callable[..., Any], responses_api: bool
+) -> None:
+    seen: dict[str, Any] = {}
+
+    def fake_init(model: str, **kwargs: Any) -> ScriptedChatModel:
+        seen[model] = kwargs
+        return ScriptedChatModel()
+
+    monkeypatch.setattr(factory, "init_chat_model", fake_init)
+    made = make_mcp_app("openai:served-model", {}, openai_responses_api=responses_api)
+    with TestClient(made.app):
+        pass
+    assert seen["openai:served-model"]["use_responses_api"] is responses_api
 
 
 # Feature 002: every tool is classified, and the approval gate is generated from the catalog

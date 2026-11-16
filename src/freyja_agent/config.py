@@ -114,6 +114,10 @@ class Settings(BaseSettings):
     # Carries credentials, so it has no default: startup fails until FREYJA_DATABASE_URI is set.
     database_uri: str
     model: str = "anthropic:claude-sonnet-5-5"
+    # Whether an ``openai:`` model is called through OpenAI's Responses API, as Deep Agents
+    # does by default. False calls it through chat completions, for an OpenAI-compatible server
+    # whose Responses API does not take a conversation's earlier turns. Other providers ignore it.
+    openai_responses_api: bool = True
     # Root of the agent's file tools; skills/ inside it is committed (FR-017).
     workspace_dir: str = "workspace"
     # LangGraph recursion limit per run; reaching it ends the run with an error (FR-004a).

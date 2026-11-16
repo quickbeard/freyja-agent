@@ -169,7 +169,8 @@ None. The Constitution Check passed without deviations before research and after
 - **Model resolution (Phase 4)**: the factory resolves the provider string through
   `init_chat_model` plus Deep Agents' provider profile before building, because the subagent's
   summarization middleware needs a model instance. The identifier still appears only in
-  settings (FR-016).
+  settings (FR-016). `FREYJA_OPENAI_RESPONSES_API=false` (added 2026-11-16) has an `openai:`
+  model called through chat completions; see research R3.
 - **`api/decisions.py`** holds resume validation, as the tasks list anticipated.
 - **API checklist review (2026-11-06)**: [checklists/api.md](checklists/api.md) was run after
   implementation. It added three requirements: a resume names its proposal (`interrupt_id`,
