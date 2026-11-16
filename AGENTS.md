@@ -97,6 +97,10 @@ startup and exits with an error naming the connection when it is unreachable.
   arguments; `schemas.py` and `serialize.py` the request, response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
+- `web/`: the Next.js web app, so far the unchanged scaffold from `create-next-app` (pnpm,
+  Biome, Tailwind CSS). Its commands run inside `web/`: `pnpm dev`, `pnpm build`, `pnpm lint`.
+  `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
+  there.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
