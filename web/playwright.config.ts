@@ -5,6 +5,10 @@ import { defineConfig, devices } from "@playwright/test";
 // server's, not a deployment's: what a deployment configures stays in next.config.ts.
 const PORT = 3100;
 const BASE_URL = `http://localhost:${PORT}`;
+// Where the built app forwards /api/...: an address nothing listens on. The tests hand a
+// page the service's answers themselves (e2e/api.ts), and the ones about a stopped service
+// let the request through to find nothing there, whatever runs on this machine's port 8000.
+const ABSENT_SERVICE = "http://127.0.0.1:9";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -56,6 +60,7 @@ export default defineConfig({
   webServer: {
     command: `pnpm build && pnpm start --port ${PORT}`,
     url: BASE_URL,
+    env: { FREYJA_API_URL: ABSENT_SERVICE },
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },

@@ -214,6 +214,8 @@ web/
 ├── vitest.config.mts          # NEW: jsdom, React plugin, tsconfig paths (R17)
 ├── __tests__/                 # NEW: the unit tests, laid out as the code they cover, and
 │                              #   testing.ts, the fetch stub they share
+├── e2e/                       # + the end-to-end tests of the console (Playwright) and
+│                              #   api.ts, the service's answers they hand to a page
 ├── app/
 │   ├── layout.tsx             # the shell: sidebar and page
 │   ├── page.tsx               # REMOVED: / redirects to /llm
@@ -382,5 +384,21 @@ check, phase by phase.
   `matchMedia`, which jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
 - **The stock page's files are gone** (T036): `web/app/page.tsx` and the five images under
   `web/public/`, which only that page used.
+- **End-to-end tests** (T037a, added after the plan). Playwright came to `main` while this
+  phase was in review, so the browser check of T037 is now kept as tests:
+  `web/e2e/console.spec.ts` and `web/e2e/llm.spec.ts`, ten tests beside the existing smoke
+  test, each run in Chromium, Firefox, and WebKit against the built app. They need no
+  service: `web/e2e/api.ts` hands a page what the service would answer, in the browser. The
+  app under test forwards `/api/...` to an address nothing listens on, so the two tests
+  about a stopped service go through the web app's own server, as the hand check did.
+- **The sidebar now closes once a section is chosen in a narrow window** (T032, FR-001). The
+  end-to-end test found that it stayed open over the page it had just led to; the hand
+  check of T037 had only opened it. `web/components/app-sidebar.tsx` closes it on a link's
+  click, and a unit test covers that.
+- **Two things a browser test of this app must allow for.** Next.js keeps an element with
+  the alert role of its own outside the page, to announce navigations, so the tests look
+  for alerts inside the main landmark. And after moving to another section, the one left
+  behind is still in the document, hidden, so a count of what a page offers counts only
+  what can be seen.
 - **Order of the service test** (T024, T029). The web tests were seen failing before their
   code existed. The service test was written before the route and first run after it.

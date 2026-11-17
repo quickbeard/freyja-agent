@@ -139,6 +139,10 @@ startup and exits with an error naming the connection when it is unreachable.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
   is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
+  `console.spec.ts` covers the shell and `llm.spec.ts` the LLM section; `api.ts` holds what
+  the service would answer (`answerProfiles`) and the locators the specs share. The app under
+  test forwards `/api/...` to an address nothing listens on, so a test that hands a page no
+  answer sees the console as it is with the service stopped.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
   `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
@@ -180,7 +184,8 @@ startup and exits with an error naming the connection when it is unreachable.
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
-  unit tests and does not replace them.
+  unit tests and does not replace them. It never needs the Freyja service: the service's
+  answers are handed to the page in the browser, through `web/e2e/api.ts`.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.
 - The README documents only what exists in the repo, never planned work.
 

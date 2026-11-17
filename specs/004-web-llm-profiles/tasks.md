@@ -273,6 +273,14 @@ with four key characters, and it has no Edit or Delete. Runs through the API beh
       the service stopped. Watch the browser console for a hydration warning from
       `usePathname()`; if there is one, apply the documented fix in
       `web/components/app-sidebar.tsx` and record it in plan.md (R15, research "Not verified")
+- [X] T037a [US1] Write the end-to-end tests of this story with Playwright, the service's
+      answers handed to the page in `web/e2e/api.ts`: `web/e2e/console.spec.ts` (`/` opens the
+      LLM section and marks it; the sidebar leads to Agents, which offers no control; in a
+      narrow window the sidebar is hidden, opens from its control, and closes once a section
+      is chosen) and `web/e2e/llm.spec.ts` (the environment's card, active and with no Edit or
+      Delete; saved profiles after it with only the active one marked; the notice when no
+      usable model is active; a refusal's reason; Refresh; the service stopped, then Try
+      again) (FR-001, FR-002, FR-003, FR-007, FR-008, FR-016, US1 scenarios 1 to 6)
 
 **Checkpoint**: quickstart section 1 works; User Story 1 is complete and can be merged alone.
 

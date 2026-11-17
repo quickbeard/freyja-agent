@@ -12,6 +12,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 
 // The console's sections, in the order the sidebar lists them.
@@ -22,6 +23,7 @@ const SECTIONS = [
 
 export function AppSidebar() {
   const pathname = usePathname();
+  const { setOpenMobile } = useSidebar();
   return (
     <Sidebar>
       <SidebarHeader>
@@ -45,6 +47,9 @@ export function AppSidebar() {
                           <Link
                             href={href}
                             aria-current={active ? "page" : undefined}
+                            // In a narrow window the sidebar is a sheet over the page:
+                            // choosing a section closes it, or it would hide the page.
+                            onClick={() => setOpenMobile(false)}
                           />
                         }
                       >

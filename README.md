@@ -321,7 +321,7 @@ pnpm exec playwright install   # once per machine: downloads the three browsers
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included. The tests are `*.spec.ts` files under `web/e2e/`. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 

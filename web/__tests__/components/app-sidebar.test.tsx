@@ -1,7 +1,7 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { AppSidebar } from "@/components/app-sidebar";
-import { SidebarProvider } from "@/components/ui/sidebar";
+import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 
 const navigation = vi.hoisted(() => ({ pathname: "/llm" }));
@@ -14,6 +14,7 @@ function renderSidebar() {
     <TooltipProvider>
       <SidebarProvider>
         <AppSidebar />
+        <SidebarTrigger />
       </SidebarProvider>
     </TooltipProvider>,
   );
@@ -53,6 +54,23 @@ describe("AppSidebar", () => {
     expect(
       screen.getByRole("link", { name: "LLM" }).getAttribute("aria-current"),
     ).toBeNull();
+  });
+
+  it("closes over a narrow window once a section is chosen", async () => {
+    // Under the sidebar's breakpoint it is a sheet over the page, closed at first.
+    vi.stubGlobal("innerWidth", 500);
+    renderSidebar();
+    expect(screen.queryByRole("link", { name: "Agents" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Toggle Sidebar" }));
+    const agents = await screen.findByRole("link", { name: "Agents" });
+    // The link's own navigation needs a router, which a unit test has none of.
+    agents.addEventListener("click", (event) => event.preventDefault());
+    fireEvent.click(agents);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("link", { name: "Agents" })).toBeNull(),
+    );
   });
 
   it("marks a section for a page inside it", () => {
