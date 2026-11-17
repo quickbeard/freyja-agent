@@ -93,7 +93,8 @@ import and export.
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Checked against constitution 1.3.0, amended on 2026-11-17 for this feature.
+Checked against constitution 1.3.0, amended on 2026-11-17 for this feature, and again against
+1.4.0, which says where the web app reads its configuration (see Analysis below).
 
 | Principle | Touched? | How the plan satisfies it | Pre-research | Post-design |
 |---|---|---|---|---|
@@ -128,6 +129,11 @@ passes for the service and for everything else it lists. For this variable the c
 to say where the web app's configuration is read, in an amendment of its own, before the tasks
 that add the variable (T008, T009). Until then the variable is also named in the root
 `.env.example`, so that every variable is documented where principle IV says to look.
+
+Resolved the same day by constitution 1.4.0: principle IV now says the web app reads its
+deployment configuration from `FREYJA_*` variables in `web/next.config.ts` and documents it in
+`web/.env.example`, which is what R13 and T008 and T009 do. The row for principle IV passes
+for the web app as well.
 
 ### Checklist review (2026-11-17)
 

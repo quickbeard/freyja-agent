@@ -49,6 +49,11 @@ identifiers MUST NOT be hardcoded in application code. Defaults MUST be the safe
 choice; the server binds `127.0.0.1` unless configured otherwise. Secrets MUST never be
 committed, and every variable MUST be documented in `.env.example`.
 
+The web app under `web/` has no `Settings` class. Its deployment configuration MUST be read
+from `FREYJA_*` environment variables in one place, `web/next.config.ts`, under the same
+rules: nothing hardcoded elsewhere, the safe local choice as the default, and every variable
+documented in `web/.env.example`.
+
 Operator-managed configuration is what an operator changes while the service runs, such as
 the model the orchestrator uses and the delegate agents it may hand work to. It MUST be kept
 in the service's database and changed only through the service's API. What the environment
@@ -119,4 +124,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.3.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-17
+**Version**: 1.4.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-17
