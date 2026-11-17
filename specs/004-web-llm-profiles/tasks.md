@@ -28,7 +28,8 @@ model endpoint in `tests/llm_stub.py`; "the model factory" is the `model_factory
 
 Two projects in one repo: the service in the src layout (`src/freyja_agent/`, `tests/`,
 repo-root files) and the web app under `web/` (`web/app/`, `web/components/`, `web/lib/`). Web
-tests sit next to the code as `*.test.ts` and `*.test.tsx`.
+tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of
+the code it covers.
 
 ## Standing rules for every task
 
@@ -79,8 +80,8 @@ the path from the browser to the service.
       plan.md under Implementation Notes (R14, R17, research "Not verified")
 - [X] T006 Create `web/vitest.config.mts` with the `tsconfigPaths()` and `react()` plugins and
       `test.environment: "jsdom"`, as Next.js's Vitest guide gives it; keep the `test` script
-      as `vitest run`; confirm `web/lib/utils.test.ts` still passes. Then write
-      `web/next.config.test.ts`: `rewrites()` forwards `/api/:path*` to `:path*` on
+      as `vitest run`; confirm `web/__tests__/lib/utils.test.ts` still passes. Then write
+      `web/__tests__/next.config.test.ts`: `rewrites()` forwards `/api/:path*` to `:path*` on
       `http://127.0.0.1:8000` by default and on `FREYJA_API_URL` when it is set; it fails until
       T009 (FR-003, R13, R17)
 - [X] T007 Add the shadcn components `sidebar`, `card`, `dialog`, `alert-dialog`, `input`,
@@ -223,26 +224,25 @@ with four key characters, and it has no Edit or Delete. Runs through the API beh
       `environment`; `usable_model` is true; `secret_configured` follows the setting; `limit` is
       50; no model endpoint is contacted; the response has no key (FR-007, FR-008, FR-011, US1
       scenarios 2 and 3)
-- [X] T025 [P] [US1] Write `web/lib/api.test.ts`: a request goes to `/api` plus its path; a 2xx
-      body is returned parsed; a refusal raises an error carrying the service's `code` and
-      `message`; a 422 raises one carrying each field's message; a network failure raises an
-      error that says the service cannot be reached. Write `web/lib/llm.test.ts`: `listProfiles`
+- [X] T025 [P] [US1] Write `web/__tests__/lib/api.test.ts`: a request goes to `/api` plus its path;
+      a 2xx body is returned parsed; a refusal raises an error carrying the service's `code` and
+      `message`; a 422 raises one carrying each field's message; a network failure raises an error
+      that says the service cannot be reached. Write `web/__tests__/lib/llm.test.ts`: `listProfiles`
       asks for `/llm/profiles` and returns the list (FR-003, FR-007)
-- [X] T026 [P] [US1] Write `web/components/app-sidebar.test.tsx`: it lists LLM and Agents as
-      links to `/llm` and `/agents` and marks the one matching the current path. Write
-      `web/app/agents/page.test.tsx`: the page says agents are not managed from the console yet
-      and has no button, link, or field of its own. Extend `web/next.config.test.ts`:
-      `redirects()` sends `/` to `/llm` and is not permanent (FR-001, FR-002, US1 scenarios 1, 4,
-      5)
-- [X] T027 [P] [US1] Write `web/components/llm/profile-card.test.tsx`: a card shows the name,
-      provider label, model id, base URL when there is one, the API choice for `openai` only,
-      the four key characters, and the marks for active, from the environment, and not usable;
-      the environment's card has no Edit and no Delete control (FR-007, FR-008, US1 scenarios 2
-      and 3)
-- [X] T028 [P] [US1] Write `web/components/llm/profile-list.test.tsx`: it shows a loading state,
-      then one card per profile; when the service cannot be reached it says so, offers to try
-      again, and shows no card; a refusal shows the service's reason; when `usable_model` is
-      false it says that no usable model is active (FR-003, FR-016, US1 scenario 6)
+- [X] T026 [P] [US1] Write `web/__tests__/components/app-sidebar.test.tsx`: it lists LLM and Agents
+      as links to `/llm` and `/agents` and marks the one matching the current path. Write
+      `web/__tests__/app/agents/page.test.tsx`: the page says agents are not managed from the
+      console yet and has no button, link, or field of its own. Extend
+      `web/__tests__/next.config.test.ts`: `redirects()` sends `/` to `/llm` and is not permanent
+      (FR-001, FR-002, US1 scenarios 1, 4, 5)
+- [X] T027 [P] [US1] Write `web/__tests__/components/llm/profile-card.test.tsx`: a card shows the
+      name, provider label, model id, base URL when there is one, the API choice for `openai` only,
+      the four key characters, and the marks for active, from the environment, and not usable; the
+      environment's card has no Edit and no Delete control (FR-007, FR-008, US1 scenarios 2 and 3)
+- [X] T028 [P] [US1] Write `web/__tests__/components/llm/profile-list.test.tsx`: it shows a loading
+      state, then one card per profile; when the service cannot be reached it says so, offers to try
+      again, and shows no card; a refusal shows the service's reason; when `usable_model` is false
+      it says that no usable model is active (FR-003, FR-016, US1 scenario 6)
 
 ### Implementation for User Story 1
 
@@ -311,19 +311,19 @@ the environment's card: the next run names the environment.
       the new profile at its next run; activating `environment` returns to the environment's
       model (FR-013, FR-014, FR-015, FR-024a, SC-002, SC-003, SC-007, SC-010, US2 scenarios 3
       to 7, 10, 11)
-- [ ] T040 [P] [US2] Write `web/components/llm/profile-form.test.tsx` for adding: the form has
-      name, provider, model id, base URL, and key; the API choice is offered for an
-      OpenAI-compatible endpoint only and is on by default; a missing value, a name that is
-      taken, and a base URL that is not a web address each show which field is wrong and why
-      and send nothing more; a save sends the values once; after the form is sent or closed its
-      key field is empty when opened again, and nothing was written to `localStorage` or
-      `sessionStorage` (FR-003, FR-004, FR-006, US2 scenarios 8 and 9, US5 scenario 8)
-- [ ] T041 [P] [US2] Write `web/components/llm/activate-dialog.test.tsx`: Set active opens a
-      confirmation that names the profile and says existing conversations will be sent to its
-      endpoint from their next run; confirming sends one activation and the list then shows
-      exactly one active card; cancelling sends nothing. Extend `web/lib/llm.test.ts`:
-      `createProfile` and `activateProfile` send what the contract asks (FR-012, US2 scenarios 2
-      and 12)
+- [ ] T040 [P] [US2] Write `web/__tests__/components/llm/profile-form.test.tsx` for adding: the form
+      has name, provider, model id, base URL, and key; the API choice is offered for an
+      OpenAI-compatible endpoint only and is on by default; a missing value, a name that is taken,
+      and a base URL that is not a web address each show which field is wrong and why and send
+      nothing more; a save sends the values once; after the form is sent or closed its key field is
+      empty when opened again, and nothing was written to `localStorage` or `sessionStorage`
+      (FR-003, FR-004, FR-006, US2 scenarios 8 and 9, US5 scenario 8)
+- [ ] T041 [P] [US2] Write `web/__tests__/components/llm/activate-dialog.test.tsx`: Set active opens
+      a confirmation that names the profile and says existing conversations will be sent to its
+      endpoint from their next run; confirming sends one activation and the list then shows exactly
+      one active card; cancelling sends nothing. Extend `web/__tests__/lib/llm.test.ts`:
+      `createProfile` and `activateProfile` send what the contract asks (FR-012, US2 scenarios 2 and
+      12)
 
 ### Implementation for User Story 2
 
@@ -384,16 +384,16 @@ warning is gone. Nothing else changed.
       `test_busy` and reach no endpoint; an unreadable key is `profile_unusable`; a test
       changes no profile's values, not the active profile, and no thread (FR-017, FR-019,
       FR-019a, FR-019b, US3 scenarios 4 to 7, 9)
-- [ ] T051 [P] [US3] Extend `web/components/llm/profile-card.test.tsx`,
-      `web/components/llm/activate-dialog.test.tsx`, and
-      `web/components/llm/profile-form.test.tsx`: Test on a card shows the result when it ends,
-      with the failed step and reason; a card shows whether its last test passed or failed and
+- [ ] T051 [P] [US3] Extend `web/__tests__/components/llm/profile-card.test.tsx`,
+      `web/__tests__/components/llm/activate-dialog.test.tsx`, and
+      `web/__tests__/components/llm/profile-form.test.tsx`: Test on a card shows the result when it
+      ends, with the failed step and reason; a card shows whether its last test passed or failed and
       the time the service gave, or that it has not been tested since its last change; the
       activation confirmation warns and offers to test first when the last test did not pass or
-      there is none, and still lets the operator confirm; Test in the form sends the form's
-      values, and in the Edit form an empty key sends the profile's id instead. Extend
-      `web/lib/llm.test.ts`: `testProfile` and `testDraft` send what the contract asks (FR-007,
-      FR-012, FR-017, SC-011, US3 scenarios 4, 5, 9 to 11)
+      there is none, and still lets the operator confirm; Test in the form sends the form's values,
+      and in the Edit form an empty key sends the profile's id instead. Extend
+      `web/__tests__/lib/llm.test.ts`: `testProfile` and `testDraft` send what the contract asks
+      (FR-007, FR-012, FR-017, SC-011, US3 scenarios 4, 5, 9 to 11)
 
 ### Implementation for User Story 3
 
@@ -443,14 +443,14 @@ works; delete an inactive profile; see the active one refuse deletion.
       restart; a run in progress during the edit finishes on the values it started with; a run
       in progress on a profile that is then deactivated and deleted finishes normally (FR-013,
       FR-014, US4 scenario 3, spec Edge Cases)
-- [ ] T058 [P] [US4] Extend `web/components/llm/profile-form.test.tsx` and write
-      `web/components/llm/delete-dialog.test.tsx`: the Edit form opens with the profile's
-      values and an empty key; saving with the key empty sends no key; saving a change to the
-      active profile first asks for confirmation, saying the change applies from the next run,
-      and sends nothing when cancelled; Delete asks for confirmation and removes the card; the
-      refusal for the active profile is shown as the service worded it; the environment's card
-      offers neither. Extend `web/lib/llm.test.ts`: `updateProfile` and `deleteProfile` send
-      what the contract asks (FR-008 to FR-010, US4 scenarios 1 to 6)
+- [ ] T058 [P] [US4] Extend `web/__tests__/components/llm/profile-form.test.tsx` and write
+      `web/__tests__/components/llm/delete-dialog.test.tsx`: the Edit form opens with the profile's
+      values and an empty key; saving with the key empty sends no key; saving a change to the active
+      profile first asks for confirmation, saying the change applies from the next run, and sends
+      nothing when cancelled; Delete asks for confirmation and removes the card; the refusal for the
+      active profile is shown as the service worded it; the environment's card offers neither.
+      Extend `web/__tests__/lib/llm.test.ts`: `updateProfile` and `deleteProfile` send what the
+      contract asks (FR-008 to FR-010, US4 scenarios 1 to 6)
 
 ### Implementation for User Story 4
 
@@ -544,10 +544,10 @@ the secret: saving is refused and the environment's model still works.
       again makes it usable; an `OPTIONS` preflight from another origin to every `/llm` route
       gets no `access-control-allow-*` header; every route that takes a body refuses one sent
       as `text/plain` (FR-003a, FR-022, SC-012, US5 scenarios 4, 5, 9)
-- [ ] T070 [P] [US5] Extend `web/lib/llm.test.ts` and
-      `web/components/llm/profile-card.test.tsx`: no type the web app receives has a key field;
-      a profile that is not usable shows why, offers no Set active, and for a saved one offers
-      Edit so its key can be entered again (FR-007, FR-020, FR-022, US5 scenario 5)
+- [ ] T070 [P] [US5] Extend `web/__tests__/lib/llm.test.ts` and
+      `web/__tests__/components/llm/profile-card.test.tsx`: no type the web app receives has a key
+      field; a profile that is not usable shows why, offers no Set active, and for a saved one
+      offers Edit so its key can be entered again (FR-007, FR-020, FR-022, US5 scenario 5)
 
 ### Implementation for User Story 5, part 2
 
@@ -626,11 +626,12 @@ the secret: saving is refused and the environment's model still works.
 ### Within Each User Story
 
 - Tests first, and they must fail before implementation starts.
-- Tasks that share a file run in the order listed: `tests/test_llm_profiles_api.py` grows by
-  parts in T024, T038, T050, T056, T069; `tests/test_llm_switch.py` in T023, T039, T057;
-  `src/freyja_agent/api/llm.py` in T029, T042, T043, T053, T059, T060, T072;
-  `web/lib/llm.ts` in T031, T044, T054, T061, and its test file in T025, T041, T051, T058;
-  `web/next.config.test.ts` in T006 and T026; the card, list, and form components likewise.
+- Tasks that share a file run in the order listed: `tests/test_llm_profiles_api.py` grows by parts
+  in T024, T038, T050, T056, T069; `tests/test_llm_switch.py` in T023, T039, T057;
+  `src/freyja_agent/api/llm.py` in T029, T042, T043, T053, T059, T060, T072; `web/lib/llm.ts` in
+  T031, T044, T054, T061, and its test file in T025, T041, T051, T058;
+  `web/__tests__/next.config.test.ts` in T006 and T026; the card, list, and form components
+  likewise.
 
 ### Parallel Opportunities
 
@@ -652,8 +653,8 @@ the secret: saving is refused and the environment's model still works.
 # Write the tests, then watch them fail:
 Task: "Add and activate in tests/test_llm_profiles_api.py part 2 (T038)"
 Task: "Switching, runs in progress, pauses, restarts, two instances in tests/test_llm_switch.py part 2 (T039)"
-Task: "The Add form in web/components/llm/profile-form.test.tsx (T040)"
-Task: "The activation confirmation in web/components/llm/activate-dialog.test.tsx (T041)"
+Task: "The Add form in web/__tests__/components/llm/profile-form.test.tsx (T040)"
+Task: "The activation confirmation in web/__tests__/components/llm/activate-dialog.test.tsx (T041)"
 
 # Then implement:
 Task: "POST /llm/profiles, then activate, in src/freyja_agent/api/llm.py (T042, T043)"
@@ -708,8 +709,8 @@ proceed at the same time once Phase 4 is merged.
 - Four tasks check something the plan could not verify without a network or a browser: T005,
   T007, T009, and T037. Each records what it found in plan.md.
 - Test files added beyond the plan's tree: `tests/test_llm_providers.py` (T011),
-  `tests/test_llm_secrets_nowhere.py` (T068), `web/next.config.test.ts` (T006), and
-  `web/app/agents/page.test.tsx` (T026). T077 brings the plan in line.
+  `tests/test_llm_secrets_nowhere.py` (T068), `web/__tests__/next.config.test.ts` (T006), and
+  `web/__tests__/app/agents/page.test.tsx` (T026). T077 brings the plan in line.
 - The analysis of 2026-11-17 found that constitution principle IV, which names the `Settings`
   class, did not cover the web app's one variable, `FREYJA_API_URL`. Constitution 1.4.0
   resolved it: the web app reads its deployment configuration in `web/next.config.ts` and

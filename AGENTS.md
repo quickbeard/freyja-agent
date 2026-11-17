@@ -120,19 +120,20 @@ startup and exits with an error naming the connection when it is unreachable.
   arguments; `schemas.py` and `serialize.py` the request, response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
-- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx`
-  is the shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects
-  to `/llm`; `web/app/llm/` lists the LLM profiles as cards (`web/components/llm/`) and
-  `web/app/agents/` is a placeholder. `web/lib/api.ts` is the one function that calls the
-  service, always through `/api`, and its error type; `web/lib/llm.ts` holds the profile
-  types and calls; `web/lib/testing.ts` stubs `fetch` for the tests. Lists are read with
-  SWR in Client Components. shadcn/ui is set up: `components.json`, components under
-  `web/components/ui/`, and the `cn` helper in `web/lib/utils.ts`. Generated components
-  need `pnpm format` after they are added, and three lint rules they do not meet are off
-  for `web/components/ui/` only (`web/biome.json`). `web/next.config.ts` is the one place
-  the web app reads its configuration: `FREYJA_API_URL`, where its server forwards
-  `/api/...`, documented in `web/.env.example`; it also holds the redirect. Unit tests are
-  `*.test.ts` and `*.test.tsx` files next to the code they cover, run by Vitest with jsdom.
+- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
+  shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
+  `web/app/llm/` lists the LLM profiles as cards (`web/components/llm/`) and `web/app/agents/` is a
+  placeholder. `web/lib/api.ts` is the one function that calls the service, always through `/api`,
+  and its error type; `web/lib/llm.ts` holds the profile types and calls. Lists are read with SWR in
+  Client Components. shadcn/ui is set up: `components.json`, components under `web/components/ui/`,
+  and the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they are
+  added, and three lint rules they do not meet are off for `web/components/ui/` only
+  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its configuration:
+  `FREYJA_API_URL`, where its server forwards `/api/...`, documented in `web/.env.example`; it also
+  holds the redirect. Unit tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`,
+  which follows the layout of the code it covers (`web/__tests__/lib/api.test.ts` covers
+  `web/lib/api.ts`), run by Vitest with jsdom; `web/__tests__/testing.ts` stubs `fetch` for them. No
+  test file sits beside the code.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
@@ -171,8 +172,8 @@ startup and exits with an error naming the connection when it is unreachable.
 - Configuration goes through `Settings`. Never hardcode hosts, ports, connection strings, or
   model ids; add a field with a safe local default, or no default when the value carries a
   credential, and document it in `.env.example`.
-- New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` file next to
-  the code for the web app.
+- New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` or `*.test.tsx`
+  file under `web/__tests__/` for the web app.
 - Write the tests before opening a pull request or merge request, not after. Its description
   has a Tests section that names the tests covering the change, new ones and existing ones
   alike. A change that needs no test, such as documentation or a dependency bump, says so in

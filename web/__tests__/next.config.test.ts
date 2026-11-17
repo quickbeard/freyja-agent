@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import nextConfig from "./next.config";
+import nextConfig from "@/next.config";
 
 async function rewrites() {
   const rules = await nextConfig.rewrites?.();

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { type LlmProfileList, listProfiles, providerLabel } from "./llm";
-import { stubFetch } from "./testing";
+import { stubFetch } from "@/__tests__/testing";
+import { type LlmProfileList, listProfiles, providerLabel } from "@/lib/llm";
 
 const LIST: LlmProfileList = {
   profiles: [],

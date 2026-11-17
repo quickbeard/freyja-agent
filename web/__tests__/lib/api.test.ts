@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { ApiError, api } from "./api";
-import { stubFetch } from "./testing";
+import { stubFetch } from "@/__tests__/testing";
+import { ApiError, api } from "@/lib/api";
 
 async function refusal(run: Promise<unknown>): Promise<ApiError> {
   try {

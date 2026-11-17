@@ -1,6 +1,6 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
-import AgentsPage from "./page";
+import AgentsPage from "@/app/agents/page";
 
 describe("the Agents section", () => {
   it("says agents are not managed from the console yet", () => {

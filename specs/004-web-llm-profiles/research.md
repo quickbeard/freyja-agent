@@ -306,7 +306,9 @@ development, the documented fix applies: render a stable fallback and set the pa
 **Decision**: Vitest with jsdom, `@vitejs/plugin-react`, `@testing-library/react`,
 `@testing-library/dom`, and `vite-tsconfig-paths`, in `vitest.config.mts`, as Next.js's guide
 gives them (`01-app/02-guides/testing/vitest.md`). `fetch` is replaced by a stub in each test.
-Tests stay next to the code as `*.test.ts` and `*.test.tsx`.
+Tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout
+of the code it covers. (Until Phase 3 they sat next to the code; see plan.md, Implementation
+Notes.)
 
 **Rationale**: every component with behavior here is a Client Component, which this setup
 renders. The guide's limit, that async Server Components are not supported, touches only the

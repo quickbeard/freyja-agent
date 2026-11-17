@@ -1,7 +1,7 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
+import { ProfileCard } from "@/components/llm/profile-card";
 import type { LlmProfile } from "@/lib/llm";
-import { ProfileCard } from "./profile-card";
 
 const SAVED: LlmProfile = {
   id: "5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b",

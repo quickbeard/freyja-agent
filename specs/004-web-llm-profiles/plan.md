@@ -212,19 +212,21 @@ web/
 ├── next.config.ts             # + rewrites (/api to the service) and the redirect from / (R13, R15)
 ├── .env.example               # NEW: FREYJA_API_URL
 ├── vitest.config.mts          # NEW: jsdom, React plugin, tsconfig paths (R17)
+├── __tests__/                 # NEW: the unit tests, laid out as the code they cover, and
+│                              #   testing.ts, the fetch stub they share
 ├── app/
 │   ├── layout.tsx             # the shell: sidebar and page
 │   ├── page.tsx               # REMOVED: / redirects to /llm
 │   ├── llm/page.tsx           # NEW: the LLM section
 │   └── agents/page.tsx        # NEW: the placeholder
 ├── components/
-│   ├── app-sidebar.tsx        # NEW: the sidebar and its links (client), with its test
+│   ├── app-sidebar.tsx        # NEW: the sidebar and its links (client)
 │   ├── llm/                   # NEW: profile list, card, form dialog, activate and delete
-│   │                          #   confirmations, test result; each with its test
+│   │                          #   confirmations, test result
 │   └── ui/                    # + the shadcn components in R16
 └── lib/
-    ├── api.ts                 # NEW: fetch to /api, the error shape, with its test
-    └── llm.ts                 # NEW: the profile types and the calls, with its test
+    ├── api.ts                 # NEW: fetch to /api, the error shape
+    └── llm.ts                 # NEW: the profile types and the calls
 ```
 
 Also edited: `pyproject.toml` and `uv.lock` (`cryptography` declared), `.env.example` (the two
@@ -243,14 +245,14 @@ store, the manager, and the test. `runtime/` keeps the wiring, and `api/` the ro
 
 | Requirement | Tests |
 |---|---|
-| FR-001, FR-002 | `web/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
-| FR-003 | `web/lib/api.test.ts`, `web/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
+| FR-001, FR-002 | `web/__tests__/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
+| FR-003 | `web/__tests__/lib/api.test.ts`, `web/__tests__/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
 | FR-003a | `test_llm_profiles_api.py` (no permission for another origin; a body that is not JSON is refused) |
 | FR-004, FR-005, FR-006 | `test_llm_profile_store.py`, `test_llm_profiles_api.py`, `integration/test_llm_profiles_postgres.py` |
-| FR-007 | `web/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
+| FR-007 | `web/__tests__/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
 | FR-008 | `test_llm_profiles_api.py` (environment profile, read-only) |
-| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
-| FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
+| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/__tests__/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
+| FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/__tests__/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
 | FR-013, FR-014 | `test_llm_switch.py` (next run, run in progress, pause, background run, two runtimes) |
 | FR-016, FR-016a | `test_llm_no_model.py` (runs refused, the health check unchanged, no background run and no attempt used) |
 | FR-017, FR-018, FR-019, FR-019a, FR-019b | `test_llm_check.py`, `test_llm_profiles_api.py` |
@@ -370,9 +372,14 @@ check, phase by phase.
   SWR does not retry a failed read by itself here, and a failed read never shows older cards.
 - **The loading state is an `<output>`** (T035), which carries the status role Biome asks for
   in place of `role="status"` on a `<div>`.
-- **Files beyond the plan's tree**: `web/lib/testing.ts`, the `fetch` stub the web tests share,
-  and `web/app/agents/page.test.tsx`. `web/vitest.setup.ts` now also stubs `matchMedia`, which
-  jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
+- **Web tests live under `web/__tests__/`** (decided in review of this phase). The plan had
+  each test next to the code it covers. They were moved to one directory that follows the
+  layout of the code, so `web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`, and they
+  import what they cover through the `@/` alias. `AGENTS.md`, the README, research R17, and
+  every path in tasks.md say so, for the tests of later phases too.
+- **Files beyond the plan's tree**: `web/__tests__/testing.ts`, the `fetch` stub the web tests
+  share, and `web/__tests__/app/agents/page.test.tsx`. `web/vitest.setup.ts` now also stubs
+  `matchMedia`, which jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
 - **The stock page's files are gone** (T036): `web/app/page.tsx` and the five images under
   `web/public/`, which only that page used.
 - **Order of the service test** (T024, T029). The web tests were seen failing before their
