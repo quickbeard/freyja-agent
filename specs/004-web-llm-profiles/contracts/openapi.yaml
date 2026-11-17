@@ -370,7 +370,11 @@ components:
       additionalProperties: false
       minProperties: 1
       properties:
-        name: { type: string, minLength: 1, maxLength: 64 }
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique without regard to case; never `Environment`.
         provider: { $ref: "#/components/schemas/Provider" }
         model: { type: string, minLength: 1, maxLength: 200 }
         base_url: { type: [string, "null"], maxLength: 2000, format: uri }
