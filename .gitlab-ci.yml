@@ -1,7 +1,41 @@
-# GitLab CI: the web app's end-to-end tests (Playwright). The same job runs on GitHub from
-# .github/workflows/playwright.yml. Ruff, pytest, Biome, and Vitest run in the pre-commit hook.
+# GitLab CI: the unit tests of both projects (pytest, Vitest) and the web app's end-to-end
+# tests (Playwright). The same jobs run on GitHub from .github/workflows/unit-tests.yml and
+# .github/workflows/playwright.yml. Ruff and Biome run in the pre-commit hook only.
 stages:
   - test
+
+# The unit tests run on every merge request and on main, whatever changed: they are quick.
+.unit-tests:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+pytest:
+  extends: .unit-tests
+  # The Python that .python-version names.
+  image: python:3.12-slim
+  variables:
+    # The cache and the environment may sit on different file systems on a runner.
+    UV_LINK_MODE: copy
+  before_script:
+    - pip install --quiet "uv==0.12.*"
+    # --locked fails when uv.lock is out of step with pyproject.toml instead of rewriting it.
+    - uv sync --locked
+  script:
+    # The Postgres tests under tests/integration are skipped: they are opt-in and need
+    # FREYJA_TEST_DATABASE_URI.
+    - uv run pytest
+
+vitest:
+  extends: .unit-tests
+  image: node:26-slim
+  before_script:
+    - npm install -g pnpm@12
+    - cd web
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm test
 
 playwright:
   stage: test

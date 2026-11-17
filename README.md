@@ -307,6 +307,8 @@ docker compose exec postgres createdb -U freyja freyja_test
 FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
 ```
 
+CI runs both unit test suites on every pull request and merge request and on `main`: `.github/workflows/unit-tests.yml` on GitHub, and the `pytest` and `vitest` jobs of `.gitlab-ci.yml` on GitLab. The Postgres tests under `tests/integration` stay opt-in and are skipped there, and CI does not run the linters; the commit hook does.
+
 ## End-to-end tests
 
 The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium, Firefox, and WebKit:
