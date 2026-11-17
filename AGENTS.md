@@ -108,7 +108,7 @@ startup and exits with an error naming the connection when it is unreachable.
   are added. Unit tests are `*.test.ts` files next to the code they cover, run by Vitest in
   Node.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
-  there.
+  there. `web/CLAUDE.md` only imports it for Claude Code.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
