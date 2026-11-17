@@ -1,12 +1,14 @@
 """The running service's shared objects: the agent and its catalog, the links to the tool
-servers and the A2A agents, the run-lock and agent task stores, the delegation worker, and this
-instance's id."""
+servers and the A2A agents, the run-lock, agent task, and LLM profile stores, the model
+manager, the delegation worker, and this instance's id."""
 
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -14,7 +16,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
 from freyja_agent.agent.catalog import RESERVED_TOOL_NAMES, Catalog
-from freyja_agent.agent.factory import build_agent
+from freyja_agent.agent.factory import build_agent, resolve_model
 from freyja_agent.config import Settings
 from freyja_agent.delegates.a2a_agents import (
     AgentLink,
@@ -30,6 +32,13 @@ from freyja_agent.delegates.mcp_servers import (
     default_connect,
     open_tool_servers,
 )
+from freyja_agent.llm.active import ENVIRONMENT_PROFILE, ActiveModel, ModelManager
+from freyja_agent.llm.providers import PROVIDERS, ModelFactory, build_model, environment_spec
+from freyja_agent.llm.store import (
+    InMemoryLlmProfileStore,
+    LlmProfileStore,
+    PostgresLlmProfileStore,
+)
 from freyja_agent.runtime.agent_tasks import (
     AgentTaskStore,
     InMemoryAgentTaskStore,
@@ -39,6 +48,11 @@ from freyja_agent.runtime.locks import PostgresRunLocks, RunLocks
 from freyja_agent.runtime.persistence import open_persistence
 
 logger = logging.getLogger(__name__)
+
+
+def _given(model: BaseChatModel) -> BaseChatModel:
+    """The chat model a caller handed to ``assemble``, standing for the environment's."""
+    return model
 
 
 @dataclass
@@ -57,6 +71,29 @@ class Runtime:
     agent_tasks: AgentTaskStore = field(default_factory=InMemoryAgentTaskStore)
     # Watches pending agent tasks and delivers their outcomes (feature 003, research R9).
     worker: DelegationWorker | None = None
+    # Saved LLM profiles and which one is active (feature 004, research R5).
+    llm_profiles: LlmProfileStore = field(default_factory=InMemoryLlmProfileStore)
+    # Keeps ``agent`` and ``catalog`` in step with the active profile (research R1, R6). None
+    # for a runtime put together by hand, which then always runs on the model it was given.
+    models: ModelManager | None = None
+
+    def applied_model(self) -> ActiveModel:
+        """The model this instance last built its orchestrator for; reads nothing."""
+        if self.models is None:
+            return ActiveModel(revision=0, profile=ENVIRONMENT_PROFILE)
+        return self.models.active
+
+    async def model_for_run(self) -> ActiveModel:
+        """Bring the orchestrator in step with the active profile, and say which it is.
+
+        Called once at the start of every run. A run takes ``agent`` right after it, so it
+        keeps the orchestrator it started on whatever is activated meanwhile (FR-013).
+        """
+        if self.models is None:
+            return self.applied_model()
+        orchestrator, active = await self.models.current()
+        self.agent, self.catalog = orchestrator.agent, orchestrator.catalog
+        return active
 
     @classmethod
     @asynccontextmanager
@@ -73,6 +110,8 @@ class Runtime:
         agent_tasks: AgentTaskStore | None = None,
         agent_transport: AgentTransport = default_transport,
         run_worker: bool = True,
+        llm_profiles: LlmProfileStore | None = None,
+        model_factory: ModelFactory | None = None,
     ) -> AsyncIterator["Runtime"]:
         """Connect the tool servers and the agents, build the agent with their tools, and yield.
 
@@ -88,6 +127,12 @@ class Runtime:
         server, which swaps the transport and nothing else (constitution principle III). A
         tool server that cannot be used raises here, before anything is served (FR-004); the
         links are closed on the way out (FR-005).
+
+        Feature 004 builds the orchestrator through the model manager, for the active LLM
+        profile in ``llm_profiles``, and keeps what a rebuild needs, so that a later change of
+        profile reuses these links and tools. ``model_factory`` turns a profile into a chat
+        model and is the seam the tests swap (004 research R18). ``model``, a string or a chat
+        model, stands for the environment's model, as it always has.
         """
         async with open_tool_servers(
             settings.mcp_servers,
@@ -105,27 +150,52 @@ class Runtime:
                 server_names=set(settings.mcp_servers),
                 taken_tool_names=RESERVED_TOOL_NAMES | {tool.name for tool in server_tools},
             ) as agents:
-                orchestrator = build_agent(
-                    model if model is not None else settings.model,
-                    checkpointer=checkpointer,
-                    store=store,
-                    workspace_dir=settings.workspace_dir,
-                    max_steps=settings.max_steps,
-                    delegate_tools=[
-                        *server_tools,
-                        *(tool for link in agents for tool in agent_tools(link, task_store)),
-                    ],
-                    # Agent tasks exist only with agents: without any, the orchestrator is
-                    # what it was before feature 003 (FR-024).
-                    agent_tasks=task_store if agents else None,
-                    openai_responses_api=settings.openai_responses_api,
+                profile_store = (
+                    llm_profiles if llm_profiles is not None else InMemoryLlmProfileStore()
                 )
+                spec = environment_spec(settings, model if isinstance(model, str) else None)
+                provider = PROVIDERS.get(spec.provider)
+                key = os.environ.get(provider.key_variable, "") if provider else ""
+                if isinstance(model, BaseChatModel):
+                    environment = partial(_given, model)
+                elif model_factory is not None:
+                    environment = partial(model_factory, spec)
+                else:
+                    # The path the environment's model has always taken (001 research R3).
+                    environment = partial(
+                        resolve_model, spec.name, openai_responses_api=spec.responses_api
+                    )
+                manager = ModelManager(
+                    store=profile_store,
+                    secret=settings.secret_key,
+                    factory=model_factory or build_model,
+                    environment=environment,
+                    environment_secrets=(key,) if key else (),
+                    build=partial(
+                        build_agent,
+                        checkpointer=checkpointer,
+                        store=store,
+                        workspace_dir=settings.workspace_dir,
+                        max_steps=settings.max_steps,
+                        delegate_tools=[
+                            *server_tools,
+                            *(tool for link in agents for tool in agent_tools(link, task_store)),
+                        ],
+                        # Agent tasks exist only with agents: without any, the orchestrator
+                        # is what it was before feature 003 (FR-024).
+                        agent_tasks=task_store if agents else None,
+                        openai_responses_api=settings.openai_responses_api,
+                    ),
+                )
+                orchestrator = await manager.load()
                 runtime = cls(
                     agent=orchestrator.agent,
                     catalog=orchestrator.catalog,
                     servers=servers,
                     agents=agents,
                     agent_tasks=task_store,
+                    llm_profiles=profile_store,
+                    models=manager,
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
@@ -161,6 +231,8 @@ class Runtime:
             await locks.setup()
             agent_tasks = PostgresAgentTaskStore(persistence.pool)
             await agent_tasks.setup()
+            llm_profiles = PostgresLlmProfileStore(persistence.pool)
+            await llm_profiles.setup()
             logger.info("Persistence ready: checkpointer, store, and run-lock table")
             async with cls.assemble(
                 settings,
@@ -172,6 +244,7 @@ class Runtime:
                 connect=connect,
                 agent_tasks=agent_tasks,
                 agent_transport=agent_transport,
+                llm_profiles=llm_profiles,
             ) as runtime:
                 yield runtime
         finally:

@@ -1,11 +1,21 @@
 """Request and response models for the thread endpoints (contracts/openapi.yaml)."""
 
 from datetime import datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    model_validator,
+)
 
 from freyja_agent.config import SERVER_NAME_PATTERN
+from freyja_agent.llm.store import BASE_URL_LIMIT, MODEL_LIMIT, NAME_LIMIT, REASON_LIMIT
 
 # Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars; at least one
 # character that is not a dot, so "." and ".." never name a thread (FR-001a). The length is a
@@ -203,9 +213,160 @@ class ErrorDetail(BaseModel):
         "proposal_mismatch",
         "thread_not_found",
         "internal",
+        # Feature 004, the LLM profile routes.
+        "profile_not_found",
+        "profile_read_only",
+        "profile_active",
+        "profile_unusable",
+        "profile_limit",
+        "name_taken",
+        "secret_not_configured",
+        "test_busy",
     ]
     message: str
 
 
 class ErrorResponse(BaseModel):
     detail: ErrorDetail
+
+
+# Feature 004: LLM profiles (specs/004-web-llm-profiles/contracts/openapi.yaml). No response
+# model here has a key field, and a request's key is a SecretStr, so it is never shown when a
+# model is printed or logged (FR-020).
+
+API_KEY_LIMIT = 4000
+LlmProvider = Literal["openai", "anthropic", "openrouter"]
+ProfileName = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=NAME_LIMIT)
+]
+ModelId = Annotated[
+    str, StringConstraints(strip_whitespace=True, min_length=1, max_length=MODEL_LIMIT)
+]
+ApiKey = Annotated[SecretStr, Field(min_length=1, max_length=API_KEY_LIMIT)]
+
+
+def _web_address(value: str) -> str:
+    parts = urlsplit(value)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("must be an http or https address with a host")
+    return value
+
+
+BaseUrl = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=BASE_URL_LIMIT),
+    AfterValidator(_web_address),
+]
+# A refused value is never repeated: on these routes it may be a key (research R9).
+_REQUEST = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+
+class LlmProfileCreate(BaseModel):
+    model_config = _REQUEST
+
+    name: ProfileName
+    provider: LlmProvider
+    model: ModelId
+    base_url: BaseUrl | None = None
+    api_key: ApiKey
+    # Used for an OpenAI-compatible endpoint only: the Responses API, or chat completions.
+    responses_api: bool = True
+
+
+class LlmProfileUpdate(BaseModel):
+    """Only the fields sent are changed; a key left out keeps the stored one (FR-009)."""
+
+    model_config = _REQUEST
+
+    name: ProfileName | None = None
+    provider: LlmProvider | None = None
+    model: ModelId | None = None
+    base_url: BaseUrl | None = None
+    api_key: ApiKey | None = None
+    responses_api: bool | None = None
+
+    @model_validator(mode="after")
+    def _something_to_change(self) -> Self:
+        if not self.model_fields_set:
+            raise ValueError("send at least one field to change")
+        return self
+
+
+class LlmProfileDraft(BaseModel):
+    """Values to test without saving them (FR-017)."""
+
+    model_config = _REQUEST
+
+    provider: LlmProvider
+    model: ModelId
+    base_url: BaseUrl | None = None
+    api_key: ApiKey | None = None
+    responses_api: bool = True
+    # A saved profile whose stored key is used when ``api_key`` is left out.
+    profile_id: Annotated[str, Field(min_length=1, max_length=64)] | None = None
+
+    @model_validator(mode="after")
+    def _a_key_from_somewhere(self) -> Self:
+        if self.api_key is None and self.profile_id is None:
+            raise ValueError("send 'api_key', or 'profile_id' to use a saved profile's key")
+        return self
+
+
+LlmTestStep = Literal["first_message", "conversation"]
+
+
+class LlmLastTest(BaseModel):
+    ok: bool
+    at: datetime
+    # The step that failed; None when the test passed.
+    step: LlmTestStep | None
+    # Why it failed, with any key removed; None when the test passed.
+    reason: Annotated[str | None, Field(max_length=REASON_LIMIT)]
+
+
+class LlmTestResult(LlmLastTest):
+    # Whether the result was kept with a listed profile.
+    recorded: bool
+
+
+class LlmProfile(BaseModel):
+    # 32 hex characters for a saved profile; "environment" for the environment's.
+    id: str
+    name: str
+    source: Literal["saved", "environment"]
+    # One of the three for a saved profile; the environment's may carry another prefix.
+    provider: str
+    model: str
+    base_url: str | None
+    # None for a provider with no such choice.
+    responses_api: bool | None
+    # The key's last four characters; empty for a key under eight characters, or none.
+    key_hint: str
+    active: bool
+    usable: bool
+    unusable_reason: (
+        Literal["key_unreadable", "secret_not_configured", "not_configured", "cannot_build"] | None
+    )
+    # None when not tested since the profile's last change.
+    last_test: LlmLastTest | None
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class LlmProfileList(BaseModel):
+    profiles: list[LlmProfile]
+    # The id of the one active profile; "environment" when no saved one is.
+    active_id: str
+    # False when the active profile is not usable: runs then end with no_usable_model.
+    usable_model: bool
+    # False when profiles cannot be saved because no secret is set.
+    secret_configured: bool
+    limit: int
+
+
+class RunProfile(BaseModel):
+    """The profile a run uses, in its stream's first event (contracts/sse-events.md)."""
+
+    id: str
+    name: str
+    source: Literal["saved", "environment"]

@@ -28,6 +28,7 @@ from freyja_agent.api.serialize import (
 )
 
 if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
+    from freyja_agent.llm.active import ActiveModel
     from freyja_agent.runtime.runtime import Runtime
 
 logger = logging.getLogger(__name__)
@@ -48,6 +49,20 @@ def lease_owner(runtime: Runtime, run_id: str) -> str:
 def _event(kind: str, payload: Any) -> ServerSentEvent:
     # EventSourceResponse does not encode data itself; a dict would be sent as a Python repr.
     return ServerSentEvent(data=json.dumps(to_jsonable(payload)), event=kind)
+
+
+def _start(
+    active: ActiveModel, thread_id: str, run_id: str, mode: RunMode, debug: bool
+) -> dict[str, Any]:
+    """A run's first event, naming the LLM profile it uses (feature 004, FR-024a)."""
+    profile = active.profile
+    return {
+        "thread_id": thread_id,
+        "run_id": run_id,
+        "mode": mode,
+        "debug": debug,
+        "profile": {"id": profile.id, "name": profile.name, "source": profile.source},
+    }
 
 
 def _is_model_error(exc: BaseException) -> bool:
@@ -98,15 +113,42 @@ async def run_stream(
     # How the run ended, for ``on_end``; None while it runs and after a disconnect.
     ended: tuple[str, str | None] | None = None
     try:
-        yield _event(
-            "start", {"thread_id": thread_id, "run_id": run_id, "mode": mode, "debug": debug}
+        # The one place a run picks up a change of LLM profile: the orchestrator is brought in
+        # step with the active profile here, and this run keeps the one it gets, whatever is
+        # activated while it runs (feature 004, FR-013, research R2).
+        try:
+            active = await runtime.model_for_run()
+        except Exception:
+            logger.exception(
+                "run %s on thread %s: the active LLM profile could not be applied",
+                run_id,
+                thread_id,
+            )
+            ended = ("error", "internal")
+            yield _event("start", _start(runtime.applied_model(), thread_id, run_id, mode, debug))
+            yield _event(
+                "error",
+                {"code": "internal", "message": "The run failed because of an internal error."},
+            )
+            return
+        agent = runtime.agent
+        profile = active.profile
+        logger.info(
+            "run %s on thread %s (%s) uses LLM profile %s (%s, %s)",
+            run_id,
+            thread_id,
+            mode,
+            profile.name,
+            profile.id,
+            profile.source,
         )
+        yield _event("start", _start(active, thread_id, run_id, mode, debug))
         interrupts: tuple[Interrupt, ...] = ()
         try:
             # Subgraph streaming is on so an agent's progress, written by a hand-off made inside
             # the subagent, reaches the stream. What it adds is filtered back to the 001
             # contract: updates and interrupts come from the root only (feature 003, R7).
-            async for namespace, stream_mode, chunk in runtime.agent.astream(
+            async for namespace, stream_mode, chunk in agent.astream(
                 input, config, stream_mode=stream_modes, durability="sync", subgraphs=True
             ):
                 if on_recorded is not None and not namespace and stream_mode == "updates":

@@ -14,6 +14,7 @@ import pytest
 # imports the app; no database is contacted.
 os.environ.setdefault("FREYJA_DATABASE_URI", "postgresql://localhost:5432/freyja_test")
 
+from cryptography.fernet import Fernet
 from fastapi import FastAPI
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
@@ -23,16 +24,20 @@ from freyja_agent.agent.factory import build_agent
 from freyja_agent.api.app import create_app
 from freyja_agent.config import Settings
 from freyja_agent.delegates.a2a_agents import default_transport
+from freyja_agent.llm.providers import ModelFactory
+from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileStore
 from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
 from tests.asgi_stream import StreamingASGITransport
-from tests.fakes import FakeClock
+from tests.fakes import FakeClock, ProfileModels
 from tests.mcp_stub import StubServer, make_stub
 
 REPO_SKILLS = Path(__file__).resolve().parent.parent / "workspace" / "skills"
+# The secret the suite stores keys under (feature 004). Made afresh for every test session.
+TEST_SECRET = Fernet.generate_key().decode()
 
 
 @pytest.fixture
@@ -239,6 +244,8 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         locks: InMemoryRunLocks | None = None,
         run_worker: bool = False,
         network: bool = False,
+        llm_profiles: LlmProfileStore | None = None,
+        model_factory: ModelFactory | None = None,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -284,6 +291,78 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                     default_transport if network else lambda name, _url: transports[name]
                 ),
                 run_worker=run_worker,
+                # Feature 004: a test may give stand-in agents and LLM profiles together.
+                llm_profiles=llm_profiles,
+                model_factory=model_factory,
+            ) as runtime:
+                made.runtimes.append(runtime)
+                yield runtime
+
+        made.open_runtime = open_runtime
+        made.app = create_app(open_runtime=open_runtime)
+        return made
+
+    return _make
+
+
+@dataclass
+class LlmApp:
+    """An app assembled the production way, with LLM profiles behind it (feature 004)."""
+
+    app: FastAPI
+    settings: Settings
+    # Saved profiles and the active choice; shared by two apps to stand for two instances.
+    store: InMemoryLlmProfileStore
+    # What turns a profile into a chat model here, and the record of what it built.
+    models: ProfileModels
+    open_runtime: Callable[[Settings], Any] = lambda _settings: nullcontext()
+    runtimes: list[Runtime] = field(default_factory=list)
+
+    @property
+    def runtime(self) -> Runtime:
+        return self.runtimes[-1]
+
+
+@pytest.fixture
+def make_llm_app(workspace: Path, clock: FakeClock) -> Callable[..., LlmApp]:
+    """Build an app whose runtime is assembled by ``Runtime.assemble``, with LLM profiles.
+
+    Persistence is in memory. ``models`` is the model factory: it returns a labelled scripted
+    model per model id, so the store, the manager, the run loop, and the routes are the
+    production code and only the chat model is a stand-in (004 research R18). The environment's
+    model is ``FREYJA_MODEL`` as usual; pass ``model="openai:env-model"`` to name it. Pass
+    ``store``, ``saver``, ``locks``, or ``models`` from an earlier app to simulate a restart or
+    a second instance on the same database. ``secret=None`` starts without a secret.
+    """
+
+    def _make(
+        *,
+        models: ProfileModels | None = None,
+        store: InMemoryLlmProfileStore | None = None,
+        saver: InMemorySaver | None = None,
+        locks: InMemoryRunLocks | None = None,
+        instance_id: str = "instance-a",
+        secret: str | None = TEST_SECRET,
+        **overrides: Any,
+    ) -> LlmApp:
+        settings = Settings(workspace_dir=str(workspace), secret_key=secret, **overrides)
+        factory = models or ProfileModels()
+        profile_store = store or InMemoryLlmProfileStore(clock=clock.now)
+        checkpointer = saver or InMemorySaver()
+        lock_store = locks or InMemoryRunLocks(settings.run_lock_ttl_seconds, clock=clock.now)
+        made = LlmApp(app=FastAPI(), settings=settings, store=profile_store, models=factory)
+
+        @asynccontextmanager
+        async def open_runtime(_settings: Settings) -> AsyncIterator[Runtime]:
+            async with Runtime.assemble(
+                settings,
+                checkpointer=checkpointer,
+                store=InMemoryStore(),
+                locks=lock_store,
+                instance_id=instance_id,
+                run_worker=False,
+                llm_profiles=profile_store,
+                model_factory=factory,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime

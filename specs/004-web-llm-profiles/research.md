@@ -219,8 +219,12 @@ Activation answers with the whole list, so the console redraws from one response
 ([contracts/sse-events.md](contracts/sse-events.md)).
 
 **Rationale**: `start` is already sent by every run before the model is called, and 001's
-contract lets fields be added. No existing test compares the whole `start` event (*verified*:
-four tests check only its kind), so FR-023 holds.
+contract lets fields be added.
+
+**Corrected in Phase 2**: this said no existing test compares the whole `start` event. One
+does: `tests/test_runs.py` compares the first event's payload in full, on the line after the
+check of its kind that the search had found. That assertion now expects `profile` as well.
+It is the only earlier test that changed; FR-023 and SC-006 say so.
 
 ## R12. Requests from other origins
 
@@ -330,7 +334,8 @@ Two runtimes sharing one store stand for two instances, as in 003.
 except the added `profile` field. `Runtime.assemble(model=<instance>)`, which every existing
 test uses, keeps working: an injected model is treated as the environment's.
 
-**Rationale**: FR-023 and SC-006. The existing suite is the check: it must pass unchanged.
+**Rationale**: FR-023 and SC-006. The existing suite is the check: it passes with one
+assertion changed, the one that compares a run's first event in full (R11).
 
 ## R20. The quickstart's second model
 
