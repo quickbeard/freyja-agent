@@ -1,0 +1,31 @@
+# GitLab CI: the web app's end-to-end tests (Playwright). The same job runs on GitHub from
+# .github/workflows/playwright.yml. Ruff, pytest, Biome, and Vitest run in the pre-commit hook.
+stages:
+  - test
+
+playwright:
+  stage: test
+  # The image carries the three browsers and their system packages. Its version must equal
+  # the @playwright/test version in web/pnpm-lock.yaml; change both together.
+  image: mcr.microsoft.com/playwright:v1.65.1-noble
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      changes:
+        - web/**/*
+        - .gitlab-ci.yml
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      changes:
+        - web/**/*
+        - .gitlab-ci.yml
+  before_script:
+    - npm install -g pnpm@12
+    - cd web
+    - pnpm install --frozen-lockfile
+  script:
+    # Playwright builds the app and serves it itself (web/playwright.config.ts).
+    - pnpm exec playwright test
+  artifacts:
+    when: always
+    paths:
+      - web/playwright-report/
+    expire_in: 30 days

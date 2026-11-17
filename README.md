@@ -307,6 +307,20 @@ docker compose exec postgres createdb -U freyja freyja_test
 FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
 ```
 
+## End-to-end tests
+
+The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium, Firefox, and WebKit:
+
+```bash
+cd web
+pnpm exec playwright install   # once per machine: downloads the three browsers
+pnpm test:e2e                  # playwright test
+```
+
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included. The tests are `*.spec.ts` files under `web/e2e/`. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report.
+
+The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
+
 ## Configuration
 
 Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/config.py`. Load them with `uv run --env-file .env <command>`.
