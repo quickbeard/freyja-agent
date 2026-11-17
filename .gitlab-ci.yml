@@ -1,7 +1,68 @@
-# GitLab CI: the web app's end-to-end tests (Playwright). The same job runs on GitHub from
-# .github/workflows/playwright.yml. Ruff, pytest, Biome, and Vitest run in the pre-commit hook.
+# GitLab CI: the linters (Ruff, Biome) and the unit tests (pytest, Vitest) of both projects,
+# and the web app's end-to-end tests (Playwright). The same jobs run on GitHub from lint.yml,
+# unit-tests.yml, and playwright.yml under .github/workflows/.
 stages:
   - test
+
+# The linters and the unit tests run on every merge request and on main, whatever changed:
+# they are quick.
+.every-change:
+  stage: test
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+ruff:
+  extends: .every-change
+  # The Python that .python-version names.
+  image: python:3.12-slim
+  variables:
+    UV_LINK_MODE: copy
+  before_script:
+    - pip install --quiet "uv==0.12.*"
+    # Ruff comes from uv.lock, so CI checks with the version a developer has.
+    - uv sync --locked
+  script:
+    # Both report and change nothing; the commit hook is where files get fixed.
+    - uv run ruff check .
+    - uv run ruff format --check .
+
+biome:
+  extends: .every-change
+  image: node:26-slim
+  before_script:
+    - npm install -g pnpm@12
+    - cd web
+    - pnpm install --frozen-lockfile
+  script:
+    # biome check: lint and formatting in one command.
+    - pnpm lint
+
+pytest:
+  extends: .every-change
+  # The Python that .python-version names.
+  image: python:3.12-slim
+  variables:
+    # The cache and the environment may sit on different file systems on a runner.
+    UV_LINK_MODE: copy
+  before_script:
+    - pip install --quiet "uv==0.12.*"
+    # --locked fails when uv.lock is out of step with pyproject.toml instead of rewriting it.
+    - uv sync --locked
+  script:
+    # The Postgres tests under tests/integration are skipped: they are opt-in and need
+    # FREYJA_TEST_DATABASE_URI.
+    - uv run pytest
+
+vitest:
+  extends: .every-change
+  image: node:26-slim
+  before_script:
+    - npm install -g pnpm@12
+    - cd web
+    - pnpm install --frozen-lockfile
+  script:
+    - pnpm test
 
 playwright:
   stage: test

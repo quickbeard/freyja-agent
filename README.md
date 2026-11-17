@@ -273,6 +273,8 @@ The web hooks run the scripts in `web/package.json` with pnpm, so they need Node
 uv run pre-commit run --all-files
 ```
 
+CI runs both linters on every pull request and merge request and on `main`: `.github/workflows/lint.yml` on GitHub, and the `ruff` and `biome` jobs of `.gitlab-ci.yml` on GitLab. There they only report: `ruff check`, `ruff format --check`, and `biome check` change no file, so a failure is fixed locally with the commands above.
+
 ## Unit tests
 
 ```bash
@@ -306,6 +308,8 @@ The Postgres integration tests under `tests/integration/` are skipped unless `FR
 docker compose exec postgres createdb -U freyja freyja_test
 FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
 ```
+
+CI runs both unit test suites on every pull request and merge request and on `main`: `.github/workflows/unit-tests.yml` on GitHub, and the `pytest` and `vitest` jobs of `.gitlab-ci.yml` on GitLab. The Postgres tests under `tests/integration` stay opt-in and are skipped there.
 
 ## End-to-end tests
 
