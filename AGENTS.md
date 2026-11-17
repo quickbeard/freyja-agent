@@ -133,6 +133,10 @@ startup and exits with an error naming the connection when it is unreachable.
   credential, and document it in `.env.example`.
 - New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` file next to
   the code for the web app.
+- Write the tests before opening a pull request or merge request, not after. Its description
+  has a Tests section that names the tests covering the change, new ones and existing ones
+  alike. A change that needs no test, such as documentation or a dependency bump, says so in
+  that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.
 - The README documents only what exists in the repo, never planned work.
