@@ -384,13 +384,13 @@ check, phase by phase.
   `matchMedia`, which jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
 - **The stock page's files are gone** (T036): `web/app/page.tsx` and the five images under
   `web/public/`, which only that page used.
-- **End-to-end tests** (T037a, added after the plan). Playwright came to `main` while this
-  phase was in review, so the browser check of T037 is now kept as tests:
-  `web/e2e/console.spec.ts` and `web/e2e/llm.spec.ts`, ten tests beside the existing smoke
-  test, each run in Chromium, Firefox, and WebKit against the built app. They need no
-  service: `web/e2e/api.ts` hands a page what the service would answer, in the browser. The
-  app under test forwards `/api/...` to an address nothing listens on, so the two tests
-  about a stopped service go through the web app's own server, as the hand check did.
+- **End-to-end tests** (T037a, added after the plan). Playwright came to `main` while this phase
+  was in review, so the browser check of T037 is now kept as tests: `web/e2e/console.spec.ts`
+  and `web/e2e/llm.spec.ts`, ten tests beside the existing smoke test, run in Chromium against
+  the built app. They need no service: `web/e2e/api.ts` hands a page what the service would
+  answer, in the browser. The app under test forwards `/api/...` to an address nothing listens
+  on, so the two tests about a stopped service go through the web app's own server, as the hand
+  check did.
 - **The sidebar now closes once a section is chosen in a narrow window** (T032, FR-001). The
   end-to-end test found that it stayed open over the page it had just led to; the hand
   check of T037 had only opened it. `web/components/app-sidebar.tsx` closes it on a link's

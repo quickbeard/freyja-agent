@@ -38,10 +38,11 @@ Always go through uv. Never call python, pip, or pytest directly.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
-- In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium, Firefox,
-  and WebKit. Playwright builds the app and serves it on port 3100 itself, so nothing needs
-  to be running, the Freyja service included. `pnpm exec playwright install` downloads the
-  three browsers once per machine. The commit hook does not run these tests; CI does.
+- In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium, the one
+  browser `web/playwright.config.ts` names. Playwright builds the app and serves it on port 3100
+  itself, so nothing needs to be running, the Freyja service included. `pnpm exec playwright
+  install chromium` downloads the browser once per machine. The commit hook does not run these
+  tests; CI does.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 
