@@ -59,40 +59,40 @@ tests sit next to the code as `*.test.ts` and `*.test.tsx`.
 **Purpose**: The dependency, the two settings, the web app's test tooling, its components, and
 the path from the browser to the service.
 
-- [ ] T001 Add `cryptography>=50,<51` to `[project].dependencies` in `pyproject.toml`, then run
+- [X] T001 Add `cryptography>=50,<51` to `[project].dependencies` in `pyproject.toml`, then run
       `uv lock`; confirm the lock gains no package and that `cryptography` stays at 50.0.2 (R4)
-- [ ] T002 [P] Add tests for the two settings to `tests/test_config.py`: `secret_key` is unset
+- [X] T002 [P] Add tests for the two settings to `tests/test_config.py`: `secret_key` is unset
       by default; a key from `Fernet.generate_key()` is accepted; a value that is not a Fernet
       key, such as `not-a-key`, is refused with an error that names `secret_key` and does not
       repeat the value; `llm_test_timeout_seconds` defaults to 60 and refuses 0, a negative
       number, and 61 (FR-019, FR-022, contracts/settings.md)
-- [ ] T003 Implement the settings in `src/freyja_agent/config.py`: `secret_key: SecretStr | None
+- [X] T003 Implement the settings in `src/freyja_agent/config.py`: `secret_key: SecretStr | None
       = None`, validated as a Fernet key when set, and `llm_test_timeout_seconds:
       Annotated[float, Field(gt=0, le=60)] = 60` (FR-019, FR-022, R4, R7)
-- [ ] T004 [P] Document `FREYJA_SECRET_KEY`, with the command that generates one, and
+- [X] T004 [P] Document `FREYJA_SECRET_KEY`, with the command that generates one, and
       `FREYJA_LLM_TEST_TIMEOUT_SECONDS` in `.env.example`, with the text of
       contracts/settings.md; leave `FREYJA_SECRET_KEY` commented out (principle IV)
-- [ ] T005 [P] In `web/`, add `swr` to the dependencies and `jsdom`, `@vitejs/plugin-react`,
+- [X] T005 [P] In `web/`, add `swr` to the dependencies and `jsdom`, `@vitejs/plugin-react`,
       `@testing-library/react`, `@testing-library/dom`, and `vite-tsconfig-paths` to the dev
       dependencies in `web/package.json`, updating `web/pnpm-lock.yaml`. Before keeping `swr`,
       check that its peer dependencies accept React 19.3; if they do not, stop and record it in
       plan.md under Implementation Notes (R14, R17, research "Not verified")
-- [ ] T006 Create `web/vitest.config.mts` with the `tsconfigPaths()` and `react()` plugins and
+- [X] T006 Create `web/vitest.config.mts` with the `tsconfigPaths()` and `react()` plugins and
       `test.environment: "jsdom"`, as Next.js's Vitest guide gives it; keep the `test` script
       as `vitest run`; confirm `web/lib/utils.test.ts` still passes. Then write
       `web/next.config.test.ts`: `rewrites()` forwards `/api/:path*` to `:path*` on
       `http://127.0.0.1:8000` by default and on `FREYJA_API_URL` when it is set; it fails until
       T009 (FR-003, R13, R17)
-- [ ] T007 Add the shadcn components `sidebar`, `card`, `dialog`, `alert-dialog`, `input`,
+- [X] T007 Add the shadcn components `sidebar`, `card`, `dialog`, `alert-dialog`, `input`,
       `label`, `select`, `switch`, `badge`, `skeleton`, and `sonner` under `web/components/ui/`
       with the shadcn CLI in the `base-vega` style, then run `pnpm format`; `pnpm lint`,
       `pnpm test`, and `pnpm build` pass. If the CLI has no such component for the style, stop
       and record it in plan.md (R16, research "Not verified")
-- [ ] T008 [P] Create `web/.env.example` documenting `FREYJA_API_URL` with its default
+- [X] T008 [P] Create `web/.env.example` documenting `FREYJA_API_URL` with its default
       `http://127.0.0.1:8000`, add `!.env.example` to `web/.gitignore` so it is committed, and
       name the variable in the root `.env.example` too, pointing at `web/.env.example`
       (contracts/settings.md, principle IV)
-- [ ] T009 Add `rewrites()` to `web/next.config.ts`: `/api/:path*` goes to
+- [X] T009 Add `rewrites()` to `web/next.config.ts`: `/api/:path*` goes to
       `${FREYJA_API_URL}/:path*`, with `FREYJA_API_URL` read from the environment and defaulting
       to `http://127.0.0.1:8000`. Check by hand whether a changed `FREYJA_API_URL` takes effect
       at `next start` without a new `next build`, and record the answer in plan.md under

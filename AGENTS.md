@@ -105,8 +105,11 @@ startup and exits with an error naming the connection when it is unreachable.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), so far the `create-next-app` start
   page with shadcn/ui set up: `components.json`, components under `web/components/ui/`, and
   the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they
-  are added. Unit tests are `*.test.ts` files next to the code they cover, run by Vitest in
-  Node.
+  are added, and three lint rules they do not meet are off for `web/components/ui/` only
+  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its
+  configuration: `FREYJA_API_URL`, where its server forwards `/api/...`, documented in
+  `web/.env.example`. Unit tests are `*.test.ts` and `*.test.tsx` files next to the code they
+  cover, run by Vitest with jsdom.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `docker-compose.yml`: local Postgres for development and the integration tests.

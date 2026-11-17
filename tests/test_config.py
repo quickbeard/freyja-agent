@@ -1,4 +1,5 @@
 import pytest
+from cryptography.fernet import Fernet
 from pydantic import ValidationError
 
 from freyja_agent.config import Settings
@@ -167,4 +168,56 @@ def test_background_run_counts_are_whole_numbers(
 ) -> None:
     monkeypatch.setenv(name, "2.5")
     with pytest.raises(ValidationError, match=name.removeprefix("FREYJA_").lower()):
+        Settings()
+
+
+# Feature 004: the secret that protects stored API keys, and the profile test's time limit
+# (contracts/settings.md).
+
+
+def test_the_secret_key_is_unset_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FREYJA_SECRET_KEY", raising=False)
+    assert Settings().secret_key is None
+
+
+def test_a_blank_secret_key_counts_as_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREYJA_SECRET_KEY", "  ")
+    assert Settings().secret_key is None
+
+
+def test_a_fernet_key_is_accepted_as_the_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    key = Fernet.generate_key().decode()
+    monkeypatch.setenv("FREYJA_SECRET_KEY", key)
+    secret = Settings().secret_key
+    assert secret is not None
+    assert secret.get_secret_value() == key
+    assert key not in repr(secret)
+
+
+@pytest.mark.parametrize("value", ["not-a-key", "c2hvcnQ=", "x" * 44])
+def test_a_secret_that_is_not_a_fernet_key_is_refused(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("FREYJA_SECRET_KEY", value)
+    with pytest.raises(ValidationError, match="secret_key") as refused:
+        Settings()
+    assert value not in str(refused.value)
+
+
+def test_the_llm_test_time_limit_defaults_to_a_minute(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("FREYJA_LLM_TEST_TIMEOUT_SECONDS", raising=False)
+    assert Settings().llm_test_timeout_seconds == 60
+
+
+def test_the_llm_test_time_limit_can_be_shortened(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("FREYJA_LLM_TEST_TIMEOUT_SECONDS", "2.5")
+    assert Settings().llm_test_timeout_seconds == 2.5
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "61"])
+def test_the_llm_test_time_limit_is_between_zero_and_a_minute(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv("FREYJA_LLM_TEST_TIMEOUT_SECONDS", value)
+    with pytest.raises(ValidationError, match="llm_test_timeout_seconds"):
         Settings()

@@ -729,6 +729,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "a2a-sdk" },
+    { name = "cryptography" },
     { name = "deepagents" },
     { name = "fastapi", extra = ["standard"] },
     { name = "httpx" },
@@ -757,6 +758,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "a2a-sdk", specifier = ">=1.3,<2" },
+    { name = "cryptography", specifier = ">=50,<51" },
     { name = "deepagents", specifier = ">=0.7.32,<0.8" },
     { name = "fastapi", extras = ["standard"], specifier = ">=0.162.0" },
     { name = "httpx", specifier = ">=0.28.1" },

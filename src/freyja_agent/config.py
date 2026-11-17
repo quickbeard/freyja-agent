@@ -2,12 +2,15 @@ import ipaddress
 from typing import Annotated, Self
 from urllib.parse import urlsplit
 
+from cryptography.fernet import Fernet
 from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    SecretStr,
     StrictBool,
     StringConstraints,
+    field_validator,
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -118,6 +121,12 @@ class Settings(BaseSettings):
     # does by default. False calls it through chat completions, for an OpenAI-compatible server
     # whose Responses API does not take a conversation's earlier turns. Other providers ignore it.
     openai_responses_api: bool = True
+    # The secret that protects stored API keys (feature 004, FR-020, FR-022): a Fernet key.
+    # Unset, the service starts and saving an LLM profile is refused; a value that is not a
+    # Fernet key stops startup like any invalid setting (contracts/settings.md).
+    secret_key: SecretStr | None = None
+    # The most a profile test may take, both of its steps together (FR-019).
+    llm_test_timeout_seconds: Annotated[float, Field(gt=0, le=60)] = 60
     # Root of the agent's file tools; skills/ inside it is committed (FR-017).
     workspace_dir: str = "workspace"
     # LangGraph recursion limit per run; reaching it ends the run with an error (FR-004a).
@@ -147,6 +156,29 @@ class Settings(BaseSettings):
     background_retry_seconds: Annotated[float, Field(gt=0)] = 60
     # Background runs under way at once on one instance; further ones wait (003 SC-003).
     background_run_concurrency: Annotated[int, Field(gt=0)] = 4
+
+    @field_validator("secret_key", mode="before")
+    @classmethod
+    def _blank_secret_is_unset(cls, value: object) -> object:
+        # A line left as ``FREYJA_SECRET_KEY=`` means no secret, not an invalid one.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("secret_key")
+    @classmethod
+    def _secret_is_a_fernet_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        try:
+            Fernet(value.get_secret_value())
+        except ValueError:
+            # Raised afresh so that nothing of the refused value travels with the error.
+            raise ValueError(
+                "must be a Fernet key: 32 bytes as URL-safe base64, as "
+                "cryptography.fernet.Fernet.generate_key() gives"
+            ) from None
+        return value
 
 
 settings = Settings()
