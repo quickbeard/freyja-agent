@@ -17,6 +17,20 @@
 - Q: Should the console let an operator activate a profile that has not passed a test? → A: Yes, with a warning. Each card shows its profile's last test result: passed, failed, or not tested since its last change. Activation is always possible, and its confirmation warns and offers to test first when the profile has not passed. The last result is therefore kept with the profile.
 - Q: Should Freyja record which profile each run used, so an operator can tell afterwards which model produced a reply? → A: In the run's stream and in the service log. The first event of each run's stream names the profile the run uses, and the service logs one line per run naming it. Nothing is added to the thread itself.
 
+### Security and reliability checklist review 2026-11-17
+
+Decisions recorded while resolving `checklists/security-reliability.md`; the wording fixes are listed in that checklist's review record.
+
+- Q: After a switch, where do a thread's earlier messages go? → A: To the newly active profile's endpoint, on the thread's next run. That is the operator's choice to make, so the activation confirmation says it (FR-012).
+- Q: May a page from another origin use the API? → A: No. It can neither read a response nor change a profile, and a request whose body is not JSON is refused (FR-003a).
+- Q: What if the secret that protects stored keys is set to a value that cannot be one? → A: The service does not start, as for any invalid setting. FR-016 is about the model, not about the service's settings (FR-022).
+- Q: What happens to an agent's outcome that is waiting to be delivered while no usable model is active? → A: No background run starts. The outcome waits, uses up no delivery attempt, and is delivered once a usable model is active (FR-016a).
+- Q: What if service instances are given different secrets or different model settings? → A: That is a deployment mistake the service does not detect. Instances are assumed to be given the same ones, and the profile list describes the instance that answered (Assumptions).
+- Q: Does saving a change to the active profile need a confirmation, as activating and deleting do? → A: Yes. The console asks, saying that the change applies from the next run (FR-010).
+- Q: How many tests may run at once? → A: One per listed profile, and four in all, on each service instance. A request beyond either is refused and sends nothing (FR-019b).
+- Q: Does the health check report a missing model? → A: No. It keeps reporting only that the service runs; the profile list says whether a usable model is active (FR-016).
+- Q: What does removing a key from text cover? → A: The key's exact text. An encoded or altered form of it is not searched for (FR-021).
+
 ## User Scenarios & Testing *(mandatory)*
 
 ### User Story 1 - Open the console and see which model Freyja runs on (Priority: P1)
@@ -60,6 +74,7 @@ The operator presses Add, fills in a name, a provider, a model id, an optional b
 9. **Given** the form, **When** a required value is missing, the name is already used, or the base URL is not a web address, **Then** nothing is saved and the form says which value is wrong and why.
 10. **Given** several service instances share one database, **When** a profile is activated through one of them, **Then** runs that start on any instance ten seconds later or more use the newly active profile.
 11. **Given** a run starts, is continued after a pause, or is started in the background, **When** its stream opens, **Then** the first event names the profile the run uses and says whether it comes from the environment, and the service log has one line for the run naming the same profile; neither contains a key.
+12. **Given** the confirmation for Set active, **When** it is shown, **Then** it names the profile and says that existing conversations will be sent to that profile's endpoint from their next run.
 
 ---
 
@@ -99,7 +114,7 @@ The operator opens a saved profile, changes its model id or its base URL, and sa
 
 1. **Given** a saved profile, **When** the operator edits any of its values and saves, **Then** the card shows the new values.
 2. **Given** the Edit form, **When** the operator leaves the key empty and saves, **Then** the stored key is kept; **When** they type a new key and save, **Then** the new key replaces it and the card shows the new key's last four characters.
-3. **Given** the active profile, **When** the operator edits it and saves, **Then** the next run uses the edited values without a restart, and a run in progress finishes on the values it started with.
+3. **Given** the active profile, **When** the operator edits it, saves, and confirms that the change applies from the next run, **Then** the next run uses the edited values without a restart, and a run in progress finishes on the values it started with.
 4. **Given** a saved profile that is not active, **When** the operator deletes it and confirms, **Then** its card is gone, it cannot be activated, and it is still gone after a restart.
 5. **Given** the active profile, **When** the operator tries to delete it, **Then** it is refused and the console says to activate another profile first.
 6. **Given** the environment card, **When** the operator looks for a way to edit or delete it, **Then** there is none, and a request to do so sent straight to the service is refused.
@@ -123,6 +138,9 @@ An operator types an API key once. From then on nobody reads it back: not in the
 4. **Given** the secret that protects stored keys is not set, **When** the operator saves a profile, **Then** nothing is saved, the console names the missing setting, and the environment's model, its card, and its runs are unaffected.
 5. **Given** stored keys were protected with a secret that has since changed, **When** the service starts, **Then** it starts, each profile whose key cannot be read is shown as unusable, and typing its key again makes it usable.
 6. **Given** a key shorter than eight characters, **When** its card is shown, **Then** no character of it is shown.
+7. **Given** the secret that protects stored keys is set to a value that cannot be used as one, **When** the service starts, **Then** it does not start, and the error names the setting without repeating its value.
+8. **Given** a key was typed into the Add or Edit form, **When** the form is sent or closed, **Then** the console no longer holds the key, it was never written to the browser's storage, and opening the form again shows an empty key field.
+9. **Given** a page served from another origin, **When** it asks the service for the profiles or tries to change one, **Then** it can read no response and no profile changes.
 
 ---
 
@@ -144,6 +162,10 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - The operator presses Set active on the profile that is already active. Nothing changes and no run is affected.
 - More profiles than the console's limit are requested. Adding one more is refused with the limit named.
 - The console is opened on a narrow screen. The sidebar can be collapsed and opened again, and every control stays reachable.
+- An agent's outcome is ready to be delivered while no usable model is active. No background run starts for it; it waits, and is delivered once a usable model is active.
+- A test is requested for a profile that is already being tested, or while four tests are running on that instance. The request is refused and nothing is sent to an endpoint.
+- A run in progress started on a profile that is then deactivated and deleted. The run finishes on the model it started with; the deletion does not wait for it.
+- Two instances were given different secrets or different model settings. The service does not detect it: each instance reports and uses what it was given, so the cards and the model in use can differ between them until the deployment is corrected.
 
 ## Requirements *(mandatory)*
 
@@ -153,26 +175,29 @@ An operator types an API key once. From then on nobody reads it back: not in the
 
 - **FR-001**: The web app MUST show a sidebar on the left of every page that lists the console's sections, LLM and Agents, marks the section in use, and opens a section when its entry is chosen. On a narrow screen the sidebar MUST be collapsible, with every section still reachable.
 - **FR-002**: Opening the web app's address alone MUST lead to the LLM section. The Agents section MUST say that agents are not managed from the console yet and MUST offer no control.
-- **FR-003**: The web app MUST read and change everything through the service's API, on the same origin the web app is served from. It MUST hold no model credential and call no model endpoint itself. When the service cannot be reached or refuses a request, the page MUST say so with the service's reason, offer to try again, and never present earlier data as current.
+- **FR-003**: The web app MUST read and change everything through the service's API, on the same origin the web app is served from. It MUST hold no model credential and call no model endpoint itself. When the service cannot be reached or refuses a request, the page MUST say so with the service's reason, offer to try again, and never present earlier data as current. A key typed into a form MUST be kept only until the form is sent or closed, MUST NOT be written to the browser's storage, and MUST NOT be shown again once sent. The web app's server MUST pass a request on to the service without keeping or logging its body.
+- **FR-003a**: The service's API MUST NOT be usable by a page served from another origin: such a page can neither read a response nor change a profile. A request to a route that takes a body MUST be refused when the body is not sent as JSON.
 
 **Profiles**
 
 - **FR-004**: The service MUST keep LLM profiles. A profile has a name, a provider, a model id, an optional base URL, an API key, and, for an OpenAI-compatible endpoint, a choice between the Responses API and chat completions that defaults to the Responses API. The provider is one of three: an OpenAI-compatible endpoint, Anthropic, or OpenRouter.
 - **FR-005**: An operator MUST be able to add a profile, see every profile, edit a saved profile, and delete a saved profile, from the LLM section. Saved profiles MUST survive a restart of the service.
-- **FR-006**: A name MUST be unique among profiles, compared without regard to letter case, and MUST be 1 to 64 characters. A model id MUST be 1 to 200 characters, a base URL at most 2,000 characters and a web address when given, and a key 1 to 4,000 characters. At most 50 profiles MAY be saved. A request that breaks any of these MUST be refused, name the value and the rule, and save nothing.
+- **FR-006**: A name MUST be unique among profiles, compared without regard to letter case, and MUST be 1 to 64 characters. A model id MUST be 1 to 200 characters, a base URL at most 2,000 characters and a web address when given, and a key 1 to 4,000 characters. At most 50 profiles MAY be saved. A request that breaks any of these MUST be refused, name the value and the rule, and save nothing. A saved profile MUST NOT take the name of the environment's profile, `Environment`, compared the same way.
 - **FR-007**: The LLM section MUST show the profiles as cards, each with the profile's name, provider, model id, base URL if any, the choice of API where it applies, the last four characters of its key, whether it is active, whether it comes from the environment, whether it is usable, and its last test result: passed or failed and when, with the step that failed, or not tested since its last change. It MUST have an Add button that opens the form for a new profile.
 - **FR-008**: The model the environment configures MUST appear as one profile marked as coming from the environment. It MUST NOT be editable or deletable, from the console or by a request sent straight to the service. It MUST show the values the service was started with.
 - **FR-009**: When a saved profile is edited, a key left empty MUST keep the stored key, and a key that is given MUST replace it.
-- **FR-010**: Deleting MUST ask for confirmation in the console. The active profile MUST NOT be deletable; the refusal MUST say to activate another profile first.
+- **FR-010**: Deleting MUST ask for confirmation in the console. The active profile MUST NOT be deletable; the refusal MUST say to activate another profile first. Saving a change to the active profile MUST also ask for confirmation in the console, saying that the change applies from the next run.
 
 **The active profile**
 
 - **FR-011**: Exactly one profile MUST be active at any time, and it is the model the orchestrator and its subagent use. With no saved profile activated, the environment's profile is the active one, so a deployment configured only through the environment behaves as before this feature.
-- **FR-012**: An operator MUST be able to activate any usable profile, including the environment's, after confirming in the console. Activation MUST either complete or leave the earlier profile active; it MUST NOT contact the model endpoint, and it MUST NOT depend on a test. When the profile's last test did not pass, or it has not been tested since its last change, the confirmation MUST say so and offer to test first.
+- **FR-011a**: A saved profile is usable when its key can be read with the secret the service was given. The environment's profile is usable when a model can be built from what the environment configures and, for one of the three providers, that provider's key is set. Usable says nothing about whether the endpoint answers; that is what the test reports.
+- **FR-012**: An operator MUST be able to activate any usable profile, including the environment's, after confirming in the console. Activation MUST either complete or leave the earlier profile active; it MUST NOT contact the model endpoint, and it MUST NOT depend on a test. When the profile's last test did not pass, or it has not been tested since its last change, the confirmation MUST say so and offer to test first. The confirmation MUST name the profile and say that existing conversations will be sent to its endpoint from their next run.
 - **FR-013**: Activating a profile, and editing the active one, MUST take effect without a restart: a run that starts afterwards on the same service instance uses the new values. A run in progress MUST finish on the model it started with, including its subagent's work. A paused run that is continued afterwards, and a background run that starts afterwards, use the newly active profile. A thread's history MUST be unaffected by a change of model.
 - **FR-014**: When several service instances share one database, a run that starts on any of them ten seconds or more after an activation or an edit of the active profile MUST use the new values. The instance that handled the change MUST apply it at once (FR-013).
 - **FR-015**: Which profile is active MUST survive a restart. A saved profile that is active stays active whatever the environment configures.
-- **FR-016**: The service MUST start when the active profile, or the environment's model, is not usable. A run MUST then end with an error that says no usable model is active, and the service MUST NOT switch to another profile by itself, the environment's included. The LLM section MUST say that no usable model is active while that is the case.
+- **FR-016**: The service MUST start when the active profile, or the environment's model, is not usable. A run MUST then end with an error that says no usable model is active, and the service MUST NOT switch to another profile by itself, the environment's included. The LLM section MUST say that no usable model is active while that is the case. The health check MUST keep reporting only that the service runs; whether a usable model is active is reported with the profiles.
+- **FR-016a**: While no usable model is active, the service MUST start no background run. An agent's outcome waiting to be delivered stays waiting, uses up none of its delivery attempts, and is delivered once a usable model is active, by a background run or at the start of the user's next run.
 
 **Testing a profile**
 
@@ -180,23 +205,24 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - **FR-018**: A test MUST hold a conversation of at least two requests with the profile's endpoint, built the way a run builds one: a first message, then a request carrying that exchange together with a tool call and its result. It passes only if every request is answered. It MUST report which step failed and the endpoint's reason.
 - **FR-019**: A test MUST end within sixty seconds, reporting an endpoint that did not answer in time. It MUST NOT change the active profile, any profile's values, or a thread.
 - **FR-019a**: The result of the last test of a listed profile MUST be kept with it: whether it passed, when, and for a failure the step and a reason of at most 500 characters. A saved profile's result MUST survive a restart and MUST be cleared when its provider, model id, base URL, key, or choice of API changes; a change of name keeps it. The environment profile's result is kept until the service restarts. A test of unsaved form values is not kept, and neither is a result for a profile that was changed or deleted while the test ran.
+- **FR-019b**: On each service instance, a listed profile MUST have at most one test in progress, and at most four tests MAY run at once. A request beyond either limit MUST be refused, say why, and send nothing to an endpoint.
 
 **Keys**
 
 - **FR-020**: A key MUST be stored so that it cannot be read from the stored profile without a secret the operator gives the service through its configuration. The service MUST never return a key, and MUST never write one to a log, a thread, or a stream. The most it shows of a key is its last four characters, and nothing of a key shorter than eight characters.
-- **FR-021**: Text about a profile that is shown, logged, or kept, including a reason from a model endpoint, MUST have the profile's key removed from it.
-- **FR-022**: When the secret that protects stored keys is not set, saving a profile MUST be refused with a reason that names the missing setting, and the environment's profile MUST keep working. When stored keys cannot be read with the current secret, the service MUST start, mark each such profile unusable, and let the operator make it usable by entering its key again.
+- **FR-021**: Text about a profile that is shown, logged, or kept, including a reason from a model endpoint, MUST have the profile's key removed from it. Removal means the key's exact text; an encoded or altered form of a key is not searched for.
+- **FR-022**: When the secret that protects stored keys is not set, saving a profile MUST be refused with a reason that names the missing setting, and the environment's profile MUST keep working. When stored keys cannot be read with the current secret, the service MUST start, mark each such profile unusable, and let the operator make it usable by entering its key again. When the secret is set to a value that cannot be used as one, the service MUST NOT start, and the error MUST name the setting without repeating its value: that is an invalid setting, which FR-016 does not cover.
 
 **Compatibility and record**
 
 - **FR-023**: With no saved profile and a usable model in the environment, every behavior of the service MUST be what it was before this feature, and every existing automated test MUST pass unchanged. The differences are FR-016, without a usable model, and the profile named in a run's first event and in the log (FR-024a), which adds to what a run reports and takes nothing away.
-- **FR-024**: The service MUST log, without any key, each profile added, edited, deleted, and activated, naming the profile.
+- **FR-024**: The service MUST log, without any key, each profile added, edited, deleted, and activated, naming the profile. It MUST also log each run refused because no usable model is active, and at startup each profile that is not usable, with the reason.
 - **FR-024a**: The first event of every run's stream, including a continuation after a pause and a background run, MUST name the profile the run uses and say whether it comes from the environment. The service MUST log one line per run naming that profile. Neither contains a key, and nothing about the profile is added to the thread.
 - **FR-025**: The web app's behavior and the service's behavior MUST each be covered by automated tests that need no model provider and no network, with a stand-in for the model endpoint.
 
 ### Key Entities
 
-- **LLM profile**: One way to reach a model. It has a name, a provider, a model id, an optional base URL, a key, the choice of API for an OpenAI-compatible endpoint, when it was added and last changed, where it comes from (saved by an operator, or the environment), whether it is usable, and the result of its last test. A saved profile belongs to the service's database; the environment's profile is read from the service's configuration and is never stored.
+- **LLM profile**: One way to reach a model. It has a name, a provider, a model id, an optional base URL, a key, the choice of API for an OpenAI-compatible endpoint, when it was added and last changed, where it comes from (saved by an operator, or the environment), whether it is usable, and the result of its last test. A saved profile belongs to the service's database; the environment's profile is read from the service's configuration and is never stored. Whether it is usable is defined in FR-011a. With several instances, the environment's profile, each profile's usability, and the environment profile's test result are what the answering instance has.
 - **Active profile**: The one profile the orchestrator and its subagent use. A single choice shared by every service instance on the same database, kept across restarts.
 - **Profile test**: One check of a profile or of unsaved form values. It has the steps it ran, whether each was answered, and the reason for a failure. The last one for a listed profile is kept with that profile until the profile's way of reaching its model changes; a check of unsaved form values is not kept.
 - **Console section**: A named area of the web app reached from the sidebar. This feature has two: LLM, and Agents as a placeholder.
@@ -216,13 +242,15 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - **SC-009**: At every moment, including during concurrent activations and deletions and across a restart in the middle of one, exactly one profile is active.
 - **SC-010**: For every run, an operator can tell which profile it used from the run's stream while it runs, and from the service log afterwards.
 - **SC-011**: An operator about to activate a profile that has not passed a test since its last change is told so before they confirm, every time.
+- **SC-012**: A page served from another origin can read no profile and change none, in every browser the console supports.
+- **SC-013**: While no usable model is active, no agent outcome loses a delivery attempt, and every waiting outcome is delivered after a usable profile is activated.
 
 ## Assumptions
 
 **Scope**
 
 - Out of scope, per the description: the Agents section beyond its placeholder, which is the next feature; authentication for the console or the API; reaching the console or the API from another machine; and a model per role, such as one for the orchestrator and another for its subagent. The orchestrator and its subagent use the one active profile.
-- Also out of scope: the models of delegate agents, which stay their teams' concern; choosing a model per thread or per run; keeping with a thread which profile produced each reply, which a run reports in its stream and the log instead (FR-024a); usage or cost reporting; reordering or grouping cards; and importing or exporting profiles.
+- Also out of scope: the models of delegate agents, which stay their teams' concern; choosing a model per thread or per run; keeping with a thread which profile produced each reply, which a run reports in its stream and the log instead (FR-024a); usage or cost reporting; reordering or grouping cards; importing or exporting profiles; and replacing the secret that protects stored keys while keeping them readable: after the secret changes, each saved profile's key is entered again (FR-022).
 - The providers are the three the service has clients for today. Adding a provider is a later change.
 - The console is in English and is used with a current desktop browser; the narrow-screen rule in FR-001 keeps it usable on a small window, and a dedicated mobile layout is out of scope.
 
@@ -237,13 +265,13 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - A test sends a few short requests to the endpoint and may be billed by its provider as any request is.
 - Concurrent edits of one profile are settled by the later save (User Story 4). Profiles are few and operators fewer; locking is not worth its cost here.
 - Ten seconds is the bound for other instances to pick up a change (FR-014); the plan sets how. The instance that handled the change applies it at once. Confirmed in clarification on 2026-11-17.
-- Trust, stated in one place. The operator is trusted: anyone who can reach the console can change the model every thread uses. A model endpoint is not trusted with the service's logs or threads, which is why its error text is cleaned of keys (FR-021). The base URL an operator enters is trusted as they entered it and may name another machine, since model endpoints usually are elsewhere.
+- Trust, stated in one place. The operator is trusted: anyone who can reach the console can change the model every thread uses. A model endpoint is not trusted with the service's logs or threads, which is why its error text is cleaned of keys (FR-021). The base URL an operator enters is trusted as they entered it and may name another machine, since model endpoints usually are elsewhere. Which endpoint receives a thread's messages is the operator's decision: after a switch, a thread's earlier messages are sent to the newly active profile's endpoint on its next run, which is why the activation confirmation says so (FR-012).
 
 **Environment and dependencies**
 
 - The constitution's principle IV says all runtime configuration is read from environment variables. Profiles are configuration an operator changes while the service runs, kept in the database, and the secret that protects stored keys is a new environment setting. The constitution is amended to allow operator-managed configuration before this feature's plan is written; the plan's Constitution Check depends on it.
-- The service keeps binding to the local interface with no authentication. With this feature, anyone who can reach the port can change the model and read every profile except its key. That is acceptable for local use, is documented, and must be revisited before the service is bound more widely.
+- The service keeps binding to the local interface with no authentication. With this feature, anyone who can reach the port can change the model and read every profile except its key. That is acceptable for local use, is documented, and must be revisited before the service is bound more widely. Three further exposures share that condition. Anyone who can reach the port can make the service send requests to any address, through a profile's base URL and the test, and read up to 500 characters of a failure's reason. A key typed into the console travels to the service inside the request, over plain HTTP on the one machine, through the web app's server, which passes it on without keeping it. And no limit is set on how many profiles' tests an operator starts over time, only on how many run at once (FR-019b).
 - The web app is a client of the service's API only, and the browser reaches the API on the web app's own origin, so the API needs no change to accept requests from another origin.
-- Several service instances may share one database, as features 001 to 003 already allow; the active profile is one choice for all of them.
+- Several service instances may share one database, as features 001 to 003 already allow; the active profile is one choice for all of them. Every instance is assumed to be given the same secret and the same model settings in its environment; the service does not check this, and where they differ each instance reports and uses its own (Edge Cases).
 - The existing thread routes, approval gate, run lease, step limit, catalog, and delegation worker are reused unchanged. This feature adds the profiles, the active choice, the test, and the routes the console needs, and changes how the service obtains its model from one fixed value at startup to the active profile.
 - The setting that chooses between the Responses API and chat completions for the environment's model (feature 001's research R3) keeps its meaning and is what the environment's profile shows.

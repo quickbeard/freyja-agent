@@ -1,0 +1,438 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.4.0
+  description: >
+    Additions made by feature 004, web console shell and LLM profiles. Every path here is new.
+    The thread routes and the catalog are unchanged; see
+    ../../001-thread-runs-api/contracts/, ../../002-mcp-tool-delegation/contracts/, and
+    ../../003-a2a-agent-delegation/contracts/ for them. The run stream's first event gains one
+    field and `error` gains one code; see sse-events.md. No authentication in this increment;
+    bind to a local interface. No response, error, or event defined here ever contains an API
+    key. The service sends no cross-origin headers, so a page from another origin can neither
+    read a response nor send a JSON body; a body that is not sent as JSON is refused with 422.
+paths:
+  /llm/profiles:
+    get:
+      summary: List every LLM profile and say which one is active
+      description: >
+        The environment's profile first, then the saved profiles by name. Read from the
+        database and from this instance's environment; no model endpoint is contacted.
+      responses:
+        "200":
+          description: The profiles
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmProfileList" }
+              example:
+                active_id: 5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b
+                usable_model: true
+                secret_configured: true
+                limit: 50
+                profiles:
+                  - id: environment
+                    name: Environment
+                    source: environment
+                    provider: anthropic
+                    model: claude-sonnet-5-5
+                    base_url: null
+                    responses_api: null
+                    key_hint: "9f2c"
+                    active: false
+                    usable: true
+                    unusable_reason: null
+                    last_test: null
+                    created_at: null
+                    updated_at: null
+                  - id: 5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b
+                    name: Local vLLM
+                    source: saved
+                    provider: openai
+                    model: served-model
+                    base_url: "http://10.0.0.5:31000/v1"
+                    responses_api: false
+                    key_hint: "a1b2"
+                    active: true
+                    usable: true
+                    unusable_reason: null
+                    last_test:
+                      ok: true
+                      at: "2026-11-17T09:14:02.118000+00:00"
+                      step: null
+                      reason: null
+                    created_at: "2026-11-17T09:10:44.501000+00:00"
+                    updated_at: "2026-11-17T09:13:20.009000+00:00"
+    post:
+      summary: Save a new profile
+      description: >
+        The new profile is not active. Refused when the secret that protects stored keys is not
+        set.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LlmProfileCreate" }
+      responses:
+        "201":
+          description: The saved profile
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmProfile" }
+        "409":
+          description: >
+            `name_taken`, `profile_limit`, or `secret_not_configured`. Nothing was saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: A value is missing or breaks a rule. Nothing was saved.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+  /llm/profiles/{profile_id}:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    patch:
+      summary: Change a saved profile
+      description: >
+        Only the fields sent are changed. `api_key` left out keeps the stored key. Changing the
+        provider, the model, the base URL, the key, or the choice of API clears the last test
+        result. Changing the active profile takes effect at the next run.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LlmProfileUpdate" }
+      responses:
+        "200":
+          description: The profile as it is now
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmProfile" }
+        "404":
+          description: "`profile_not_found`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: >
+            `profile_read_only` for the environment's profile, `name_taken`, or
+            `secret_not_configured` when a key is sent and no secret is set. Nothing was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: A value breaks a rule. Nothing was changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+    delete:
+      summary: Delete a saved profile that is not active
+      responses:
+        "204":
+          description: Deleted
+        "404":
+          description: "`profile_not_found`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: >
+            `profile_active`: activate another profile first. `profile_read_only` for the
+            environment's profile.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /llm/profiles/{profile_id}/activate:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    post:
+      summary: Make this profile the one the orchestrator uses
+      description: >
+        Takes effect without a restart: on this instance at the next run, on other instances
+        sharing the database at their next run as well. Runs in progress finish on the model
+        they started with. No model endpoint is contacted and no test is required.
+        `environment` is a valid id here. Activating the active profile changes nothing.
+      responses:
+        "200":
+          description: The profiles after the change
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmProfileList" }
+        "404":
+          description: "`profile_not_found`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: "`profile_unusable`: the earlier profile stays active."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /llm/profiles/{profile_id}/test:
+    parameters:
+      - $ref: "#/components/parameters/ProfileId"
+    post:
+      summary: Test a listed profile
+      description: >
+        Holds a short conversation with the profile's endpoint: a first message, then a request
+        carrying that exchange with a tool call and its result. Ends within the test time limit.
+        The result is kept with the profile unless the profile changed or was deleted meanwhile.
+        A failed test is still a 200: the result says what failed.
+      responses:
+        "200":
+          description: The result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmTestResult" }
+              examples:
+                passed:
+                  value: { ok: true, step: null, reason: null, at: "2026-11-17T09:14:02.118000+00:00", recorded: true }
+                refused_on_the_second_step:
+                  value:
+                    ok: false
+                    step: conversation
+                    reason: "Error code: 422 - Input should be a valid string"
+                    at: "2026-11-17T09:14:02.118000+00:00"
+                    recorded: true
+        "404":
+          description: "`profile_not_found`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: >
+            `profile_unusable`: its key cannot be read. `test_busy`: this profile is already
+            being tested, or four tests are running on this instance. Nothing was sent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+  /llm/test:
+    post:
+      summary: Test values that are not saved
+      description: >
+        The same test, for the Add and Edit forms. Nothing is saved and no result is kept.
+        `api_key` may be left out when `profile_id` names a saved profile, whose stored key is
+        then used.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/LlmProfileDraft" }
+      responses:
+        "200":
+          description: The result, with `recorded` false
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LlmTestResult" }
+        "404":
+          description: "`profile_not_found`, for `profile_id`"
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "409":
+          description: >
+            `profile_unusable`: the stored key of `profile_id` cannot be read. `test_busy`: four
+            tests are running on this instance. Nothing was sent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ErrorResponse" }
+        "422":
+          description: A value is missing or breaks a rule. Nothing was sent.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
+components:
+  parameters:
+    ProfileId:
+      name: profile_id
+      in: path
+      required: true
+      description: A saved profile's id, or `environment`.
+      schema: { type: string, minLength: 1, maxLength: 64 }
+  schemas:
+    Provider:
+      type: string
+      enum: [openai, anthropic, openrouter]
+      description: >
+        `openai` is any OpenAI-compatible endpoint. The environment's profile may report another
+        value: the prefix of FREYJA_MODEL as written.
+    LlmProfile:
+      type: object
+      required:
+        - id
+        - name
+        - source
+        - provider
+        - model
+        - base_url
+        - responses_api
+        - key_hint
+        - active
+        - usable
+        - unusable_reason
+        - last_test
+        - created_at
+        - updated_at
+      properties:
+        id:
+          type: string
+          description: 32 hex characters for a saved profile; `environment` for the environment's.
+        name: { type: string, minLength: 1, maxLength: 64 }
+        source: { type: string, enum: [saved, environment] }
+        provider: { type: string }
+        model: { type: string }
+        base_url: { type: [string, "null"] }
+        responses_api:
+          type: [boolean, "null"]
+          description: >
+            True: the Responses API. False: chat completions. Null for a provider that has no
+            such choice.
+        key_hint:
+          type: string
+          description: >
+            The key's last four characters. Empty when the key has fewer than eight characters
+            or when there is none.
+        active: { type: boolean }
+        usable: { type: boolean }
+        unusable_reason:
+          type: [string, "null"]
+          enum: [key_unreadable, secret_not_configured, not_configured, cannot_build, null]
+          description: >
+            `key_unreadable`: the stored key cannot be read with the current secret.
+            `secret_not_configured`: no secret is set. `not_configured`: the environment names
+            no key for its provider. `cannot_build`: the values do not make a model.
+        last_test:
+          oneOf:
+            - { $ref: "#/components/schemas/LlmLastTest" }
+            - { type: "null" }
+          description: Null when not tested since the profile's last change.
+        created_at: { type: [string, "null"], format: date-time }
+        updated_at: { type: [string, "null"], format: date-time }
+    LlmLastTest:
+      type: object
+      required: [ok, at, step, reason]
+      properties:
+        ok: { type: boolean }
+        at: { type: string, format: date-time }
+        step:
+          type: [string, "null"]
+          enum: [first_message, conversation, null]
+          description: The step that failed; null when the test passed.
+        reason:
+          type: [string, "null"]
+          maxLength: 500
+          description: Why it failed, with any key removed; null when the test passed.
+    LlmTestResult:
+      allOf:
+        - { $ref: "#/components/schemas/LlmLastTest" }
+        - type: object
+          required: [recorded]
+          properties:
+            recorded:
+              type: boolean
+              description: Whether the result was kept with a listed profile.
+    LlmProfileList:
+      type: object
+      required: [profiles, active_id, usable_model, secret_configured, limit]
+      properties:
+        profiles:
+          type: array
+          items: { $ref: "#/components/schemas/LlmProfile" }
+        active_id:
+          type: string
+          description: The id of the one active profile; `environment` when no saved one is.
+        usable_model:
+          type: boolean
+          description: >
+            False when the active profile is not usable. Runs then end with `no_usable_model`.
+        secret_configured:
+          type: boolean
+          description: False when profiles cannot be saved because no secret is set.
+        limit: { type: integer, description: The most profiles that can be saved. }
+    LlmProfileCreate:
+      type: object
+      additionalProperties: false
+      required: [name, provider, model, api_key]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique without regard to case; never `Environment`.
+        provider: { $ref: "#/components/schemas/Provider" }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        base_url: { type: [string, "null"], maxLength: 2000, format: uri }
+        api_key: { type: string, minLength: 1, maxLength: 4000, writeOnly: true }
+        responses_api: { type: boolean, default: true }
+    LlmProfileUpdate:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        name: { type: string, minLength: 1, maxLength: 64 }
+        provider: { $ref: "#/components/schemas/Provider" }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        base_url: { type: [string, "null"], maxLength: 2000, format: uri }
+        api_key:
+          type: string
+          minLength: 1
+          maxLength: 4000
+          writeOnly: true
+          description: Leave out to keep the stored key.
+        responses_api: { type: boolean }
+    LlmProfileDraft:
+      type: object
+      additionalProperties: false
+      required: [provider, model]
+      properties:
+        provider: { $ref: "#/components/schemas/Provider" }
+        model: { type: string, minLength: 1, maxLength: 200 }
+        base_url: { type: [string, "null"], maxLength: 2000, format: uri }
+        api_key: { type: string, minLength: 1, maxLength: 4000, writeOnly: true }
+        responses_api: { type: boolean, default: true }
+        profile_id:
+          type: string
+          description: >
+            A saved profile whose stored key is used when `api_key` is left out. One of the two
+            is required.
+    ErrorDetail:
+      type: object
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          enum:
+            - profile_not_found
+            - profile_read_only
+            - profile_active
+            - profile_unusable
+            - profile_limit
+            - name_taken
+            - secret_not_configured
+            - test_busy
+          description: The codes this feature adds; the existing ones are unchanged.
+        message: { type: string }
+    ErrorResponse:
+      type: object
+      required: [detail]
+      properties:
+        detail: { $ref: "#/components/schemas/ErrorDetail" }
+    ValidationErrorResponse:
+      type: object
+      required: [detail]
+      description: >
+        FastAPI's validation error shape without `input`: on these routes a refused value is
+        never repeated, because it may be a key.
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required: [type, loc, msg]
+            properties:
+              type: { type: string }
+              loc:
+                type: array
+                items: { type: [string, integer] }
+              msg: { type: string }
