@@ -33,21 +33,33 @@ The FastAPI application with a Postgres checkpointer and store is the only runti
 local development, staging, and production. LangGraph Server and Studio MUST NOT be used.
 Differences between environments MUST come from configuration alone, never from a second
 code path. Debugging tools, such as the debug stream mode or a CLI, MUST build the agent
-through the same factory the API uses.
+through the same factory the API uses. The web app under `web/` is a client of that API and
+nothing more: it MUST NOT hold a credential for a model or a delegate, call a model or a
+delegate itself, or carry logic that decides what the orchestrator does.
 
 Rationale: a bug that reproduces only in production cannot be fixed with a tool that runs
 a different runtime; parity is cheaper than a second mental model.
 
 ### IV. Configuration Through Settings
 
-All runtime configuration MUST be read through the `Settings` class from `FREYJA_*`
-environment variables. Hosts, ports, connection strings, and model identifiers MUST NOT be
-hardcoded in application code. Defaults MUST be the safe local choice; the server binds
-`127.0.0.1` unless configured otherwise. Secrets MUST never be committed, and every
-variable MUST be documented in `.env.example`.
+Deployment configuration is what a deployment needs before it can start, such as addresses,
+ports, connection strings, limits, and secrets. It MUST be read through the `Settings` class
+from `FREYJA_*` environment variables. Hosts, ports, connection strings, and model
+identifiers MUST NOT be hardcoded in application code. Defaults MUST be the safe local
+choice; the server binds `127.0.0.1` unless configured otherwise. Secrets MUST never be
+committed, and every variable MUST be documented in `.env.example`.
+
+Operator-managed configuration is what an operator changes while the service runs, such as
+the model the orchestrator uses and the delegate agents it may hand work to. It MUST be kept
+in the service's database and changed only through the service's API. What the environment
+configures of the same kind stays valid as a read-only default, so a deployment configured
+only through the environment behaves as it did before. A secret an operator enters, such as a
+model provider's API key, MUST be stored encrypted under a key that comes from the
+environment, and MUST never be returned by the API, logged, or written to a thread.
 
 Rationale: the same image runs everywhere, and an unauthenticated API bound to all
-interfaces on a developer machine is an exposure.
+interfaces on a developer machine is an exposure. Changing a model or a delegate should not
+mean editing a file and restarting a service that has runs in progress.
 
 ### V. Automated Quality Gates
 
@@ -107,4 +119,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.2.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-16
+**Version**: 1.3.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-17
