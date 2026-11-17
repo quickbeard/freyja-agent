@@ -9,7 +9,8 @@ info:
     ../../003-a2a-agent-delegation/contracts/ for them. The run stream's first event gains one
     field and `error` gains one code; see sse-events.md. No authentication in this increment;
     bind to a local interface. No response, error, or event defined here ever contains an API
-    key.
+    key. The service sends no cross-origin headers, so a page from another origin can neither
+    read a response nor send a JSON body; a body that is not sent as JSON is refused with 422.
 paths:
   /llm/profiles:
     get:
@@ -200,7 +201,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
-          description: "`profile_unusable`: its key cannot be read, so nothing was sent."
+          description: >
+            `profile_unusable`: its key cannot be read. `test_busy`: this profile is already
+            being tested, or four tests are running on this instance. Nothing was sent.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -228,7 +231,9 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
         "409":
-          description: "`profile_unusable`: the stored key of `profile_id` cannot be read."
+          description: >
+            `profile_unusable`: the stored key of `profile_id` cannot be read. `test_busy`: four
+            tests are running on this instance. Nothing was sent.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -350,7 +355,11 @@ components:
       additionalProperties: false
       required: [name, provider, model, api_key]
       properties:
-        name: { type: string, minLength: 1, maxLength: 64 }
+        name:
+          type: string
+          minLength: 1
+          maxLength: 64
+          description: Unique without regard to case; never `Environment`.
         provider: { $ref: "#/components/schemas/Provider" }
         model: { type: string, minLength: 1, maxLength: 200 }
         base_url: { type: [string, "null"], maxLength: 2000, format: uri }
@@ -401,6 +410,7 @@ components:
             - profile_limit
             - name_taken
             - secret_not_configured
+            - test_busy
           description: The codes this feature adds; the existing ones are unchanged.
         message: { type: string }
     ErrorResponse:

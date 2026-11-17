@@ -123,6 +123,10 @@ Steps, in order (research R7):
 2. `conversation`: the same user message, an assistant turn that calls one tool, that tool's
    result, and a second user message, with the tool's definition attached.
 
+Limits on each service instance (FR-019b): one test in progress per listed profile, and four
+in all, counted in memory. A request beyond either is refused with `test_busy` before anything
+is sent.
+
 ## State transitions
 
 ### A saved profile
@@ -139,8 +143,10 @@ saved, not active --delete--> (none)
 saved, active --delete--> refused (409 profile_active)
 ```
 
-Usability is not a stored state. A saved profile is unusable when its key cannot be decrypted
-with the current secret, or no secret is set (FR-022); entering its key again makes it usable.
+Usability is not a stored state (FR-011a). A saved profile is unusable when its key cannot be
+decrypted with the current secret, or no secret is set (FR-022); entering its key again makes
+it usable. It is worked out by the instance that answers, from the secret that instance was
+given.
 
 ### The active choice
 

@@ -65,7 +65,8 @@ again. Start the service again.
 
 In the console: **Add**, name `Stub`, provider OpenAI-compatible, model `ok`, base URL
 `http://127.0.0.1:9997/v1`, key `quickstart-key-0001`, Responses API off, **Save**. A second card
-appears, not active. **Set active** on it and confirm.
+appears, not active. **Set active** on it: the confirmation names the profile and says that
+existing conversations will be sent to its endpoint from their next run. Confirm.
 
 Or through the API:
 
@@ -134,7 +135,8 @@ says it has not been tested since its last change.
   four key characters, and the test result is kept.
 - Edit it again with a new key: the card shows the new key's last four characters and no test
   result.
-- With `Stub` active, change its model to `ok-2` and start a run: the service was not
+- With `Stub` active, change its model to `ok-2` and save: the console asks for confirmation,
+  saying the change applies from the next run. Confirm and start a run: the service was not
   restarted, and the stand-in's terminal shows the request asking for `ok-2`. Change it back.
 - Delete `Refuses` and confirm: its card is gone, also after a restart.
 - Try to delete the active profile: refused, with a message to activate another first.
@@ -169,6 +171,22 @@ curl -s -X POST localhost:8000/llm/profiles -H 'content-type: application/json' 
 
 Put the secret back and restart: the saved profiles are usable again.
 
+Set `FREYJA_SECRET_KEY=not-a-key` and start the service: it does not start, and the error names
+the variable without repeating the value. Restore the real secret.
+
+A page from another origin cannot use the API. The service gives a preflight no permission, and
+refuses a body that is not sent as JSON:
+
+```bash
+curl -s -i -X OPTIONS localhost:8000/llm/profiles -H 'Origin: http://other.example' \
+  -H 'Access-Control-Request-Method: POST' | grep -i -c 'access-control-allow'       # 0
+curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/llm/profiles \
+  -H 'content-type: text/plain' -d '{"name": "X", "provider": "openai", "model": "ok", "api_key": "k"}'   # 422
+```
+
+In the console, type a key into the Add form and close it without saving; open it again: the
+key field is empty.
+
 ## 6. No usable model (FR-016)
 
 With a saved profile active, start the service with a different `FREYJA_SECRET_KEY`. It starts.
@@ -183,8 +201,10 @@ curl -N -X POST localhost:8000/threads/llm-3/runs -H 'content-type: application/
 # data: {"code": "no_usable_model", ...}
 ```
 
-The service has not switched to the environment's model. Activate the environment's profile in
-the console and send the message again: the run completes. Restore the original secret.
+The service has not switched to the environment's model, `curl -s localhost:8000/healthz`
+still answers `{"status":"ok"}`, and the service log has a line for the refused run and one
+naming the unusable profile at startup. Activate the environment's profile in the console and
+send the message again: the run completes. Restore the original secret.
 
 ## 7. Nothing changed for an environment-only deployment (FR-023)
 

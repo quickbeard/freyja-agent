@@ -30,6 +30,10 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 
 The value is never logged, returned, or shown, and it never leaves the service process.
 
+Every instance that shares a database must be given the same value. The service does not check
+this: an instance with another value lists the saved profiles as unusable and, if one of them
+is active, ends its runs with `no_usable_model` (spec Assumptions).
+
 ### What is unchanged
 
 `FREYJA_MODEL`, `FREYJA_OPENAI_RESPONSES_API`, and the providers' own variables

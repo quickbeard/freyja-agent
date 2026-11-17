@@ -119,6 +119,16 @@ Tracking:
   asks for (FR-016, clarified 2026-11-17), and the refusal moves to a fixed check before each
   run (R8).
 
+### Checklist review (2026-11-17)
+
+`checklists/security-reliability.md` raised sixteen findings against the spec and this plan.
+All were resolved in the spec the same day, and the design changed in four places: the API
+refuses other origins by requirement and by test (FR-003a, R12); the worker's rule without a
+usable model is now a requirement (FR-016a, R8); tests are limited to one per profile and four
+per instance, refused with `test_busy` (FR-019b, R7); and a confirmation is asked before a
+change to the active profile is saved (FR-010). The Constitution Check is unchanged: the fixes
+add fixed rules of the kind principle VI asks for and touch no other principle.
+
 ## Project Structure
 
 ### Documentation (this feature)
@@ -218,18 +228,19 @@ store, the manager, and the test. `runtime/` keeps the wiring, and `api/` the ro
 | Requirement | Tests |
 |---|---|
 | FR-001, FR-002 | `web/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
-| FR-003 | `web/lib/api.test.ts`, `web/components/llm/profile-list.test.tsx` (unreachable, refusal) |
+| FR-003 | `web/lib/api.test.ts`, `web/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
+| FR-003a | `test_llm_profiles_api.py` (no permission for another origin; a body that is not JSON is refused) |
 | FR-004, FR-005, FR-006 | `test_llm_profile_store.py`, `test_llm_profiles_api.py`, `integration/test_llm_profiles_postgres.py` |
 | FR-007 | `web/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
 | FR-008 | `test_llm_profiles_api.py` (environment profile, read-only) |
-| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/components/llm/profile-form.test.tsx`, `delete-dialog.test.tsx` |
-| FR-011, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/components/llm/activate-dialog.test.tsx` |
+| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
+| FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
 | FR-013, FR-014 | `test_llm_switch.py` (next run, run in progress, pause, background run, two runtimes) |
-| FR-016 | `test_llm_no_model.py` |
-| FR-017, FR-018, FR-019, FR-019a | `test_llm_check.py`, `test_llm_profiles_api.py` |
-| FR-020, FR-021, FR-022 | `test_llm_secrets.py`, `test_llm_profiles_api.py` (a recognizable key in no response or log), `test_llm_check.py` (a key repeated by the endpoint) |
+| FR-016, FR-016a | `test_llm_no_model.py` (runs refused, the health check unchanged, no background run and no attempt used) |
+| FR-017, FR-018, FR-019, FR-019a, FR-019b | `test_llm_check.py`, `test_llm_profiles_api.py` |
+| FR-020, FR-021, FR-022 | `test_llm_secrets.py`, `test_llm_profiles_api.py` (a recognizable key in no response or log), `test_llm_check.py` (a key repeated by the endpoint), `test_config.py` (a secret that is not valid stops startup) |
 | FR-023 | the existing suite, unchanged |
-| FR-024, FR-024a | `test_llm_profiles_api.py` (log lines), `test_llm_switch.py` (`start.profile`) |
+| FR-024, FR-024a | `test_llm_profiles_api.py` (log lines), `test_llm_switch.py` (`start.profile`), `test_llm_no_model.py` (a refused run and an unusable profile are logged) |
 | FR-025 | all of the above |
 
 ## Complexity Tracking

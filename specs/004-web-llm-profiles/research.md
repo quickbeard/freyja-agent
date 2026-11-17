@@ -144,6 +144,11 @@ asking the model to call a tool first would depend on the model choosing to. Bin
 makes the request carry tool definitions, as every orchestrator request does. Retries are off
 so that the limit is a limit.
 
+**How many at once** (FR-019b): each instance keeps, in memory, the ids of the listed profiles
+being tested and a count of all tests in progress. A second test of the same profile, or a
+fifth test, is refused with 409 `test_busy` before a model is built. The limits are per
+instance because a test holds no database row; four is a constant, not a setting.
+
 **Alternatives considered**: a single request (misses the failure); running a real orchestrator
 turn (needs a thread, and FR-019 says a test changes none).
 
@@ -161,8 +166,9 @@ adds nothing to the thread, and leaves a pending proposal pending. The database 
 required at startup, as today. The service never falls back to another profile (clarified
 2026-11-17).
 
-**The worker** starts no background run while no usable model is active. An outcome that is
-ready stays ready and is delivered once a usable profile is active, or by the user's next run.
+**The worker** starts no background run while no usable model is active (FR-016a). An outcome
+that is ready stays ready and is delivered once a usable profile is active, by a background run
+or at the start of the user's next run.
 Without this rule each waiting outcome would use up its background run attempts (003 FR-027)
 on runs that cannot succeed.
 
@@ -181,19 +187,25 @@ for all three kinds of run is simpler for a client.
   on these routes that value may be a key.
 - `redact(text, secrets)` replaces every secret of eight characters or more with a marker. It is
   applied to a test's reason, to the `model_error` message and its log line in `run_stream`,
-  and to any log line about a profile.
+  and to any log line about a profile. It looks for the key's exact text only; an encoded form
+  is not searched for (FR-021).
 - Request bodies are never logged; uvicorn's access log has the path only.
 
 **Rationale**: the same approach as 002's `pass_env` redaction and 003's `describe`: one
 function, applied at every exit. A provider can repeat a key in an error, so cleaning error text
 is not optional (FR-021).
 
+**In the web app** (FR-003): the key lives in the form's state only. The form clears it when it
+is sent and when it closes, which also covers Cache Components keeping a hidden page mounted
+(R14). Nothing is written to `localStorage` or `sessionStorage`, and no response carries a key
+to show again.
+
 ## R10. The API
 
 **Decision**: a new router `api/llm.py` under `/llm`, with the shapes in
 [contracts/openapi.yaml](contracts/openapi.yaml): list, add, change, delete, activate, test a
 listed profile, and test unsaved values. Refusals use the existing error shape,
-`{"detail": {"code", "message"}}`, with seven new codes. The environment's profile has the id
+`{"detail": {"code", "message"}}`, with eight new codes. The environment's profile has the id
 `environment`, so one path shape serves both kinds; a write to it is `profile_read_only`.
 Activation answers with the whole list, so the console redraws from one response.
 
@@ -212,8 +224,9 @@ four tests check only its kind), so FR-023 holds.
 
 ## R12. Requests from other origins
 
-**Decision**: no CORS configuration is added. The browser reaches the API on the web app's own
-origin (R13).
+**Decision**: no CORS configuration is added, and that is now a requirement with a test
+(FR-003a, SC-012): a preflight from another origin gets no permission, and a body that is not
+sent as JSON is refused. The browser reaches the API on the web app's own origin (R13).
 
 **Rationale**: with no CORS headers, a page on another origin cannot read a response or send a
 JSON request, because that needs a preflight the API does not answer. A cross-origin form post
