@@ -86,7 +86,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
   delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
   loop never waits for a delivery; `tick()` does, for the tests.
-- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; no route uses them yet.
+- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API only lists
+  them.
   `providers.py` holds the provider table, `build_model` for a saved profile, and the
   environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
@@ -105,10 +106,13 @@ startup and exits with an error naming the connection when it is unreachable.
   the tests swap to reach stand-in agents. `assemble` also takes `model_factory`, which turns
   an LLM profile into a chat model and is the seam the profile tests swap. Every run calls
   `Runtime.model_for_run()` first, which brings `agent` and `catalog` in step with the active
-  profile.
+  profile. `Runtime.environment` is the environment's profile as the list shows it, described
+  once at startup.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
+  `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, which asks no model
+  anything; its routes answer a refused request without repeating the value (`NoInputRoute`);
   `streaming.py` the SSE run loop with the lease heartbeat, also driven by the worker for
   background runs; `outcomes.py` records pending tasks' outcomes in their thread exactly once
   and answers messages to agents that a stop left in flight; `decisions.py` resume
@@ -116,14 +120,19 @@ startup and exits with an error naming the connection when it is unreachable.
   arguments; `schemas.py` and `serialize.py` the request, response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
-- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), so far the `create-next-app` start
-  page with shadcn/ui set up: `components.json`, components under `web/components/ui/`, and
-  the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they
-  are added, and three lint rules they do not meet are off for `web/components/ui/` only
-  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its
-  configuration: `FREYJA_API_URL`, where its server forwards `/api/...`, documented in
-  `web/.env.example`. Unit tests are `*.test.ts` and `*.test.tsx` files next to the code they
-  cover, run by Vitest with jsdom.
+- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx`
+  is the shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects
+  to `/llm`; `web/app/llm/` lists the LLM profiles as cards (`web/components/llm/`) and
+  `web/app/agents/` is a placeholder. `web/lib/api.ts` is the one function that calls the
+  service, always through `/api`, and its error type; `web/lib/llm.ts` holds the profile
+  types and calls; `web/lib/testing.ts` stubs `fetch` for the tests. Lists are read with
+  SWR in Client Components. shadcn/ui is set up: `components.json`, components under
+  `web/components/ui/`, and the `cn` helper in `web/lib/utils.ts`. Generated components
+  need `pnpm format` after they are added, and three lint rules they do not meet are off
+  for `web/components/ui/` only (`web/biome.json`). `web/next.config.ts` is the one place
+  the web app reads its configuration: `FREYJA_API_URL`, where its server forwards
+  `/api/...`, documented in `web/.env.example`; it also holds the redirect. Unit tests are
+  `*.test.ts` and `*.test.tsx` files next to the code they cover, run by Vitest with jsdom.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright

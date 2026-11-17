@@ -39,3 +39,11 @@ describe("the path from the browser to the service", () => {
     );
   });
 });
+
+describe("the web app's address alone", () => {
+  it("leads to the LLM section, and not for good", async () => {
+    expect(await nextConfig.redirects?.()).toEqual([
+      { source: "/", destination: "/llm", permanent: false },
+    ]);
+  });
+});

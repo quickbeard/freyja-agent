@@ -16,6 +16,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl()}/:path*` }];
   },
+  // The console has no page of its own at its address: it opens on the LLM section.
+  async redirects() {
+    return [{ source: "/", destination: "/llm", permanent: false }];
+  },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {

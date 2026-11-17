@@ -355,6 +355,7 @@ These need the network or a browser and are checked when the feature is built:
   plan.md, Implementation Notes.
 - That SWR's current release supports React 19.3 and Next.js 16.4, and that the shadcn CLI has
   every component in R16 for the `base-vega` style.
-- That `usePathname()` causes no hydration warning here (R15).
+- That `usePathname()` causes no hydration warning here (R15). Checked in Phase 3 (T037):
+  none; see plan.md, Implementation Notes.
 - That a streamed response passes through a rewrite unbuffered. The documentation implies it;
   this feature streams nothing through the console.

@@ -217,59 +217,59 @@ with four key characters, and it has no Edit or Delete. Runs through the API beh
 
 ### Tests for User Story 1
 
-- [ ] T024 [P] [US1] Write `tests/test_llm_profiles_api.py` part 1: `GET /llm/profiles` returns
+- [X] T024 [P] [US1] Write `tests/test_llm_profiles_api.py` part 1: `GET /llm/profiles` returns
       the environment's profile first with `id` `environment`, `source` `environment`,
       `active` true, its provider, model, base URL, and `key_hint`; `active_id` is
       `environment`; `usable_model` is true; `secret_configured` follows the setting; `limit` is
       50; no model endpoint is contacted; the response has no key (FR-007, FR-008, FR-011, US1
       scenarios 2 and 3)
-- [ ] T025 [P] [US1] Write `web/lib/api.test.ts`: a request goes to `/api` plus its path; a 2xx
+- [X] T025 [P] [US1] Write `web/lib/api.test.ts`: a request goes to `/api` plus its path; a 2xx
       body is returned parsed; a refusal raises an error carrying the service's `code` and
       `message`; a 422 raises one carrying each field's message; a network failure raises an
       error that says the service cannot be reached. Write `web/lib/llm.test.ts`: `listProfiles`
       asks for `/llm/profiles` and returns the list (FR-003, FR-007)
-- [ ] T026 [P] [US1] Write `web/components/app-sidebar.test.tsx`: it lists LLM and Agents as
+- [X] T026 [P] [US1] Write `web/components/app-sidebar.test.tsx`: it lists LLM and Agents as
       links to `/llm` and `/agents` and marks the one matching the current path. Write
       `web/app/agents/page.test.tsx`: the page says agents are not managed from the console yet
       and has no button, link, or field of its own. Extend `web/next.config.test.ts`:
       `redirects()` sends `/` to `/llm` and is not permanent (FR-001, FR-002, US1 scenarios 1, 4,
       5)
-- [ ] T027 [P] [US1] Write `web/components/llm/profile-card.test.tsx`: a card shows the name,
+- [X] T027 [P] [US1] Write `web/components/llm/profile-card.test.tsx`: a card shows the name,
       provider label, model id, base URL when there is one, the API choice for `openai` only,
       the four key characters, and the marks for active, from the environment, and not usable;
       the environment's card has no Edit and no Delete control (FR-007, FR-008, US1 scenarios 2
       and 3)
-- [ ] T028 [P] [US1] Write `web/components/llm/profile-list.test.tsx`: it shows a loading state,
+- [X] T028 [P] [US1] Write `web/components/llm/profile-list.test.tsx`: it shows a loading state,
       then one card per profile; when the service cannot be reached it says so, offers to try
       again, and shows no card; a refusal shows the service's reason; when `usable_model` is
       false it says that no usable model is active (FR-003, FR-016, US1 scenario 6)
 
 ### Implementation for User Story 1
 
-- [ ] T029 [US1] Create `src/freyja_agent/api/llm.py` with a router under `/llm` whose routes
+- [X] T029 [US1] Create `src/freyja_agent/api/llm.py` with a router under `/llm` whose routes
       return validation errors without `input`, and `GET /llm/profiles` built from the store,
       the environment's profile, and the manager, with `usable` and `unusable_reason` worked out
       for every profile from this instance's secret and environment; include the router in
       `src/freyja_agent/api/app.py` (FR-007, FR-008, FR-011a, R9, R10)
-- [ ] T030 [P] [US1] Implement `web/lib/api.ts`: one function that calls `/api` plus a path with
+- [X] T030 [P] [US1] Implement `web/lib/api.ts`: one function that calls `/api` plus a path with
       JSON, and one error type with the service's code, message, and field messages (FR-003,
       R13)
-- [ ] T031 [US1] Implement `web/lib/llm.ts`: the TypeScript types of contracts/openapi.yaml
+- [X] T031 [US1] Implement `web/lib/llm.ts`: the TypeScript types of contracts/openapi.yaml
       (`LlmProfile`, `LlmProfileList`, `LlmLastTest`), with no key field, and `listProfiles`
       (FR-007, R14)
-- [ ] T032 [P] [US1] Implement `web/components/app-sidebar.tsx` as a Client Component on the
+- [X] T032 [P] [US1] Implement `web/components/app-sidebar.tsx` as a Client Component on the
       shadcn sidebar, with the two links and the active mark from `usePathname()`; it collapses
       on a narrow screen (FR-001, R15)
-- [ ] T033 [US1] Make `web/app/layout.tsx` the shell: the sidebar and the page, with the app's
+- [X] T033 [US1] Make `web/app/layout.tsx` the shell: the sidebar and the page, with the app's
       title and description in its metadata; it stays a Server Component (FR-001, R15)
-- [ ] T034 [P] [US1] Implement `web/components/llm/profile-card.tsx` (FR-007)
-- [ ] T035 [US1] Implement `web/components/llm/profile-list.tsx` as a Client Component that
+- [X] T034 [P] [US1] Implement `web/components/llm/profile-card.tsx` (FR-007)
+- [X] T035 [US1] Implement `web/components/llm/profile-list.tsx` as a Client Component that
       reads the list with SWR and renders the states of T028 (FR-003, FR-007, R14)
-- [ ] T036 [US1] Create `web/app/llm/page.tsx` and `web/app/agents/page.tsx`, the second saying
+- [X] T036 [US1] Create `web/app/llm/page.tsx` and `web/app/agents/page.tsx`, the second saying
       that agents are not managed from the console yet and offering no control; delete
       `web/app/page.tsx`; add `redirects()` from `/` to `/llm` with `permanent: false` in
       `web/next.config.ts` (FR-002, R15)
-- [ ] T037 [US1] Run quickstart section 1 by hand in a browser, including a narrow window and
+- [X] T037 [US1] Run quickstart section 1 by hand in a browser, including a narrow window and
       the service stopped. Watch the browser console for a hydration warning from
       `usePathname()`; if there is one, apply the documented fix in
       `web/components/app-sidebar.tsx` and record it in plan.md (R15, research "Not verified")

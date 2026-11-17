@@ -336,3 +336,44 @@ check, phase by phase.
 - **The checkpoint** was run with the real service and model: a run answered, its first event
   named the environment's profile, the log had one line for it, and `freyja_llm_profiles` and
   `freyja_llm_state` existed with the environment active at revision 0.
+
+### Phase 3 as built (2026-11-17)
+
+- **No hydration warning** (T037, research "Not verified"). The browser console showed none
+  with `usePathname()` in `web/components/app-sidebar.tsx`, on `/llm`, on `/agents`, and after
+  the redirect from `/`, so the documented fix was not needed.
+- **The browser check** (T037) was run in headless Chrome against `next dev` and the real
+  service: `/` lands on `/llm` with LLM marked; one card, Environment, marked active and from
+  the environment, with the provider, model, base URL, API choice, and four key characters,
+  and no Edit or Delete; the Agents page has its sentence and no control of its own; in a
+  500-pixel window the sidebar is hidden and opens from its control; with the service stopped
+  the page says the service cannot be reached, offers to try again, and shows no card.
+- **One main landmark** (T033). The generated `SidebarInset` is itself `<main>`, so the layout
+  wraps the page in a `<div>`. The first version nested a second `<main>`; the check found it.
+- **In development the page is opened at `localhost`**, as the quickstart says. `next dev`
+  refuses its own scripts to a page opened at `127.0.0.1` unless `allowedDevOrigins` names it,
+  and the list then stays on its loading state. Nothing was configured: a built app is not
+  affected, and the documented address works.
+- **The environment is described once, at startup** (T029). `Runtime.environment` holds it, so
+  reading the list builds no model. When the environment's profile is the active one the
+  manager has just built its model, and the description does not build it a second time. A
+  model handed to the runtime already built, as the tests do, is listed under the model
+  setting's name and as usable.
+- **`secret_not_configured` comes before `key_unreadable`** (T029): with no secret set every
+  saved profile is listed as not usable for that reason, and a key is only tried against a
+  secret that exists.
+- **A reply that is not JSON counts as unreachable** (T030). When the service is stopped the
+  web app's server answers the forwarded request with a 500 and no JSON body, so
+  `web/lib/api.ts` reports an error reply it cannot parse the same way as a failed request.
+- **A Refresh button** (T035) sits above the cards. The plan named only "try again" after a
+  failure; the list is otherwise read once, and a second way to read it costs one button.
+  SWR does not retry a failed read by itself here, and a failed read never shows older cards.
+- **The loading state is an `<output>`** (T035), which carries the status role Biome asks for
+  in place of `role="status"` on a `<div>`.
+- **Files beyond the plan's tree**: `web/lib/testing.ts`, the `fetch` stub the web tests share,
+  and `web/app/agents/page.test.tsx`. `web/vitest.setup.ts` now also stubs `matchMedia`, which
+  jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
+- **The stock page's files are gone** (T036): `web/app/page.tsx` and the five images under
+  `web/public/`, which only that page used.
+- **Order of the service test** (T024, T029). The web tests were seen failing before their
+  code existed. The service test was written before the route and first run after it.
