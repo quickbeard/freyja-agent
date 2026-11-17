@@ -304,3 +304,35 @@ check, phase by phase.
   place of the rewrite, which R13 set aside; nothing in this feature needs that.
 - **The checkpoint** was run with the real service: through the web app's dev server,
   `/api/healthz` and `/api/tools` answered what the service answers directly.
+
+### Phase 2 as built (2026-11-17)
+
+- **One earlier test changed** (T021). R11 said no existing test compares the whole `start`
+  event. `tests/test_runs.py` does, so its assertion now expects `profile`. It is the only
+  earlier test that changed. The spec's FR-023 and SC-006 and research R11 and R19 are
+  corrected to say so.
+- **The environment's model still goes through `resolve_model`** (T019). When no model factory
+  is given, the manager builds the environment's model with the function the factory has
+  always used, and `build_model` is for saved profiles. A test factory, when given, builds
+  both. This keeps the environment's path exactly what it was, which the earlier tests check.
+- **`build_model` and `resolve_model` both hold the API-choice rule** (T014). The rule is two
+  lines; `agent/factory.py` was left untouched so that nothing about the environment's path
+  moved in this phase.
+- **`environment_profile` builds the model to say whether it is usable** (T014). That is the
+  only way to know, since one client builds without a key and another does not. It opens no
+  connection.
+- **The store checks the rules too** (T015, T016), not only the request shapes: lengths, the
+  provider, the address, and the reserved name. A value sent unchanged is not a change, so it
+  moves neither `config_version` nor `revision`; a key is always a change, because two tokens
+  of one key differ.
+- **`Runtime.models` may be absent** (T019). A runtime put together by hand, as one test
+  fixture does, has no manager; its runs name the environment's profile.
+- **A run whose profile cannot be read** (T021) ends with `start` and an `internal` error and
+  releases its lease. The plan did not say what happens when the single-row read fails.
+- **Unusable models still stop startup**, as planned for this phase: Phase 7 is where that
+  changes. The placeholder model exists and is tested, and nothing uses it yet.
+- **Test files beyond the plan's tree**: `tests/test_llm_providers.py` (T011) and
+  `tests/test_llm_schemas.py`, for the request and response shapes of T020.
+- **The checkpoint** was run with the real service and model: a run answered, its first event
+  named the environment's profile, the log had one line for it, and `freyja_llm_profiles` and
+  `freyja_llm_state` existed with the environment active at revision 0.

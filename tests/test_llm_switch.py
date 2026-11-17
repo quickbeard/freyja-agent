@@ -1,0 +1,205 @@
+"""004 FR-011, FR-013, FR-014, FR-024a: the model a run uses follows the active LLM profile.
+
+The apps are assembled the production way. The model factory returns a labelled scripted model
+per model id, so a run's reply and the factory's record say which profile it used (R18). Two
+apps sharing one profile store stand for two service instances on one database (R6).
+"""
+
+import asyncio
+import logging
+from collections.abc import Callable
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from freyja_agent.llm.secrets import encrypt
+from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileRecord, LlmState
+from tests.conftest import LlmApp, McpApp
+from tests.fakes import ScriptedChatModel
+
+Events = list[tuple[str, Any]]
+ENVIRONMENT = {"id": "environment", "name": "Environment", "source": "environment"}
+KEY = "sk-recognizable-key-0001"
+
+
+def run(client: TestClient, thread: str, sse_events: Any, message: str = "hello") -> Events:
+    with client.stream("POST", f"/threads/{thread}/runs", json={"message": message}) as response:
+        assert response.status_code == 200, response.read()
+        return sse_events(response.iter_lines())
+
+
+def profile_of(events: Events) -> dict[str, str]:
+    kind, start = events[0]
+    assert kind == "start"
+    return start["profile"]
+
+
+def reply(client: TestClient, thread: str) -> str:
+    return client.get(f"/threads/{thread}/state").json()["messages"][-1]["content"]
+
+
+def save(made: LlmApp, name: str, model: str, **values: Any) -> LlmProfileRecord:
+    """Save a profile straight into the store, with its key stored as the service stores it."""
+    given: dict[str, Any] = {
+        "provider": "openai",
+        "base_url": "http://127.0.0.1:9997/v1",
+        "api_key_encrypted": encrypt(KEY, made.settings.secret_key),
+        "key_hint": KEY[-4:],
+        "responses_api": False,
+    }
+    return asyncio.run(made.store.create_profile(name=name, model=model, **{**given, **values}))
+
+
+def activate(made: LlmApp, profile_id: str | None) -> LlmState:
+    return asyncio.run(made.store.activate(profile_id))
+
+
+def profile_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [r.getMessage() for r in caplog.records if "uses LLM profile" in r.getMessage()]
+
+
+# Part 1 (T023): the mechanics, with no route yet.
+
+
+def test_with_no_saved_profile_a_run_names_the_environments_profile(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with (
+        caplog.at_level(logging.INFO, logger="freyja_agent.api.streaming"),
+        TestClient(made.app) as client,
+    ):
+        events = run(client, "t-1", sse_events)
+        assert reply(client, "t-1") == "Answered by env-model."
+
+    assert profile_of(events) == ENVIRONMENT
+    assert events[-1][0] == "end"
+    (line,) = profile_lines(caplog)
+    assert "run " in line
+    assert "thread t-1" in line
+    assert "Environment (environment, environment)" in line
+    # The environment's model is built from the setting, with no key or address of its own.
+    (spec,) = made.models.built
+    assert spec.name == "openai:env-model"
+    assert spec.api_key is None
+    assert spec.base_url is None
+
+
+def test_the_model_is_built_once_while_the_active_choice_does_not_move(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        for thread in ("t-1", "t-2", "t-1"):
+            assert profile_of(run(client, thread, sse_events)) == ENVIRONMENT
+    assert len(made.models.built) == 1
+    assert made.models.model("env-model").calls == 3
+
+
+def test_a_profile_activated_in_the_store_is_used_by_the_next_run(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    saved = save(made, "Stub", "saved-model")
+    with (
+        caplog.at_level(logging.INFO, logger="freyja_agent"),
+        TestClient(made.app) as client,
+    ):
+        assert profile_of(run(client, "t-1", sse_events)) == ENVIRONMENT
+        activate(made, saved.id)
+        events = run(client, "t-1", sse_events, "and again")
+        assert profile_of(events) == {"id": saved.id, "name": "Stub", "source": "saved"}
+        assert reply(client, "t-1") == "Answered by saved-model."
+        # The thread's earlier messages are still there, and the new model received them.
+        seen = made.models.model("saved-model").seen[-1]
+        assert [m.content for m in seen if m.type == "human"] == ["hello", "and again"]
+
+        activate(made, None)
+        assert profile_of(run(client, "t-1", sse_events)) == ENVIRONMENT
+
+    # The saved profile's model was built from its own values, with its key read back.
+    environment, stub, environment_again = made.models.built
+    assert (stub.provider, stub.model) == ("openai", "saved-model")
+    assert stub.base_url == "http://127.0.0.1:9997/v1"
+    assert stub.api_key == KEY
+    assert stub.responses_api is False
+    assert environment == environment_again
+    # No log line holds the key, and each run has one line naming its profile.
+    assert all(KEY not in record.getMessage() for record in caplog.records)
+    assert [
+        line.split("uses LLM profile ")[1].split(" (")[0] for line in profile_lines(caplog)
+    ] == [
+        "Environment",
+        "Stub",
+        "Environment",
+    ]
+
+
+def test_a_second_runtime_on_the_same_store_reads_the_same_state(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    first = make_llm_app(model="openai:env-model")
+    second = make_llm_app(
+        model="openai:env-model",
+        store=first.store,
+        models=first.models,
+        instance_id="instance-b",
+    )
+    saved = save(first, "Stub", "saved-model")
+    with TestClient(first.app) as a, TestClient(second.app) as b:
+        assert profile_of(run(a, "t-a", sse_events)) == ENVIRONMENT
+        assert profile_of(run(b, "t-b", sse_events)) == ENVIRONMENT
+
+        # A change made on the database reaches each instance at its next run.
+        activate(first, saved.id)
+        assert profile_of(run(b, "t-b", sse_events))["name"] == "Stub"
+        assert profile_of(run(a, "t-a", sse_events))["name"] == "Stub"
+
+        # An edit of the active profile moves the revision, so both rebuild once more.
+        asyncio.run(first.store.update_profile(saved.id, name="Renamed", model="newer-model"))
+        assert profile_of(run(a, "t-a", sse_events))["name"] == "Renamed"
+        assert profile_of(run(b, "t-b", sse_events))["name"] == "Renamed"
+        assert reply(b, "t-b") == "Answered by newer-model."
+
+
+def test_a_model_handed_to_the_runtime_stands_for_the_environments(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any
+) -> None:
+    made = make_mcp_app(ScriptedChatModel(final_text="From the given model."), {})
+    with TestClient(made.app) as client:
+        events = run(client, "t-1", sse_events)
+        assert profile_of(events) == ENVIRONMENT
+        assert reply(client, "t-1") == "From the given model."
+
+
+class FlakyStore(InMemoryLlmProfileStore):
+    """A store whose state cannot be read while ``down`` is set."""
+
+    down = False
+
+    async def state(self) -> LlmState:
+        if self.down:
+            raise ConnectionError("the database is gone")
+        return await super().state()
+
+
+def test_a_run_whose_profile_cannot_be_read_ends_with_an_error_and_frees_the_thread(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    store = FlakyStore()
+    made = make_llm_app(model="openai:env-model", store=store)
+    with TestClient(made.app) as client:
+        store.down = True
+        events = run(client, "t-1", sse_events)
+        assert [kind for kind, _ in events] == ["start", "error"]
+        assert profile_of(events) == ENVIRONMENT
+        assert events[1][1]["code"] == "internal"
+        assert "database" not in events[1][1]["message"]
+        # No model was asked, and nothing was added to the thread.
+        assert made.models.model("env-model").calls == 0
+        assert client.get("/threads/t-1/state").status_code == 404
+
+        # The lease was released: the same thread runs again once the store answers.
+        store.down = False
+        assert run(client, "t-1", sse_events)[-1][0] == "end"

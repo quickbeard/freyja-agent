@@ -82,6 +82,13 @@ startup and exits with an error naming the connection when it is unreachable.
   `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
   delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
   loop never waits for a delivery; `tick()` does, for the tests.
+- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; no route uses them yet.
+  `providers.py` holds the provider table, `build_model` for a saved profile, and the
+  environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
+  removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
+  and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
+  `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
+  rebuilds the orchestrator through `build_agent` when the active profile's revision moved.
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, and agent
@@ -91,7 +98,10 @@ startup and exits with an error naming the connection when it is unreachable.
   the tool servers and the agents, builds the agent, and runs the worker; `Runtime.open` adds
   Postgres and is what the FastAPI lifespan enters. Both take `connect`, the seam the tests swap
   to reach stub servers, and `agent_transport`, the httpx transport each agent link uses, which
-  the tests swap to reach stand-in agents.
+  the tests swap to reach stand-in agents. `assemble` also takes `model_factory`, which turns
+  an LLM profile into a chat model and is the seam the profile tests swap. Every run calls
+  `Runtime.model_for_run()` first, which brings `agent` and `catalog` in step with the active
+  profile.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
@@ -115,8 +125,10 @@ startup and exits with an error naming the connection when it is unreachable.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
-  with stub tool servers, and `make_a2a_app` with stand-in agents. `fakes.py` holds the
-  scripted chat model; `mcp_stub.py` the stub MCP server, which records every call it
+  with stub tool servers, `make_a2a_app` with stand-in agents, and `make_llm_app` with LLM
+  profiles and a model factory. `fakes.py` holds the scripted chat model, a labelled one that
+  can hold a call open, and the test model factory; `mcp_stub.py` the stub MCP server, which
+  records every call it
   receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
   records every message and cancel and behaves by a keyword at the start of the message;
   `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams

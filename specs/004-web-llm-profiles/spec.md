@@ -215,7 +215,7 @@ An operator types an API key once. From then on nobody reads it back: not in the
 
 **Compatibility and record**
 
-- **FR-023**: With no saved profile and a usable model in the environment, every behavior of the service MUST be what it was before this feature, and every existing automated test MUST pass unchanged. The differences are FR-016, without a usable model, and the profile named in a run's first event and in the log (FR-024a), which adds to what a run reports and takes nothing away.
+- **FR-023**: With no saved profile and a usable model in the environment, every behavior of the service MUST be what it was before this feature, and every existing automated test MUST pass unchanged, apart from the one assertion that compares a run's first event in full, which gains the profile. The differences are FR-016, without a usable model, and the profile named in a run's first event and in the log (FR-024a), which adds to what a run reports and takes nothing away.
 - **FR-024**: The service MUST log, without any key, each profile added, edited, deleted, and activated, naming the profile. It MUST also log each run refused because no usable model is active, and at startup each profile that is not usable, with the reason.
 - **FR-024a**: The first event of every run's stream, including a continuation after a pause and a background run, MUST name the profile the run uses and say whether it comes from the environment. The service MUST log one line per run naming that profile. Neither contains a key, and nothing about the profile is added to the thread.
 - **FR-025**: The web app's behavior and the service's behavior MUST each be covered by automated tests that need no model provider and no network, with a stand-in for the model endpoint.
@@ -236,7 +236,7 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - **SC-003**: No run in progress fails, stops, or changes model because a profile was activated or edited while it ran.
 - **SC-004**: A recognizable key saved in a profile appears nowhere in what the service returns, logs, streams, or keeps in a thread, and cannot be found in the stored profile, beyond its last four characters.
 - **SC-005**: A profile whose endpoint accepts a first message and refuses a conversation is reported as failing by the test every time, and the test ends within sixty seconds whatever the endpoint does.
-- **SC-006**: A deployment configured only through the environment, with a usable model, behaves exactly as before: every automated test that existed before this feature passes unchanged.
+- **SC-006**: A deployment configured only through the environment, with a usable model, behaves exactly as before: every automated test that existed before this feature passes, changed only where one compares a run's first event in full.
 - **SC-007**: Saved profiles and the choice of active profile are the same after a restart as before it, every time.
 - **SC-008**: From any page of the console, the LLM section is one action away, and with fifty saved profiles its cards are shown within two seconds on the machine the service runs on.
 - **SC-009**: At every moment, including during concurrent activations and deletions and across a restart in the middle of one, exactly one profile is active.

@@ -47,6 +47,8 @@ def test_stream_starts_then_updates_and_messages_then_ends(
         "run_id": events[0][1]["run_id"],
         "mode": "run",
         "debug": False,
+        # Feature 004 (FR-024a): a run names the LLM profile it uses.
+        "profile": {"id": "environment", "name": "Environment", "source": "environment"},
     }
     assert len(events[0][1]["run_id"]) == 32
     assert events[-1] == ("end", {"status": "completed"})
