@@ -710,8 +710,8 @@ proceed at the same time once Phase 4 is merged.
 - Test files added beyond the plan's tree: `tests/test_llm_providers.py` (T011),
   `tests/test_llm_secrets_nowhere.py` (T068), `web/next.config.test.ts` (T006), and
   `web/app/agents/page.test.tsx` (T026). T077 brings the plan in line.
-- **Open before T008 and T009** (analysis of 2026-11-17): constitution principle IV says
-  deployment configuration is read through the `Settings` class. The web app's one variable,
-  `FREYJA_API_URL`, is read by `web/next.config.ts`, which `Settings` cannot cover. The
-  constitution needs a sentence saying where the web app's configuration is read; that is a
-  separate amendment and is not made by any task here.
+- The analysis of 2026-11-17 found that constitution principle IV, which names the `Settings`
+  class, did not cover the web app's one variable, `FREYJA_API_URL`. Constitution 1.4.0
+  resolved it: the web app reads its deployment configuration in `web/next.config.ts` and
+  documents it in `web/.env.example`, as T008 and T009 do. T008 still names the variable in
+  the root `.env.example`, as a pointer.
