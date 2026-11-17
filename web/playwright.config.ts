@@ -38,11 +38,16 @@ export default defineConfig({
     trace: "on-first-retry",
   },
 
-  /* One browser, so a run stays quick. Add a project here to test in another. */
+  /* The browsers the console's users have. Add a project here to test in another. */
   projects: [
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+    },
+
+    {
+      name: "firefox",
+      use: { ...devices["Desktop Firefox"] },
     },
   ],
 

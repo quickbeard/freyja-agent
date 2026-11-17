@@ -313,11 +313,11 @@ CI runs both unit test suites on every pull request and merge request and on `ma
 
 ## End-to-end tests
 
-The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium:
+The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium and Firefox:
 
 ```bash
 cd web
-pnpm exec playwright install chromium   # once per machine: downloads the browser
+pnpm exec playwright install chromium firefox   # once per machine: downloads the two browsers
 pnpm test:e2e                  # playwright test
 ```
 
