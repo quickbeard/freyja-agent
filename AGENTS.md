@@ -38,6 +38,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
+- In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium, Firefox,
+  and WebKit. Playwright builds the app and serves it on port 3100 itself, so nothing needs
+  to be running, the Freyja service included. `pnpm exec playwright install` downloads the
+  three browsers once per machine. The commit hook does not run these tests; CI does.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 
@@ -122,6 +126,12 @@ startup and exits with an error naming the connection when it is unreachable.
   cover, run by Vitest with jsdom.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
+- `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
+  (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
+  is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
+- `.github/workflows/playwright.yml` and `.gitlab-ci.yml`: the same end-to-end job for GitHub
+  and for GitLab, run when a file under `web/` changes. The GitLab job's image version must
+  equal the `@playwright/test` version in `web/pnpm-lock.yaml`; change both together.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
@@ -153,6 +163,8 @@ startup and exits with an error naming the connection when it is unreachable.
   alike. A change that needs no test, such as documentation or a dependency bump, says so in
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
+- An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
+  unit tests and does not replace them.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.
 - The README documents only what exists in the repo, never planned work.
 
