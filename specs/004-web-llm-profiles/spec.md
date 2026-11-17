@@ -173,7 +173,7 @@ An operator types an API key once. From then on nobody reads it back: not in the
 
 **Console shell**
 
-- **FR-001**: The web app MUST show a sidebar on the left of every page that lists the console's sections, LLM and Agents, marks the section in use, and opens a section when its entry is chosen. On a narrow screen the sidebar MUST be collapsible, with every section still reachable.
+- **FR-001**: The web app MUST show a sidebar on the left of every page that lists the console's sections, LLM and Agents, marks the section in use, and opens a section when its entry is chosen. On a narrow screen, meaning a window less than 768 pixels wide, the sidebar MUST be collapsible, with every section still reachable.
 - **FR-002**: Opening the web app's address alone MUST lead to the LLM section. The Agents section MUST say that agents are not managed from the console yet and MUST offer no control.
 - **FR-003**: The web app MUST read and change everything through the service's API, on the same origin the web app is served from. It MUST hold no model credential and call no model endpoint itself. When the service cannot be reached or refuses a request, the page MUST say so with the service's reason, offer to try again, and never present earlier data as current. A key typed into a form MUST be kept only until the form is sent or closed, MUST NOT be written to the browser's storage, and MUST NOT be shown again once sent. The web app's server MUST pass a request on to the service without keeping or logging its body.
 - **FR-003a**: The service's API MUST NOT be usable by a page served from another origin: such a page can neither read a response nor change a profile. A request to a route that takes a body MUST be refused when the body is not sent as JSON.
@@ -242,7 +242,7 @@ An operator types an API key once. From then on nobody reads it back: not in the
 - **SC-009**: At every moment, including during concurrent activations and deletions and across a restart in the middle of one, exactly one profile is active.
 - **SC-010**: For every run, an operator can tell which profile it used from the run's stream while it runs, and from the service log afterwards.
 - **SC-011**: An operator about to activate a profile that has not passed a test since its last change is told so before they confirm, every time.
-- **SC-012**: A page served from another origin can read no profile and change none, in every browser the console supports.
+- **SC-012**: A page served from another origin can read no profile and change none: the service gives permission to no other origin on any route, which holds whatever browser is used.
 - **SC-013**: While no usable model is active, no agent outcome loses a delivery attempt, and every waiting outcome is delivered after a usable profile is activated.
 
 ## Assumptions

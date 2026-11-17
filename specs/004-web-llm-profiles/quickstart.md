@@ -9,7 +9,7 @@ API shapes are in [contracts/openapi.yaml](contracts/openapi.yaml), the stream c
 The saved profiles point at `tests/llm_stub.py`, the suite's stand-in for an OpenAI-compatible
 endpoint, served on loopback. It behaves by the model id it is asked for:
 `refuse-conversation` answers a first message and refuses a request that carries earlier turns,
-and any other id, such as `ok`, answers everything ([research R20](research.md#r20-the-quickstarts-second-model)). No second
+`slow` answers after 20 seconds, and any other id, such as `ok`, answers everything ([research R20](research.md#r20-the-quickstarts-second-model)). No second
 account or key is needed.
 
 ## Prerequisites
@@ -95,9 +95,9 @@ environment's profile and run again:
 curl -s -X POST localhost:8000/llm/profiles/environment/activate | jq .active_id   # "environment"
 ```
 
-**A run in progress keeps its model.** Start a run that takes a while, activate another profile
-while it streams, and let it finish: it ends normally, and only the next run names the new
-profile.
+**A run in progress keeps its model.** Add a profile like `Stub` with the model `slow`, which
+the stand-in answers after 20 seconds, and activate it. Start a run, activate `Stub` while the
+run waits, and let it finish: it ends normally on `slow`, and only the next run names `Stub`.
 
 **Two instances.** Start a second instance on another port against the same database, activate
 a profile through the first, and start a run through the second:

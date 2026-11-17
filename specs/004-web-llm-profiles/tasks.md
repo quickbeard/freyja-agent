@@ -79,20 +79,26 @@ the path from the browser to the service.
       plan.md under Implementation Notes (R14, R17, research "Not verified")
 - [ ] T006 Create `web/vitest.config.mts` with the `tsconfigPaths()` and `react()` plugins and
       `test.environment: "jsdom"`, as Next.js's Vitest guide gives it; keep the `test` script
-      as `vitest run`; confirm `web/lib/utils.test.ts` still passes (R17)
+      as `vitest run`; confirm `web/lib/utils.test.ts` still passes. Then write
+      `web/next.config.test.ts`: `rewrites()` forwards `/api/:path*` to `:path*` on
+      `http://127.0.0.1:8000` by default and on `FREYJA_API_URL` when it is set; it fails until
+      T009 (FR-003, R13, R17)
 - [ ] T007 Add the shadcn components `sidebar`, `card`, `dialog`, `alert-dialog`, `input`,
       `label`, `select`, `switch`, `badge`, `skeleton`, and `sonner` under `web/components/ui/`
       with the shadcn CLI in the `base-vega` style, then run `pnpm format`; `pnpm lint`,
       `pnpm test`, and `pnpm build` pass. If the CLI has no such component for the style, stop
       and record it in plan.md (R16, research "Not verified")
 - [ ] T008 [P] Create `web/.env.example` documenting `FREYJA_API_URL` with its default
-      `http://127.0.0.1:8000`, and add `!.env.example` to `web/.gitignore` so it is committed
+      `http://127.0.0.1:8000`, add `!.env.example` to `web/.gitignore` so it is committed, and
+      name the variable in the root `.env.example` too, pointing at `web/.env.example`
       (contracts/settings.md, principle IV)
 - [ ] T009 Add `rewrites()` to `web/next.config.ts`: `/api/:path*` goes to
       `${FREYJA_API_URL}/:path*`, with `FREYJA_API_URL` read from the environment and defaulting
       to `http://127.0.0.1:8000`. Check by hand whether a changed `FREYJA_API_URL` takes effect
       at `next start` without a new `next build`, and record the answer in plan.md under
-      Implementation Notes and in `web/.env.example` (R13, research "Not verified")
+      Implementation Notes and in `web/.env.example`. The rewrite is the only thing between the
+      browser and the service: no code in `web/` reads, keeps, or logs a request's body (FR-003,
+      R13, research "Not verified")
 
 **Checkpoint**: `uv run pytest tests/test_config.py` passes; in `web/`, `pnpm lint`, `pnpm test`,
 and `pnpm build` pass; `curl localhost:3000/api/healthz` reaches a running service through the
@@ -176,19 +182,24 @@ model through the manager and behaves as before.
       contracts/openapi.yaml: `LlmProfile`, `LlmLastTest`, `LlmTestResult`, `LlmProfileList`,
       `LlmProfileCreate`, `LlmProfileUpdate`, `LlmProfileDraft`, and `RunProfile`; the request
       models with `extra="forbid"` and the limits "1 to 64", "1 to 200", "at most 2,000", and
-      "1 to 4,000" characters; no response model has a key field (FR-006, FR-020, R10)
+      "1 to 4,000" characters; no response model has a key field; and add to `ErrorDetail`
+      the eight codes of the contract: `profile_not_found`, `profile_read_only`,
+      `profile_active`, `profile_unusable`, `profile_limit`, `name_taken`,
+      `secret_not_configured`, `test_busy` (FR-006, FR-020, R10)
 - [ ] T021 Change `src/freyja_agent/api/streaming.py` so that `run_stream` asks the manager for
       the current orchestrator before emitting `start`, uses that one reference for the whole
       run, adds `profile` (`id`, `name`, `source`) to `start`, and logs one INFO line per run
       with the same three values (FR-013, FR-024a, R2, R11, contracts/sse-events.md)
-- [ ] T022 Add to `tests/fakes.py` a scripted model that carries a label and a model factory
-      that returns one per profile and records what it built, and to `tests/conftest.py` a
-      `make_llm_app` fixture that assembles an app the production way with an in-memory profile
-      store, a secret, and that factory; existing fixtures are unchanged (R18)
+- [ ] T022 Add to `tests/fakes.py` a scripted model that carries a label and can hold one call
+      open until the test releases it, and a model factory that returns one per profile and
+      records what it built; add to `tests/conftest.py` a `make_llm_app` fixture that assembles
+      an app the production way with an in-memory profile store, a secret, and that factory,
+      and let `make_a2a_app` take the same store and factory so a test can have stand-in agents
+      and profiles together; with neither given, existing fixtures behave as before (R18)
 - [ ] T023 Write `tests/test_llm_switch.py` part 1: with no saved profile, a run's `start` names
       the environment's profile with `source` `environment` and the log has one line for the
       run; a second runtime on the same store reads the same state; the model factory was
-      called once across two runs (FR-011, FR-024a, R6)
+      called once across two runs (FR-011, FR-024a, SC-010, R6)
 
 **Checkpoint**: `uv run pytest` passes with every earlier test unchanged (FR-023, SC-006); the
 service starts and runs as before, and each run's first event names the environment's profile.
@@ -215,10 +226,14 @@ with four key characters, and it has no Edit or Delete. Runs through the API beh
 - [ ] T025 [P] [US1] Write `web/lib/api.test.ts`: a request goes to `/api` plus its path; a 2xx
       body is returned parsed; a refusal raises an error carrying the service's `code` and
       `message`; a 422 raises one carrying each field's message; a network failure raises an
-      error that says the service cannot be reached (FR-003)
+      error that says the service cannot be reached. Write `web/lib/llm.test.ts`: `listProfiles`
+      asks for `/llm/profiles` and returns the list (FR-003, FR-007)
 - [ ] T026 [P] [US1] Write `web/components/app-sidebar.test.tsx`: it lists LLM and Agents as
-      links to `/llm` and `/agents` and marks the one matching the current path (FR-001, US1
-      scenario 1)
+      links to `/llm` and `/agents` and marks the one matching the current path. Write
+      `web/app/agents/page.test.tsx`: the page says agents are not managed from the console yet
+      and has no button, link, or field of its own. Extend `web/next.config.test.ts`:
+      `redirects()` sends `/` to `/llm` and is not permanent (FR-001, FR-002, US1 scenarios 1, 4,
+      5)
 - [ ] T027 [P] [US1] Write `web/components/llm/profile-card.test.tsx`: a card shows the name,
       provider label, model id, base URL when there is one, the API choice for `openai` only,
       the four key characters, and the marks for active, from the environment, and not usable;
@@ -233,14 +248,15 @@ with four key characters, and it has no Edit or Delete. Runs through the API beh
 
 - [ ] T029 [US1] Create `src/freyja_agent/api/llm.py` with a router under `/llm` whose routes
       return validation errors without `input`, and `GET /llm/profiles` built from the store,
-      the environment's profile, and the manager; include the router in
-      `src/freyja_agent/api/app.py` (FR-007, FR-008, R9, R10)
+      the environment's profile, and the manager, with `usable` and `unusable_reason` worked out
+      for every profile from this instance's secret and environment; include the router in
+      `src/freyja_agent/api/app.py` (FR-007, FR-008, FR-011a, R9, R10)
 - [ ] T030 [P] [US1] Implement `web/lib/api.ts`: one function that calls `/api` plus a path with
       JSON, and one error type with the service's code, message, and field messages (FR-003,
       R13)
 - [ ] T031 [US1] Implement `web/lib/llm.ts`: the TypeScript types of contracts/openapi.yaml
-      (`LlmProfile`, `LlmProfileList`, `LlmLastTest`), with no key field, and `listProfiles`,
-      with `web/lib/llm.test.ts` (FR-007, R14)
+      (`LlmProfile`, `LlmProfileList`, `LlmLastTest`), with no key field, and `listProfiles`
+      (FR-007, R14)
 - [ ] T032 [P] [US1] Implement `web/components/app-sidebar.tsx` as a Client Component on the
       shadcn sidebar, with the two links and the active mark from `usePathname()`; it collapses
       on a narrow screen (FR-001, R15)
@@ -282,8 +298,9 @@ the environment's card: the next run names the environment.
       refused with `secret_not_configured`; a body that is not JSON is refused; `POST
       .../activate` answers the whole list with one active profile; an unknown id is
       `profile_not_found`; activating the active one changes nothing; `environment` can be
-      activated; each add and each activation is logged with the profile's name and no key
-      (FR-004 to FR-006, FR-011, FR-012, FR-024, US2 scenarios 1, 2, 7, 9)
+      activated; each add and each activation is logged with the profile's name and no key;
+      with 50 profiles saved, one request returns all 51 entries (FR-004 to FR-006, FR-011,
+      FR-012, FR-024, SC-008, US2 scenarios 1, 2, 7, 9)
 - [ ] T039 [P] [US2] Write `tests/test_llm_switch.py` part 2: after an activation the next run
       on that instance uses the new profile, named in `start`; a run held open while another
       profile is activated ends normally on the model it started with, and the next run on the
@@ -292,8 +309,8 @@ the environment's card: the next run names the environment.
       started after an activation uses it; a new runtime on the same store starts on the saved
       active profile whatever the environment names; a second runtime sharing the store uses
       the new profile at its next run; activating `environment` returns to the environment's
-      model (FR-013, FR-014, FR-015, FR-024a, SC-002, SC-003, SC-007, US2 scenarios 3 to 7, 10,
-      11)
+      model (FR-013, FR-014, FR-015, FR-024a, SC-002, SC-003, SC-007, SC-010, US2 scenarios 3
+      to 7, 10, 11)
 - [ ] T040 [P] [US2] Write `web/components/llm/profile-form.test.tsx` for adding: the form has
       name, provider, model id, base URL, and key; the API choice is offered for an
       OpenAI-compatible endpoint only and is on by default; a missing value, a name that is
@@ -304,7 +321,9 @@ the environment's card: the next run names the environment.
 - [ ] T041 [P] [US2] Write `web/components/llm/activate-dialog.test.tsx`: Set active opens a
       confirmation that names the profile and says existing conversations will be sent to its
       endpoint from their next run; confirming sends one activation and the list then shows
-      exactly one active card; cancelling sends nothing (FR-012, US2 scenarios 2 and 12)
+      exactly one active card; cancelling sends nothing. Extend `web/lib/llm.test.ts`:
+      `createProfile` and `activateProfile` send what the contract asks (FR-012, US2 scenarios 2
+      and 12)
 
 ### Implementation for User Story 2
 
@@ -315,8 +334,7 @@ the environment's card: the next run names the environment.
       `src/freyja_agent/api/llm.py`: refuse an unusable profile, change the state in one
       statement, rebuild on this instance at once, log it, and answer with the list (FR-012,
       FR-013, FR-024, R6)
-- [ ] T044 [US2] Add `createProfile` and `activateProfile` to `web/lib/llm.ts`, with their tests
-      in `web/lib/llm.test.ts` (R14)
+- [ ] T044 [US2] Add `createProfile` and `activateProfile` to `web/lib/llm.ts` (R14)
 - [ ] T045 [P] [US2] Implement `web/components/llm/profile-form.tsx` as a dialog for adding,
       which resets its state, the key included, whenever it opens or closes (FR-003, FR-004,
       R9, R14)
@@ -344,14 +362,15 @@ warning is gone. Nothing else changed.
       completions and the Responses API in the test process, recording every request. It
       behaves by model id: `refuse-conversation` answers a first message and refuses a request
       carrying earlier turns with a 422; `repeat-key` fails with an error that repeats the key
-      it was sent; `never-answer` does not answer; any other id answers everything. With
-      `--http <port>` it listens on loopback for the quickstart (R18, R20)
+      it was sent; `reject-key` answers 401 to every request; `never-answer` does not answer;
+      `slow` answers after 20 seconds; any other id answers everything. With `--http <port>` it
+      listens on loopback for the quickstart (R18, R20)
 - [ ] T049 [P] [US3] Write `tests/test_llm_check.py` against the stand-in, through the real
       `ChatOpenAI` client, over chat completions and over the Responses API: a working endpoint
       passes after exactly two requests, the second carrying the first user message, an
       assistant turn with a tool call, its result, a second user message, and the tool's
       definition; `refuse-conversation` fails on `conversation` with the endpoint's reason; an
-      unreachable address and a refused key fail on `first_message`; `never-answer` ends at the
+      unreachable address and `reject-key` fail on `first_message`; `never-answer` ends at the
       time limit, reporting that the endpoint did not answer in time; `repeat-key` gives a
       reason without the key; a reason is cut at 500 characters; no retry is made (FR-018,
       FR-019, FR-021, SC-005, US3 scenarios 1 to 3, 8)
@@ -372,8 +391,9 @@ warning is gone. Nothing else changed.
       the time the service gave, or that it has not been tested since its last change; the
       activation confirmation warns and offers to test first when the last test did not pass or
       there is none, and still lets the operator confirm; Test in the form sends the form's
-      values, and in the Edit form an empty key sends the profile's id instead (FR-007, FR-012,
-      FR-017, SC-011, US3 scenarios 4, 5, 9 to 11)
+      values, and in the Edit form an empty key sends the profile's id instead. Extend
+      `web/lib/llm.test.ts`: `testProfile` and `testDraft` send what the contract asks (FR-007,
+      FR-012, FR-017, SC-011, US3 scenarios 4, 5, 9 to 11)
 
 ### Implementation for User Story 3
 
@@ -386,8 +406,7 @@ warning is gone. Nothing else changed.
       profile and four in all, and refuse beyond either before a model is built; record a
       listed profile's result against the `config_version` read at the start; keep the
       environment's result in memory (FR-017, FR-019a, FR-019b, R7)
-- [ ] T054 [US3] Add `testProfile` and `testDraft` to `web/lib/llm.ts`, with their tests in
-      `web/lib/llm.test.ts` (R14)
+- [ ] T054 [US3] Add `testProfile` and `testDraft` to `web/lib/llm.ts` (R14)
 - [ ] T055 [US3] Add Test and the last result to `web/components/llm/profile-card.tsx`, the
       warning to `web/components/llm/activate-dialog.tsx`, and Test to
       `web/components/llm/profile-form.tsx`; show the time the service returned, never one
@@ -411,7 +430,8 @@ works; delete an inactive profile; see the active one refuse deletion.
 - [ ] T056 [P] [US4] Write `tests/test_llm_profiles_api.py` part 4: `PATCH` changes only the
       fields sent; a key left out keeps the stored key and its four characters; a key sent
       replaces both; a change of provider, model, base URL, key, or API choice clears the last
-      test result and a change of name keeps it; a used name is `name_taken`; a key sent with
+      test result and a change of name keeps it; a used name, and the name `Environment`, are
+      `name_taken`; a key sent with
       no secret is `secret_not_configured`; `PATCH` and `DELETE` on `environment` are
       `profile_read_only`; `DELETE` of an inactive profile answers 204 and it is gone, also for
       a new runtime; `DELETE` of the active profile is `profile_active` with a message to
@@ -429,19 +449,20 @@ works; delete an inactive profile; see the active one refuse deletion.
       active profile first asks for confirmation, saying the change applies from the next run,
       and sends nothing when cancelled; Delete asks for confirmation and removes the card; the
       refusal for the active profile is shown as the service worded it; the environment's card
-      offers neither (FR-008 to FR-010, US4 scenarios 1 to 6)
+      offers neither. Extend `web/lib/llm.test.ts`: `updateProfile` and `deleteProfile` send
+      what the contract asks (FR-008 to FR-010, US4 scenarios 1 to 6)
 
 ### Implementation for User Story 4
 
 - [ ] T059 [US4] Add `PATCH /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
-      refuse the environment's profile, apply the fields sent, encrypt a new key, and, when the
+      refuse the environment's profile and the reserved name, apply the fields sent, encrypt a
+      new key, and, when the
       profile is the active one, rebuild on this instance at once; log it (FR-005, FR-009,
       FR-013, FR-024)
 - [ ] T060 [US4] Add `DELETE /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
       refuse the environment's profile and the active one, delete, and log it (FR-005, FR-010,
       FR-024)
-- [ ] T061 [US4] Add `updateProfile` and `deleteProfile` to `web/lib/llm.ts`, with their tests
-      in `web/lib/llm.test.ts` (R14)
+- [ ] T061 [US4] Add `updateProfile` and `deleteProfile` to `web/lib/llm.ts` (R14)
 - [ ] T062 [P] [US4] Implement `web/components/llm/delete-dialog.tsx` (FR-010)
 - [ ] T063 [US4] Give `web/components/llm/profile-form.tsx` its editing mode with the
       confirmation for the active profile, and add Edit and Delete to
@@ -484,7 +505,8 @@ starts, the console says no usable model is active, and a run ends at once with
 - [ ] T066 [US5] In `src/freyja_agent/api/streaming.py`, when no usable model is active, emit
       `start` and then `error` with code `no_usable_model` and the message of
       contracts/sse-events.md without invoking the graph, release the lease, and log the
-      refusal; add the code to `ErrorDetail` in `src/freyja_agent/api/schemas.py` (FR-016,
+      refusal. The code belongs to the stream's `error` event, like `step_limit` and
+      `model_error`; it is not added to `ErrorDetail`, which is the HTTP refusal shape (FR-016,
       FR-024, R8)
 - [ ] T067 [US5] In `src/freyja_agent/delegates/delegation_worker.py`, start no delivery while
       no usable model is active, leaving ready outcomes ready and their attempts untouched
@@ -531,10 +553,10 @@ the secret: saving is refused and the environment's model still works.
 
 - [ ] T071 [US5] In `src/freyja_agent/api/streaming.py`, clean the `model_error` message and
       its log line with `redact` and the manager's secrets (FR-021, R9)
-- [ ] T072 [US5] In `src/freyja_agent/api/llm.py` and `src/freyja_agent/llm/active.py`, report
-      each profile's `usable` and `unusable_reason` from the instance's secret, and refuse to
-      activate or test an unusable one with `profile_unusable`; fix whatever T068 and T069
-      still find (FR-011a, FR-012, FR-022)
+- [ ] T072 [US5] Fix in `src/freyja_agent/api/llm.py` and `src/freyja_agent/llm/active.py`
+      whatever T068 and T069 still find. The usable state and its reason are reported since
+      T029, and an unusable profile is refused by activation since T043 and by the test since
+      T053; this task closes what the proof turns up (FR-011a, FR-012, FR-022)
 - [ ] T073 [US5] Show the unusable state and its reason on `web/components/llm/profile-card.tsx`
       (FR-007, FR-022)
 
@@ -566,7 +588,9 @@ the secret: saving is refused and the environment's model still works.
       (FR-025, principle V)
 - [ ] T079 Run `specs/004-web-llm-profiles/quickstart.md`, all seven sections, against the real
       service, the stand-in on loopback, and the web app in a browser; section 7 repeats the
-      001 quickstart with no saved profile (FR-023, SC-001, SC-006, SC-008)
+      001 quickstart with no saved profile. Then save 50 profiles through the API and time the
+      LLM section from navigation to the last card: within two seconds (FR-023, SC-001, SC-006,
+      SC-008)
 - [ ] T080 Re-run the Constitution Check of `specs/004-web-llm-profiles/plan.md` against the
       implemented code and note the result in the pull request description (principles I to VI)
 
@@ -605,7 +629,8 @@ the secret: saving is refused and the environment's model still works.
 - Tasks that share a file run in the order listed: `tests/test_llm_profiles_api.py` grows by
   parts in T024, T038, T050, T056, T069; `tests/test_llm_switch.py` in T023, T039, T057;
   `src/freyja_agent/api/llm.py` in T029, T042, T043, T053, T059, T060, T072;
-  `web/lib/llm.ts` in T031, T044, T054, T061; the card, list, and form components likewise.
+  `web/lib/llm.ts` in T031, T044, T054, T061, and its test file in T025, T041, T051, T058;
+  `web/next.config.test.ts` in T006 and T026; the card, list, and form components likewise.
 
 ### Parallel Opportunities
 
@@ -682,5 +707,11 @@ proceed at the same time once Phase 4 is merged.
 - Stop at any checkpoint to validate a story on its own.
 - Four tasks check something the plan could not verify without a network or a browser: T005,
   T007, T009, and T037. Each records what it found in plan.md.
-- Two test files are added beyond the plan's tree: `tests/test_llm_providers.py` (T011) and
-  `tests/test_llm_secrets_nowhere.py` (T068). T077 brings the plan in line.
+- Test files added beyond the plan's tree: `tests/test_llm_providers.py` (T011),
+  `tests/test_llm_secrets_nowhere.py` (T068), `web/next.config.test.ts` (T006), and
+  `web/app/agents/page.test.tsx` (T026). T077 brings the plan in line.
+- **Open before T008 and T009** (analysis of 2026-11-17): constitution principle IV says
+  deployment configuration is read through the `Settings` class. The web app's one variable,
+  `FREYJA_API_URL`, is read by `web/next.config.ts`, which `Settings` cannot cover. The
+  constitution needs a sentence saying where the web app's configuration is read; that is a
+  separate amendment and is not made by any task here.

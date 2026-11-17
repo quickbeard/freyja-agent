@@ -119,6 +119,16 @@ Tracking:
   asks for (FR-016, clarified 2026-11-17), and the refusal moves to a fixed check before each
   run (R8).
 
+### Analysis (2026-11-17)
+
+`/speckit-analyze` found one point where this check was too generous. Principle IV says
+deployment configuration MUST be read through the `Settings` class. The web app's one variable,
+`FREYJA_API_URL`, is read by `web/next.config.ts`; a Python class cannot cover it. The row above
+passes for the service and for everything else it lists. For this variable the constitution has
+to say where the web app's configuration is read, in an amendment of its own, before the tasks
+that add the variable (T008, T009). Until then the variable is also named in the root
+`.env.example`, so that every variable is documented where principle IV says to look.
+
 ### Checklist review (2026-11-17)
 
 `checklists/security-reliability.md` raised sixteen findings against the spec and this plan.
