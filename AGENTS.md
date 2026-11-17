@@ -130,12 +130,14 @@ startup and exits with an error naming the connection when it is unreachable.
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
   is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
-  `unit-tests.yml` runs pytest and Vitest on every pull request and on `main`; GitLab's
-  `pytest` and `vitest` jobs do the same for merge requests. `playwright.yml` and GitLab's
-  `playwright` job run the end-to-end tests when a file under `web/` changes. The GitLab
-  Playwright image's version must equal the `@playwright/test` version in
-  `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes to the other
-  side too. CI does not run Ruff, Biome, or the opt-in Postgres tests.
+  `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
+  `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
+  GitLab's `ruff`, `biome`, `pytest`, and `vitest` jobs do the same for merge requests.
+  `playwright.yml` and GitLab's `playwright` job run the end-to-end tests when a file under
+  `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
+  version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
+  to the other side too. The linters only report in CI; the commit hook is where files get
+  fixed. CI does not run the opt-in Postgres tests.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
