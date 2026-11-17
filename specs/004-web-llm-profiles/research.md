@@ -346,7 +346,8 @@ A stand-in gives both with no second account or key, as `tests/a2a_stub.py` does
 These need the network or a browser and are checked when the feature is built:
 
 - Whether a `rewrites()` destination is read when `next build` runs or when `next start` does.
-  The bundled documentation does not say. The quickstart sets `FREYJA_API_URL` before either.
+  The bundled documentation does not say. Checked in Phase 1 (T009): at `next build`; see
+  plan.md, Implementation Notes.
 - That SWR's current release supports React 19.3 and Next.js 16.4, and that the shadcn CLI has
   every component in R16 for the `base-vega` style.
 - That `usePathname()` causes no hydration warning here (R15).

@@ -50,7 +50,7 @@ starts, the environment's profile is listed as unusable, and runs end with `no_u
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `FREYJA_API_URL` | `http://127.0.0.1:8000` | Where the web app's server forwards `/api/...` (research R13). Read by `web/next.config.ts`; set it before `pnpm dev`, `pnpm build`, and `pnpm start`. |
+| `FREYJA_API_URL` | `http://127.0.0.1:8000` | Where the web app's server forwards `/api/...` (research R13). Read by `web/next.config.ts` when `pnpm dev` starts and when `pnpm build` runs. A built app keeps the address it was built with: `pnpm start` does not read the variable again. |
 
 It is a server-side variable with no `NEXT_PUBLIC_` prefix: the browser only ever calls the web
 app's own origin and never learns the API's address. It is documented in `web/.env.example`.
