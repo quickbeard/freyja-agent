@@ -87,8 +87,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
   delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
   loop never waits for a delivery; `tick()` does, for the tests.
-- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API only lists
-  them.
+- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API lists, adds,
+  and activates them.
   `providers.py` holds the provider table, `build_model` for a saved profile, and the
   environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
@@ -112,8 +112,10 @@ startup and exits with an error naming the connection when it is unreachable.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
-  `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, which asks no model
-  anything; its routes answer a refused request without repeating the value (`NoInputRoute`);
+  `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, `POST /llm/profiles`,
+  and `POST /llm/profiles/{id}/activate`, none of which asks a model anything; an activation
+  is applied on this instance at once; its routes answer a refused request without repeating
+  the value (`NoInputRoute`);
   `streaming.py` the SSE run loop with the lease heartbeat, also driven by the worker for
   background runs; `outcomes.py` records pending tasks' outcomes in their thread exactly once
   and answers messages to agents that a stop left in flight; `decisions.py` resume
@@ -123,25 +125,29 @@ startup and exits with an error naming the connection when it is unreachable.
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
-  `web/app/llm/` lists the LLM profiles as cards (`web/components/llm/`) and `web/app/agents/` is a
-  placeholder. `web/lib/api.ts` is the one function that calls the service, always through `/api`,
-  and its error type; `web/lib/llm.ts` holds the profile types and calls. Lists are read with SWR in
-  Client Components. shadcn/ui is set up: `components.json`, components under `web/components/ui/`,
-  and the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they are
-  added, and three lint rules they do not meet are off for `web/components/ui/` only
-  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its configuration:
-  `FREYJA_API_URL`, where its server forwards `/api/...`, documented in `web/.env.example`; it also
-  holds the redirect. Unit tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`,
-  which follows the layout of the code it covers (`web/__tests__/lib/api.test.ts` covers
-  `web/lib/api.ts`), run by Vitest with jsdom; `web/__tests__/testing.ts` stubs `fetch` for them. No
-  test file sits beside the code.
+  `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` is a placeholder.
+  `web/components/llm/` holds the list, the card, the dialog that adds a profile
+  (`profile-form.tsx`, which keeps nothing once it is sent or closed), and the confirmation before a
+  profile is activated (`activate-dialog.tsx`). `web/lib/api.ts` is the one function that calls the
+  service, always through `/api`, and its error type; `web/lib/llm.ts` holds the profile types and
+  the calls that list, add, and activate. Lists are read with SWR in Client Components. shadcn/ui is
+  set up: `components.json`, components under `web/components/ui/`, and the `cn` helper in
+  `web/lib/utils.ts`. Generated components need `pnpm format` after they are added, and three lint
+  rules they do not meet are off for `web/components/ui/` only (`web/biome.json`).
+  `web/next.config.ts` is the one place the web app reads its configuration: `FREYJA_API_URL`, where
+  its server forwards `/api/...`, documented in `web/.env.example`; it also holds the redirect. Unit
+  tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of
+  the code it covers (`web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`), run by Vitest with
+  jsdom; `web/__tests__/testing.ts` stubs `fetch` for them. No test file sits beside the code.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
   is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
-  `console.spec.ts` covers the shell and `llm.spec.ts` the LLM section; `api.ts` holds what
-  the service would answer (`answerProfiles`) and the locators the specs share. The app under
+  `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read, and
+  `profiles.spec.ts` adding and activating; `api.ts` holds what the service would answer
+  (`answerProfiles` for a list, `ProfileService` for a page that changes profiles, which
+  keeps what the page saved and activated) and the locators the specs share. The app under
   test forwards `/api/...` to an address nothing listens on, so a test that hands a page no
   answer sees the console as it is with the service stopped.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.

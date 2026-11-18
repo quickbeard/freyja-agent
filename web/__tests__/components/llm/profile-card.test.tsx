@@ -1,5 +1,5 @@
-import { render, screen } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { ProfileCard } from "@/components/llm/profile-card";
 import type { LlmProfile } from "@/lib/llm";
 
@@ -93,6 +93,39 @@ describe("ProfileCard", () => {
     );
     expect(screen.getByText("Not usable")).toBeTruthy();
     expect(screen.getByText(text)).toBeTruthy();
+  });
+
+  it("offers Set active on a usable profile that is not active", () => {
+    const onActivate = vi.fn();
+    render(<ProfileCard profile={SAVED} onActivate={onActivate} />);
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    expect(onActivate).toHaveBeenCalledWith(SAVED);
+  });
+
+  it("offers it on the environment's profile when another one is active", () => {
+    render(
+      <ProfileCard
+        profile={{ ...ENVIRONMENT, active: false }}
+        onActivate={vi.fn()}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "Set active" })).toBeTruthy();
+  });
+
+  it.each([
+    ["the active profile", { ...SAVED, active: true }],
+    [
+      "a profile that is not usable",
+      { ...SAVED, usable: false, unusable_reason: "key_unreadable" as const },
+    ],
+  ])("does not offer it on %s", (_case, profile) => {
+    render(<ProfileCard profile={profile} onActivate={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: "Set active" })).toBeNull();
+  });
+
+  it("offers it only where something can be done with it", () => {
+    render(<ProfileCard profile={SAVED} />);
+    expect(screen.queryByRole("button")).toBeNull();
   });
 
   it("gives the environment's profile no way to be edited or deleted", () => {

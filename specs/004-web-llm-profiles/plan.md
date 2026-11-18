@@ -414,3 +414,56 @@ check, phase by phase.
   what can be seen.
 - **Order of the service test** (T024, T029). The web tests were seen failing before their
   code existed. The service test was written before the route and first run after it.
+
+### Phase 4 as built (2026-11-18)
+
+- **What activation refuses** (T043). A profile that is not usable in the sense of FR-011a: a
+  saved profile whose key cannot be read on this instance, or the environment's profile when
+  the environment's is not usable. The refusal comes before anything is changed, so the earlier
+  profile stays active, as FR-012 asks.
+- **Applying it at once does not decide the activation** (T043). After the choice is changed,
+  this instance rebuilds its orchestrator at once (R6). If that rebuild fails, the activation
+  still stands and the failure is logged without the key: every instance takes the choice up
+  at its next run, where a run reports what is wrong. The plan did not say what an immediate
+  rebuild that fails should do; refusing would have left the choice changed and the answer an
+  error.
+- **An activation that changes nothing is not logged and rebuilds nothing** (T043): the
+  store's revision stays where it was, which is how the route tells.
+- **A body that is not JSON was already refused** (T042, FR-003a). FastAPI 0.162 answers 422
+  to a body sent as text or as a form on these routes, so nothing was added; three tests hold
+  it in place.
+- **A rule the request shape and the store disagree on is an internal error** (T042). Both
+  check the same lengths and the web address. The store's refusal can only be reached if the
+  two drift apart, and is answered 500 rather than shown as the operator's mistake.
+- **The switch tests give the environment its key** (T039). `tests/test_llm_switch.py` now
+  sets `OPENAI_API_KEY` for every test, because activating the environment's profile requires
+  it to be usable. Part 1's tests never activated through the route and did not need it.
+- **A key stays in the open form after a refused save** (T045, FR-003). The form drops the
+  key when a save succeeds and when the form closes. After a refusal, such as a taken name,
+  the form stays open with what was typed, the key included, in a password field, so only the
+  wrong value has to be changed. FR-003's "until the form is sent or closed" is read as a
+  form that was sent successfully.
+- **The form's fields start again whenever it opens or closes** (T045, R14): they are keyed
+  by a counter that both move, and the dialog's content is unmounted while closed.
+- **Set active is offered where it can succeed** (T047): on a usable profile that is not the
+  active one, the environment's included. The service still refuses a profile that became
+  unusable since the list was read, and the confirmation shows that refusal.
+- **The provider is the generated select** (T045). In a unit test it is opened and chosen
+  from with the keyboard: under jsdom a click on an option does not select it.
+- **The form scrolls inside itself** (T045) when it is taller than the window, which it can
+  be once it says what is wrong with several fields.
+- **End-to-end** (T047a). `web/e2e/api.ts` gained `ProfileService`, a stand-in for the profile
+  routes that keeps what a page saved and activated and records every request, and
+  `web/e2e/profiles.spec.ts` has nine tests on it. `answerProfiles` stays for the tests that
+  only read the list.
+- **The checkpoint** was run by hand against the real service on a database made for it and
+  dropped afterwards: a profile added through the API was stored with its key as a token that
+  does not contain the key; a taken name, a body sent as text, a base URL that is not a web
+  address, and an unknown id were refused as the contract says; after an activation a run's
+  first event and log line named the profile, with no restart; after a restart the profile was
+  still active; a second instance on the same database took up an activation made through the
+  first at its next run; and in a browser the console added a profile through the form, showed
+  the service's "name taken" at the name, and moved the Active mark after the confirmation.
+  No log held either key. **Not checked**: a run answered by the environment's real model
+  after switching back to it. The run named the environment's profile, and the model's
+  endpoint could not be reached from the machine at the time, with or without Freyja.

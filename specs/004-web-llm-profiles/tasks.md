@@ -297,7 +297,7 @@ the environment's card: the next run names the environment.
 
 ### Tests for User Story 2
 
-- [ ] T038 [P] [US2] Write `tests/test_llm_profiles_api.py` part 2: `POST /llm/profiles` answers
+- [X] T038 [P] [US2] Write `tests/test_llm_profiles_api.py` part 2: `POST /llm/profiles` answers
       201 with the saved profile, not active, with the key's four characters and no key; a
       missing value, a name of 65 characters, a model of 201, a base URL that is not a web
       address, and a key of 4,001 characters are each refused with 422 naming the field and
@@ -309,7 +309,7 @@ the environment's card: the next run names the environment.
       activated; each add and each activation is logged with the profile's name and no key;
       with 50 profiles saved, one request returns all 51 entries (FR-004 to FR-006, FR-011,
       FR-012, FR-024, SC-008, US2 scenarios 1, 2, 7, 9)
-- [ ] T039 [P] [US2] Write `tests/test_llm_switch.py` part 2: after an activation the next run
+- [X] T039 [P] [US2] Write `tests/test_llm_switch.py` part 2: after an activation the next run
       on that instance uses the new profile, named in `start`; a run held open while another
       profile is activated ends normally on the model it started with, and the next run on the
       same thread uses the new one with the thread's messages intact; a run paused on a
@@ -319,14 +319,14 @@ the environment's card: the next run names the environment.
       the new profile at its next run; activating `environment` returns to the environment's
       model (FR-013, FR-014, FR-015, FR-024a, SC-002, SC-003, SC-007, SC-010, US2 scenarios 3
       to 7, 10, 11)
-- [ ] T040 [P] [US2] Write `web/__tests__/components/llm/profile-form.test.tsx` for adding: the form
+- [X] T040 [P] [US2] Write `web/__tests__/components/llm/profile-form.test.tsx` for adding: the form
       has name, provider, model id, base URL, and key; the API choice is offered for an
       OpenAI-compatible endpoint only and is on by default; a missing value, a name that is taken,
       and a base URL that is not a web address each show which field is wrong and why and send
       nothing more; a save sends the values once; after the form is sent or closed its key field is
       empty when opened again, and nothing was written to `localStorage` or `sessionStorage`
       (FR-003, FR-004, FR-006, US2 scenarios 8 and 9, US5 scenario 8)
-- [ ] T041 [P] [US2] Write `web/__tests__/components/llm/activate-dialog.test.tsx`: Set active opens
+- [X] T041 [P] [US2] Write `web/__tests__/components/llm/activate-dialog.test.tsx`: Set active opens
       a confirmation that names the profile and says existing conversations will be sent to its
       endpoint from their next run; confirming sends one activation and the list then shows exactly
       one active card; cancelling sends nothing. Extend `web/__tests__/lib/llm.test.ts`:
@@ -335,21 +335,21 @@ the environment's card: the next run names the environment.
 
 ### Implementation for User Story 2
 
-- [ ] T042 [US2] Add `POST /llm/profiles` to `src/freyja_agent/api/llm.py`: validate, refuse
+- [X] T042 [US2] Add `POST /llm/profiles` to `src/freyja_agent/api/llm.py`: validate, refuse
       the reserved name, encrypt the key, store its hint, save, and log the addition without
       the key (FR-004 to FR-006, FR-020, FR-024, R10)
-- [ ] T043 [US2] Add `POST /llm/profiles/{profile_id}/activate` to
+- [X] T043 [US2] Add `POST /llm/profiles/{profile_id}/activate` to
       `src/freyja_agent/api/llm.py`: refuse an unusable profile, change the state in one
       statement, rebuild on this instance at once, log it, and answer with the list (FR-012,
       FR-013, FR-024, R6)
-- [ ] T044 [US2] Add `createProfile` and `activateProfile` to `web/lib/llm.ts` (R14)
-- [ ] T045 [P] [US2] Implement `web/components/llm/profile-form.tsx` as a dialog for adding,
+- [X] T044 [US2] Add `createProfile` and `activateProfile` to `web/lib/llm.ts` (R14)
+- [X] T045 [P] [US2] Implement `web/components/llm/profile-form.tsx` as a dialog for adding,
       which resets its state, the key included, whenever it opens or closes (FR-003, FR-004,
       R9, R14)
-- [ ] T046 [P] [US2] Implement `web/components/llm/activate-dialog.tsx` (FR-012)
-- [ ] T047 [US2] Add the Add button to `web/components/llm/profile-list.tsx` and Set active to
+- [X] T046 [P] [US2] Implement `web/components/llm/activate-dialog.tsx` (FR-012)
+- [X] T047 [US2] Add the Add button to `web/components/llm/profile-list.tsx` and Set active to
       `web/components/llm/profile-card.tsx`; after either, the list is read again (FR-007)
-- [ ] T047a [US2] Write `web/e2e/profiles.spec.ts`, with `web/e2e/api.ts` grown into a stand-in
+- [X] T047a [US2] Write `web/e2e/profiles.spec.ts`, with `web/e2e/api.ts` grown into a stand-in
       for the profile routes that keeps what a page saved and activated: Add opens the form;
       saving shows a new card with the key's last four characters, not active; a taken name and
       a base URL that is not a web address are shown at their field and nothing is saved; a

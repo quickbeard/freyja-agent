@@ -1,11 +1,19 @@
 "use client";
 
+import { useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
-import { type LlmProfileList, listProfiles, PROFILES_PATH } from "@/lib/llm";
+import {
+  type LlmProfile,
+  type LlmProfileList,
+  listProfiles,
+  PROFILES_PATH,
+} from "@/lib/llm";
+import { ActivateDialog } from "./activate-dialog";
 import { ProfileCard } from "./profile-card";
+import { ProfileForm } from "./profile-form";
 
 function reason(error: unknown): string {
   return error instanceof ApiError
@@ -22,6 +30,8 @@ export function ProfileList() {
     // A failure is shown, with a way to try again, and not retried behind the operator's back.
     shouldRetryOnError: false,
   });
+  const [adding, setAdding] = useState(false);
+  const [activating, setActivating] = useState<LlmProfile | null>(null);
 
   if (error !== undefined) {
     // Whatever was loaded before is not shown: it may no longer be true.
@@ -64,7 +74,7 @@ export function ProfileList() {
           usable profile to continue.
         </p>
       )}
-      <div className="flex justify-end">
+      <div className="flex justify-end gap-2">
         <Button
           variant="outline"
           size="sm"
@@ -73,12 +83,30 @@ export function ProfileList() {
         >
           Refresh
         </Button>
+        <Button size="sm" onClick={() => setAdding(true)}>
+          Add
+        </Button>
       </div>
       <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {data.profiles.map((profile) => (
-          <ProfileCard key={profile.id} profile={profile} />
+          <ProfileCard
+            key={profile.id}
+            profile={profile}
+            onActivate={setActivating}
+          />
         ))}
       </div>
+      {/* After either change the list is read again: the service says what is so. */}
+      <ProfileForm
+        open={adding}
+        onOpenChange={setAdding}
+        onSaved={() => mutate()}
+      />
+      <ActivateDialog
+        profile={activating}
+        onClose={() => setActivating(null)}
+        onActivated={(list) => mutate(list)}
+      />
     </div>
   );
 }
