@@ -151,6 +151,7 @@ add fixed rules of the kind principle VI asks for and touch no other principle.
 
 ```text
 specs/004-web-llm-profiles/
+├── spec.md              # from /speckit-specify, clarified
 ├── plan.md              # This file
 ├── research.md          # Phase 0: decisions R1 to R20
 ├── data-model.md        # Phase 1: entities, tables, transitions
@@ -160,8 +161,9 @@ specs/004-web-llm-profiles/
 │   ├── sse-events.md    # `start.profile` and the `no_usable_model` error
 │   └── settings.md      # FREYJA_SECRET_KEY, the test limit, FREYJA_API_URL
 ├── checklists/
-│   └── requirements.md  # from /speckit-specify
-└── tasks.md             # from /speckit-tasks, not created by this command
+│   ├── requirements.md  # from /speckit-specify
+│   └── security-reliability.md  # from /speckit-checklist
+└── tasks.md             # from /speckit-tasks: nine phases, each one pull request
 ```
 
 ### Source Code (repository root)
@@ -198,9 +200,16 @@ src/freyja_agent/
 
 tests/
 ├── llm_stub.py                        # NEW: stand-in OpenAI-compatible endpoint, by model id
+├── fakes.py                           # + the test model factory and a labelled model
+├── conftest.py                        # + make_llm_app
 ├── test_llm_secrets.py                # encrypt, hint, redact
+├── test_llm_providers.py              # the provider table, building a model, the
+│                                      #   environment's profile
+├── test_llm_schemas.py                # the request and response shapes of the routes
 ├── test_llm_profile_store.py          # store contract, in memory
-├── test_llm_profiles_api.py           # the routes, their refusals, no key anywhere
+├── test_llm_profiles_api.py           # the routes, their refusals, other origins
+├── test_llm_secrets_nowhere.py        # one recognizable key, searched for in everything
+│                                      #   the service returns, streams, keeps, logs, stores
 ├── test_llm_switch.py                 # activation, runs in progress, pauses, two instances
 ├── test_llm_check.py                  # the test, against the stand-in
 ├── test_llm_no_model.py               # startup and runs without a usable model
@@ -212,10 +221,12 @@ web/
 ├── next.config.ts             # + rewrites (/api to the service) and the redirect from / (R13, R15)
 ├── .env.example               # NEW: FREYJA_API_URL
 ├── vitest.config.mts          # NEW: jsdom, React plugin, tsconfig paths (R17)
+├── vitest.setup.ts            # NEW: unmounts after each test
 ├── __tests__/                 # NEW: the unit tests, laid out as the code they cover, and
 │                              #   testing.ts, the fetch stub they share
-├── e2e/                       # + the end-to-end tests of the console (Playwright) and
-│                              #   api.ts, the service's answers they hand to a page
+├── e2e/                       # + console.spec.ts, llm.spec.ts, profiles.spec.ts: the
+│                              #   end-to-end tests of the console (Playwright), and api.ts,
+│                              #   the service's answers they hand to a page
 ├── app/
 │   ├── layout.tsx             # the shell: sidebar and page
 │   ├── page.tsx               # REMOVED: / redirects to /llm
@@ -223,9 +234,10 @@ web/
 │   └── agents/page.tsx        # NEW: the placeholder
 ├── components/
 │   ├── app-sidebar.tsx        # NEW: the sidebar and its links (client)
-│   ├── llm/                   # NEW: profile list, card, form dialog, activate and delete
-│   │                          #   confirmations, test result
+│   ├── llm/                   # NEW: profile-list, profile-card, profile-form (add and
+│   │                          #   edit), activate-dialog, delete-dialog, test-result
 │   └── ui/                    # + the shadcn components in R16
+├── hooks/use-mobile.ts        # NEW: written by the shadcn CLI for the sidebar
 └── lib/
     ├── api.ts                 # NEW: fetch to /api, the error shape
     └── llm.ts                 # NEW: the profile types and the calls
@@ -250,16 +262,16 @@ store, the manager, and the test. `runtime/` keeps the wiring, and `api/` the ro
 | FR-001, FR-002 | `web/__tests__/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
 | FR-003 | `web/__tests__/lib/api.test.ts`, `web/__tests__/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
 | FR-003a | `test_llm_profiles_api.py` (no permission for another origin; a body that is not JSON is refused) |
-| FR-004, FR-005, FR-006 | `test_llm_profile_store.py`, `test_llm_profiles_api.py`, `integration/test_llm_profiles_postgres.py` |
+| FR-004, FR-005, FR-006 | `test_llm_providers.py`, `test_llm_schemas.py`, `test_llm_profile_store.py`, `test_llm_profiles_api.py`, `integration/test_llm_profiles_postgres.py` |
 | FR-007 | `web/__tests__/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
-| FR-008 | `test_llm_profiles_api.py` (environment profile, read-only) |
+| FR-008 | `test_llm_providers.py` (the environment's profile), `test_llm_profiles_api.py` (listed, read-only) |
 | FR-009, FR-010 | `test_llm_profiles_api.py`; `web/__tests__/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
 | FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/__tests__/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
 | FR-013, FR-014 | `test_llm_switch.py` (next run, run in progress, pause, background run, two runtimes) |
 | FR-016, FR-016a | `test_llm_no_model.py` (runs refused, the health check unchanged, no background run and no attempt used) |
 | FR-017, FR-018, FR-019, FR-019a, FR-019b | `test_llm_check.py`, `test_llm_profiles_api.py` |
-| FR-020, FR-021, FR-022 | `test_llm_secrets.py`, `test_llm_profiles_api.py` (a recognizable key in no response or log), `test_llm_check.py` (a key repeated by the endpoint), `test_config.py` (a secret that is not valid stops startup) |
-| FR-023 | the existing suite, unchanged |
+| FR-020, FR-021, FR-022 | `test_llm_secrets.py`, `test_llm_secrets_nowhere.py` (a recognizable key in no response, stream, thread, log, or stored row), `test_llm_profiles_api.py` (a missing or changed secret), `test_llm_check.py` (a key repeated by the endpoint), `test_config.py` (a secret that is not valid stops startup); `web/e2e/profiles.spec.ts` (no key on the page or in the browser's storage) |
+| FR-023 | the existing suite, unchanged but for one assertion on the whole `start` event (see Phase 2 as built) |
 | FR-024, FR-024a | `test_llm_profiles_api.py` (log lines), `test_llm_switch.py` (`start.profile`), `test_llm_no_model.py` (a refused run and an unusable profile are logged) |
 | FR-025 | all of the above |
 
@@ -672,3 +684,60 @@ check, phase by phase.
   profiles were listed as not usable, a save was refused, and a run on the environment's real
   model completed; with the secret back they were usable; with a secret that is not a key the
   service did not start and named the setting without its value. No log held a key.
+
+### Phase 9 as built (2026-11-18)
+
+- **The documents** (T074 to T077). `README.md` has two new sections, LLM profiles and Web
+  console, and names `profile` and `no_usable_model` where it describes a run's stream; its
+  settings table has the two new settings and the web app's variable. `AGENTS.md` was kept
+  current phase by phase, so this phase only added the two settings to its `config.py` entry
+  and took out "in progress". 001's stream contract names `start.profile`, the
+  `no_usable_model` code, and that a `model_error` message has the profile's key replaced.
+  The trees above list what was built, `tests/test_llm_providers.py`,
+  `tests/test_llm_schemas.py`, and `tests/test_llm_secrets_nowhere.py` among it.
+- **What T005, T007, T009, and T037 found** is under Phase 1 as built (SWR's peer range, the
+  shadcn components and their lint rules, when the rewrite's destination is read) and Phase 3
+  as built (no hydration warning, the browser check).
+- **The stand-in needs the service's env file** (T079). `python -m tests.llm_stub` imports the
+  provider table, and with it the service's settings, so without `--env-file .env` it stops on
+  the missing database setting. `AGENTS.md` already had the right command; the quickstart,
+  research R20, and the module's own text did not, and now do.
+- **The error for a secret that is not a key names the setting** (T079): `secret_key`, as
+  pydantic reports a field of `Settings`, not the variable `FREYJA_SECRET_KEY`. The value is
+  not repeated. The quickstart, [contracts/settings.md](contracts/settings.md), and the README
+  now say "the setting".
+- **Two steps of the quickstart were worded for a profile that is not active** (T079). In
+  section 4 `Stub` is the active profile, so the console asks for confirmation before each of
+  the three saves, not only the last, as FR-010 requires; in section 5, with the secret
+  removed, the console also says that no usable model is active. The quickstart says both now.
+- **The gates** (T078). Ruff check and format, `uv run pytest` (724 passed, 56 skipped), the
+  Postgres tests (56 passed), `pnpm lint`, `pnpm test` (138), `pnpm build`, `pnpm test:e2e`
+  (84 in Chromium and Firefox), and `uv run pre-commit run --all-files` pass. The feature
+  added no Ruff suppression and no `biome-ignore`. Without network: both default suites were
+  run with every connection and name lookup outside loopback refused and counted, in Python
+  by replacing `socket.connect` and `getaddrinfo` and in Node by replacing
+  `net.Socket.connect` and `dns.lookup`; both passed with no attempt counted, and a probe
+  showed that each guard does count one. A network namespace was not available on the
+  machine, so the interface itself was not taken down.
+- **The quickstart** (T079) was run in full against the real service on a database made for
+  it and dropped afterwards, the stand-in on loopback, and the built web app in Chromium:
+  sections 1 to 6 as written, with the two corrections above, and section 7, the whole 001
+  quickstart on the environment's real model with no saved profile, where every step behaved
+  as written there and each `start` named the environment's profile.
+- **Fifty profiles** (T079, SC-008). With 50 saved through the API, a 51st was refused with
+  `profile_limit`, the list answered in 3 ms, and the LLM section showed its 51 cards 0.15 to
+  0.18 s after navigation in Chromium and 0.16 to 0.37 s in Firefox, five loads each, on the
+  built app served by `next start`. The bound is two seconds.
+- **The Constitution Check was run again against the code** (T080), constitution 1.4.0:
+
+  | Principle | Result | What the code shows |
+  |---|---|---|
+  | I. Human approval | PASS | No tool was added or reclassified; `agent/catalog.py` and the gate are untouched by this feature. A rebuild goes through `build_agent` with the same tools. In the quickstart a proposal paused before a restart was decided after it, and a run refused for lack of a model left its proposal pending (`test_llm_no_model.py`). |
+  | II. Protocol-based delegation | PASS | No delegate and no agent framework was added. The model clients are the three already installed; `cryptography` is the one dependency declared, and it was in the lock. |
+  | III. One runtime | PASS | `build_agent` is still the only place the orchestrator is assembled, and `ModelManager` calls it; `run_stream` is still the only run loop. The web app has no Route Handler, no Server Action, and no credential: it calls `/api/...` on its own origin and `web/next.config.ts` forwards it. The tests swap one seam, `model_factory`. |
+  | IV. Configuration through settings | PASS | The two settings are read through `Settings` and documented in `.env.example`; `FREYJA_API_URL` is read in `web/next.config.ts` only and documented in `web/.env.example`. Profiles are kept in the database and changed only through the API. A key is stored as a Fernet token under `FREYJA_SECRET_KEY` and is returned, logged, and written to a thread nowhere, which `test_llm_secrets_nowhere.py` searches for. No address or model id is hardcoded outside tests. |
+  | V. Automated quality gates | PASS | Every gate above passes; every requirement has a test (the map above); no suppression was added; the `S` and `ASYNC` rule sets stay on, and the test's time limit is `asyncio.timeout`. The end-to-end tests are an addition the constitution does not require. |
+  | VI. Deterministic guardrails | PASS | Whether a run may call a model is a fixed check in `run_stream` before the graph is invoked. One active profile is the database's single row and foreign key. Key removal is one function, `redact`. None of the three asks a model. |
+  | Technology constraints | PASS | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; the same Postgres pool; Ruff only. The web app is Next.js with TypeScript, pnpm, Biome, and Vitest. |
+
+  No deviation, and nothing new for Complexity Tracking.

@@ -342,8 +342,8 @@ assertion changed, the one that compares a run's first event in full (R11).
 ## R20. The quickstart's second model
 
 **Decision**: the quickstart uses the suite's `tests/llm_stub.py`, served on loopback with
-`uv run python -m tests.llm_stub --http 9997`, as the endpoint for the saved profiles, in a mode
-that works and a mode that refuses a conversation.
+`uv run --env-file .env python -m tests.llm_stub --http 9997`, as the endpoint for the saved
+profiles, in a mode that works and a mode that refuses a conversation.
 
 **Rationale**: the walk-through needs a second endpoint and one that fails on the second step.
 A stand-in gives both with no second account or key, as `tests/a2a_stub.py` does for 003.

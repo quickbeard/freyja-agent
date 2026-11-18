@@ -4,7 +4,10 @@ It serves chat completions and the Responses API under ``/v1`` and records every
 receives, with the key it was sent. The suite reaches it through the real ``ChatOpenAI`` client
 (``stub_factory``); run as a module it serves on the loopback interface for the quickstart:
 
-    uv run python -m tests.llm_stub --http 9997     # base URL http://127.0.0.1:9997/v1
+    uv run --env-file .env python -m tests.llm_stub --http 9997
+
+Its base URL is then ``http://127.0.0.1:9997/v1``. The env file is needed because the module
+imports the service's settings with the provider table.
 
 It behaves by the model id it is asked for:
 

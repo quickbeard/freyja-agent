@@ -604,33 +604,33 @@ the secret: saving is refused and the environment's model still works.
 
 ## Phase 9: Polish & Cross-Cutting Concerns
 
-- [ ] T074 [P] Update `README.md`: the web console and how to run it, LLM profiles and the
+- [X] T074 [P] Update `README.md`: the web console and how to run it, LLM profiles and the
       active profile, `FREYJA_SECRET_KEY` and the test limit in the settings table, the
       service starting without a usable model, `profile` in a run's first event, the
       stand-in's command, and the web app's `FREYJA_API_URL`; only what now exists
-- [ ] T075 [P] Update `AGENTS.md`: Layout entries for the `llm/` package, `api/llm.py`,
+- [X] T075 [P] Update `AGENTS.md`: Layout entries for the `llm/` package, `api/llm.py`,
       `tests/llm_stub.py`, and the web app's pages, components, and `lib/`; the `model_factory`
       seam; the two settings; the Commands entry `uv run python -m tests.llm_stub --http 9997`;
       and that web tests are `*.test.ts` and `*.test.tsx` run with jsdom
-- [ ] T076 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
+- [X] T076 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
       contract names `start.profile` and the `no_usable_model` code where a reader looks first,
       pointing at `specs/004-web-llm-profiles/contracts/sse-events.md`
-- [ ] T077 [P] Update `specs/004-web-llm-profiles/plan.md`: list `tasks.md`,
+- [X] T077 [P] Update `specs/004-web-llm-profiles/plan.md`: list `tasks.md`,
       `tests/test_llm_providers.py`, and `tests/test_llm_secrets_nowhere.py` in its trees, and
       record under Implementation Notes what T005, T007, T009, and T037 found and anything the
       implementation settled differently from the plan
-- [ ] T078 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
+- [X] T078 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
       `FREYJA_TEST_DATABASE_URI=... uv run pytest tests/integration`, in `web/` `pnpm lint`,
       `pnpm test`, `pnpm build`, and `pnpm test:e2e`, and `uv run pre-commit run --all-files`;
       confirm no Ruff
       suppression was added and that both default suites pass with the network disconnected
       (FR-025, principle V)
-- [ ] T079 Run `specs/004-web-llm-profiles/quickstart.md`, all seven sections, against the real
+- [X] T079 Run `specs/004-web-llm-profiles/quickstart.md`, all seven sections, against the real
       service, the stand-in on loopback, and the web app in a browser; section 7 repeats the
       001 quickstart with no saved profile. Then save 50 profiles through the API and time the
       LLM section from navigation to the last card: within two seconds (FR-023, SC-001, SC-006,
       SC-008)
-- [ ] T080 Re-run the Constitution Check of `specs/004-web-llm-profiles/plan.md` against the
+- [X] T080 Re-run the Constitution Check of `specs/004-web-llm-profiles/plan.md` against the
       implemented code and note the result in the pull request description (principles I to VI)
 
 ---

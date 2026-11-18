@@ -12,7 +12,7 @@ uv run pre-commit install       # one-time per clone: runs the linters and the u
 (cd web && pnpm install)        # web app dependencies; needs Node and pnpm
 ```
 
-`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
+`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. To save [LLM profiles](#llm-profiles) the service also needs `FREYJA_SECRET_KEY`, which is left unset there. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
 
 ## Run the dev server
 
@@ -28,7 +28,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, and the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`) if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving.
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`), and the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`) if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](#no-usable-model)).
 
 Check it is up:
 
@@ -51,7 +51,7 @@ curl -N -X POST localhost:8000/threads/demo-1/runs \
   -d '{"message": "Summarize what you can do and which skills you have loaded."}'
 ```
 
-Each event has an `event:` line naming its kind and a `data:` line holding one JSON object. The first event is always `start`. Then come `update` (one per orchestrator step, with messages, tool calls, and tool results), `message` (the reply as it is produced), and, with `?debug=true`, `debug` (raw LangGraph detail; it never changes the run). Exactly one terminal event closes the stream: `end` when the reply is finished, `interrupt` when the orchestrator proposes an action that needs approval, or `error` with a `code` of `step_limit`, `model_error`, or `internal`. A later message to the same thread continues the conversation, including after a service restart.
+Each event has an `event:` line naming its kind and a `data:` line holding one JSON object. The first event is always `start`; its `profile` names the [LLM profile](#llm-profiles) the run uses, as `id`, `name`, and `source`. Then come `update` (one per orchestrator step, with messages, tool calls, and tool results), `message` (the reply as it is produced), and, with `?debug=true`, `debug` (raw LangGraph detail; it never changes the run). Exactly one terminal event closes the stream: `end` when the reply is finished, `interrupt` when the orchestrator proposes an action that needs approval, or `error` with a `code` of `step_limit`, `model_error`, `internal`, or `no_usable_model`. A later message to the same thread continues the conversation, including after a service restart.
 
 One run per thread: a second run while one streams gets `409` with code `run_active`. The marker is a lease in the database, so it holds across service instances and expires after `FREYJA_RUN_LOCK_TTL_SECONDS` if the instance holding it dies. A clean stop (Ctrl-C or SIGTERM) waits for in-flight runs to finish before closing the database pool, because uvicorn's graceful shutdown has no timeout by default; pass `--timeout-graceful-shutdown` to uvicorn to cap the wait. Only a crash leaves a lease behind, and it expires.
 
@@ -246,6 +246,116 @@ During a run, a hand-off to an agent that cannot be reached, does not acknowledg
 
 A proposal for an agent's tool names its agent: each entry of `action_requests` has `agent` set, and `null` for every other tool.
 
+## LLM profiles
+
+An LLM profile is one way to reach a model: a name, a provider (`openai` for any OpenAI-compatible endpoint, `anthropic`, or `openrouter`), a model, an optional base URL, an API key, and, for `openai`, whether the Responses API or chat completions is used. Profiles are kept in the database and changed while the service runs, through the routes under `/llm` or in the [web console](#web-console). Exactly one profile is **active**: the one every run uses. The full contracts are in `specs/004-web-llm-profiles/contracts/`.
+
+What the environment configures (`FREYJA_MODEL`, `FREYJA_OPENAI_RESPONSES_API`, and the provider's own variables) is the **environment's profile**. Its id is `environment` and its name `Environment`; it is read-only, and it is active until a saved profile is activated. A service configured only through the environment behaves as it did before profiles existed.
+
+### The secret
+
+The keys of saved profiles are stored encrypted under `FREYJA_SECRET_KEY`, a Fernet key. Generate one once, add the printed line to `.env`, and restart the service:
+
+```bash
+echo "FREYJA_SECRET_KEY=$(uv run python -c 'from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())')"
+```
+
+Without it the service starts and the environment's profile works as before, but saving a profile is refused with `409` and code `secret_not_configured`. A value that is not a Fernet key stops startup with an error that names the setting, `secret_key`, and not its value. Every instance that shares a database needs the same value. After the secret changes, each saved profile is listed as not usable, with `unusable_reason` `key_unreadable`, until its key is entered again.
+
+### List, add, and activate
+
+```bash
+curl -s localhost:8000/llm/profiles | jq
+```
+
+The answer has `profiles`, the environment's first and then the saved ones by name, `active_id`, `usable_model` (whether the active profile can be used), `secret_configured`, and `limit`. Each profile has its `id`, `name`, `source` (`saved` or `environment`), `provider`, `model`, `base_url`, `responses_api`, `key_hint`, `active`, `usable`, `unusable_reason`, `last_test`, `created_at`, and `updated_at`. Listing reads the database and the environment and contacts no model endpoint.
+
+Add a profile, then make it the active one:
+
+```bash
+ID=$(curl -s -X POST localhost:8000/llm/profiles -H 'content-type: application/json' -d '{
+  "name": "Local model", "provider": "openai", "model": "<served model name>",
+  "base_url": "http://<host>:<port>/v1", "api_key": "<key>", "responses_api": false}' | jq -r .id)
+curl -s -X POST localhost:8000/llm/profiles/$ID/activate | jq .active_id
+```
+
+A name has 1 to 64 characters and is unique without regard to case; `Environment` is taken. A model has 1 to 200 characters, a base URL is an `http` or `https` address on any host, and at most 50 profiles can be saved. A request that breaks a rule is `422`; a name already in use is `409` with code `name_taken`, and a 51st profile `409` with `profile_limit`. A new profile is not active.
+
+An activation applies without a restart, from the next run, on every instance that shares the database. A run in progress finishes on the model it started with. Existing conversations are sent to the new profile's endpoint from their next run, and a thread paused for a decision continues on the profile that is active when it is resumed. A profile that is not usable cannot be activated (`409`, `profile_unusable`). To go back to the environment's model:
+
+```bash
+curl -s -X POST localhost:8000/llm/profiles/environment/activate | jq .active_id   # "environment"
+```
+
+Each run names its profile in its `start` event and in one log line. Adding, activating, changing, deleting, and testing a profile each write one log line that names the profile and, for a change, the fields that changed.
+
+### Test a profile
+
+```bash
+curl -s -X POST localhost:8000/llm/profiles/$ID/test | jq
+# {"ok": true, "at": "...", "step": null, "reason": null, "recorded": true}
+```
+
+A test sends the profile's endpoint two requests under one time limit, `FREYJA_LLM_TEST_TIMEOUT_SECONDS`: a first message (`first_message`), then a request that carries earlier turns and a tool call (`conversation`), which is what a run sends after its first step. An endpoint that answers a first message and refuses every later one fails the second step. A failed test names the `step` and gives the `reason`, at most 500 characters.
+
+The last result is kept with a saved profile, also across restarts, and is cleared when its provider, model, base URL, key, or API choice changes. The environment's result is kept in memory until the instance restarts. `POST /llm/test` tests values that are not saved and keeps nothing; it takes the fields of a new profile, and `profile_id` in place of `api_key` uses that saved profile's stored key.
+
+One instance runs one test per profile at a time and four in all. A test beyond either limit is `409` with code `test_busy`, and nothing is sent.
+
+### Change and delete
+
+```bash
+curl -s -X PATCH localhost:8000/llm/profiles/$ID -H 'content-type: application/json' \
+  -d '{"model": "<another model>"}' | jq
+curl -s -X DELETE localhost:8000/llm/profiles/$ID -o /dev/null -w '%{http_code}\n'   # 204
+```
+
+A change carries only the fields to change: a key left out keeps the stored key. A change to the active profile applies from the next run, like an activation. The active profile cannot be deleted (`409`, `profile_active`): activate another first. The environment's profile can be neither changed nor deleted (`409`, `profile_read_only`).
+
+### Keys stay secret
+
+A key goes in and never comes out. No route returns it: a profile shows `key_hint`, the key's last four characters, or nothing when the key has fewer than eight. The key is in no log line, stream event, or thread, and where a provider's error repeats it, in a test's reason or a run's `model_error` message, `<key>` stands in its place. A refused request to an `/llm` route is answered without the value that was sent.
+
+The API gives no other origin permission to call it, and every route that takes a body refuses one that is not sent as JSON, so a page from another site cannot change a profile through a browser that can reach the service.
+
+### No usable model
+
+The active profile is not usable when its stored key cannot be read, when the service has no secret, or when the environment names a provider without a key or a model that cannot be built. The service still starts, `/healthz` answers, and profiles can be listed and changed. A run ends at once with `start` and then `error`:
+
+```json
+{"code": "no_usable_model", "message": "No usable model is active. Activate a usable LLM profile, then send the message again."}
+```
+
+Nothing is added to the thread and a pending proposal stays pending, so the same request can be sent again once a usable profile is active. The service does not switch to another profile by itself, and background runs wait until a usable one is active.
+
+### Try it with the stand-in endpoint
+
+The test suite's stand-in for an OpenAI-compatible endpoint can be served on loopback, so a profile can be added, tested, and run on without a second account or key:
+
+```bash
+uv run --env-file .env python -m tests.llm_stub --http 9997   # base URL http://127.0.0.1:9997/v1
+```
+
+Save a profile with provider `openai`, that base URL, any key, and `responses_api` false. The stand-in behaves by the model id it is asked for: `refuse-conversation` answers a first message and refuses a request with earlier turns, `reject-key` answers 401, `repeat-key` fails with an error that repeats the key, `never-answer` does not answer, `slow` answers after 20 seconds, and any other id, such as `ok`, answers everything.
+
+## Web console
+
+The web app under `web/` is the console: a client of the API above that holds no key and calls no model itself. Start the service, then:
+
+```bash
+cd web
+pnpm dev                       # http://localhost:3000
+```
+
+Open <http://localhost:3000>, by that name: in development Next.js serves its dev-only assets to `localhost` only, so the page does not load fully when opened as `127.0.0.1`. The address changes to `/llm`. A sidebar on the left lists the sections, LLM and Agents; on a screen narrower than 768 pixels it opens from a button. Like the API, the console has no authentication.
+
+- **LLM** shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
+- **Agents** is a placeholder: agents are not managed from the console yet.
+
+When the service cannot be reached, the LLM section says so and offers to try again.
+
+The browser only ever calls the web app's own origin. The web app's server forwards `/api/...` to the service at `FREYJA_API_URL`, `http://127.0.0.1:8000` by default; set the variable before `pnpm dev` when the service listens elsewhere. `pnpm build` writes the address into the build and `pnpm start` does not read it again, so a built app is built again to change it. The variable is documented in `web/.env.example` and read in `web/next.config.ts`.
+
 ## Lint and format
 
 Ruff handles both linting and formatting for Python. Configuration lives in `pyproject.toml` under `[tool.ruff]`.
@@ -292,15 +402,15 @@ pnpm test                      # vitest run
 
 They are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of the code it covers: `web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`. They run with jsdom and reach no service: `web/__tests__/testing.ts` replaces `fetch`.
 
-The Python tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. The suite needs no network, no installed MCP server, and no running agent.
+The Python tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. LLM profiles are covered by a stand-in model endpoint, `tests/llm_stub.py`, which the suite reaches inside the test process through the real OpenAI client. The suite needs no network, no installed MCP server, no running agent, and no model endpoint.
 
-To try the stand-in by hand, serve it on loopback and list it as an agent:
+To try the stand-in agent by hand, serve it on loopback and list it as an agent:
 
 ```bash
 uv run python -m tests.a2a_stub --http 9998   # http://127.0.0.1:9998
 ```
 
-It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`.
+It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](#try-it-with-the-stand-in-endpoint).
 
 The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
 
@@ -321,7 +431,7 @@ pnpm exec playwright install chromium firefox   # once per machine: downloads th
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, and `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 
@@ -334,7 +444,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_HOST` | `127.0.0.1` | Bind address for `freyja-api`. Containers set `0.0.0.0`. |
 | `FREYJA_PORT` | `8000` | Bind port for `freyja-api`. |
 | `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer, store, and run locks. No default because it carries credentials; `.env.example` has the value the compose container uses. |
-| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. |
+| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. With the provider's variables below it is the environment's [LLM profile](#llm-profiles), used until a saved profile is activated. |
 | `FREYJA_OPENAI_RESPONSES_API` | `true` | Whether an `openai:` model is called through OpenAI's Responses API or, when `false`, through chat completions. Set `false` for an OpenAI-compatible server whose Responses API answers a first message and refuses every later one. Other providers ignore it. |
 | `FREYJA_WORKSPACE_DIR` | `workspace` | Root of the orchestrator's file tools. `skills/` inside it is committed source; `cases/` is written at runtime and git-ignored. |
 | `FREYJA_MAX_STEPS` | `50` | Maximum orchestrator steps per run. Reaching it ends the run with an `error` event of code `step_limit`; the thread stays usable. A plain reply takes about 7 steps and each tool call about 4 more, so the default allows roughly ten tool calls per turn and values below 11 stop every tool call. |
@@ -350,11 +460,19 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between background run attempts. |
 | `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one service instance; further ones wait their turn. |
+| `FREYJA_SECRET_KEY` | unset | The secret that protects the API keys of saved LLM profiles: a Fernet key, 44 URL-safe base64 characters. Unset, the service starts and saves no profile; a value that is not a Fernet key stops startup. See [The secret](#the-secret). |
+| `FREYJA_LLM_TEST_TIMEOUT_SECONDS` | `60` | The most a test of an LLM profile may take, both requests together. Greater than 0 and at most 60. |
 | `OPENAI_API_KEY`, `OPENAI_API_BASE` | | Key for `openai:` models. `OPENAI_API_BASE` is optional: set it for self-hosted OpenAI-compatible servers or to route through a gateway. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | | Key for `anthropic:` models. `ANTHROPIC_API_URL` is optional: set it to route through a gateway. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | | Key for `openrouter:` models; the model id is OpenRouter's slug. `OPENROUTER_API_BASE` is optional: set it to route through a proxy. |
 
 `FREYJA_TEST_DATABASE_URI` is not a setting: it is read only by the integration tests, as described above.
+
+The web app has one variable of its own, read by `web/next.config.ts` and documented in `web/.env.example`:
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `FREYJA_API_URL` | `http://127.0.0.1:8000` | Where the web app's server forwards `/api/...`: the Freyja service. Read when `pnpm dev` starts and when `pnpm build` runs. |
 
 ## Spec Kit workflow
 
