@@ -1226,3 +1226,152 @@ def test_each_change_and_deletion_is_logged_by_name_and_without_a_key(
     assert "deleted" in deleted and "Renamed" in deleted
     for record in caplog.records:
         assert NEW_KEY not in record.getMessage() and KEY not in record.getMessage()
+
+
+# Part 5 (T069): a missing or changed secret, and requests from another origin.
+
+OTHER_ORIGIN = "http://other.example"
+LLM_ROUTES = [
+    ("GET", "/llm/profiles"),
+    ("POST", "/llm/profiles"),
+    ("PATCH", "/llm/profiles/{id}"),
+    ("DELETE", "/llm/profiles/{id}"),
+    ("POST", "/llm/profiles/{id}/activate"),
+    ("POST", "/llm/profiles/{id}/test"),
+    ("POST", "/llm/test"),
+]
+
+
+def test_without_a_secret_the_environment_works_as_before_and_nothing_is_saved(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    with_secret = make_llm_app(model="openai:env-model")
+    saved = save(with_secret, "Stub")
+    made = make_llm_app(model="openai:env-model", store=with_secret.store, secret=None)
+    with TestClient(made.app) as client:
+        body = listing(client)
+        message = refusal(add(client), 409, "secret_not_configured")
+        with client.stream("POST", "/threads/t-1/runs", json={"message": "hello"}) as stream:
+            events = sse_events(stream.iter_lines())
+        tested = check(client, "environment").json()
+        # A saved profile's key cannot be read, so it is neither activated nor tested.
+        refusal(activate(client, saved.id), 409, "profile_unusable")
+        refusal(check(client, saved.id), 409, "profile_unusable")
+        after = listing(client)
+
+    assert "FREYJA_SECRET_KEY" in message
+    assert body["secret_configured"] is False
+    environment, profile = body["profiles"]
+    # The environment's profile lists, runs, and tests as it does with a secret.
+    assert (environment["active"], environment["usable"]) == (True, True)
+    assert body["usable_model"] is True
+    assert events[0][1]["profile"]["id"] == "environment"
+    assert events[-1] == ("end", {"status": "completed"})
+    assert tested["ok"] is True
+    assert (profile["usable"], profile["unusable_reason"]) == (False, "secret_not_configured")
+    assert after["active_id"] == "environment"
+    assert len(after["profiles"]) == 2
+
+
+def test_under_another_secret_the_service_starts_and_a_key_entered_again_is_usable(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    before = make_llm_app(model="openai:env-model")
+    first = save(before, "First")
+    second = save(before, "Second", model="second-model")
+    # The same database, and a service started with a secret the keys were not stored under.
+    made = make_llm_app(
+        model="openai:env-model",
+        store=before.store,
+        secret=Fernet.generate_key().decode(),
+    )
+    with TestClient(made.app) as client:
+        assert client.get("/healthz").json() == {"status": "ok"}
+        body = listing(client)
+        for profile_id in (first.id, second.id):
+            refusal(activate(client, profile_id), 409, "profile_unusable")
+            refusal(check(client, profile_id), 409, "profile_unusable")
+
+        # Its key is sent again: stored under the secret the service has now.
+        fixed = change(client, first.id, api_key=KEY)
+        assert activate(client, first.id).status_code == 200
+        assert check(client, first.id).json()["ok"] is True
+        with client.stream("POST", "/threads/t-1/runs", json={"message": "hello"}) as stream:
+            events = sse_events(stream.iter_lines())
+        after = listing(client)
+
+    assert body["secret_configured"] is True
+    assert [(p["name"], p["usable"], p["unusable_reason"]) for p in body["profiles"]] == [
+        ("Environment", True, None),
+        ("First", False, "key_unreadable"),
+        ("Second", False, "key_unreadable"),
+    ]
+    assert (fixed.json()["usable"], fixed.json()["unusable_reason"]) == (True, None)
+    assert events[0][1]["profile"]["name"] == "First"
+    assert events[-1] == ("end", {"status": "completed"})
+    # The other one is as it was.
+    assert [(p["name"], p["usable"]) for p in after["profiles"]] == [
+        ("Environment", True),
+        ("First", True),
+        ("Second", False),
+    ]
+
+
+@pytest.mark.parametrize(("method", "path"), LLM_ROUTES)
+def test_a_page_from_another_origin_is_given_permission_on_no_route(
+    make_llm_app: Callable[..., LlmApp], method: str, path: str
+) -> None:
+    """SC-012: with no permission, a browser lets such a page read nothing and send no JSON."""
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        url = path.format(id=added["id"])
+        preflight = client.options(
+            url,
+            headers={
+                "Origin": OTHER_ORIGIN,
+                "Access-Control-Request-Method": method,
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        # The request itself, sent as a page from that origin sends it.
+        sent = client.request(method, url, headers={"Origin": OTHER_ORIGIN})
+
+    for response in (preflight, sent):
+        allowed = [name for name in response.headers if name.lower().startswith("access-control-")]
+        assert allowed == [], (response.status_code, allowed)
+    # A preflight is answered with no permission at all, not with a profile.
+    assert preflight.status_code in (400, 405)
+    assert KEY not in preflight.text
+
+
+@pytest.mark.parametrize(
+    ("method", "path"),
+    [("POST", "/llm/profiles"), ("PATCH", "/llm/profiles/{id}"), ("POST", "/llm/test")],
+)
+@pytest.mark.parametrize(
+    "content_type", ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]
+)
+def test_every_route_that_takes_a_body_refuses_one_not_sent_as_json(
+    make_llm_app: Callable[..., LlmApp], method: str, path: str, content_type: str
+) -> None:
+    """FR-003a: these are the bodies a page from another origin can send without asking."""
+    made = make_llm_app(model="openai:env-model")
+    body = json.dumps({**NEW, "name": "Sent as text"})
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        built = len(made.models.built)
+        response = client.request(
+            method,
+            path.format(id=added["id"]),
+            content=body,
+            headers={"content-type": content_type},
+        )
+        after = listing(client)
+
+    assert response.status_code == 422, response.text
+    assert KEY not in response.text
+    # Nothing was saved, changed, or tested.
+    assert [p["name"] for p in after["profiles"]] == ["Environment", "Local vLLM"]
+    assert after["profiles"][1] == added
+    assert len(made.models.built) == built

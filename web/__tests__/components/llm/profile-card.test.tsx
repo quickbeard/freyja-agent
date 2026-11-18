@@ -341,3 +341,51 @@ describe("ProfileCard, changing and removing", () => {
     expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
   });
 });
+
+describe("ProfileCard, a profile that is not usable", () => {
+  const unreadable: LlmProfile = {
+    ...SAVED,
+    usable: false,
+    unusable_reason: "key_unreadable",
+  };
+
+  it("says why, cannot be tested or activated, and can be edited to enter its key again", () => {
+    render(
+      <ProfileCard
+        profile={unreadable}
+        onActivate={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Not usable")).toBeTruthy();
+    expect(screen.getByText(/stored key cannot be read/)).toBeTruthy();
+    expect(screen.getByText(/Enter the key again/)).toBeTruthy();
+    expect(
+      screen.getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Edit", "Delete"]);
+    // Its last four characters are still shown, and nothing more of it.
+    expect(screen.getByText("Ends in a1b2")).toBeTruthy();
+  });
+
+  it("offers nothing on the environment's profile when it is not usable", () => {
+    render(
+      <ProfileCard
+        profile={{
+          ...ENVIRONMENT,
+          key_hint: "",
+          usable: false,
+          unusable_reason: "not_configured",
+        }}
+        onActivate={vi.fn()}
+        onEdit={vi.fn()}
+        onDelete={vi.fn()}
+      />,
+    );
+    expect(screen.getByText("Not usable")).toBeTruthy();
+    expect(
+      screen.getByText("The environment names no key for this provider."),
+    ).toBeTruthy();
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+});

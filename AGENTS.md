@@ -131,11 +131,12 @@ startup and exits with an error naming the connection when it is unreachable.
   profile's test with its endpoint; an activation is applied on this instance at once; its
   routes answer a refused request without repeating the value (`NoInputRoute`); `streaming.py`
   the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
-  which turns a run away with `no_usable_model` before the graph when no usable model is active;
-  `outcomes.py` records pending tasks' outcomes in their thread exactly once and answers
-  messages to agents that a stop left in flight; `decisions.py` resume validation, including
-  edits checked against a server tool's JSON Schema and pinned arguments; `schemas.py` and
-  `serialize.py` the request, response, and event shapes.
+  which turns a run away with `no_usable_model` before the graph when no usable model is active,
+  and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
+  records pending tasks' outcomes in their thread exactly once and answers messages to agents
+  that a stop left in flight; `decisions.py` resume validation, including edits checked against
+  a server tool's JSON Schema and pinned arguments; `schemas.py` and `serialize.py` the request,
+  response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
@@ -208,6 +209,10 @@ startup and exits with an error naming the connection when it is unreachable.
   alike. A change that needs no test, such as documentation or a dependency bump, says so in
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
+- A stored API key appears nowhere beyond its last four characters: in no response, stream,
+  thread, or log. Text that may hold one, such as a provider's error, goes through `redact`
+  first, and `tests/test_llm_secrets_nowhere.py` searches everything the service gives back.
+  A new route or log line about profiles is added to that test.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
   unit tests and does not replace them. It never needs the Freyja service: the service's
   answers are handed to the page in the browser, through `web/e2e/api.ts`.

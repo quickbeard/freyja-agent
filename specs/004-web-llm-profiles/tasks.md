@@ -561,7 +561,7 @@ the secret: saving is refused and the environment's model still works.
 
 ### Tests for User Story 5, part 2
 
-- [ ] T068 [P] [US5] Write `tests/test_llm_secrets_nowhere.py`: with one recognizable key saved
+- [X] T068 [P] [US5] Write `tests/test_llm_secrets_nowhere.py`: with one recognizable key saved
       in a profile, drive every `/llm` route, including each refusal and each 422, a test that
       passes and one that fails, and a run, a resume, and a failed run on that profile; the
       key's text appears in no response body, no event of any stream, no thread state, and no
@@ -569,7 +569,7 @@ the secret: saving is refused and the environment's model still works.
       characters shows no character on its card; an endpoint that repeats the key in an error
       gives a `model_error` message and a log line without it (FR-020, FR-021, SC-004, US5
       scenarios 1 to 3, 6)
-- [ ] T069 [US5] Write `tests/test_llm_profiles_api.py` part 5: with no secret, adding a
+- [X] T069 [US5] Write `tests/test_llm_profiles_api.py` part 5: with no secret, adding a
       profile is `secret_not_configured`, the environment's profile lists and runs as before,
       and saved profiles are listed unusable with `secret_not_configured`; with a secret other
       than the one the keys were stored under, the runtime starts, each such profile is listed
@@ -577,22 +577,22 @@ the secret: saving is refused and the environment's model still works.
       again makes it usable; an `OPTIONS` preflight from another origin to every `/llm` route
       gets no `access-control-allow-*` header; every route that takes a body refuses one sent
       as `text/plain` (FR-003a, FR-022, SC-012, US5 scenarios 4, 5, 9)
-- [ ] T070 [P] [US5] Extend `web/__tests__/lib/llm.test.ts` and
+- [X] T070 [P] [US5] Extend `web/__tests__/lib/llm.test.ts` and
       `web/__tests__/components/llm/profile-card.test.tsx`: no type the web app receives has a key
       field; a profile that is not usable shows why, offers no Set active, and for a saved one
       offers Edit so its key can be entered again (FR-007, FR-020, FR-022, US5 scenario 5)
 
 ### Implementation for User Story 5, part 2
 
-- [ ] T071 [US5] In `src/freyja_agent/api/streaming.py`, clean the `model_error` message and
+- [X] T071 [US5] In `src/freyja_agent/api/streaming.py`, clean the `model_error` message and
       its log line with `redact` and the manager's secrets (FR-021, R9)
-- [ ] T072 [US5] Fix in `src/freyja_agent/api/llm.py` and `src/freyja_agent/llm/active.py`
+- [X] T072 [US5] Fix in `src/freyja_agent/api/llm.py` and `src/freyja_agent/llm/active.py`
       whatever T068 and T069 still find. The usable state and its reason are reported since
       T029, and an unusable profile is refused by activation since T043 and by the test since
       T053; this task closes what the proof turns up (FR-011a, FR-012, FR-022)
-- [ ] T073 [US5] Show the unusable state and its reason on `web/components/llm/profile-card.tsx`
+- [X] T073 [US5] Show the unusable state and its reason on `web/components/llm/profile-card.tsx`
       (FR-007, FR-022)
-- [ ] T073a [US5] Extend `web/e2e/profiles.spec.ts`: after a save the page shows the key's last
+- [X] T073a [US5] Extend `web/e2e/profiles.spec.ts`: after a save the page shows the key's last
       four characters and nowhere the key; a refused save leaves the key out of what the page
       shows; `localStorage` and `sessionStorage` hold nothing after adding, editing, and testing;
       a card whose key cannot be read says why and its form asks for the key again (FR-003,
