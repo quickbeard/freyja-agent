@@ -104,4 +104,31 @@ describe("api", () => {
     expect(error.status).toBe(500);
     expect(error.message).toMatch(/cannot be reached/);
   });
+
+  it("says the service answered with an error when it did, and passes on its words", async () => {
+    // The service is there: a path it does not have is answered by it, in its own shape.
+    stubFetch({ status: 404, json: { detail: "Not Found" } });
+    const error = await refusal(api("/llm/nothing"));
+    expect(error.code).toBe("error");
+    expect(error.status).toBe(404);
+    expect(error.message).toBe(
+      "The Freyja service answered with an error (404): Not Found",
+    );
+    expect(error.message).not.toMatch(/cannot be reached/);
+  });
+
+  it("says so too for an error it cannot read the reason of", async () => {
+    stubFetch({ status: 400, json: { unexpected: true } });
+    const error = await refusal(api("/llm/profiles"));
+    expect(error.code).toBe("error");
+    expect(error.message).toBe(
+      "The Freyja service answered with an error (400).",
+    );
+
+    // An error below 500 with no JSON at all is still an answer, not a silence.
+    stubFetch({ status: 404, text: "Not Found" });
+    const plain = await refusal(api("/llm/profiles"));
+    expect(plain.code).toBe("error");
+    expect(plain.status).toBe(404);
+  });
 });

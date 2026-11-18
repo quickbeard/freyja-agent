@@ -761,7 +761,7 @@ proceed at the same time once Phase 4 is merged.
 
 ## Phase 10: Convergence
 
-- [ ] T081 CRITICAL: Remove the keys of the profile a run uses from a model's error before
+- [X] T081 CRITICAL: Remove the keys of the profile a run uses from a model's error before
       LangGraph is given it, so that a failing run streamed with `?debug=true` carries `<key>`
       in place of the key: today `run_stream` in `src/freyja_agent/api/streaming.py` yields
       each `debug` chunk as it is, and the failed step's `task_result` holds the provider's
@@ -770,14 +770,14 @@ proceed at the same time once Phase 4 is merged.
       `specs/001-thread-runs-api/contracts/sse-events.md` and in
       `specs/004-web-llm-profiles/contracts/sse-events.md` that a debug event holds no profile
       key per FR-020, FR-021, US5/AC3, SC-004, Constitution IV (contradicts)
-- [ ] T082 CRITICAL: Keep the key out of what the checkpointer stores for a failed step: the
+- [X] T082 CRITICAL: Keep the key out of what the checkpointer stores for a failed step: the
       model's exception is saved with the step's writes (`checkpoint_writes` in Postgres) as
       the provider worded it. Clean it at the same boundary as T081. First make
       `tests/test_llm_secrets_nowhere.py` search the saver's stored writes after the failing
       run and see it fail, and add the same search of a real database to
       `tests/integration/test_postgres_runtime.py` per FR-020, FR-021, US5/AC3, SC-004,
       Constitution IV (contradicts)
-- [ ] T083 Refuse a request from a page of another origin on the two `/llm` routes that take no
+- [X] T083 Refuse a request from a page of another origin on the two `/llm` routes that take no
       body, `POST /llm/profiles/{id}/activate` and `POST /llm/profiles/{id}/test` in
       `src/freyja_agent/api/llm.py`: a form post needs no preflight, so today it switches the
       active profile to `environment`, whose id is known, and starts tests. Requests the web
@@ -786,33 +786,33 @@ proceed at the same time once Phase 4 is merged.
       active profile and the last test result are unchanged, and see it fail; add the case to
       `web/e2e/` only if the console's own requests change per FR-003a, US5/AC9, SC-012
       (partial)
-- [ ] T084 Show the newer of a card's own test result and the one the list reports in
+- [X] T084 Show the newer of a card's own test result and the one the list reports in
       `web/components/llm/profile-card.tsx`: a test does not move `updated_at`, so after a
       "Test first" in the activation dialog, or a test from another window, the card keeps
       its earlier result, and the environment's card keeps one from before a restart. Add the
       cases to `web/__tests__/components/llm/profile-card.test.tsx` first per FR-007, US3/AC9,
       FR-003 (partial)
-- [ ] T085 Make the confirmation before a change to the active profile a step that a repeated
+- [X] T085 Make the confirmation before a change to the active profile a step that a repeated
       press cannot pass in `web/components/llm/profile-form.tsx`: Save and Confirm are the
       same button in place, so a double press, or Enter twice, saves without the notice being
       read. First add a test to `web/__tests__/components/llm/profile-form.test.tsx` that a
       second press on Save sends nothing per FR-010 (partial)
-- [ ] T086 Read the list again when activating, changing, deleting, or testing a profile is
+- [X] T086 Read the list again when activating, changing, deleting, or testing a profile is
       refused with `profile_not_found`, in `web/components/llm/profile-list.tsx` and the
       dialogs it opens, so the card of a profile another operator deleted goes away without
       Refresh. Unit tests first, and one case in `web/e2e/profiles.spec.ts` per Edge Cases:
       the operator's page is stale (partial)
-- [ ] T087 Give the activation and deletion confirmations a maximum height and their own
+- [X] T087 Give the activation and deletion confirmations a maximum height and their own
       scroll, as the form has: after a failed "Test first" with a reason of 500 characters the
       activation dialog is 880 pixels tall, and in a window 360 by 560 its Cancel and Set
       active buttons cannot be reached. Add an end-to-end case at that size to
       `web/e2e/profiles.spec.ts` first per FR-001, Edge Cases: narrow screen (partial)
-- [ ] T088 Add a test to `tests/test_llm_switch.py` in which a run that is held open hands work
+- [X] T088 Add a test to `tests/test_llm_switch.py` in which a run that is held open hands work
       to the subagent through the `task` tool while another profile is activated: the
       subagent's call goes to the model the run started with, and the next run's to the new
       one. `build_agent` already gives both the same model; nothing proves it per FR-011,
       FR-013, US2/AC4, Constitution V (partial)
-- [ ] T089 Settle how principle IV applies to the providers' own variables: `Runtime.assemble`
+- [X] T089 Settle how principle IV applies to the providers' own variables: `Runtime.assemble`
       in `src/freyja_agent/runtime/runtime.py` and `environment_profile` in
       `src/freyja_agent/llm/providers.py` read `OPENAI_API_KEY` and its siblings from
       `os.environ`, and the result decides whether the environment's profile is usable, which
@@ -820,28 +820,28 @@ proceed at the same time once Phase 4 is merged.
       Either read them through `Settings`, or record the justification in the Constitution
       Check of `specs/004-web-llm-profiles/plan.md` and correct R3 per Constitution IV,
       plan: research R3 (contradicts)
-- [ ] T090 List a saved active profile that the manager could not build as not usable, with
+- [X] T090 List a saved active profile that the manager could not build as not usable, with
       `cannot_build`, and `usable_model` false, in `profile_list` of
       `src/freyja_agent/api/llm.py`: today the list works usability out from the key alone, so
       such a profile is shown as usable while its runs end with `no_usable_model`. No values
       of the three providers are known to reach this; test it in
       `tests/test_llm_no_model.py` with a factory that raises per FR-016, FR-011a (contradicts)
-- [ ] T091 Tell a service error apart from a service that cannot be reached in
+- [X] T091 Tell a service error apart from a service that cannot be reached in
       `web/lib/api.ts`: an answer whose `detail` is a string, such as a 404, is reported as
       "cannot be reached". Keep that wording for a failed request and for the empty 500 the
       web app's server answers while the service is down. Tests in
       `web/__tests__/lib/api.test.ts` first per FR-003 (partial)
-- [ ] T092 [P] Add the three unit tests that are missing: the form's own limit on a name's
+- [X] T092 [P] Add the three unit tests that are missing: the form's own limit on a name's
       length and a 422 that names a field the form does not have, in
       `web/__tests__/components/llm/profile-form.test.tsx`, and the environment's wording in
       the activation warning, in `web/__tests__/components/llm/activate-dialog.test.tsx` per
       Constitution V (partial)
-- [ ] T093 [P] Bring FR-021 and the code together on short keys: `redact` in
+- [X] T093 [P] Bring FR-021 and the code together on short keys: `redact` in
       `src/freyja_agent/llm/secrets.py` leaves a key of fewer than eight characters in text, as
       research R9 chose, and FR-021 states no such floor. Either state the floor in FR-021 of
       `specs/004-web-llm-profiles/spec.md`, or remove short keys too and change
       `tests/test_llm_secrets.py` per FR-021, FR-020 (contradicts)
-- [ ] T094 [P] Record under Implementation Notes in `specs/004-web-llm-profiles/plan.md`, and
+- [X] T094 [P] Record under Implementation Notes in `specs/004-web-llm-profiles/plan.md`, and
       in FR-023 and SC-006 of `spec.md`, that Phase 3 changed three assertions of feature 003,
       in `tests/test_a2a_catalog.py` and `tests/test_a2a_handoff.py`, from `"9877"` to
       `":9877"`: a run id could hold those digits, so the tests failed now and then; no

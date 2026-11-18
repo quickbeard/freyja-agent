@@ -89,6 +89,8 @@ the contract and may change with the underlying library.
 Debug events are unredacted. They may carry anything held in the thread's state and the run's
 internal records, including full messages and tool arguments. That is accepted in this
 increment because the same reader can read the thread's state and there is no authentication.
+One thing they never carry is the key of an LLM profile: a failed step's error is shown in the
+provider's words with the key replaced by `<key>` (feature 004).
 
 ### `interrupt` (terminal)
 

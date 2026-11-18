@@ -9,7 +9,10 @@ export class ApiError extends Error {
     message: string,
     /** The HTTP status, or 0 when no response came back at all. */
     readonly status: number,
-    /** The service's code for a refusal; `invalid` for refused values; `unreachable`. */
+    /**
+     * The service's code for a refusal; `invalid` for refused values; `unreachable`; `error`
+     * for an answer that is an error in no shape the service's contract has.
+     */
     readonly code: string,
     /** For refused values: which field and why. Never the value that was sent. */
     readonly fields: FieldError[] = [],
@@ -72,10 +75,27 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
   if (response.ok) {
     return payload as T;
   }
-  // An error with no body the service would send is the web app's server saying it could not
-  // pass the request on, which is what it answers while the service is down.
-  throw (
-    refusal(response.status, payload) ??
-    new ApiError(UNREACHABLE, response.status, "unreachable")
+  const refused = refusal(response.status, payload);
+  if (refused !== null) {
+    throw refused;
+  }
+  // A server error with no JSON body is the web app's server saying it could not pass the
+  // request on, which is what it answers while the service is down.
+  if (payload === undefined && response.status >= 500) {
+    throw new ApiError(UNREACHABLE, response.status, "unreachable");
+  }
+  // Anything else is an answer: something is there, and it said no in words of its own.
+  const detail = (payload as { detail?: unknown } | undefined)?.detail;
+  throw new ApiError(
+    typeof detail === "string" && detail !== ""
+      ? `The Freyja service answered with an error (${response.status}): ${detail}`
+      : `The Freyja service answered with an error (${response.status}).`,
+    response.status,
+    "error",
   );
+}
+
+/** Whether a request was refused because the profile it names no longer exists. */
+export function isGone(error: unknown): boolean {
+  return error instanceof ApiError && error.code === "profile_not_found";
 }

@@ -181,6 +181,45 @@ describe("ProfileForm, adding", () => {
     expect(field("API key").value).toBe(KEY);
   });
 
+  it("refuses a name longer than 64 characters itself, and sends nothing", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill({ Name: "n".repeat(65) });
+    save();
+    expect(errorAt("Name")).toBe("A name has at most 64 characters.");
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    // Exactly 64 is a name.
+    type("Name", "n".repeat(64));
+    save();
+    expect(errorAt("Name")).toBeNull();
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows a refused value the form has no field for over the form", async () => {
+    stubFetch({
+      status: 422,
+      json: {
+        detail: [
+          {
+            type: "extra_forbidden",
+            loc: ["body", "surprise"],
+            msg: "Extra inputs are not permitted",
+          },
+        ],
+      },
+    });
+    render(<Harness />);
+    fill();
+    save();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Extra inputs are not permitted");
+    for (const name of ["Name", "Model id", "Base URL", "API key"]) {
+      expect(errorAt(name)).toBeNull();
+    }
+  });
+
   it("shows a value the service refuses at its field", async () => {
     stubFetch({
       status: 422,
@@ -572,6 +611,38 @@ describe("ProfileForm, editing", () => {
     expect(fetchStub).toHaveBeenCalledTimes(1);
     expect(sent(fetchStub).method).toBe("PATCH");
     expect(sent(fetchStub).body.model).toBe("newer-model");
+  });
+
+  it("sends nothing when Save is pressed twice in a row on the active profile", () => {
+    const fetchStub = stubFetch({ json: { ...changed, active: true } });
+    render(<Harness profile={{ ...SAVED, active: true }} />);
+    type("Model id", "newer-model");
+    const pressed = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(pressed, { detail: 1 });
+    // The second press of a double press lands where the first one did.
+    fireEvent.click(pressed, { detail: 2 });
+    expect(screen.getByRole("note")).toBeTruthy();
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    // Nor does it when it lands on the button that confirms, as part of the same double
+    // press: confirming takes a press of its own.
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }), {
+      detail: 2,
+    });
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(screen.getByRole("note")).toBeTruthy();
+  });
+
+  it("sends nothing when Enter is pressed twice in a field of the active profile", () => {
+    const fetchStub = stubFetch({ json: { ...changed, active: true } });
+    render(<Harness profile={{ ...SAVED, active: true }} />);
+    type("Model id", "newer-model");
+    const form = field("Model id").closest("form") as HTMLFormElement;
+    fireEvent.submit(form);
+    expect(screen.getByRole("note")).toBeTruthy();
+    fireEvent.submit(form);
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(screen.getByRole("note")).toBeTruthy();
   });
 
   it("does not ask when what the form says about the active profile is wrong", () => {

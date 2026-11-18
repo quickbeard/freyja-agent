@@ -95,10 +95,16 @@ export const TESTED_AT = "2026-11-18T09:14:02.118000+00:00";
 export const REFUSES_EARLIER_TURNS =
   "Error code: 422 - Input should be a valid string: this endpoint takes no earlier turns as input";
 export const REJECTS_KEY = "Error code: 401 - Incorrect API key provided.";
+/** A reason as long as the service keeps one: 500 characters. */
+export const LONG_REASON =
+  "Error code: 400 - the endpoint refused the request. "
+    .repeat(10)
+    .slice(0, 500);
 
 /**
  * How a test of a model goes, by its id, as `tests/llm_stub.py` behaves: `refuse-conversation`
- * fails at the second step, `reject-key` at the first, and any other id passes.
+ * fails at the second step, `reject-key` at the first, and any other id passes. `long-reason`
+ * is the stand-in's own: it fails with a reason of the greatest length the service keeps.
  */
 export function testOf(model: string): LlmLastTest {
   if (model === "refuse-conversation") {
@@ -115,6 +121,14 @@ export function testOf(model: string): LlmLastTest {
       at: TESTED_AT,
       step: "first_message",
       reason: REJECTS_KEY,
+    };
+  }
+  if (model === "long-reason") {
+    return {
+      ok: false,
+      at: TESTED_AT,
+      step: "conversation",
+      reason: LONG_REASON,
     };
   }
   return { ok: true, at: TESTED_AT, step: null, reason: null };
@@ -358,6 +372,11 @@ export class ProfileService {
           }
         : profile,
     );
+  }
+
+  /** What another operator does meanwhile: delete a profile this page still shows. */
+  deleteElsewhere(id: string) {
+    this.profiles = this.profiles.filter((profile) => profile.id !== id);
   }
 
   /** Answer this page's requests to the profile routes, in the browser. */

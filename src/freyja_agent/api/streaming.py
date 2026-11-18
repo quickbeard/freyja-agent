@@ -26,6 +26,7 @@ from freyja_agent.api.serialize import (
     to_jsonable,
     update_to_dict,
 )
+from freyja_agent.llm.guard import ModelError
 from freyja_agent.llm.secrets import redact
 
 if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
@@ -73,8 +74,12 @@ def _is_model_error(exc: BaseException) -> bool:
     """True when the exception came out of the chat model (provider errors, timeouts).
 
     Provider SDK exceptions and model-side failures propagate through langchain-core's chat
-    model base class; tool and graph failures do not pass through those frames.
+    model base class; tool and graph failures do not pass through those frames. An error
+    that held a profile's key is raised by the model as a ``ModelError`` with the key taken
+    out (``llm/guard.py``).
     """
+    if isinstance(exc, ModelError):
+        return True
     for frame, _ in traceback.walk_tb(exc.__traceback__):
         if frame.f_globals.get("__name__", "").startswith("langchain_core.language_models"):
             return True

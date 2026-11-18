@@ -194,6 +194,75 @@ describe("Edit and Delete, from the list", () => {
     ).toEqual(["GET", "DELETE", "GET"]);
   });
 
+  it("reads the list again when the profile to delete is already gone", async () => {
+    const fetchStub = stubFetch(
+      list(ENVIRONMENT, SAVED),
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "profile_not_found",
+            message: "There is no profile with this id.",
+          },
+        },
+      },
+      list(ENVIRONMENT),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    await screen.findByRole("alertdialog");
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("There is no profile with this id.");
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Local vLLM" })).toBeNull(),
+    );
+    expect(
+      fetchStub.mock.calls.map(([, init]) => init?.method ?? "GET"),
+    ).toEqual(["GET", "DELETE", "GET"]);
+  });
+
+  it("reads the list again when the profile being changed is gone", async () => {
+    const fetchStub = stubFetch(
+      list(ENVIRONMENT, SAVED),
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "profile_not_found",
+            message: "There is no profile with this id.",
+          },
+        },
+      },
+      list(ENVIRONMENT),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const form = await screen.findByRole("dialog", { name: "Edit Local vLLM" });
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "newer-model" },
+    });
+    fireEvent.click(
+      Array.from(form.querySelectorAll("button")).find(
+        (button) => button.textContent === "Save",
+      ) as HTMLElement,
+    );
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("There is no profile with this id.");
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Local vLLM" })).toBeNull(),
+    );
+    expect(
+      fetchStub.mock.calls.map(([, init]) => init?.method ?? "GET"),
+    ).toEqual(["GET", "PATCH", "GET"]);
+  });
+
   it("opens the form with the profile's values from Edit, and shows the change once saved", async () => {
     const renamed = { ...SAVED, name: "Renamed" };
     const fetchStub = stubFetch(

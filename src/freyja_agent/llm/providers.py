@@ -133,6 +133,20 @@ class EnvironmentProfile:
     name: str = ENVIRONMENT_NAME
 
 
+def environment_key(spec: ModelSpec, environ: Mapping[str, str] | None = None) -> str:
+    """The key the environment gives the provider of ``spec``, or "" when it gives none.
+
+    A provider's key and base URL are its client's own variables, not ``FREYJA_*`` settings:
+    the client reads them itself, as it always has, and ``Settings`` never holds them. The
+    service looks at them to describe the environment's profile, which means its hint, its
+    base URL, whether it can be used (FR-011a), and the key to take out of its errors
+    (FR-021). This module is the one place that reads them.
+    """
+    provider = PROVIDERS.get(spec.provider)
+    environ = os.environ if environ is None else environ
+    return environ.get(provider.key_variable, "") if provider else ""
+
+
 def environment_profile(
     settings: Settings,
     *,
@@ -142,14 +156,14 @@ def environment_profile(
 ) -> EnvironmentProfile:
     """Describe the environment's model for the console (FR-008, FR-011a).
 
-    The base URL and the key's last four characters come from the provider's own variables,
-    read here for display only. Usable means that a model can be built and, for a provider in
-    the table, that its key is set: one client builds without a key and fails only when called.
+    The base URL and the key's last four characters come from the provider's own variables
+    (``environment_key``). Usable means that a model can be built and, for a provider in the
+    table, that its key is set: one client builds without a key and fails only when called.
     """
     environ = os.environ if environ is None else environ
     spec = environment_spec(settings, model)
     provider = PROVIDERS.get(spec.provider)
-    key = environ.get(provider.key_variable, "") if provider else ""
+    key = environment_key(spec, environ)
     base_url = (environ.get(provider.base_url_variable) or None) if provider else None
     reason = None
     if provider is not None and not key:

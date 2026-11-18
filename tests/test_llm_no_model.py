@@ -136,6 +136,45 @@ def test_the_service_starts_when_the_environments_model_cannot_be_built(
     assert ENV_KEY not in str(events)
 
 
+def test_a_saved_active_profile_that_cannot_be_built_is_listed_as_not_usable(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    """FR-016: the list says no usable model is active for as long as runs are turned away.
+
+    No values of the three providers are known to fail here; the client stands for one that
+    would.
+    """
+    made = make_llm_app(model="openai:env-model", models=Unbuildable())
+    with TestClient(made.app) as client:
+        added = client.post(
+            "/llm/profiles",
+            json={"name": "Broken", "provider": "openai", "model": "broken", "api_key": KEY},
+        ).json()
+        other = client.post(
+            "/llm/profiles",
+            json={"name": "Other", "provider": "openai", "model": "broken", "api_key": KEY},
+        ).json()
+        # A key that can be read is all that is known before a model is built from it.
+        assert (added["usable"], added["unusable_reason"]) == (True, None)
+        assert client.post(f"/llm/profiles/{added['id']}/activate").status_code == 200
+        body = listing(client)
+        events = run(client, "t-1", sse_events)
+        # Back on a model that can be built, nothing is held against the profile.
+        assert client.post("/llm/profiles/environment/activate").status_code == 200
+        back = listing(client)
+
+    by_name = {profile["name"]: profile for profile in body["profiles"]}
+    assert (by_name["Broken"]["active"], by_name["Broken"]["usable"]) == (True, False)
+    assert by_name["Broken"]["unusable_reason"] == "cannot_build"
+    assert body["usable_model"] is False
+    # Only the profile this instance tried to build is known not to build.
+    assert (by_name["Other"]["usable"], by_name["Other"]["unusable_reason"]) == (True, None)
+    refused(events, {"id": added["id"], "name": "Broken", "source": "saved"})
+    assert back["usable_model"] is True
+    assert {p["name"]: p["usable"] for p in back["profiles"]}["Broken"] is True
+    assert other["id"] != added["id"]
+
+
 def test_the_service_starts_when_the_active_profiles_key_cannot_be_read(
     make_llm_app: Callable[..., LlmApp], sse_events: Any
 ) -> None:

@@ -11,17 +11,19 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { ApiError } from "@/lib/api";
+import { ApiError, isGone } from "@/lib/api";
 import { deleteProfile, type LlmProfile } from "@/lib/llm";
 
 function Confirmation({
   profile,
   onClose,
   onDeleted,
+  onGone,
 }: {
   profile: LlmProfile;
   onClose: () => void;
   onDeleted: () => void;
+  onGone?: () => void;
 }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -37,6 +39,7 @@ function Confirmation({
       onDeleted();
       onClose();
     } catch (error) {
+      if (isGone(error)) onGone?.();
       // The service's own words: for the active profile they say what to do first.
       setRefusal(
         error instanceof ApiError
@@ -87,10 +90,13 @@ export function DeleteDialog({
   profile,
   onClose,
   onDeleted,
+  onGone,
 }: {
   profile: LlmProfile | null;
   onClose: () => void;
   onDeleted: () => void;
+  /** Told when the service says the profile no longer exists. */
+  onGone?: () => void;
 }) {
   return (
     <AlertDialog
@@ -99,13 +105,16 @@ export function DeleteDialog({
         if (!open) onClose();
       }}
     >
-      <AlertDialogContent>
+      {/* Taller than a short, narrow window once it shows a long reason: it scrolls in itself,
+          so its buttons can always be reached. */}
+      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         {profile !== null && (
           <Confirmation
             key={profile.id}
             profile={profile}
             onClose={onClose}
             onDeleted={onDeleted}
+            onGone={onGone}
           />
         )}
       </AlertDialogContent>

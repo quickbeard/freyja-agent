@@ -1343,6 +1343,94 @@ def test_a_page_from_another_origin_is_given_permission_on_no_route(
     # A preflight is answered with no permission at all, not with a profile.
     assert preflight.status_code in (400, 405)
     assert KEY not in preflight.text
+    # Reading is answered, and the browser keeps the answer from the page. Anything that
+    # would change something is refused outright.
+    if method == "GET":
+        assert sent.status_code == 200
+    else:
+        refusal(sent, 403, "other_origin")
+
+
+# What a browser sends with a request a page of another origin makes. A form needs no
+# preflight, so the service itself has to turn these away (FR-003a).
+FROM_ANOTHER_ORIGIN = [
+    {"Origin": OTHER_ORIGIN},
+    {"Origin": "null"},
+    {"Sec-Fetch-Site": "cross-site"},
+    # Another port of this machine is another origin, and the same site.
+    {"Origin": "http://localhost:3000", "Sec-Fetch-Site": "same-site"},
+    # Through the web app's server, which names the host the browser asked for.
+    {"Origin": OTHER_ORIGIN, "X-Forwarded-Host": "localhost:3000"},
+]
+
+
+@pytest.mark.parametrize("headers", FROM_ANOTHER_ORIGIN)
+def test_a_form_from_another_origin_cannot_switch_the_model_or_start_a_test(
+    make_llm_app: Callable[..., LlmApp], headers: dict[str, str]
+) -> None:
+    """FR-003a: the two routes that take no body are reached by a plain form post.
+
+    The environment's profile has an id anyone knows, so a page could put it back in use and
+    have it tested.
+    """
+    made = make_llm_app(model="openai:env-model")
+    form = {**headers, "Content-Type": "application/x-www-form-urlencoded"}
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        assert activate(client, added["id"]).status_code == 200
+        asked = made.models.model("env-model").calls
+        switched = client.post("/llm/profiles/environment/activate", headers=form, content="")
+        tested = client.post("/llm/profiles/environment/test", headers=form, content="")
+        deleted = client.delete("/llm/profiles/environment", headers=headers)
+        after = listing(client)
+
+    for response in (switched, tested, deleted):
+        message = refusal(response, 403, "other_origin")
+        assert "another origin" in message
+    # Nothing changed, and no model was asked anything.
+    assert after["active_id"] == added["id"]
+    assert after["profiles"][0]["last_test"] is None
+    assert made.models.model("env-model").calls == asked
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        # A client that is no browser page, such as curl, sends none of these.
+        {},
+        # The console, straight to the service on the address it was opened at.
+        {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+        # The console through the web app's server, which passes on the host it was asked for.
+        {
+            "Origin": "http://localhost:3000",
+            "X-Forwarded-Host": "localhost:3000",
+            "Sec-Fetch-Site": "same-origin",
+        },
+    ],
+)
+def test_the_console_and_a_client_that_is_no_page_are_not_turned_away(
+    make_llm_app: Callable[..., LlmApp], headers: dict[str, str]
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = client.post("/llm/profiles", json=NEW, headers=headers)
+        profile_id = added.json()["id"]
+        switched = client.post(f"/llm/profiles/{profile_id}/activate", headers=headers)
+        tested = client.post(f"/llm/profiles/{profile_id}/test", headers=headers)
+        changed = client.patch(
+            f"/llm/profiles/{profile_id}", json={"name": "Renamed"}, headers=headers
+        )
+        back = client.post("/llm/profiles/environment/activate", headers=headers)
+        deleted = client.delete(f"/llm/profiles/{profile_id}", headers=headers)
+
+    assert [r.status_code for r in (added, switched, tested, changed, back, deleted)] == [
+        201,
+        200,
+        200,
+        200,
+        200,
+        204,
+    ]
 
 
 @pytest.mark.parametrize(

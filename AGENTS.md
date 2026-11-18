@@ -97,13 +97,17 @@ startup and exits with an error naming the connection when it is unreachable.
   is ready waits.
 - `src/freyja_agent/llm/`: LLM profiles (feature 004), the ways to reach a model that an
   operator saves, tests, and activates while the service runs. `providers.py` holds the
-  provider table, `build_model` for a saved profile, and the environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
-  removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
+  provider table, `build_model` for a saved profile, and the environment's profile, and is
+  the one module that reads a provider's own variables (`environment_key`); `secrets.py`
+  encrypts stored API keys under `FREYJA_SECRET_KEY` and removes keys from text (`redact`);
+  `guard.py` makes a model raise its errors with its profile's key already taken out
+  (`guard_model`), because LangGraph shows a failed step's error in the debug stream and
+  saves it with the thread; `store.py` is the `LlmProfileStore` for saved profiles
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
   `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
   rebuilds the orchestrator through `build_agent` when the active profile's revision moved,
   around a placeholder model when the active profile is not usable, so that the service
-  starts and runs end with `no_usable_model`;
+  starts and runs end with `no_usable_model`, and which guards every model it builds;
   `check.py` is a profile's test (`check_model`: two requests under one time limit, the
   second carrying earlier turns and a tool call) and the count of tests in progress
   (`CheckSlots`).
@@ -130,7 +134,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
   profile's test with its endpoint; an activation is applied on this instance at once; its
-  routes answer a refused request without repeating the value (`NoInputRoute`); `streaming.py`
+  routes answer a refused request without repeating the value (`NoInputRoute`), and turn
+  away a request that changes something when a browser marks it as made by a page of another
+  origin (`refuse_other_origins`, 403 `other_origin`); `streaming.py`
   the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
   which turns a run away with `no_usable_model` before the graph when no usable model is active,
   and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
@@ -212,8 +218,14 @@ startup and exits with an error naming the connection when it is unreachable.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - A stored API key appears nowhere beyond its last four characters: in no response, stream,
   thread, or log. Text that may hold one, such as a provider's error, goes through `redact`
-  first, and `tests/test_llm_secrets_nowhere.py` searches everything the service gives back.
-  A new route or log line about profiles is added to that test.
+  first, and a model is guarded before it is used (`guard_model`), so its errors hold no key
+  when LangGraph is given them. `tests/test_llm_secrets_nowhere.py` searches everything the
+  service gives back and everything the checkpointer keeps. A new route or log line about
+  profiles is added to that test.
+- A route that changes something and takes no body can be reached by a form on any web page.
+  The `/llm` routes refuse such a request by what the browser says of it
+  (`refuse_other_origins`); a new router that changes operator-managed configuration does the
+  same.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
   unit tests and does not replace them. It never needs the Freyja service: the service's
   answers are handed to the page in the browser, through `web/e2e/api.ts`.

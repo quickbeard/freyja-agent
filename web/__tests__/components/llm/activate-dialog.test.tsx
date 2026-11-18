@@ -203,6 +203,14 @@ describe("ActivateDialog, an untested profile", () => {
     expect(screen.getByRole("button", { name: "Test first" })).toBeTruthy();
   });
 
+  it("says the environment's profile has not been tested since the service started", () => {
+    open({ ...ENVIRONMENT, active: false });
+    expect(warning()?.textContent).toMatch(
+      /Environment has not been tested since the service started/,
+    );
+    expect(warning()?.textContent).not.toMatch(/its last change/);
+  });
+
   it("says so when the profile's last test failed, and at which step", () => {
     open({ ...SAVED, last_test: failed });
     expect(warning()?.textContent).toMatch(
@@ -327,6 +335,50 @@ describe("Set active, from the list", () => {
     expect(cardOf("Environment").textContent).not.toContain("Active");
     await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
     // One read, one activation, and the list read again.
+    expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([
+      "/api/llm/profiles",
+      `/api/llm/profiles/${SAVED.id}/activate`,
+      "/api/llm/profiles",
+    ]);
+  });
+
+  it("reads the list again when the profile to activate is gone", async () => {
+    // Another operator deleted it since this page read the list.
+    const fetchStub = stubFetch(
+      { json: list("environment") },
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "profile_not_found",
+            message: "There is no profile with this id.",
+          },
+        },
+      },
+      {
+        json: {
+          ...list("environment"),
+          profiles: list("environment").profiles.slice(0, 1),
+        },
+      },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    const dialog = await screen.findByRole("alertdialog");
+    fireEvent.click(
+      Array.from(dialog.querySelectorAll("button")).find(
+        (button) => button.textContent === "Set active",
+      ) as HTMLElement,
+    );
+
+    // The refusal is shown, and the card of the profile that is gone goes away.
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("There is no profile with this id.");
+    await waitFor(() =>
+      expect(screen.queryByRole("heading", { name: "Local vLLM" })).toBeNull(),
+    );
     expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([
       "/api/llm/profiles",
       `/api/llm/profiles/${SAVED.id}/activate`,

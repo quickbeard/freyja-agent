@@ -73,6 +73,29 @@ class Seen:
         return self.call("GET", f"/threads/{thread}/state").json()
 
 
+def kept(saver: Any) -> list[str]:
+    """Everything the in-memory checkpointer holds, as text: checkpoints, blobs, and the writes
+    of each step, a failed step's error among them."""
+    texts: list[str] = []
+
+    def walk(value: Any) -> None:
+        if isinstance(value, bytes | bytearray):
+            texts.append(bytes(value).decode("latin-1"))
+        elif isinstance(value, str):
+            texts.append(value)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                walk(key)
+                walk(item)
+        elif isinstance(value, list | tuple):
+            for item in value:
+                walk(item)
+
+    for part in (saver.storage, saver.blobs, saver.writes):
+        walk(part)
+    return texts
+
+
 def nowhere(texts: list[str], *marks: str) -> None:
     for text in texts:
         for mark in marks:
@@ -158,6 +181,12 @@ def test_a_key_is_in_nothing_the_service_returns_streams_keeps_or_logs(
                 "PATCH", f"/llm/profiles/{stub_id}", json={"model": "m" * 201, "api_key": KEY}
             ),
             seen.call("PATCH", "/llm/profiles/environment", json={"api_key": KEY}),
+            seen.call(  # other_origin, which is also logged
+                "POST",
+                "/llm/profiles",
+                json=profile(name="X"),
+                headers={"Origin": "http://other.example"},
+            ),
             seen.call("PATCH", f"/llm/profiles/{'0' * 32}", json={"api_key": KEY}),
             seen.call("DELETE", f"/llm/profiles/{stub_id}"),  # profile_active
             seen.call("DELETE", "/llm/profiles/environment"),
@@ -200,8 +229,10 @@ def test_a_key_is_in_nothing_the_service_returns_streams_keeps_or_logs(
         assert resumed[-1] == ("end", {"status": "completed"})
         seen.state("t-1")
         assert seen.call("POST", f"/llm/profiles/{leaky_id}/activate").status_code == 200
-        broken = seen.stream("/threads/t-2/runs", {"message": "hello"})
+        # The failing run is watched in full: its debug events carry the failed step.
+        broken = seen.stream("/threads/t-2/runs", {"message": "hello"}, debug="true")
         seen.state("t-2")
+        in_threads = kept(made.runtime.agent.checkpointer)
         seen.call("GET", "/llm/profiles")
         seen.call("GET", "/tools")
         assert seen.call("POST", "/llm/profiles/environment/activate").status_code == 200
@@ -216,6 +247,12 @@ def test_a_key_is_in_nothing_the_service_returns_streams_keeps_or_logs(
     assert broken[-1][1]["code"] == "model_error"
     assert REDACTED in broken[-1][1]["message"]
     assert "Incorrect API key provided" in broken[-1][1]["message"]
+    # The failed step is in the debug events and in what the checkpointer kept of the thread,
+    # in the provider's words with the key taken out.
+    debugged = [str(data) for kind, data in broken if kind == "debug"]
+    assert any("Incorrect API key provided" in text for text in debugged)
+    assert any("Incorrect API key provided" in text for text in in_threads)
+    nowhere(in_threads, MARK, ENV_MARK)
 
     # Nothing returned or streamed, and no thread, holds any part of either key.
     assert len(seen.texts) >= 40
@@ -244,8 +281,9 @@ def test_the_real_clients_error_reaches_a_run_and_the_log_without_the_key(
         added = seen.call("POST", "/llm/profiles", json=profile(model="repeat-key")).json()
         seen.call("POST", f"/llm/profiles/{added['id']}/activate")
         tested = seen.call("POST", f"/llm/profiles/{added['id']}/test").json()
-        events = seen.stream("/threads/t-1/runs", {"message": "hello"})
+        events = seen.stream("/threads/t-1/runs", {"message": "hello"}, debug="true")
         seen.state("t-1")
+        in_threads = kept(made.runtime.agent.checkpointer)
 
     # The stand-in was sent the key and said it back.
     assert {request.key for request in stub.requests} == {KEY}
@@ -255,6 +293,8 @@ def test_the_real_clients_error_reaches_a_run_and_the_log_without_the_key(
     assert (kind, error["code"]) == ("error", "model_error")
     assert f"The key {REDACTED} is not allowed" in error["message"]
     nowhere(seen.texts, MARK)
+    assert any("is not allowed" in text for text in in_threads)
+    nowhere(in_threads, MARK)
     logged = [caplog.handler.format(record) for record in caplog.records]
     assert any("model error" in line and REDACTED in line for line in logged)
     nowhere(logged, MARK)

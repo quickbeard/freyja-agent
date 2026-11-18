@@ -10,8 +10,9 @@ import logging
 from collections.abc import Callable, Coroutine, Sequence
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from urllib.parse import urlsplit
 
-from fastapi import APIRouter, HTTPException, Path, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
@@ -80,7 +81,56 @@ class NoInputRoute(APIRoute):
         return without_input
 
 
-router = APIRouter(prefix="/llm", tags=["llm"], route_class=NoInputRoute)
+def _error(status: int, code: str, message: str) -> HTTPException:
+    return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+# Requests that only read. A page of another origin is not kept from sending one: with no
+# permission given, its browser keeps the answer from it (SC-012).
+READS = frozenset({"GET", "HEAD", "OPTIONS"})
+# What a browser says of a request a page made to its own origin, or the user made directly.
+OWN_SITE = frozenset({"same-origin", "none"})
+
+
+def refuse_other_origins(request: Request) -> None:
+    """Turn away a request that changes something and was made by a page of another origin.
+
+    A browser asks first before it sends JSON across origins, and is given no permission. It
+    does not ask before a form post, which is all the routes without a body need (FR-003a).
+    So what the browser says of the request decides: ``Sec-Fetch-Site`` where it sends it, and
+    ``Origin`` against the host the browser asked for, which the web app's server passes on as
+    ``X-Forwarded-Host``. A page of another origin can set none of the three. A client that
+    is no page, such as curl, sends none of them and is served.
+    """
+    if request.method in READS:
+        return
+    headers = request.headers
+    site = headers.get("sec-fetch-site")
+    origin = headers.get("origin")
+    asked = (headers.get("x-forwarded-host") or headers.get("host") or "").split(",")[0]
+    asked = asked.strip().lower()
+    other_site = site is not None and site.lower() not in OWN_SITE
+    other_origin = origin is not None and (not asked or urlsplit(origin).netloc.lower() != asked)
+    if other_site or other_origin:
+        logger.warning(
+            "Refused %s %s: the request was made by a page of another origin",
+            request.method,
+            request.url.path,
+        )
+        raise _error(
+            403,
+            "other_origin",
+            "This request was made by a page of another origin and was refused. Profiles are "
+            "changed from the console, or by a client that is not a web page.",
+        )
+
+
+router = APIRouter(
+    prefix="/llm",
+    tags=["llm"],
+    route_class=NoInputRoute,
+    dependencies=[Depends(refuse_other_origins)],
+)
 
 
 ProfileIdPath = Annotated[
@@ -92,12 +142,14 @@ def _runtime(request: Request) -> Runtime:
     return request.app.state.runtime
 
 
-def _error(status: int, code: str, message: str) -> HTTPException:
-    return HTTPException(status_code=status, detail={"code": code, "message": message})
-
-
-def _saved(record: LlmProfileRecord, *, active: bool, secret: SecretStr | None) -> LlmProfile:
+def _saved(
+    record: LlmProfileRecord, *, active: bool, secret: SecretStr | None, unbuildable: bool = False
+) -> LlmProfile:
+    """A saved profile as the list shows it. ``unbuildable``: this instance tried to build its
+    model and could not, which a key that can be read does not tell."""
     reason = unusable_reason(record, secret)
+    if reason is None and unbuildable:
+        reason = "cannot_build"
     last = None
     if record.last_test_ok is not None and record.last_test_at is not None:
         last = LlmLastTest(
@@ -157,6 +209,14 @@ async def profile_list(runtime: Runtime) -> LlmProfileList:
     """
     state = await runtime.llm_profiles.state()
     secret = runtime.settings.secret_key
+    # The active profile's model, as this instance applied it: runs are turned away from one
+    # that could not be built, and the list has to say so for as long as they are (FR-016).
+    applied = runtime.applied_model()
+    unbuildable = (
+        applied.profile.id
+        if applied.why == "cannot_build" and applied.revision == state.revision
+        else None
+    )
     profiles = [
         _environment(
             runtime.environment_profile(),
@@ -164,7 +224,12 @@ async def profile_list(runtime: Runtime) -> LlmProfileList:
             last=runtime.environment_test,
         ),
         *(
-            _saved(record, active=record.id == state.active_profile_id, secret=secret)
+            _saved(
+                record,
+                active=record.id == state.active_profile_id,
+                secret=secret,
+                unbuildable=record.id == unbuildable and record.id == state.active_profile_id,
+            )
             for record in await runtime.llm_profiles.list_profiles()
         ),
     ]

@@ -312,6 +312,71 @@ def test_a_run_in_progress_ends_on_the_model_it_started_with(
         assert humans(made, "saved-model") == ["hello", "and again"]
 
 
+def to_the_subagent(what: str) -> AIMessage:
+    """The orchestrator handing ``what`` to its general-purpose subagent."""
+    return AIMessage(
+        content="",
+        tool_calls=[
+            {
+                "id": "s1",
+                "name": "task",
+                "args": {"description": what, "subagent_type": "general-purpose"},
+            }
+        ],
+    )
+
+
+def test_a_subagents_work_stays_on_the_model_its_run_started_with(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    """FR-011, FR-013: the orchestrator and its subagent use the one active profile.
+
+    The profile changes while the run waits in its first step. The subagent is called only
+    after that, and is still asked through the model the run started with.
+    """
+    made = make_llm_app(model="openai:env-model")
+    first = made.models.model("env-model")
+    first.script = [to_the_subagent("Look into the nightly report.")]
+    second = made.models.model("saved-model")
+    second.script = [to_the_subagent("Look into the weekly report.")]
+    streamed: dict[str, Events] = {}
+
+    with TestClient(made.app) as client:
+        stub_id = add(client)
+        first.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "t-1", sse_events))
+        )
+        running.start()
+        with first.held():
+            switch_to(client, stub_id)
+            assert made.runtime.applied_model().profile.name == "Stub"
+        running.join(10)
+        assert not running.is_alive()
+
+        events = streamed["events"]
+        assert profile_of(events) == ENVIRONMENT
+        assert events[-1] == ("end", {"status": "completed"})
+        # Three calls: the hand-off, the subagent's own, and the reply. All on the first model.
+        assert first.calls == 3
+        assert second.calls == 0
+        asked_of_subagent = [m.content for m in first.seen[1] if m.type == "human"]
+        assert asked_of_subagent == ["Look into the nightly report."]
+        state = client.get("/threads/t-1/state").json()
+        handed_back = [m for m in state["messages"] if m["type"] == "tool" and m["name"] == "task"]
+        assert [m["content"] for m in handed_back] == ["Answered by env-model."]
+
+        # The next run's subagent is asked through the newly active profile's model.
+        after = run(client, "t-2", sse_events)
+        assert profile_of(after)["name"] == "Stub"
+        assert after[-1] == ("end", {"status": "completed"})
+        assert second.calls == 3
+        assert first.calls == 3
+        assert [m.content for m in second.seen[1] if m.type == "human"] == [
+            "Look into the weekly report."
+        ]
+
+
 def test_a_paused_run_resumed_after_an_activation_continues_on_the_new_profile(
     make_llm_app: Callable[..., LlmApp], sse_events: Any
 ) -> None:
