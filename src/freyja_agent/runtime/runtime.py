@@ -7,7 +7,7 @@ import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
 
@@ -33,7 +33,15 @@ from freyja_agent.delegates.mcp_servers import (
     open_tool_servers,
 )
 from freyja_agent.llm.active import ENVIRONMENT_PROFILE, ActiveModel, ModelManager
-from freyja_agent.llm.providers import PROVIDERS, ModelFactory, build_model, environment_spec
+from freyja_agent.llm.providers import (
+    PROVIDERS,
+    EnvironmentProfile,
+    ModelFactory,
+    ModelSpec,
+    build_model,
+    environment_profile,
+    environment_spec,
+)
 from freyja_agent.llm.store import (
     InMemoryLlmProfileStore,
     LlmProfileStore,
@@ -53,6 +61,10 @@ logger = logging.getLogger(__name__)
 def _given(model: BaseChatModel) -> BaseChatModel:
     """The chat model a caller handed to ``assemble``, standing for the environment's."""
     return model
+
+
+def _already_built(_spec: ModelSpec) -> None:
+    """Stands in for a model factory when the model is known to build."""
 
 
 @dataclass
@@ -76,6 +88,15 @@ class Runtime:
     # Keeps ``agent`` and ``catalog`` in step with the active profile (research R1, R6). None
     # for a runtime put together by hand, which then always runs on the model it was given.
     models: ModelManager | None = None
+    # The environment's model as a read-only profile, described once at startup: what the
+    # environment configures cannot change while the service runs (FR-008).
+    environment: EnvironmentProfile | None = None
+
+    def environment_profile(self) -> EnvironmentProfile:
+        """The environment's profile; worked out from the settings for a hand-built runtime."""
+        if self.environment is None:
+            self.environment = environment_profile(self.settings)
+        return self.environment
 
     def applied_model(self) -> ActiveModel:
         """The model this instance last built its orchestrator for; reads nothing."""
@@ -188,6 +209,18 @@ class Runtime:
                     ),
                 )
                 orchestrator = await manager.load()
+                # Whether the environment's model can be built is known when the manager has
+                # just built it, or it was handed over built; otherwise building one says.
+                given = isinstance(model, BaseChatModel)
+                built = given or manager.active.profile is ENVIRONMENT_PROFILE
+                described = environment_profile(
+                    settings,
+                    factory=_already_built if built else model_factory or build_model,
+                    model=model if isinstance(model, str) else None,
+                )
+                if given:
+                    # A model handed over needs no key from the environment.
+                    described = replace(described, usable=True, unusable_reason=None)
                 runtime = cls(
                     agent=orchestrator.agent,
                     catalog=orchestrator.catalog,
@@ -196,6 +229,7 @@ class Runtime:
                     agent_tasks=task_store,
                     llm_profiles=profile_store,
                     models=manager,
+                    environment=described,
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,

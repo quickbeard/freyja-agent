@@ -38,10 +38,11 @@ Always go through uv. Never call python, pip, or pytest directly.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
-- In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium, Firefox,
-  and WebKit. Playwright builds the app and serves it on port 3100 itself, so nothing needs
-  to be running, the Freyja service included. `pnpm exec playwright install` downloads the
-  three browsers once per machine. The commit hook does not run these tests; CI does.
+- In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium and Firefox,
+  the browsers `web/playwright.config.ts` names. Playwright builds the app and serves it on port
+  3100 itself, so nothing needs to be running, the Freyja service included. `pnpm exec
+  playwright install chromium firefox` downloads the two browsers once per machine. The commit
+  hook does not run these tests; CI does.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 
@@ -86,7 +87,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
   delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
   loop never waits for a delivery; `tick()` does, for the tests.
-- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; no route uses them yet.
+- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API only lists
+  them.
   `providers.py` holds the provider table, `build_model` for a saved profile, and the
   environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
@@ -105,10 +107,13 @@ startup and exits with an error naming the connection when it is unreachable.
   the tests swap to reach stand-in agents. `assemble` also takes `model_factory`, which turns
   an LLM profile into a chat model and is the seam the profile tests swap. Every run calls
   `Runtime.model_for_run()` first, which brings `agent` and `catalog` in step with the active
-  profile.
+  profile. `Runtime.environment` is the environment's profile as the list shows it, described
+  once at startup.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
+  `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, which asks no model
+  anything; its routes answer a refused request without repeating the value (`NoInputRoute`);
   `streaming.py` the SSE run loop with the lease heartbeat, also driven by the worker for
   background runs; `outcomes.py` records pending tasks' outcomes in their thread exactly once
   and answers messages to agents that a stop left in flight; `decisions.py` resume
@@ -116,19 +121,29 @@ startup and exits with an error naming the connection when it is unreachable.
   arguments; `schemas.py` and `serialize.py` the request, response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
-- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), so far the `create-next-app` start
-  page with shadcn/ui set up: `components.json`, components under `web/components/ui/`, and
-  the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they
-  are added, and three lint rules they do not meet are off for `web/components/ui/` only
-  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its
-  configuration: `FREYJA_API_URL`, where its server forwards `/api/...`, documented in
-  `web/.env.example`. Unit tests are `*.test.ts` and `*.test.tsx` files next to the code they
-  cover, run by Vitest with jsdom.
+- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
+  shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
+  `web/app/llm/` lists the LLM profiles as cards (`web/components/llm/`) and `web/app/agents/` is a
+  placeholder. `web/lib/api.ts` is the one function that calls the service, always through `/api`,
+  and its error type; `web/lib/llm.ts` holds the profile types and calls. Lists are read with SWR in
+  Client Components. shadcn/ui is set up: `components.json`, components under `web/components/ui/`,
+  and the `cn` helper in `web/lib/utils.ts`. Generated components need `pnpm format` after they are
+  added, and three lint rules they do not meet are off for `web/components/ui/` only
+  (`web/biome.json`). `web/next.config.ts` is the one place the web app reads its configuration:
+  `FREYJA_API_URL`, where its server forwards `/api/...`, documented in `web/.env.example`; it also
+  holds the redirect. Unit tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`,
+  which follows the layout of the code it covers (`web/__tests__/lib/api.test.ts` covers
+  `web/lib/api.ts`), run by Vitest with jsdom; `web/__tests__/testing.ts` stubs `fetch` for them. No
+  test file sits beside the code.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
   is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
+  `console.spec.ts` covers the shell and `llm.spec.ts` the LLM section; `api.ts` holds what
+  the service would answer (`answerProfiles`) and the locators the specs share. The app under
+  test forwards `/api/...` to an address nothing listens on, so a test that hands a page no
+  answer sees the console as it is with the service stopped.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
   `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
@@ -162,15 +177,16 @@ startup and exits with an error naming the connection when it is unreachable.
 - Configuration goes through `Settings`. Never hardcode hosts, ports, connection strings, or
   model ids; add a field with a safe local default, or no default when the value carries a
   credential, and document it in `.env.example`.
-- New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` file next to
-  the code for the web app.
+- New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` or `*.test.tsx`
+  file under `web/__tests__/` for the web app.
 - Write the tests before opening a pull request or merge request, not after. Its description
   has a Tests section that names the tests covering the change, new ones and existing ones
   alike. A change that needs no test, such as documentation or a dependency bump, says so in
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
-  unit tests and does not replace them.
+  unit tests and does not replace them. It never needs the Freyja service: the service's
+  answers are handed to the page in the browser, through `web/e2e/api.ts`.
 - Commit messages use the `type: summary` form: `feat:`, `chore:`, `docs:`.
 - The README documents only what exists in the repo, never planned work.
 

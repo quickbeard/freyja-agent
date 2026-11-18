@@ -290,7 +290,7 @@ cd web
 pnpm test                      # vitest run
 ```
 
-They are `*.test.ts` files next to the code they cover and run in Node. Component tests would need jsdom and Vitest's React plugin, which are not installed.
+They are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of the code it covers: `web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`. They run with jsdom and reach no service: `web/__tests__/testing.ts` replaces `fetch`.
 
 The Python tests live in `tests/`. The suite runs the production routes through FastAPI's test client with in-memory persistence and a scripted model, so it needs neither a database nor a model provider. Tool servers are covered by a stub MCP server, `tests/mcp_stub.py`, which most tests reach inside the test process; the transport tests launch it over pipes and serve it on the loopback interface. Agents are covered the same way by a stand-in A2A agent, `tests/a2a_stub.py`, reached inside the test process through a streaming transport; only `tests/test_a2a_transport.py` serves it on loopback. The suite needs no network, no installed MCP server, and no running agent.
 
@@ -313,15 +313,15 @@ CI runs both unit test suites on every pull request and merge request and on `ma
 
 ## End-to-end tests
 
-The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium, Firefox, and WebKit:
+The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium and Firefox:
 
 ```bash
 cd web
-pnpm exec playwright install   # once per machine: downloads the three browsers
+pnpm exec playwright install chromium firefox   # once per machine: downloads the two browsers
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included. The tests are `*.spec.ts` files under `web/e2e/`. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 

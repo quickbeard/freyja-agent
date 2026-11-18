@@ -5,6 +5,10 @@ import { defineConfig, devices } from "@playwright/test";
 // server's, not a deployment's: what a deployment configures stays in next.config.ts.
 const PORT = 3100;
 const BASE_URL = `http://localhost:${PORT}`;
+// Where the built app forwards /api/...: an address nothing listens on. The tests hand a
+// page the service's answers themselves (e2e/api.ts), and the ones about a stopped service
+// let the request through to find nothing there, whatever runs on this machine's port 8000.
+const ABSENT_SERVICE = "http://127.0.0.1:9";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -34,7 +38,7 @@ export default defineConfig({
     trace: "on-first-retry",
   },
 
-  /* Configure projects for major browsers */
+  /* The browsers the console's users have. Add a project here to test in another. */
   projects: [
     {
       name: "chromium",
@@ -45,17 +49,13 @@ export default defineConfig({
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
     },
-
-    {
-      name: "webkit",
-      use: { ...devices["Desktop Safari"] },
-    },
   ],
 
   /* Build the app and serve it before the tests start, as Next.js's guide recommends. */
   webServer: {
     command: `pnpm build && pnpm start --port ${PORT}`,
     url: BASE_URL,
+    env: { FREYJA_API_URL: ABSENT_SERVICE },
     reuseExistingServer: !process.env.CI,
     timeout: 180_000,
   },

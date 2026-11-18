@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import nextConfig from "./next.config";
+import nextConfig from "@/next.config";
 
 async function rewrites() {
   const rules = await nextConfig.rewrites?.();
@@ -37,5 +37,13 @@ describe("the path from the browser to the service", () => {
     expect((await rewrites())[0].destination).toBe(
       "http://127.0.0.1:8000/:path*",
     );
+  });
+});
+
+describe("the web app's address alone", () => {
+  it("leads to the LLM section, and not for good", async () => {
+    expect(await nextConfig.redirects?.()).toEqual([
+      { source: "/", destination: "/llm", permanent: false },
+    ]);
   });
 });

@@ -212,19 +212,23 @@ web/
 ├── next.config.ts             # + rewrites (/api to the service) and the redirect from / (R13, R15)
 ├── .env.example               # NEW: FREYJA_API_URL
 ├── vitest.config.mts          # NEW: jsdom, React plugin, tsconfig paths (R17)
+├── __tests__/                 # NEW: the unit tests, laid out as the code they cover, and
+│                              #   testing.ts, the fetch stub they share
+├── e2e/                       # + the end-to-end tests of the console (Playwright) and
+│                              #   api.ts, the service's answers they hand to a page
 ├── app/
 │   ├── layout.tsx             # the shell: sidebar and page
 │   ├── page.tsx               # REMOVED: / redirects to /llm
 │   ├── llm/page.tsx           # NEW: the LLM section
 │   └── agents/page.tsx        # NEW: the placeholder
 ├── components/
-│   ├── app-sidebar.tsx        # NEW: the sidebar and its links (client), with its test
+│   ├── app-sidebar.tsx        # NEW: the sidebar and its links (client)
 │   ├── llm/                   # NEW: profile list, card, form dialog, activate and delete
-│   │                          #   confirmations, test result; each with its test
+│   │                          #   confirmations, test result
 │   └── ui/                    # + the shadcn components in R16
 └── lib/
-    ├── api.ts                 # NEW: fetch to /api, the error shape, with its test
-    └── llm.ts                 # NEW: the profile types and the calls, with its test
+    ├── api.ts                 # NEW: fetch to /api, the error shape
+    └── llm.ts                 # NEW: the profile types and the calls
 ```
 
 Also edited: `pyproject.toml` and `uv.lock` (`cryptography` declared), `.env.example` (the two
@@ -243,14 +247,14 @@ store, the manager, and the test. `runtime/` keeps the wiring, and `api/` the ro
 
 | Requirement | Tests |
 |---|---|
-| FR-001, FR-002 | `web/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
-| FR-003 | `web/lib/api.test.ts`, `web/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
+| FR-001, FR-002 | `web/__tests__/components/app-sidebar.test.tsx`; quickstart 1 for the narrow screen |
+| FR-003 | `web/__tests__/lib/api.test.ts`, `web/__tests__/components/llm/profile-list.test.tsx` (unreachable, refusal), `profile-form.test.tsx` (a typed key is cleared and never stored) |
 | FR-003a | `test_llm_profiles_api.py` (no permission for another origin; a body that is not JSON is refused) |
 | FR-004, FR-005, FR-006 | `test_llm_profile_store.py`, `test_llm_profiles_api.py`, `integration/test_llm_profiles_postgres.py` |
-| FR-007 | `web/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
+| FR-007 | `web/__tests__/components/llm/profile-card.test.tsx`, `profile-list.test.tsx` |
 | FR-008 | `test_llm_profiles_api.py` (environment profile, read-only) |
-| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
-| FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
+| FR-009, FR-010 | `test_llm_profiles_api.py`; `web/__tests__/components/llm/profile-form.test.tsx` (confirmation when the profile is active), `delete-dialog.test.tsx` |
+| FR-011, FR-011a, FR-012, FR-015 | `test_llm_switch.py`, `test_llm_profile_store.py`, `integration/test_llm_profiles_postgres.py`; `web/__tests__/components/llm/activate-dialog.test.tsx` (names the endpoint conversations go to) |
 | FR-013, FR-014 | `test_llm_switch.py` (next run, run in progress, pause, background run, two runtimes) |
 | FR-016, FR-016a | `test_llm_no_model.py` (runs refused, the health check unchanged, no background run and no attempt used) |
 | FR-017, FR-018, FR-019, FR-019a, FR-019b | `test_llm_check.py`, `test_llm_profiles_api.py` |
@@ -336,3 +340,72 @@ check, phase by phase.
 - **The checkpoint** was run with the real service and model: a run answered, its first event
   named the environment's profile, the log had one line for it, and `freyja_llm_profiles` and
   `freyja_llm_state` existed with the environment active at revision 0.
+
+### Phase 3 as built (2026-11-17)
+
+- **No hydration warning** (T037, research "Not verified"). The browser console showed none
+  with `usePathname()` in `web/components/app-sidebar.tsx`, on `/llm`, on `/agents`, and after
+  the redirect from `/`, so the documented fix was not needed.
+- **The browser check** (T037) was run in headless Chrome against `next dev` and the real
+  service: `/` lands on `/llm` with LLM marked; one card, Environment, marked active and from
+  the environment, with the provider, model, base URL, API choice, and four key characters,
+  and no Edit or Delete; the Agents page has its sentence and no control of its own; in a
+  500-pixel window the sidebar is hidden and opens from its control; with the service stopped
+  the page says the service cannot be reached, offers to try again, and shows no card.
+- **One main landmark** (T033). The generated `SidebarInset` is itself `<main>`, so the layout
+  wraps the page in a `<div>`. The first version nested a second `<main>`; the check found it.
+- **In development the page is opened at `localhost`**, as the quickstart says. `next dev`
+  refuses its own scripts to a page opened at `127.0.0.1` unless `allowedDevOrigins` names it,
+  and the list then stays on its loading state. Nothing was configured: a built app is not
+  affected, and the documented address works.
+- **The environment is described once, at startup** (T029). `Runtime.environment` holds it, so
+  reading the list builds no model. When the environment's profile is the active one the
+  manager has just built its model, and the description does not build it a second time. A
+  model handed to the runtime already built, as the tests do, is listed under the model
+  setting's name and as usable.
+- **`secret_not_configured` comes before `key_unreadable`** (T029): with no secret set every
+  saved profile is listed as not usable for that reason, and a key is only tried against a
+  secret that exists.
+- **A reply that is not JSON counts as unreachable** (T030). When the service is stopped the
+  web app's server answers the forwarded request with a 500 and no JSON body, so
+  `web/lib/api.ts` reports an error reply it cannot parse the same way as a failed request.
+- **A Refresh button** (T035) sits above the cards. The plan named only "try again" after a
+  failure; the list is otherwise read once, and a second way to read it costs one button.
+  SWR does not retry a failed read by itself here, and a failed read never shows older cards.
+- **The loading state is an `<output>`** (T035), which carries the status role Biome asks for
+  in place of `role="status"` on a `<div>`.
+- **Web tests live under `web/__tests__/`** (decided in review of this phase). The plan had
+  each test next to the code it covers. They were moved to one directory that follows the
+  layout of the code, so `web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`, and they
+  import what they cover through the `@/` alias. `AGENTS.md`, the README, research R17, and
+  every path in tasks.md say so, for the tests of later phases too.
+- **Files beyond the plan's tree**: `web/__tests__/testing.ts`, the `fetch` stub the web tests
+  share, and `web/__tests__/app/agents/page.test.tsx`. `web/vitest.setup.ts` now also stubs
+  `matchMedia`, which jsdom lacks and the sidebar reads, and undoes stubbed globals after each test.
+- **The stock page's files are gone** (T036): `web/app/page.tsx` and the five images under
+  `web/public/`, which only that page used.
+- **End-to-end tests** (T037a, added after the plan). Playwright came to `main` while this phase
+  was in review, so the browser check of T037 is now kept as tests: `web/e2e/console.spec.ts`
+  and `web/e2e/llm.spec.ts`, eleven tests beside the existing smoke test, run in Chromium and
+  Firefox against the built app. They need no service: `web/e2e/api.ts` hands a page what the
+  service would answer, in the browser. The app under test forwards `/api/...` to an address
+  nothing listens on, so the two tests about a stopped service go through the web app's own
+  server, as the hand check did.
+- **The sidebar now closes once a section is chosen in a narrow window** (T032, FR-001). The
+  end-to-end test found that it stayed open over the page it had just led to; the hand
+  check of T037 had only opened it. `web/components/app-sidebar.tsx` closes it on a link's
+  click, and a unit test covers that.
+- **The sidebar has a grey and an edge of its own** (T032, decided in review). With the stock
+  theme the sidebar was a 0.985 grey beside a white page, and its edge the page's border
+  color, so neither could be seen. `web/app/globals.css` now gives the light theme's sidebar
+  a 0.955 grey, a 0.85 edge, and a 0.9 accent for the section in use, which has to stay
+  darker than the sidebar; `web/components/app-sidebar.tsx` draws the edge in the sidebar's
+  border color. The dark theme's values already differed and are unchanged. An end-to-end
+  test compares the computed colors, which a unit test in jsdom cannot.
+- **Two things a browser test of this app must allow for.** Next.js keeps an element with
+  the alert role of its own outside the page, to announce navigations, so the tests look
+  for alerts inside the main landmark. And after moving to another section, the one left
+  behind is still in the document, hidden, so a count of what a page offers counts only
+  what can be seen.
+- **Order of the service test** (T024, T029). The web tests were seen failing before their
+  code existed. The service test was written before the route and first run after it.

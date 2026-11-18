@@ -198,7 +198,8 @@ def test_no_agents_address_appears_in_the_catalog(
 
     for text in (before, after):
         assert "localhost" not in text
-        assert "9877" not in text
+        # With its colon: the times in the answer are digits too.
+        assert ":9877" not in text
 
 
 def test_reading_the_catalog_contacts_no_agent(make_a2a_app: Callable[..., A2aApp]) -> None:
