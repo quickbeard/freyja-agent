@@ -3,6 +3,10 @@
 No client is ever called: building one opens no connection.
 """
 
+import importlib
+import os
+import re
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -17,6 +21,7 @@ from freyja_agent.llm.providers import (
     NoUsableModelError,
     UnusableChatModel,
     build_model,
+    environment_access,
     environment_key,
     environment_profile,
     environment_spec,
@@ -33,6 +38,9 @@ PROVIDER_VARIABLES = (
     "ANTHROPIC_BASE_URL",
     "OPENROUTER_API_KEY",
     "OPENROUTER_API_BASE",
+    "LANGSMITH_GATEWAY",
+    "LANGSMITH_GATEWAY_API_KEY",
+    "LANGSMITH_API_KEY",
 )
 
 
@@ -143,6 +151,101 @@ def test_each_provider_has_an_address_of_its_own(monkeypatch: pytest.MonkeyPatch
         assert sends_to(built) == provider.address
 
 
+# The packages whose code decides what a provider's client takes from the environment.
+CLIENT_PACKAGES = {
+    "openai": ("langchain_openai", "openai"),
+    "anthropic": ("langchain_anthropic", "anthropic"),
+    "openrouter": ("langchain_openrouter", "openrouter"),
+}
+
+
+def variables_the_client_knows(provider: str) -> set[str]:
+    """Every variable of the provider's that its installed client packages name.
+
+    Read from the packages themselves, so a variable a later version starts to read is in
+    the test the day the version is installed.
+    """
+    prefix = PROVIDERS[provider].variable_prefix
+    names: set[str] = set()
+    for package in CLIENT_PACKAGES[provider]:
+        root = Path(importlib.import_module(package).__file__ or "").parent
+        for source in root.rglob("*.py"):
+            text = source.read_text(encoding="utf-8", errors="ignore")
+            names |= set(re.findall(rf"""["']({prefix}[A-Z0-9_]+)["']""", text))
+    return names
+
+
+def marked(name: str) -> str:
+    """A value for an environment variable that can be told apart wherever it turns up."""
+    mark = f"env-marker-{name.lower().replace('_', '-')}"
+    if "HEADERS" in name:
+        return f"X-Env-Marker: {mark}\nAuthorization: Bearer {mark}\nX-Api-Key: {mark}"
+    if any(part in name for part in ("URL", "BASE", "PROXY", "HOST", "ENDPOINT")):
+        return f"http://{mark}.invalid/v1"
+    return mark
+
+
+def everything_about(model: Any) -> str:
+    """What a built client holds and what it would send, as text: its fields, and the address
+    and headers of a request from each of its clients, built and never sent."""
+    parts = [repr(vars(model))]
+    for name in ("root_client", "root_async_client", "_client", "_async_client"):
+        client = getattr(model, name, None)
+        if client is None or not hasattr(client, "_build_request"):
+            continue
+        models = importlib.import_module(type(client).__module__.split(".")[0] + "._models")
+        options = models.FinalRequestOptions.construct(method="post", url="/x", json_data={})
+        request = client._build_request(options)
+        parts.append(f"{name}: {request.url} {dict(request.headers)!r}")
+    return "\n".join(parts)
+
+
+@pytest.mark.parametrize("provider", ["openai", "anthropic", "openrouter"])
+@pytest.mark.parametrize("base_url", [None, "http://127.0.0.1:9/v1"])
+def test_a_saved_profiles_client_takes_nothing_from_its_providers_environment(
+    provider: str, base_url: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-004: a profile is its provider, its model, its base URL, and its key, and nothing
+    the environment has set for its own model reaches the profile's endpoint: no header, no
+    credential, no organization. Every variable the installed client names is set here."""
+    known = variables_the_client_knows(provider)
+    assert len(known) >= 2, known
+    for name in known:
+        monkeypatch.setenv(name, marked(name))
+
+    built = build_model(ModelSpec(provider=provider, model="m", api_key=KEY, base_url=base_url))
+    found = everything_about(built)
+
+    reached = {name for name in known if marked(name).split("\n")[0].split(": ")[-1] in found}
+    # A proxy is how the deployment reaches the outside, like HTTP_PROXY: it stays.
+    assert {name for name in reached if not name.endswith("_PROXY")} == set()
+    # Nothing marked is left once the proxies are set aside, whatever it was called.
+    for name in known:
+        if name.endswith("_PROXY"):
+            found = found.replace(marked(name), "")
+    assert "env-marker" not in found
+    # The credential that travels is the profile's own.
+    if provider != "openrouter":
+        assert KEY in found
+    assert sends_to(built) == (base_url or PROVIDERS[provider].address)
+    # And the environment is as it was found.
+    assert {name: os.environ.get(name) for name in known} == {n: marked(n) for n in known}
+
+
+def test_the_environments_own_model_still_takes_its_clients_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-023: what the environment sets for its own model is still its client's to read."""
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    monkeypatch.setenv("OPENAI_ORG_ID", "org-of-the-environment")
+    monkeypatch.setenv("OPENAI_CUSTOM_HEADERS", "X-Env: of-the-environment")
+
+    found = everything_about(build_model(environment_spec(Settings(model="openai:m"))))
+
+    assert "org-of-the-environment" in found
+    assert "of-the-environment" in found
+
+
 def test_a_spec_never_shows_its_key() -> None:
     spec = ModelSpec(provider="openai", model="m", api_key=KEY)
     assert KEY not in repr(spec)
@@ -230,6 +333,75 @@ def test_the_environments_profile_shows_the_address_its_client_will_use(
 
     assert profile.base_url == shown
     assert sends_to(build_model(environment_spec(Settings(model=model)))) == shown.rstrip("/")
+
+
+GATEWAY_KEY = "ls-gateway-key-7777"
+
+
+@pytest.mark.parametrize(
+    ("model", "address"),
+    [
+        ("openai:m", "https://gateway.smith.langchain.com/openai/v1"),
+        ("anthropic:m", "https://gateway.smith.langchain.com/anthropic"),
+    ],
+)
+def test_an_environment_that_reaches_its_model_through_the_gateway_alone_is_usable(
+    model: str, address: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-023: such a deployment ran before this feature, with no provider key at all. Its
+    client is built with the gateway's key, so that is the key the environment has."""
+    monkeypatch.setenv("LANGSMITH_GATEWAY", "true")
+    monkeypatch.setenv("LANGSMITH_GATEWAY_API_KEY", GATEWAY_KEY)
+    settings = Settings(model=model)
+
+    profile = environment_profile(settings)
+
+    assert (profile.usable, profile.unusable_reason) == (True, None)
+    assert profile.key_hint == "7777"
+    assert profile.base_url == address
+    built = build_model(environment_spec(settings))
+    assert sends_to(built) == address
+    assert environment_access(environment_spec(settings), built).key == GATEWAY_KEY
+    assert GATEWAY_KEY not in repr(profile)
+    assert GATEWAY_KEY not in repr(environment_access(environment_spec(settings), built))
+
+
+def test_the_environments_profile_is_described_by_what_its_client_will_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """FR-008: with the gateway on, the client goes to the gateway whatever the SDK's own
+    variable says, and sends the gateway's key. The card and the key to take out of an error
+    follow the client, not the variables."""
+    monkeypatch.setenv("LANGSMITH_GATEWAY", "true")
+    monkeypatch.setenv("LANGSMITH_GATEWAY_API_KEY", GATEWAY_KEY)
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    monkeypatch.setenv("OPENAI_BASE_URL", ELSEWHERE)
+    settings = Settings(model="openai:m")
+    built = build_model(environment_spec(settings))
+
+    profile = environment_profile(settings)
+    access = environment_access(environment_spec(settings), built)
+
+    assert sends_to(built) == "https://gateway.smith.langchain.com/openai/v1"
+    assert profile.base_url == "https://gateway.smith.langchain.com/openai/v1"
+    assert access.key == GATEWAY_KEY
+    assert profile.key_hint == "7777"
+
+
+def test_without_a_client_to_look_at_the_environment_is_described_from_its_variables(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    monkeypatch.setenv("OPENAI_API_BASE", ELSEWHERE)
+    spec = environment_spec(Settings(model="openai:m"))
+
+    assert environment_access(spec).key == KEY
+    assert environment_access(spec).base_url == ELSEWHERE
+    # A stand-in for a model has none of a client's fields, and changes nothing.
+    assert environment_access(spec, ScriptedChatModel()) == environment_access(spec)
+    # The provider's own address is no base URL to show.
+    monkeypatch.setenv("OPENAI_API_BASE", "https://api.openai.com/v1/")
+    assert environment_access(spec).base_url is None
 
 
 @pytest.mark.parametrize(("setting", "expected"), [(True, True), (False, False)])

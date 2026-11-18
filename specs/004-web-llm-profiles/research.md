@@ -56,7 +56,15 @@ environment when both are given (*verified* with the environment's keys unset: `
 variables (*verified* by the converge step: `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
 `ANTHROPIC_API_URL`, `ANTHROPIC_BASE_URL`, `OPENROUTER_API_BASE`), which would send an
 operator's key to the environment's endpoint. So a saved profile with no base URL is built
-with its provider's own address, kept in the provider table, and never without one. Going
+with its provider's own address, kept in the provider table, and never without one. The
+clients read more than an address: headers for every request (`OPENAI_CUSTOM_HEADERS`,
+`ANTHROPIC_CUSTOM_HEADERS`), which are put over the client's own credential, an organization,
+a project, and attribution values (*verified* by the third converge run). No parameter
+switches all of them off, so a saved profile's client is built with its provider's variables
+taken out of the process environment for that moment, and what a client would build lazily
+is built then too. The environment's own client is described from what it holds once built,
+because with the LangSmith gateway on, `langchain-core` sends it to the gateway with the
+gateway's key by rules of its own. Going
 through `init_chat_model` with Deep Agents' provider profile keeps a saved
 profile resolved exactly as the environment's model is (001 research R3).
 

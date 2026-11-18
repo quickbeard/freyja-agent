@@ -903,3 +903,51 @@ proceed at the same time once Phase 4 is merged.
       403 `other_origin` answer on each path that changes something in
       `specs/004-web-llm-profiles/contracts/openapi.yaml` per plan: data model, project
       structure, contract (partial)
+
+## Phase 12: Convergence
+
+- [X] T104 Build a saved profile's client so that it takes no header from the environment:
+      with `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` set, the provider's SDK adds
+      those headers to every client, over the client's own credential, so a saved profile's
+      request carries the environment's `Authorization` or `X-Api-Key` to the profile's
+      endpoint and its own key is not sent. `model_arguments` in
+      `src/freyja_agent/llm/providers.py` passes a key and a base URL and leaves the rest to
+      the client. First add a test to `tests/test_llm_providers.py` that builds a request
+      without sending it, for each provider and each such variable, and asserts that the
+      credential on it is the profile's key and that nothing of the environment's is there;
+      the environment's own model keeps them per FR-004, spec Assumptions: trust (partial)
+- [X] T105 Decide whether an environment that reaches its model through the LangSmith gateway
+      alone is supported, and make the service and the spec agree: with `LANGSMITH_GATEWAY`
+      on and its key set, and no provider key, the client is built for the gateway as it was
+      before this feature, but `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py`
+      and `environment_profile` call the environment's profile `not_configured`, and every
+      run ends with `no_usable_model`. Either count the gateway's key as the provider's in
+      `environment_key` and in the rule for usable, with tests in
+      `tests/test_llm_providers.py` and `tests/test_llm_no_model.py`, or state in FR-011a and
+      the README that the gateway is not supported per FR-023, FR-011a (contradicts)
+- [X] T106 Keep the environment's organization and project off a saved OpenAI profile's client:
+      `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and `OPENAI_PROJECT_ID` put `OpenAI-Organization`
+      and `OpenAI-Project` on its requests, which names the environment's account to the
+      profile's endpoint and may have the provider refuse a key of another organization. Add
+      the variables to the test of T104 first per FR-004 (partial)
+- [X] T107 Describe the environment's profile by what its built client will use when the
+      LangSmith gateway is on, in `environment_profile` of
+      `src/freyja_agent/llm/providers.py`: the card shows no base URL, or the one in
+      `OPENAI_BASE_URL`, while the client goes to the gateway, and the gateway's key is not
+      among the keys taken out of an error (`environment_secrets` in
+      `src/freyja_agent/runtime/runtime.py`). Follows T105's decision; tests in
+      `tests/test_llm_providers.py` and `tests/test_llm_secrets_nowhere.py` per FR-008, FR-021
+      (partial)
+- [X] T108 [P] Drop the activation dialog's own test result when the list's copy of the profile
+      has a later result or was changed since, in
+      `web/components/llm/activate-dialog.tsx`: after "Test first" passes, a later reading
+      that says the test failed, or that the profile's model or base URL changed, leaves the
+      dialog saying it passed, with no warning. A list-level case in
+      `web/__tests__/components/llm/activate-dialog.test.tsx` first per FR-012, SC-011
+      (partial)
+- [X] T109 [P] Keep a test result that was not kept by the service, and its note, on the card
+      until the next test, in `web/components/llm/profile-card.tsx`: the card reads the list
+      again at once, the profile's `updated_at` has moved, and the result is gone after one
+      round trip. Replace the case in `web/__tests__/components/llm/profile-card.test.tsx`
+      that rerenders with an unchanged `updated_at`, which the service cannot produce per
+      Edge Cases: a test is running when its profile is edited, FR-019a (partial)

@@ -464,6 +464,67 @@ describe("Set active, from the list", () => {
     ).toHaveLength(0);
   });
 
+  it.each([
+    [
+      "a later test failed",
+      {
+        last_test: {
+          ok: false,
+          at: "2026-11-18T10:00:00.000000+00:00",
+          step: "conversation" as const,
+          reason: "Error code: 422 - Input should be a valid string",
+        },
+      },
+      /last test failed at the conversation/,
+    ],
+    [
+      "the profile was changed",
+      {
+        model: "another-model",
+        updated_at: "2026-11-18T10:00:00.000000+00:00",
+        last_test: null,
+      },
+      /has not been tested since its last change/,
+    ],
+  ] as [
+    string,
+    Partial<LlmProfile>,
+    RegExp,
+  ][])("warns again after its own test passed when the list then says %s", async (_case, now, warning) => {
+    const AT = "2026-11-17T09:14:02.118000+00:00";
+    const passed = { ok: true, at: AT, step: null, reason: null };
+    const listed = (saved: Partial<LlmProfile>): LlmProfileList => ({
+      ...list("environment"),
+      profiles: [list("environment").profiles[0], { ...SAVED, ...saved }],
+    });
+    stubFetch(
+      { json: listed({}) },
+      { json: { ...passed, recorded: true } },
+      { json: listed({ last_test: passed }) },
+      { json: listed(now) },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    const dialog = await screen.findByRole("alertdialog");
+
+    // Tested from the confirmation: it passed, and the warning goes.
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+    await waitFor(() =>
+      expect(dialog.querySelector('[role="note"]')).toBeNull(),
+    );
+    expect(dialog.textContent).toMatch(/Last test passed/);
+
+    // Then the list says otherwise: the confirmation's own result is no longer the last word.
+    fireEvent.click(screen.getByText("Refresh"));
+    await waitFor(() =>
+      expect(dialog.querySelector('[role="note"]')?.textContent).toMatch(
+        warning,
+      ),
+    );
+    expect(dialog.textContent).not.toMatch(/Last test passed/);
+  });
+
   it("changes nothing when the confirmation is cancelled", async () => {
     const fetchStub = stubFetch({ json: list("environment") });
     renderList();

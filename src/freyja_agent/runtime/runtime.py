@@ -45,6 +45,7 @@ from freyja_agent.llm.providers import (
     ModelFactory,
     ModelSpec,
     build_model,
+    environment_access,
     environment_key,
     environment_profile,
     environment_spec,
@@ -205,7 +206,6 @@ class Runtime:
                 )
                 spec = environment_spec(settings, model if isinstance(model, str) else None)
                 provider = PROVIDERS.get(spec.provider)
-                key = environment_key(spec)
                 if isinstance(model, BaseChatModel):
                     environment = partial(_given, model)
                 elif model_factory is not None:
@@ -215,12 +215,27 @@ class Runtime:
                     environment = partial(
                         resolve_model, spec.name, openai_responses_api=spec.responses_api
                     )
+                # How the environment's model is reached is what its client holds: with the
+                # LangSmith gateway on, that is the gateway and its key, with no provider key
+                # at all, and such a deployment ran before feature 004 (FR-023). Only a real
+                # client is looked at; a stand-in or a model handed over says nothing.
+                client = None
+                if model_factory is None and not isinstance(model, BaseChatModel):
+                    try:
+                        client = environment()
+                    except Exception:
+                        client = None  # the manager meets the same failure and records it
+                access = environment_access(spec, client)
+                key = access.key
+                # The keys to take out of an error: the one that is sent, and the provider's
+                # own if the environment has another.
+                secrets = tuple(dict.fromkeys(k for k in (key, environment_key(spec)) if k))
                 manager = ModelManager(
                     store=profile_store,
                     secret=settings.secret_key,
                     factory=model_factory or build_model,
                     environment=environment,
-                    environment_secrets=(key,) if key else (),
+                    environment_secrets=secrets,
                     # One of the three providers with no key set is not usable, whatever a
                     # client would make of it (FR-011a). A model handed over built is.
                     environment_unusable=(
@@ -255,6 +270,7 @@ class Runtime:
                     settings,
                     factory=_already_built if built else model_factory or build_model,
                     model=model if isinstance(model, str) else None,
+                    access=access,
                 )
                 if given:
                     # A model handed over needs no key from the environment.
@@ -271,7 +287,7 @@ class Runtime:
                     model_factory=model_factory or build_model,
                     environment_model=model if given else None,
                     environment_values=spec,
-                    environment_secrets=(key,) if key else (),
+                    environment_secrets=secrets,
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,

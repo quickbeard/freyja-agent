@@ -38,9 +38,22 @@ function Confirmation({
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const inFlight = useRef(false);
-  // A test run from here, which then says more than the profile's last one.
-  const [tested, setTested] = useState<LlmTestResult | null>(null);
+  // A test run from here says more than the profile's last one, for as long as the profile
+  // is the one that was tested and the list knows of no later test.
+  const [ran, setRan] = useState<{
+    result: LlmTestResult;
+    of: string | null;
+  } | null>(null);
   const [testing, setTesting] = useState(false);
+  const tested =
+    ran !== null &&
+    ran.of === profile.updated_at &&
+    !(
+      profile.last_test !== null &&
+      Date.parse(profile.last_test.at) > Date.parse(ran.result.at)
+    )
+      ? ran.result
+      : null;
   const last = tested ?? profile.last_test;
 
   async function testFirst() {
@@ -48,7 +61,8 @@ function Confirmation({
     setTesting(true);
     setRefusal(null);
     try {
-      setTested(await testProfile(profile.id));
+      const result = await testProfile(profile.id);
+      setRan({ result, of: profile.updated_at });
       onTested?.();
     } catch (error) {
       if (isGone(error)) onGone?.();

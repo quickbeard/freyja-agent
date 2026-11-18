@@ -98,9 +98,11 @@ startup and exits with an error naming the connection when it is unreachable.
 - `src/freyja_agent/llm/`: LLM profiles (feature 004), the ways to reach a model that an
   operator saves, tests, and activates while the service runs. `providers.py` holds the
   provider table, `build_model` for a saved profile, and the environment's profile, and is
-  the one module that reads a provider's own variables (`environment_key`). A saved profile
-  with no base URL is built for its provider's own address from the table, never left to the
-  client, which would take the environment's; `secrets.py`
+  the one module that reads a provider's own variables (`environment_key`). A saved profile's
+  client is built with its provider's variables hidden (`build_model`), and for the
+  provider's own address when it has no base URL, so nothing the environment sets for its own
+  model reaches a saved profile's endpoint; the environment's profile is described from what
+  its built client holds (`environment_access`), a LangSmith gateway included; `secrets.py`
   encrypts stored API keys under `FREYJA_SECRET_KEY` and removes keys from text (`redact`);
   `guard.py` makes a model raise its errors with its profile's key already taken out
   (`guard_model`), because LangGraph shows a failed step's error in the debug stream and

@@ -24,6 +24,11 @@ the environment's profile shows the first that is set. A provider's own address 
 saved profile with no base URL is sent: it is passed to the client, which would otherwise take
 an address from those variables.
 
+A saved profile's client is built with every variable of its provider's hidden from it, the
+ones above and any other its client reads, such as headers, an organization, or a project. A
+proxy variable is the exception. So a saved profile is its provider, its model, its base URL,
+and its key, and nothing the environment sets for its own model travels with its requests.
+
 A saved profile's provider is one of the three ids. The environment's profile may carry any
 prefix LangChain accepts; one outside the table is shown as written, with no key hint and no
 base URL, and is not offered in the form.
@@ -89,10 +94,10 @@ Built at startup from what the service was started with (FR-008).
 | `id` | the constant `environment` |
 | `name` | the constant `Environment` |
 | `provider`, `model` | the two halves of `FREYJA_MODEL` |
-| `base_url` | the provider's base URL variable, when set and the provider is in the table |
-| `key_hint` | from the provider's key variable, by the same rule as a saved profile |
+| `base_url` | the address the environment's client will use, when it is not the provider's own: what the built client holds, which is the LangSmith gateway's when that is on, and otherwise the first that is set of the provider's base URL variables |
+| `key_hint` | from the key the environment's client will send, by the same rule as a saved profile: the built client's, which is the gateway's when the gateway is on, and otherwise the provider's key variable |
 | `responses_api` | `FREYJA_OPENAI_RESPONSES_API`, when the provider is `openai` |
-| `usable` | the model can be built, and the provider's key is set when the provider is in the table (research R3) |
+| `usable` | the model can be built, and its client has a key when the provider is in the table (research R3, FR-011a) |
 | last test | kept in memory on the instance; cleared when it restarts (FR-019a) |
 
 It has no `created_at` or `updated_at`. Each service instance has its own, read from its own
