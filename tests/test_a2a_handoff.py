@@ -675,8 +675,10 @@ def test_no_error_result_log_thread_or_catalog_contains_the_address(
     assert "<address>" in error["content"]
     logged = [record.getMessage() for record in caplog.records]
     assert any("hello" in line and "<address>" in line for line in logged)
+    # The port is looked for with its colon: a run or task id is random hex and now and then
+    # holds the same four digits.
     for text in [*texts, *logged]:
-        assert "localhost" not in text and "9877" not in text, text
+        assert "localhost" not in text and ":9877" not in text, text
 
 
 def test_a_status_check_while_watching_updates_the_agents_reachability(
@@ -795,8 +797,9 @@ def test_the_workers_logs_name_the_agent_and_never_the_address(
     assert "<address>" in check[0]
     assert gave_up and "bad-7" in gave_up[0] and "hello" in gave_up[0]
     assert attempt and "bad-7" in attempt[0] and "hello/" in attempt[0]
+    # With its colon, as above: the log names each run by a random id.
     for line in logged:
-        assert "localhost" not in line and "9877" not in line, line
+        assert "localhost" not in line and ":9877" not in line, line
 
 
 def test_a_stream_that_breaks_after_acknowledgment_leaves_the_task_pending(
