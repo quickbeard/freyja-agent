@@ -25,7 +25,7 @@ uv run python -c "from cryptography.fernet import Fernet; print(Fernet.generate_
 |---|---|
 | Unset | The service starts. The environment's profile works as before. Saving a profile, or changing a saved profile's key, is refused with `secret_not_configured`. Saved profiles, if any exist, are listed as unusable with `secret_not_configured`. |
 | Set, valid | Profiles can be saved. Keys are stored encrypted under it. |
-| Set, not a Fernet key | The service does not start. The error names the variable and never repeats its value. |
+| Set, not a Fernet key | The service does not start. The error names the setting, `secret_key`, and never repeats its value. |
 | Changed since keys were stored | The service starts. Each profile whose key no longer decrypts is listed as unusable with `key_unreadable`, until its key is entered again. If the active profile is one of them, runs end with `no_usable_model`. |
 
 The value is never logged, returned, or shown, and it never leaves the service process.

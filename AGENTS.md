@@ -67,7 +67,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `FREYJA_A2A_CALL_TIMEOUT_SECONDS`, `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS`,
   `FREYJA_A2A_POLL_INTERVAL_SECONDS`, `FREYJA_A2A_TASK_MAX_AGE_SECONDS`,
   `FREYJA_BACKGROUND_RUN_ATTEMPTS`, `FREYJA_BACKGROUND_RETRY_SECONDS`, and
-  `FREYJA_BACKGROUND_RUN_CONCURRENCY`.
+  `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
+  a Fernet key or unset, which protects stored API keys and stops startup when it is not a
+  Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
 - `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
   (`build_agent`; the service, the tests, and any future CLI call it). `build_agent` takes the
   tool server tools as `delegate_tools` and returns an `Orchestrator`: the compiled graph as
@@ -93,10 +95,9 @@ startup and exits with an error naming the connection when it is unreachable.
   background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
   `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
   is ready waits.
-- `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API lists, adds,
-  activates, tests, changes, and deletes them.
-  `providers.py` holds the provider table, `build_model` for a saved profile, and the
-  environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
+- `src/freyja_agent/llm/`: LLM profiles (feature 004), the ways to reach a model that an
+  operator saves, tests, and activates while the service runs. `providers.py` holds the
+  provider table, `build_model` for a saved profile, and the environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
   `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
@@ -125,7 +126,7 @@ startup and exits with an error naming the connection when it is unreachable.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
-  `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, `POST /llm/profiles`,
+  `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
   profile's test with its endpoint; an activation is applied on this instance at once; its

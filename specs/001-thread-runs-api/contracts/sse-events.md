@@ -37,10 +37,14 @@ recognize.
 ### `start`
 
 ```json
-{"thread_id": "inc-2041", "run_id": "0f3c...", "mode": "run", "debug": false}
+{"thread_id": "inc-2041", "run_id": "0f3c...", "mode": "run", "debug": false,
+ "profile": {"id": "environment", "name": "Environment", "source": "environment"}}
 ```
 
-`mode` is `run` or `resume`.
+`mode` is `run` or `resume`. `profile` names the LLM profile the run uses, by `id`, `name`,
+and `source` (`saved` or `environment`), and does not change during the run. It was added by
+feature 004; see
+[its stream contract](../../004-web-llm-profiles/contracts/sse-events.md#start-gains-profile).
 
 ### `update`
 
@@ -114,12 +118,15 @@ against. The top-level list is the union of them, for display.
 
 `code` is one of `step_limit`, `model_error` (an exception raised by the chat model: provider
 API errors and timeouts), `internal` (anything else, including a database failure during the
-run).
+run), and `no_usable_model` (the active LLM profile cannot be used; the orchestrator is not
+invoked and nothing is added to the thread). `no_usable_model` was added by feature 004; see
+[its stream contract](../../004-web-llm-profiles/contracts/sse-events.md#error-gains-no_usable_model).
 
 `message` is human-readable. The service puts no value of its own credential settings in it
-(FR-004b). For `model_error` it includes the provider's error text unfiltered; what that text
-contains is the provider's choice. For `internal` it is a fixed sentence, and the detail goes
-to the service log.
+(FR-004b). For `model_error` it includes the provider's error text; what that text contains
+is the provider's choice, except that the key of the LLM profile the run uses is replaced with
+`<key>` should the provider repeat it (feature 004). For `internal` it is a fixed sentence, and
+the detail goes to the service log.
 
 When the step limit is reached at the step that proposes a gated action, the stream ends with
 `step_limit` and not with `interrupt`: nothing is pending and the action does not run.

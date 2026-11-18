@@ -31,8 +31,9 @@ echo "FREYJA_SECRET_KEY=$(uv run python -c 'from cryptography.fernet import Fern
 # Terminal 1: the service
 uv run --env-file .env freyja-api
 
-# Terminal 2: the stand-in model endpoint
-uv run python -m tests.llm_stub --http 9997      # http://127.0.0.1:9997/v1
+# Terminal 2: the stand-in model endpoint. It imports the service's settings, so it needs
+# the same --env-file as the service.
+uv run --env-file .env python -m tests.llm_stub --http 9997      # http://127.0.0.1:9997/v1
 
 # Terminal 3: the web app (add -p <port> if 3000 is taken)
 cd web && pnpm install && pnpm dev               # http://localhost:3000
@@ -131,12 +132,14 @@ says it has not been tested since its last change.
 
 ## 4. Change and remove profiles (User Story 4)
 
+`Stub` is the active profile at this point, so each save of a change to it asks for
+confirmation first, saying that the change applies from the next run. Confirm each time.
+
 - Edit `Stub`, leave the key empty, change the name, save: the card shows the new name, the same
   four key characters, and the test result is kept.
 - Edit it again with a new key: the card shows the new key's last four characters and no test
   result.
-- With `Stub` active, change its model to `ok-2` and save: the console asks for confirmation,
-  saying the change applies from the next run. Confirm and start a run: the service was not
+- Change its model to `ok-2`, save, and confirm. Start a run: the service was not
   restarted, and the stand-in's terminal shows the request asking for `ok-2`. Change it back.
 - Delete `Refuses` and confirm: its card is gone, also after a restart.
 - Try to delete the active profile: refused, with a message to activate another first.
@@ -161,8 +164,10 @@ docker compose exec postgres psql -U freyja -d freyja -c \
 
 Search the service's terminal output for `quickstart-key`: nothing.
 
-Remove `FREYJA_SECRET_KEY` from `.env` and restart. The environment's card works as before; the
-saved cards are shown as unusable; saving a profile is refused:
+Remove `FREYJA_SECRET_KEY` from `.env` and restart. The environment's card works as before and
+can be tested; the saved cards are shown as unusable; saving a profile is refused. While a saved
+profile is the active one, the console also says that no usable model is active, as in
+section 6:
 
 ```bash
 curl -s -X POST localhost:8000/llm/profiles -H 'content-type: application/json' \
@@ -172,7 +177,7 @@ curl -s -X POST localhost:8000/llm/profiles -H 'content-type: application/json' 
 Put the secret back and restart: the saved profiles are usable again.
 
 Set `FREYJA_SECRET_KEY=not-a-key` and start the service: it does not start, and the error names
-the variable without repeating the value. Restore the real secret.
+the setting, `secret_key`, without repeating the value. Restore the real secret.
 
 A page from another origin cannot use the API. The service gives a preflight no permission, and
 refuses a body that is not sent as JSON:
@@ -219,4 +224,5 @@ uv run ruff check . && uv run ruff format --check .
 uv run pytest                              # no network, no model provider, no database
 FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
 cd web && pnpm lint && pnpm test && pnpm build
+pnpm test:e2e                              # Chromium and Firefox; needs no service
 ```
