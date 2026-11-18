@@ -1,0 +1,318 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { useState } from "react";
+import { describe, expect, it, vi } from "vitest";
+import { type Reply, stubFetch } from "@/__tests__/testing";
+import { ProfileForm } from "@/components/llm/profile-form";
+import type { LlmProfile } from "@/lib/llm";
+
+const KEY = "sk-recognizable-key-0001";
+
+const SAVED: LlmProfile = {
+  id: "5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b",
+  name: "Local vLLM",
+  source: "saved",
+  provider: "openai",
+  model: "served-model",
+  base_url: "http://10.0.0.5:31000/v1",
+  responses_api: false,
+  key_hint: "0001",
+  active: false,
+  usable: true,
+  unusable_reason: null,
+  last_test: null,
+  created_at: "2026-11-17T09:10:44.501000+00:00",
+  updated_at: "2026-11-17T09:10:44.501000+00:00",
+};
+const CREATED: Reply = { status: 201, json: SAVED };
+
+// The form as the list holds it: a control opens it, and it closes itself.
+function Harness({ onSaved }: { onSaved?: (profile: LlmProfile) => void }) {
+  const [open, setOpen] = useState(true);
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Open the form
+      </button>
+      <ProfileForm
+        open={open}
+        onOpenChange={setOpen}
+        onSaved={onSaved ?? (() => {})}
+      />
+    </>
+  );
+}
+
+const field = (name: string) => screen.getByLabelText(name) as HTMLInputElement;
+
+function type(name: string, value: string) {
+  fireEvent.change(field(name), { target: { value } });
+}
+
+// The provider is a listbox: it is opened and chosen from with the keyboard.
+async function choose(provider: string) {
+  const trigger = screen.getByRole("combobox", { name: "Provider" });
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const option = await screen.findByRole("option", { name: provider });
+  fireEvent.keyDown(option, { key: "Enter" });
+  await waitFor(() => expect(trigger.textContent).toContain(provider));
+}
+
+function fill(values: Record<string, string> = {}) {
+  const given = {
+    Name: "Local vLLM",
+    "Model id": "served-model",
+    "Base URL": "http://10.0.0.5:31000/v1",
+    "API key": KEY,
+    ...values,
+  };
+  for (const [name, value] of Object.entries(given)) {
+    type(name, value);
+  }
+}
+
+const save = () =>
+  fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+/** What the form says is wrong with a field, or null when it says nothing. */
+function errorAt(name: string): string | null {
+  const input = field(name);
+  if (input.getAttribute("aria-invalid") !== "true") return null;
+  const id = input.getAttribute("aria-describedby");
+  return id ? (document.getElementById(id)?.textContent ?? null) : null;
+}
+
+function sent(fetchStub: ReturnType<typeof stubFetch>, call = 0) {
+  const [path, init] = fetchStub.mock.calls[call];
+  return { path, method: init?.method, body: JSON.parse(String(init?.body)) };
+}
+
+describe("ProfileForm, adding", () => {
+  it("asks for a name, a provider, a model id, a base URL, and a key", () => {
+    render(<Harness />);
+    expect(screen.getByRole("dialog", { name: "Add a profile" })).toBeTruthy();
+    expect(field("Name").value).toBe("");
+    expect(field("Model id").value).toBe("");
+    expect(field("Base URL").value).toBe("");
+    expect(field("Base URL").required).toBe(false);
+    expect(
+      screen.getByRole("combobox", { name: "Provider" }).textContent,
+    ).toContain("OpenAI-compatible");
+    // The key is typed unseen, and the browser is not asked to remember it.
+    expect(field("API key").type).toBe("password");
+    expect(field("API key").getAttribute("autocomplete")).toBe("off");
+  });
+
+  it("offers the choice of API for an OpenAI-compatible endpoint only, on at first", async () => {
+    render(<Harness />);
+    const choice = () =>
+      screen.queryByRole("switch", { name: /Responses API/ });
+    expect(choice()?.getAttribute("aria-checked")).toBe("true");
+
+    await choose("Anthropic");
+    expect(choice()).toBeNull();
+    await choose("OpenRouter");
+    expect(choice()).toBeNull();
+    await choose("OpenAI-compatible");
+    expect(choice()?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("says which values are missing and sends nothing", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    save();
+
+    expect(errorAt("Name")).toMatch(/name/i);
+    expect(errorAt("Model id")).toMatch(/model/i);
+    expect(errorAt("API key")).toMatch(/key/i);
+    expect(errorAt("Base URL")).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it.each([
+    "not a web address",
+    "ftp://files.example/v1",
+    "10.0.0.5:31000/v1",
+  ])("says a base URL of %s is not a web address and sends nothing", (address) => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill({ "Base URL": address });
+    save();
+
+    expect(errorAt("Base URL")).toMatch(/http/);
+    expect(errorAt("Name")).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("clears what it said about a field once the field is changed", () => {
+    stubFetch(CREATED);
+    render(<Harness />);
+    save();
+    expect(errorAt("Name")).not.toBeNull();
+    type("Name", "Local vLLM");
+    expect(errorAt("Name")).toBeNull();
+    expect(errorAt("Model id")).not.toBeNull();
+  });
+
+  it("shows a name that is taken at the name, and sends nothing more", async () => {
+    const taken = "Another profile has this name. Choose a different name.";
+    const fetchStub = stubFetch({
+      status: 409,
+      json: { detail: { code: "name_taken", message: taken } },
+    });
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    save();
+
+    await waitFor(() => expect(errorAt("Name")).toBe(taken));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(onSaved).not.toHaveBeenCalled();
+    // The form stays open with what was typed, so only the name needs changing.
+    expect(field("Model id").value).toBe("served-model");
+    expect(field("API key").value).toBe(KEY);
+  });
+
+  it("shows a value the service refuses at its field", async () => {
+    stubFetch({
+      status: 422,
+      json: {
+        detail: [
+          {
+            type: "string_too_long",
+            loc: ["body", "model"],
+            msg: "String should have at most 200 characters",
+          },
+          {
+            type: "value_error",
+            loc: ["body", "base_url"],
+            msg: "Value error, must be an http or https address with a host",
+          },
+        ],
+      },
+    });
+    render(<Harness />);
+    fill();
+    save();
+
+    await waitFor(() =>
+      expect(errorAt("Model id")).toBe(
+        "String should have at most 200 characters",
+      ),
+    );
+    expect(errorAt("Base URL")).toMatch(/http or https address/);
+    expect(errorAt("Name")).toBeNull();
+  });
+
+  it.each([
+    [
+      "the service has no secret",
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "secret_not_configured",
+            message: "No profile can be saved: set FREYJA_SECRET_KEY.",
+          },
+        },
+      },
+      /FREYJA_SECRET_KEY/,
+    ],
+    [
+      "the service cannot be reached",
+      { fails: "Failed to fetch" },
+      /cannot be reached/,
+    ],
+  ] as [
+    string,
+    Reply,
+    RegExp,
+  ][])("says so when %s, and stays open", async (_case, reply, message) => {
+    stubFetch(reply);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    save();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(message);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(document.body.textContent).not.toContain(KEY);
+  });
+
+  it("sends the values once and hands back the saved profile", async () => {
+    const fetchStub = stubFetch(CREATED);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill({ Name: "  Local vLLM ", "Model id": " served-model " });
+    fireEvent.click(screen.getByRole("switch", { name: /Responses API/ }));
+    save();
+    save();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(SAVED));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub)).toEqual({
+      path: "/api/llm/profiles",
+      method: "POST",
+      body: {
+        name: "Local vLLM",
+        provider: "openai",
+        model: "served-model",
+        base_url: "http://10.0.0.5:31000/v1",
+        api_key: KEY,
+        responses_api: false,
+      },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("sends no base URL when none was given, and no choice of API where there is none", async () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    await choose("Anthropic");
+    fill({ "Base URL": "  " });
+    save();
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    expect(sent(fetchStub).body).toEqual({
+      name: "Local vLLM",
+      provider: "anthropic",
+      model: "served-model",
+      base_url: null,
+      api_key: KEY,
+    });
+  });
+
+  it("opens empty again after it is closed, the key included", async () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    expect(field("API key").value).toBe("");
+    expect(field("Name").value).toBe("");
+    expect(field("Model id").value).toBe("");
+  });
+
+  it("opens empty again after it is sent, and writes nothing to the browser's storage", async () => {
+    stubFetch(CREATED);
+    render(<Harness />);
+    fill();
+    save();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    expect(field("API key").value).toBe("");
+    expect(field("Name").value).toBe("");
+    expect(document.body.textContent).not.toContain(KEY);
+    expect(localStorage.length).toBe(0);
+    expect(sessionStorage.length).toBe(0);
+  });
+});

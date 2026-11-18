@@ -1,7 +1,7 @@
 // What the Freyja service would answer, for the end-to-end tests. A test hands a page the
 // answers to its requests for the profile list, so no test needs the service itself.
 
-import type { Page } from "@playwright/test";
+import type { Page, Route } from "@playwright/test";
 import type { LlmProfile, LlmProfileList } from "../lib/llm";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
@@ -87,6 +87,127 @@ export async function answerProfiles(
       await route.fulfill({ status, json: { detail: { code, message } } });
     }
   });
+}
+
+/** A request a page made to the stand-in. */
+export type Asked = { method: string; path: string; body: unknown };
+
+/**
+ * A stand-in for the service's profile routes that lives in the test, for pages that change
+ * profiles: it keeps what a page saved and activated, and answers as the service would
+ * (specs/004-web-llm-profiles/contracts/openapi.yaml). It checks only what a test needs it to
+ * refuse; the service's own rules are tested with the service.
+ */
+export class ProfileService {
+  profiles: LlmProfile[];
+  /** Every request the page made, in order. */
+  readonly asked: Asked[] = [];
+  private saved = 0;
+
+  constructor(...profiles: LlmProfile[]) {
+    this.profiles = profiles.length > 0 ? profiles : [environmentProfile()];
+  }
+
+  /** The requests that changed something. */
+  get changes(): Asked[] {
+    return this.asked.filter(({ method }) => method !== "GET");
+  }
+
+  /** The list as the service orders it: the environment's, then the saved ones by name. */
+  list(): LlmProfileList {
+    const [environment] = this.profiles.filter(
+      (p) => p.source === "environment",
+    );
+    const saved = this.profiles
+      .filter((p) => p.source === "saved")
+      .sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+    return profileList(environment, ...saved);
+  }
+
+  private refuse(route: Route, status: number, code: string, message: string) {
+    return route.fulfill({ status, json: { detail: { code, message } } });
+  }
+
+  private add(route: Route, body: Record<string, unknown>) {
+    const name = String(body.name).trim();
+    const taken = this.profiles.some(
+      (profile) => profile.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (taken) {
+      return this.refuse(
+        route,
+        409,
+        "name_taken",
+        "Another profile has this name. Choose a different name.",
+      );
+    }
+    this.saved += 1;
+    const key = String(body.api_key);
+    const profile = savedProfile(name, {
+      id: this.saved.toString(16).padStart(32, "0"),
+      provider: String(body.provider),
+      model: String(body.model).trim(),
+      base_url: (body.base_url as string | null) ?? null,
+      // Reported for a provider that has the choice, as the service does.
+      responses_api:
+        body.provider === "openai"
+          ? (body.responses_api ?? true) === true
+          : null,
+      // The service keeps the key and shows its last four characters.
+      key_hint: key.length >= 8 ? key.slice(-4) : "",
+    });
+    this.profiles.push(profile);
+    return route.fulfill({ status: 201, json: profile });
+  }
+
+  private activate(route: Route, id: string) {
+    const target = this.profiles.find((profile) => profile.id === id);
+    if (target === undefined) {
+      return this.refuse(
+        route,
+        404,
+        "profile_not_found",
+        "There is no profile with this id.",
+      );
+    }
+    if (!target.usable) {
+      return this.refuse(
+        route,
+        409,
+        "profile_unusable",
+        `Profile ${target.name} cannot be used. The profile that was active still is.`,
+      );
+    }
+    this.profiles = this.profiles.map((profile) => ({
+      ...profile,
+      active: profile.id === id,
+    }));
+    return route.fulfill({ json: this.list() });
+  }
+
+  /** Answer this page's requests to the profile routes, in the browser. */
+  async serve(page: Page): Promise<this> {
+    await page.route("**/api/llm/**", async (route) => {
+      const request = route.request();
+      const method = request.method();
+      const path = new URL(request.url()).pathname.replace(/^\/api/, "");
+      const body = request.postData() ? request.postDataJSON() : undefined;
+      this.asked.push({ method, path, body });
+
+      const activation = path.match(/^\/llm\/profiles\/([^/]+)\/activate$/);
+      if (method === "GET" && path === "/llm/profiles") {
+        return route.fulfill({ json: this.list() });
+      }
+      if (method === "POST" && path === "/llm/profiles") {
+        return this.add(route, body as Record<string, unknown>);
+      }
+      if (method === "POST" && activation) {
+        return this.activate(route, decodeURIComponent(activation[1]));
+      }
+      return route.fulfill({ status: 404, json: { detail: "Not Found" } });
+    });
+    return this;
+  }
 }
 
 /** The card of the profile with this name. */

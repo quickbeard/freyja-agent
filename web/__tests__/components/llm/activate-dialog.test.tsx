@@ -1,0 +1,239 @@
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
+import { describe, expect, it, vi } from "vitest";
+import { type Reply, stubFetch } from "@/__tests__/testing";
+import { ActivateDialog } from "@/components/llm/activate-dialog";
+import { ProfileList } from "@/components/llm/profile-list";
+import type { LlmProfile, LlmProfileList } from "@/lib/llm";
+
+const ENVIRONMENT: LlmProfile = {
+  id: "environment",
+  name: "Environment",
+  source: "environment",
+  provider: "openai",
+  model: "env-model",
+  base_url: null,
+  responses_api: true,
+  key_hint: "9f2c",
+  active: true,
+  usable: true,
+  unusable_reason: null,
+  last_test: null,
+  created_at: null,
+  updated_at: null,
+};
+
+const SAVED: LlmProfile = {
+  ...ENVIRONMENT,
+  id: "5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b",
+  name: "Local vLLM",
+  source: "saved",
+  model: "served-model",
+  active: false,
+};
+
+function list(active: "environment" | "saved"): LlmProfileList {
+  return {
+    profiles: [
+      { ...ENVIRONMENT, active: active === "environment" },
+      { ...SAVED, active: active === "saved" },
+    ],
+    active_id: active === "saved" ? SAVED.id : "environment",
+    usable_model: true,
+    secret_configured: true,
+    limit: 50,
+  };
+}
+
+const confirm = () =>
+  fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+
+describe("ActivateDialog", () => {
+  it("names the profile and says where existing conversations will go", () => {
+    render(
+      <ActivateDialog
+        profile={SAVED}
+        onClose={vi.fn()}
+        onActivated={vi.fn()}
+      />,
+    );
+    const dialog = screen.getByRole("alertdialog");
+    expect(dialog.textContent).toContain("Local vLLM");
+    expect(dialog.textContent).toMatch(
+      /existing conversations will be sent to its endpoint from their next run/i,
+    );
+  });
+
+  it("shows nothing when no profile is being activated", () => {
+    render(
+      <ActivateDialog profile={null} onClose={vi.fn()} onActivated={vi.fn()} />,
+    );
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  it("sends nothing when cancelled", async () => {
+    const fetchStub = stubFetch({ json: list("saved") });
+    const onClose = vi.fn();
+    const onActivated = vi.fn();
+    render(
+      <ActivateDialog
+        profile={SAVED}
+        onClose={onClose}
+        onActivated={onActivated}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(onActivated).not.toHaveBeenCalled();
+  });
+
+  it("sends one activation when confirmed and hands back the list", async () => {
+    const fetchStub = stubFetch({ json: list("saved") });
+    const onClose = vi.fn();
+    const onActivated = vi.fn();
+    render(
+      <ActivateDialog
+        profile={SAVED}
+        onClose={onClose}
+        onActivated={onActivated}
+      />,
+    );
+    confirm();
+    confirm();
+
+    await waitFor(() =>
+      expect(onActivated).toHaveBeenCalledWith(list("saved")),
+    );
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/llm/profiles/${SAVED.id}/activate`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("activates the environment's profile by its own id", async () => {
+    const fetchStub = stubFetch({ json: list("environment") });
+    render(
+      <ActivateDialog
+        profile={{ ...ENVIRONMENT, active: false }}
+        onClose={vi.fn()}
+        onActivated={vi.fn()}
+      />,
+    );
+    confirm();
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    expect(fetchStub.mock.calls[0][0]).toBe(
+      "/api/llm/profiles/environment/activate",
+    );
+  });
+
+  it.each([
+    [
+      "a refusal",
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "profile_unusable",
+            message:
+              "Profile Local vLLM cannot be used: its key cannot be read.",
+          },
+        },
+      },
+      /cannot be used/,
+    ],
+    [
+      "a service that cannot be reached",
+      { fails: "Failed to fetch" },
+      /cannot be reached/,
+    ],
+  ] as [
+    string,
+    Reply,
+    RegExp,
+  ][])("shows %s and stays open", async (_case, reply, message) => {
+    stubFetch(reply);
+    const onClose = vi.fn();
+    const onActivated = vi.fn();
+    render(
+      <ActivateDialog
+        profile={SAVED}
+        onClose={onClose}
+        onActivated={onActivated}
+      />,
+    );
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(message);
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(onActivated).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+});
+
+describe("Set active, from the list", () => {
+  function renderList() {
+    return render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <ProfileList />
+      </SWRConfig>,
+    );
+  }
+
+  const cardOf = (name: string) =>
+    screen
+      .getByRole("heading", { name })
+      .closest('[data-slot="card"]') as HTMLElement;
+
+  it("moves the active mark to the confirmed profile, and only one card has it", async () => {
+    const fetchStub = stubFetch(
+      { json: list("environment") },
+      { json: list("saved") },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+    // Only a card that is not active offers it.
+    expect(screen.getAllByRole("button", { name: "Set active" })).toHaveLength(
+      1,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.textContent).toContain("Local vLLM");
+    fireEvent.click(
+      Array.from(dialog.querySelectorAll("button")).find(
+        (button) => button.textContent === "Set active",
+      ) as HTMLElement,
+    );
+
+    await waitFor(() =>
+      expect(cardOf("Local vLLM").textContent).toContain("Active"),
+    );
+    expect(screen.getAllByText("Active")).toHaveLength(1);
+    expect(cardOf("Environment").textContent).not.toContain("Active");
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    // One read, one activation, and the list read again.
+    expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([
+      "/api/llm/profiles",
+      `/api/llm/profiles/${SAVED.id}/activate`,
+      "/api/llm/profiles",
+    ]);
+  });
+
+  it("changes nothing when the confirmation is cancelled", async () => {
+    const fetchStub = stubFetch({ json: list("environment") });
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    await screen.findByRole("alertdialog");
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(cardOf("Environment").textContent).toContain("Active");
+  });
+});

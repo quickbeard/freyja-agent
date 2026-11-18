@@ -59,13 +59,42 @@ export function listProfiles(): Promise<LlmProfileList> {
   return api<LlmProfileList>(PROFILES_PATH);
 }
 
-const PROVIDER_LABELS: Record<string, string> = {
-  openai: "OpenAI-compatible",
-  anthropic: "Anthropic",
-  openrouter: "OpenRouter",
-};
+/** The providers a saved profile may use. */
+export type LlmProvider = "openai" | "anthropic" | "openrouter";
+
+/** The three providers, in the order a form offers them, with the console's names for them. */
+export const PROVIDERS: { value: LlmProvider; label: string }[] = [
+  { value: "openai", label: "OpenAI-compatible" },
+  { value: "anthropic", label: "Anthropic" },
+  { value: "openrouter", label: "OpenRouter" },
+];
 
 /** What the console calls a provider. One the console does not know is shown as written. */
 export function providerLabel(provider: string): string {
-  return PROVIDER_LABELS[provider] ?? (provider || "Unknown provider");
+  const known = PROVIDERS.find(({ value }) => value === provider);
+  return known?.label ?? (provider || "Unknown provider");
+}
+
+/** The values of a profile to save. The key goes to the service and is never sent back. */
+export type NewLlmProfile = {
+  name: string;
+  provider: LlmProvider;
+  model: string;
+  base_url: string | null;
+  api_key: string;
+  /** For an OpenAI-compatible endpoint only; the service's default is the Responses API. */
+  responses_api?: boolean;
+};
+
+/** Save a new profile. It is not active. */
+export function createProfile(values: NewLlmProfile): Promise<LlmProfile> {
+  return api<LlmProfile>(PROFILES_PATH, { method: "POST", body: values });
+}
+
+/** Make a profile the one Freyja runs on; `environment` is the environment's. */
+export function activateProfile(id: string): Promise<LlmProfileList> {
+  return api<LlmProfileList>(
+    `${PROFILES_PATH}/${encodeURIComponent(id)}/activate`,
+    { method: "POST" },
+  );
 }

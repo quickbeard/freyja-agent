@@ -7,20 +7,29 @@ apps sharing one profile store stand for two service instances on one database (
 
 import asyncio
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage
 
 from freyja_agent.llm.secrets import encrypt
 from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileRecord, LlmState
-from tests.conftest import LlmApp, McpApp
-from tests.fakes import ScriptedChatModel
+from tests.conftest import TEST_SECRET, A2aApp, LlmApp, McpApp
+from tests.fakes import ProfileModels, ScriptedChatModel
+from tests.test_a2a_pending import TASK, go_pending, handoff, pending_app, stub, tick, wait_for
 
 Events = list[tuple[str, Any]]
 ENVIRONMENT = {"id": "environment", "name": "Environment", "source": "environment"}
 KEY = "sk-recognizable-key-0001"
+
+
+@pytest.fixture(autouse=True)
+def environment_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The environment's provider has its key, so the environment's profile is usable."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key-9f2c")
 
 
 def run(client: TestClient, thread: str, sse_events: Any, message: str = "hello") -> Events:
@@ -203,3 +212,221 @@ def test_a_run_whose_profile_cannot_be_read_ends_with_an_error_and_frees_the_thr
         # The lease was released: the same thread runs again once the store answers.
         store.down = False
         assert run(client, "t-1", sse_events)[-1][0] == "end"
+
+
+# Part 2 (T039): a switch made through the API.
+
+STUB = {
+    "name": "Stub",
+    "provider": "openai",
+    "model": "saved-model",
+    "base_url": "http://127.0.0.1:9997/v1",
+    "api_key": KEY,
+    "responses_api": False,
+}
+
+
+def add(client: TestClient, **values: Any) -> str:
+    """Add a profile through the API and return its id."""
+    response = client.post("/llm/profiles", json={**STUB, **values})
+    assert response.status_code == 201, response.text
+    return response.json()["id"]
+
+
+def switch_to(client: TestClient, profile_id: str) -> None:
+    response = client.post(f"/llm/profiles/{profile_id}/activate")
+    assert response.status_code == 200, response.text
+    assert response.json()["active_id"] == profile_id
+
+
+def humans(made: LlmApp, label: str) -> list[str]:
+    """What the user said, as the model for this label last received it."""
+    return [m.content for m in made.models.model(label).seen[-1] if m.type == "human"]
+
+
+def test_after_an_activation_the_next_run_uses_the_new_profile_with_no_restart(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        assert profile_of(run(client, "t-1", sse_events)) == ENVIRONMENT
+        stub_id = add(client)
+        # Adding a profile does not change the one in use.
+        assert profile_of(run(client, "t-1", sse_events, "still the first")) == ENVIRONMENT
+
+        switch_to(client, stub_id)
+        events = run(client, "t-1", sse_events, "now the second")
+        assert profile_of(events) == {"id": stub_id, "name": "Stub", "source": "saved"}
+        assert events[-1] == ("end", {"status": "completed"})
+        assert reply(client, "t-1") == "Answered by saved-model."
+        # The thread's history is intact and went to the new model.
+        assert humans(made, "saved-model") == ["hello", "still the first", "now the second"]
+        # One runtime served all of it.
+        assert len(made.runtimes) == 1
+
+
+def test_activating_the_environment_returns_to_its_model(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        switch_to(client, add(client))
+        assert profile_of(run(client, "t-1", sse_events))["name"] == "Stub"
+        switch_to(client, "environment")
+        assert profile_of(run(client, "t-1", sse_events, "back again")) == ENVIRONMENT
+        assert reply(client, "t-1") == "Answered by env-model."
+        assert humans(made, "env-model") == ["hello", "back again"]
+
+
+def test_a_run_in_progress_ends_on_the_model_it_started_with(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    first = made.models.model("env-model")
+    streamed: dict[str, Events] = {}
+
+    with TestClient(made.app) as client:
+        stub_id = add(client)
+        first.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "t-1", sse_events))
+        )
+        running.start()
+        with first.held():
+            # The run has reached its model and waits there while the profile changes.
+            switch_to(client, stub_id)
+            assert made.runtime.applied_model().profile.name == "Stub"
+        running.join(10)
+        assert not running.is_alive()
+
+        events = streamed["events"]
+        assert profile_of(events) == ENVIRONMENT
+        assert events[-1] == ("end", {"status": "completed"})
+        assert reply(client, "t-1") == "Answered by env-model."
+        assert made.models.model("saved-model").calls == 0
+
+        # The next run on the same thread uses the new profile, with the history intact.
+        after = run(client, "t-1", sse_events, "and again")
+        assert profile_of(after)["name"] == "Stub"
+        assert reply(client, "t-1") == "Answered by saved-model."
+        assert humans(made, "saved-model") == ["hello", "and again"]
+
+
+def test_a_paused_run_resumed_after_an_activation_continues_on_the_new_profile(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    made.models.model("env-model").script = [
+        AIMessage(
+            content="",
+            tool_calls=[
+                {
+                    "id": "n1",
+                    "name": "send_notification",
+                    "args": {"channel": "#ops", "message": "Nightly report is ready."},
+                }
+            ],
+        )
+    ]
+    with TestClient(made.app) as client:
+        stub_id = add(client)
+        paused = run(client, "t-1", sse_events)
+        assert profile_of(paused) == ENVIRONMENT
+        assert paused[-1][0] == "interrupt"
+
+        switch_to(client, stub_id)
+        pending = client.get("/threads/t-1/state").json()["pending"]["interrupt_id"]
+        body = {"interrupt_id": pending, "decisions": [{"type": "approve"}]}
+        with client.stream("POST", "/threads/t-1/resume", json=body) as response:
+            assert response.status_code == 200, response.read()
+            resumed = sse_events(response.iter_lines())
+
+        assert profile_of(resumed) == {"id": stub_id, "name": "Stub", "source": "saved"}
+        assert resumed[-1] == ("end", {"status": "completed"})
+        assert reply(client, "t-1") == "Answered by saved-model."
+        # The new model continued the same conversation: it received the action's result.
+        seen = made.models.model("saved-model").seen[-1]
+        assert [m.name for m in seen if m.type == "tool"] == ["send_notification"]
+        assert made.models.model("env-model").calls == 1
+
+
+def test_a_background_run_started_after_an_activation_uses_the_new_profile(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    agent = stub()
+    environment = ScriptedChatModel(script=[handoff("hold: report")], final_text="Handed off.")
+    models = ProfileModels()
+    made = pending_app(
+        make_a2a_app,
+        environment,
+        agent,
+        llm_profiles=InMemoryLlmProfileStore(),
+        model_factory=models,
+        secret_key=TEST_SECRET,
+    )
+    with (
+        caplog.at_level(logging.INFO, logger="freyja_agent.api.streaming"),
+        TestClient(made.app) as client,
+    ):
+        go_pending(client, "b-1", sse_events)
+        switch_to(client, add(client))
+        agent.release()
+        wait_for(client, made.runtime, TASK, "completed")
+        tick(client, made.runtime)  # the worker delivers the outcome in a background run
+        assert reply(client, "b-1") == "Answered by saved-model."
+
+    assert environment.calls == 2
+    assert models.model("saved-model").calls == 1
+    user, background = profile_lines(caplog)
+    assert "(run)" in user and "Environment" in user
+    assert "(background)" in background and "Stub" in background
+
+
+def test_a_restart_keeps_the_saved_active_profile_whatever_the_environment_names(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    before = make_llm_app(model="openai:env-model")
+    with TestClient(before.app) as client:
+        stub_id = add(client)
+        switch_to(client, stub_id)
+
+    # The same database, a new process, and another model in the environment.
+    after = make_llm_app(model="openai:another-env-model", store=before.store)
+    with TestClient(after.app) as client:
+        listed = client.get("/llm/profiles").json()
+        assert listed["active_id"] == stub_id
+        assert [(p["name"], p["model"], p["active"]) for p in listed["profiles"]] == [
+            ("Environment", "another-env-model", False),
+            ("Stub", "saved-model", True),
+        ]
+        events = run(client, "t-1", sse_events)
+        assert profile_of(events) == {"id": stub_id, "name": "Stub", "source": "saved"}
+        assert reply(client, "t-1") == "Answered by saved-model."
+    # The environment's model was never asked anything.
+    assert after.models.model("another-env-model").calls == 0
+
+
+def test_an_activation_through_one_instance_reaches_another_at_its_next_run(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    first = make_llm_app(model="openai:env-model")
+    second = make_llm_app(
+        model="openai:env-model",
+        store=first.store,
+        models=first.models,
+        instance_id="instance-b",
+    )
+    with TestClient(first.app) as a, TestClient(second.app) as b:
+        assert profile_of(run(b, "t-b", sse_events)) == ENVIRONMENT
+        stub_id = add(a)
+        switch_to(a, stub_id)
+        # The second instance was told nothing: it reads the choice when its run starts.
+        assert first.runtime.applied_model().profile.name == "Stub"
+        assert second.runtime.applied_model().profile.name == "Environment"
+        events = run(b, "t-b", sse_events, "and again")
+        assert profile_of(events) == {"id": stub_id, "name": "Stub", "source": "saved"}
+        assert reply(b, "t-b") == "Answered by saved-model."
+        assert b.get("/llm/profiles").json()["active_id"] == stub_id
+
+        switch_to(b, "environment")
+        assert profile_of(run(a, "t-a", sse_events)) == ENVIRONMENT

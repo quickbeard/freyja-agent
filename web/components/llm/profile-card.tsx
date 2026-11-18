@@ -1,5 +1,12 @@
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
 import { type LlmProfile, providerLabel, type UnusableReason } from "@/lib/llm";
 
 const UNUSABLE: Record<UnusableReason, string> = {
@@ -20,8 +27,19 @@ function Value({ label, children }: { label: string; children: string }) {
   );
 }
 
-/** One LLM profile, as the service describes it. It never holds or shows a whole key. */
-export function ProfileCard({ profile }: { profile: LlmProfile }) {
+/**
+ * One LLM profile, as the service describes it. It never holds or shows a whole key.
+ * `onActivate` is offered on a usable profile that is not the active one.
+ */
+export function ProfileCard({
+  profile,
+  onActivate,
+}: {
+  profile: LlmProfile;
+  onActivate?: (profile: LlmProfile) => void;
+}) {
+  const canActivate =
+    onActivate !== undefined && !profile.active && profile.usable;
   return (
     <Card>
       <CardHeader>
@@ -58,6 +76,17 @@ export function ProfileCard({ profile }: { profile: LlmProfile }) {
           </p>
         )}
       </CardContent>
+      {canActivate && (
+        <CardFooter className="mt-auto">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => onActivate(profile)}
+          >
+            Set active
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   );
 }

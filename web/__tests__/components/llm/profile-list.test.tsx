@@ -121,4 +121,48 @@ describe("ProfileList", () => {
     await screen.findByRole("heading", { name: "Environment" });
     expect(screen.queryByRole("alert")).toBeNull();
   });
+
+  it("opens the form from Add, and reads the list again once a profile is saved", async () => {
+    const added: LlmProfile = { ...SAVED, id: "f".repeat(32), name: "Claude" };
+    const fetchStub = stubFetch(
+      list(),
+      { status: 201, json: added },
+      list({ profiles: [ENVIRONMENT, added, SAVED] }),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await screen.findByRole("dialog", { name: "Add a profile" });
+    for (const [label, value] of [
+      ["Name", "Claude"],
+      ["Model id", "served-model"],
+      ["API key", "sk-recognizable-key-0001"],
+    ]) {
+      fireEvent.change(screen.getByLabelText(label), { target: { value } });
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByRole("heading", { name: "Claude" })).toBeTruthy();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([
+      "/api/llm/profiles",
+      "/api/llm/profiles",
+      "/api/llm/profiles",
+    ]);
+    expect(
+      fetchStub.mock.calls.map(([, init]) => init?.method ?? "GET"),
+    ).toEqual(["GET", "POST", "GET"]);
+    // What was active still is.
+    expect(screen.getAllByText("Active")).toHaveLength(1);
+    expect(document.body.textContent).not.toContain("sk-recognizable-key-0001");
+  });
+
+  it("offers nothing to add while the list could not be read", async () => {
+    stubFetch({ fails: "Failed to fetch" });
+    renderList();
+    await screen.findByRole("alert");
+    expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
+  });
 });
