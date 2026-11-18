@@ -41,16 +41,50 @@ class Provider:
     label: str
     key_variable: str
     base_url_variable: str
+    # The provider's own service: where a saved profile with no base URL is sent. It is what
+    # the provider's client uses when it is given no address and its variables are unset, and
+    # it is a fact about the provider, like its name, not something a deployment configures.
+    address: str
     # Whether the provider offers the Responses API beside chat completions.
     has_api_choice: bool = False
+    # Another name under which the provider's client reads a base URL, after the first.
+    other_base_url_variable: str | None = None
+
+    @property
+    def base_url_variables(self) -> tuple[str, ...]:
+        """The variables the client takes an address from, in the order it reads them."""
+        if self.other_base_url_variable is None:
+            return (self.base_url_variable,)
+        return (self.base_url_variable, self.other_base_url_variable)
 
 
 PROVIDERS: dict[str, Provider] = {
     provider.id: provider
     for provider in (
-        Provider("openai", "OpenAI-compatible", "OPENAI_API_KEY", "OPENAI_API_BASE", True),
-        Provider("anthropic", "Anthropic", "ANTHROPIC_API_KEY", "ANTHROPIC_API_URL"),
-        Provider("openrouter", "OpenRouter", "OPENROUTER_API_KEY", "OPENROUTER_API_BASE"),
+        Provider(
+            "openai",
+            "OpenAI-compatible",
+            "OPENAI_API_KEY",
+            "OPENAI_API_BASE",
+            "https://api.openai.com/v1",
+            has_api_choice=True,
+            other_base_url_variable="OPENAI_BASE_URL",
+        ),
+        Provider(
+            "anthropic",
+            "Anthropic",
+            "ANTHROPIC_API_KEY",
+            "ANTHROPIC_API_URL",
+            "https://api.anthropic.com",
+            other_base_url_variable="ANTHROPIC_BASE_URL",
+        ),
+        Provider(
+            "openrouter",
+            "OpenRouter",
+            "OPENROUTER_API_KEY",
+            "OPENROUTER_API_BASE",
+            "https://openrouter.ai/api/v1",
+        ),
     )
 }
 
@@ -83,16 +117,24 @@ def model_arguments(spec: ModelSpec) -> dict[str, Any]:
     """The arguments a spec's client is built with.
 
     The API choice only changes what the provider profile set, so it cannot hand another
-    provider's client an argument it does not know (001 research R3). A key and a base URL
-    are passed only when the spec has them; without them the client reads its own variables.
+    provider's client an argument it does not know (001 research R3).
+
+    A spec with a key is a saved profile's, or unsaved values under test: it is reached with
+    that key at its own base URL, and with no base URL at its provider's own address. The
+    address is passed, never left to the client, which would take one from the environment's
+    variables and send an operator's key to an endpoint they did not choose (FR-004). A spec
+    with no key is the environment's: the client reads its own variables, as it always has.
     """
     arguments = dict(apply_provider_profile(spec.name))
     if not spec.responses_api and RESPONSES_API in arguments:
         arguments[RESPONSES_API] = False
+    provider = PROVIDERS.get(spec.provider)
     if spec.api_key is not None:
         arguments["api_key"] = spec.api_key
     if spec.base_url:
         arguments["base_url"] = spec.base_url
+    elif spec.api_key is not None and provider is not None:
+        arguments["base_url"] = provider.address
     if spec.max_retries is not None:
         arguments["max_retries"] = spec.max_retries
     return arguments
@@ -164,7 +206,15 @@ def environment_profile(
     spec = environment_spec(settings, model)
     provider = PROVIDERS.get(spec.provider)
     key = environment_key(spec, environ)
-    base_url = (environ.get(provider.base_url_variable) or None) if provider else None
+    # The first of the client's variables that is set, which is the one the client uses.
+    base_url = next(
+        (
+            environ[name]
+            for name in (provider.base_url_variables if provider else ())
+            if environ.get(name)
+        ),
+        None,
+    )
     reason = None
     if provider is not None and not key:
         reason = "not_configured"

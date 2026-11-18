@@ -85,6 +85,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LlmProfile" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "409":
           description: >
             `name_taken`, `profile_limit`, or `secret_not_configured`. Nothing was saved.
@@ -116,6 +117,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LlmProfile" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "404":
           description: "`profile_not_found`"
           content:
@@ -138,6 +140,7 @@ paths:
       responses:
         "204":
           description: Deleted
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "404":
           description: "`profile_not_found`"
           content:
@@ -166,6 +169,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LlmProfileList" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "404":
           description: "`profile_not_found`"
           content:
@@ -202,6 +206,7 @@ paths:
                     reason: "Error code: 422 - Input should be a valid string"
                     at: "2026-11-17T09:14:02.118000+00:00"
                     recorded: true
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "404":
           description: "`profile_not_found`"
           content:
@@ -232,6 +237,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/LlmTestResult" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
         "404":
           description: "`profile_not_found`, for `profile_id`"
           content:
@@ -250,6 +256,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationErrorResponse" }
 components:
+  responses:
+    OtherOrigin:
+      description: >
+        `other_origin`: the browser marked the request as made by a page of another origin.
+        Nothing was looked at and nothing changed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/ErrorResponse" }
   parameters:
     ProfileId:
       name: profile_id

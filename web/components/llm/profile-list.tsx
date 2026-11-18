@@ -74,6 +74,12 @@ export function ProfileList() {
     );
   }
 
+  // A dialog is about the profile as the list has it now, not as it was when the dialog
+  // opened: its test may have failed since, or it may have become the active one. A profile
+  // that is gone from the list is shown as it was, with the service's refusal.
+  const current = (opened: LlmProfile) =>
+    data.profiles.find((profile) => profile.id === opened.id) ?? opened;
+
   return (
     <div className="flex flex-col gap-4">
       {!data.usable_model && (
@@ -122,7 +128,7 @@ export function ProfileList() {
       />
       {editing && (
         <ProfileForm
-          profile={editing.profile}
+          profile={current(editing.profile)}
           open={editing.open}
           onOpenChange={(open) => setEditing({ ...editing, open })}
           onSaved={() => mutate()}
@@ -136,7 +142,7 @@ export function ProfileList() {
         onGone={() => mutate()}
       />
       <ActivateDialog
-        profile={activating}
+        profile={activating && current(activating)}
         onClose={() => setActivating(null)}
         onActivated={(list) => mutate(list)}
         onTested={() => mutate()}

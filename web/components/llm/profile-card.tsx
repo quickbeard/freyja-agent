@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,6 +79,12 @@ export function ProfileCard({
   const [refusal, setRefusal] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const inFlight = useRef(false);
+  // The list's latest reading, for when a result arrives: the list may be read while a test
+  // runs, and that reading is older than the result, not newer.
+  const latestRead = useRef(listRead);
+  useEffect(() => {
+    latestRead.current = listRead;
+  }, [listRead]);
 
   // The card's own result is shown only until the service says more. A test does not change
   // the profile, so the list may report a later one, run from the confirmation or by someone
@@ -106,7 +112,11 @@ export function ProfileCard({
     setRefusal(null);
     try {
       const result = await testProfile(profile.id);
-      setTested({ result, of: profile.updated_at, read: listRead });
+      setTested({
+        result,
+        of: profile.updated_at,
+        read: latestRead.current,
+      });
       onTested?.();
     } catch (error) {
       if (isGone(error)) onGone?.();

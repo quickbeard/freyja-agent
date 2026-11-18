@@ -279,7 +279,7 @@ ID=$(curl -s -X POST localhost:8000/llm/profiles -H 'content-type: application/j
 curl -s -X POST localhost:8000/llm/profiles/$ID/activate | jq .active_id
 ```
 
-A name has 1 to 64 characters and is unique without regard to case; `Environment` is taken. A model has 1 to 200 characters, a base URL is an `http` or `https` address on any host, and at most 50 profiles can be saved. A request that breaks a rule is `422`; a name already in use is `409` with code `name_taken`, and a 51st profile `409` with `profile_limit`. A new profile is not active.
+A name has 1 to 64 characters and is unique without regard to case; `Environment` is taken. A model has 1 to 200 characters, a base URL is an `http` or `https` address on any host, and at most 50 profiles can be saved. A profile saved with no base URL is sent to its provider's own service (`https://api.openai.com/v1`, `https://api.anthropic.com`, or `https://openrouter.ai/api/v1`), whatever base URL the environment sets for its own model: the key never goes to an endpoint the profile does not name. A request that breaks a rule is `422`; a name already in use is `409` with code `name_taken`, and a 51st profile `409` with `profile_limit`. A new profile is not active.
 
 An activation applies without a restart, from the next run, on every instance that shares the database. A run in progress finishes on the model it started with. Existing conversations are sent to the new profile's endpoint from their next run, and a thread paused for a decision continues on the profile that is active when it is resumed. A profile that is not usable cannot be activated (`409`, `profile_unusable`). To go back to the environment's model:
 

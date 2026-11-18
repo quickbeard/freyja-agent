@@ -849,7 +849,7 @@ proceed at the same time once Phase 4 is merged.
 
 ## Phase 11: Convergence
 
-- [ ] T095 Build a saved profile's model for its provider's own address when the profile has no
+- [X] T095 Build a saved profile's model for its provider's own address when the profile has no
       base URL, whatever the environment's variables say: `model_arguments` in
       `src/freyja_agent/llm/providers.py` passes a base URL only when the profile has one, so
       the client falls back to `OPENAI_API_BASE`, `OPENAI_BASE_URL`, `ANTHROPIC_API_URL`,
@@ -859,45 +859,45 @@ proceed at the same time once Phase 4 is merged.
       profile keeps reading those variables. First add tests to `tests/test_llm_providers.py`
       with each variable set, for the three providers, and see them fail; the same holds for a
       test of unsaved values per FR-004, FR-007, spec Assumptions: trust (contradicts)
-- [ ] T096 Prove the guard on the environment's model in the default suite: make
+- [X] T096 Prove the guard on the environment's model in the default suite: make
       `test_the_environments_key_is_removed_from_a_failed_run_too` in
       `tests/test_llm_secrets_nowhere.py` stream its failing run with `debug="true"` and
       search what the checkpointer kept, as the saved profile's test does. Today the suite
       passes with the environment's model left unguarded, and only the opt-in Postgres test
       would notice per FR-020, FR-021, Constitution V (partial)
-- [ ] T097 [P] Show on the environment's card the address its client will use when it is set
+- [X] T097 [P] Show on the environment's card the address its client will use when it is set
       through the client's other variable name, `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`:
       `environment_profile` in `src/freyja_agent/llm/providers.py` reads only the table's
       variable and shows no base URL. Tests in `tests/test_llm_providers.py` first per FR-008
       (partial)
-- [ ] T098 [P] Add `other_origin` to the codes of `ErrorDetail` in
+- [X] T098 [P] Add `other_origin` to the codes of `ErrorDetail` in
       `src/freyja_agent/api/schemas.py`, which lists eight where
       `specs/004-web-llm-profiles/contracts/openapi.yaml` has nine, and to the test of the
       codes in `tests/test_llm_schemas.py` per contract: openapi.yaml (contradicts)
-- [ ] T099 [P] Hold in place by tests that a page of another origin cannot start or resume a
+- [X] T099 [P] Hold in place by tests that a page of another origin cannot start or resume a
       run: `POST /threads/{id}/runs` and `POST /threads/{id}/resume` refuse a body sent as
       text, as a form, or with no content type, and call no model, which today rests on a
       FastAPI default and on no test. Add the case of no content type for the `/llm` routes
       to `tests/test_llm_profiles_api.py` too per FR-003a, Constitution V (partial)
-- [ ] T100 Make the list say that no usable model is active on every instance, not only on the
+- [X] T100 Make the list say that no usable model is active on every instance, not only on the
       one that tried to build the active profile's model: `profile_list` in
       `src/freyja_agent/api/llm.py` knows `cannot_build` from what this instance applied, so
       another instance lists the profile as usable until its first run. Either bring the
       instance in step with the active profile before listing, or state the limit in FR-016;
       test with two apps on one store in `tests/test_llm_no_model.py` per FR-016 (partial)
-- [ ] T101 [P] Note the list's reading when a card's test result arrives, not when Test is
+- [X] T101 [P] Note the list's reading when a card's test result arrives, not when Test is
       pressed, in `web/components/llm/profile-card.tsx`: a list read while the test runs
       makes the card take its new result for superseded and show the list's older one until
       the next reading. Add the case to
       `web/__tests__/components/llm/profile-card.test.tsx` first per FR-007 (partial)
-- [ ] T102 Give the activation dialog and the Edit form the profile as the list has it now,
+- [X] T102 Give the activation dialog and the Edit form the profile as the list has it now,
       found by its id, in `web/components/llm/profile-list.tsx`: both decide from the copy
       taken when they opened, so a test that fails after the activation dialog opened brings
       no warning, and a profile activated elsewhere meanwhile is saved without the
       confirmation. Tests first, in the list-level cases of
       `web/__tests__/components/llm/activate-dialog.test.tsx` per FR-012, SC-011, FR-010
       (partial)
-- [ ] T103 [P] Bring three documents in line with Phase 10: the `why` field in "Model in use"
+- [X] T103 [P] Bring three documents in line with Phase 10: the `why` field in "Model in use"
       of `specs/004-web-llm-profiles/data-model.md`; `llm/guard.py` and
       `tests/test_llm_guard.py` in the trees of `specs/004-web-llm-profiles/plan.md`; and the
       403 `other_origin` answer on each path that changes something in

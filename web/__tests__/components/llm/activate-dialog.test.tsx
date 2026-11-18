@@ -386,6 +386,84 @@ describe("Set active, from the list", () => {
     ]);
   });
 
+  it("warns in an open confirmation when the list then says the profile's test failed", async () => {
+    const AT = "2026-11-17T09:14:02.118000+00:00";
+    const withTest = (last: LlmProfile["last_test"]): LlmProfileList => ({
+      ...list("environment"),
+      profiles: [
+        list("environment").profiles[0],
+        { ...SAVED, last_test: last },
+      ],
+    });
+    stubFetch(
+      { json: withTest({ ok: true, at: AT, step: null, reason: null }) },
+      {
+        json: withTest({
+          ok: false,
+          at: "2026-11-18T10:00:00.000000+00:00",
+          step: "conversation",
+          reason: "Error code: 422 - Input should be a valid string",
+        }),
+      },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+
+    // Its last test passed when the confirmation opened: no warning.
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    const dialog = await screen.findByRole("alertdialog");
+    expect(dialog.querySelector('[role="note"]')).toBeNull();
+
+    // A test that was still running, or run by someone else, then fails, and the list is
+    // read again. The confirmation is about the profile as it is now.
+    fireEvent.click(screen.getByText("Refresh"));
+    await waitFor(() =>
+      expect(dialog.querySelector('[role="note"]')?.textContent).toMatch(
+        /last test failed at the conversation/,
+      ),
+    );
+    expect(screen.getByRole("button", { name: "Test first" })).toBeTruthy();
+  });
+
+  it("asks before saving a change to a profile that became the active one while its form was open", async () => {
+    const fetchStub = stubFetch(
+      { json: list("environment") },
+      { json: list("saved") },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Local vLLM" });
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    const form = await screen.findByRole("dialog", { name: "Edit Local vLLM" });
+    fireEvent.change(screen.getByLabelText("Model id"), {
+      target: { value: "newer-model" },
+    });
+    // Activated from somewhere else, and the list is read again.
+    fireEvent.click(screen.getByText("Refresh"));
+    // Found by its markup: the form in front hides the cards from a lookup by role.
+    const cardText = () =>
+      Array.from(document.querySelectorAll('[data-slot="card"]')).find(
+        (card) => card.querySelector("h3")?.textContent === "Local vLLM",
+      )?.textContent;
+    await waitFor(() => expect(cardText()).toContain("Active"));
+
+    fireEvent.click(
+      Array.from(form.querySelectorAll("button")).find(
+        (button) => button.textContent === "Save",
+      ) as HTMLElement,
+    );
+    // What was typed is still there, and nothing is sent before the confirmation.
+    expect(form.querySelector('[role="note"]')?.textContent).toMatch(
+      /Local vLLM is the active profile/,
+    );
+    expect((screen.getByLabelText("Model id") as HTMLInputElement).value).toBe(
+      "newer-model",
+    );
+    expect(
+      fetchStub.mock.calls.filter(([, init]) => init?.method === "PATCH"),
+    ).toHaveLength(0);
+  });
+
   it("changes nothing when the confirmation is cancelled", async () => {
     const fetchStub = stubFetch({ json: list("environment") });
     renderList();

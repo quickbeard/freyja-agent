@@ -52,7 +52,12 @@ provider profile set.
 environment when both are given (*verified* with the environment's keys unset: `ChatOpenAI`,
 `ChatAnthropic`, `ChatOpenRouter` each built, with the base URL in `openai_api_base`,
 `anthropic_api_url`, and `openrouter_api_base`). None shows the key in its `repr`
-(*verified*). Going through `init_chat_model` with Deep Agents' provider profile keeps a saved
+(*verified*). Given a key and no base URL, each takes its address from the environment's
+variables (*verified* by the converge step: `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
+`ANTHROPIC_API_URL`, `ANTHROPIC_BASE_URL`, `OPENROUTER_API_BASE`), which would send an
+operator's key to the environment's endpoint. So a saved profile with no base URL is built
+with its provider's own address, kept in the provider table, and never without one. Going
+through `init_chat_model` with Deep Agents' provider profile keeps a saved
 profile resolved exactly as the environment's model is (001 research R3).
 
 **The environment's profile** is `FREYJA_MODEL` split at its first colon, plus the provider's

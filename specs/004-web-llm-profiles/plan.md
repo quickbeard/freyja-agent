@@ -119,6 +119,14 @@ its base URL, whether a key is set, and the key's text to take out of an error. 
 reads them, `llm/providers.py`. Putting them into `Settings` would give the service a copy of
 a key it has no use for, which is what feature 001 avoided.
 
+A second reading of the same principle, recorded with T095: it says hosts are not hardcoded
+in application code, and the provider table holds each provider's own address, such as
+`https://api.openai.com/v1`. That is not where a deployment's parts are; it is what the
+provider is, like its name, and it is the constant its client library already carries. It is
+passed to the client only for a saved profile with no base URL, so that the client does not
+take one from the environment's variables instead. Nothing a deployment could want to change
+is fixed by it: an operator who wants another address gives the profile a base URL.
+
 Three additions carry complexity the governance section asks to justify; none is a
 violation, so they are justified here rather than in Complexity Tracking:
 
@@ -188,6 +196,7 @@ src/freyja_agent/
 │   ├── providers.py           # the provider table; ModelSpec; build_model (R3);
 │   │                          #   environment_profile(); the placeholder model (R8)
 │   ├── secrets.py             # encrypt, decrypt, key_hint (R4); redact (R9)
+│   ├── guard.py               # guard_model: a model raises its errors without its key
 │   ├── store.py               # LlmProfileStore protocol; InMemoryLlmProfileStore;
 │   │                          #   PostgresLlmProfileStore with the two tables (R5)
 │   ├── active.py              # ActiveModel and the manager: load the active profile, compare
@@ -215,6 +224,7 @@ tests/
 ├── fakes.py                           # + the test model factory and a labelled model
 ├── conftest.py                        # + make_llm_app
 ├── test_llm_secrets.py                # encrypt, hint, redact
+├── test_llm_guard.py                  # a guarded model's errors, called, streamed, unchanged
 ├── test_llm_providers.py              # the provider table, building a model, the
 │                                      #   environment's profile
 ├── test_llm_schemas.py                # the request and response shapes of the routes
@@ -770,8 +780,8 @@ T094). What closing them settled:
   The model stays the same object under the same class name, so it is bound to tools and
   recognized by its provider as before; a wrapper around the model would have lost that. A
   middleware was the other choice and was set aside: it would see only the calls made
-  through it, and Deep Agents' summarizing call is made by a middleware of its own. `ModelManager` guards
-  every model it builds. The proof now streams the failing run with `debug` and searches
+  through it, and Deep Agents' summarizing call is made by a middleware of its own.
+  `ModelManager` guards every model it builds. The proof now streams the failing run with `debug` and searches
   everything the checkpointer holds, and an opt-in test searches `checkpoint_writes` in
   Postgres; each fails without the guard.
 - **A page of another origin is refused by what the browser says of the request** (T083). No
@@ -833,3 +843,50 @@ T094). What closing them settled:
 - **Looked at and left** by the converge step: whether a browser's password manager saves or
   fills the key field, which needs a run by hand; announcing field errors to assistive
   technology; and DNS rebinding.
+
+### Phase 11 as built (2026-11-18)
+
+A second converge run read the Phase 10 changes with a reviewer that did not write them. All
+fourteen held, and the three security fixes withstood an attempt to break them. Nine gaps
+remained (T095 to T103), one of them in code no earlier phase had questioned:
+
+- **A saved profile with no base URL goes to its provider's own address** (T095). R3 had
+  verified that a client given a key and a base URL reads nothing from the environment. It
+  had not looked at a key with no base URL: the client then takes its address from the
+  environment's variables, so on a deployment that points `OPENAI_API_BASE` at a self-hosted
+  endpoint, a profile saved for the provider's own service sent its key and its
+  conversations to that endpoint, while its card showed no base URL. The provider table now
+  holds each provider's own address, and `model_arguments` passes it for a spec that has a
+  key and no base URL. The environment's own model, which has no key in its spec, is built
+  as it always was. The Constitution Check above records why those three addresses are not
+  hardcoded configuration.
+- **The environment's card shows the address its client uses** (T097): the first that is set
+  of the variables the client reads, `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` included.
+- **The guard on the environment's model is proved in the default suite** (T096). The test of
+  the environment's key now streams its failing run with `debug` and searches the
+  checkpointer; it fails when that model is left unguarded.
+- **The service's list of codes has `other_origin`** (T098), and a test reads the contract's
+  list and the service's together, so neither gains a code alone.
+- **A page of another origin cannot start or resume a run** (T099): held in place by tests for
+  a body sent as text, as a form, and with no content type, which until now rested on a
+  FastAPI default. The behaviour was already so; the tests passed as written.
+- **The list brings its instance in step first** (T100): `profile_list` takes up the active
+  choice as a run would before it answers, so an active profile that cannot be built is
+  listed as not usable on every instance, before a run is turned away there. Building opens
+  no connection, and a rebuild is the same one the next run would have made.
+- **A card notes the list's reading when its result arrives** (T101), from a ref, so a list
+  read while the test runs is not taken for a later one.
+- **The dialogs are given the profile as the list has it now** (T102), found by its id: a
+  test that fails after the activation dialog opened brings the warning, and a profile that
+  became the active one while its form was open is saved only after the confirmation. What
+  was typed in the form stays, since the fields keep their own state.
+- **Three documents were brought in line** (T103): `why` in the data model's "Model in use"
+  and each provider's own address in its table; `llm/guard.py` and `tests/test_llm_guard.py`
+  in the trees above; and a 403 `other_origin` answer on each of the six operations of the
+  contract that change something.
+- **The checkpoint** was run against the real service on a database made for it and dropped
+  afterwards, started with `OPENAI_API_BASE` pointing at the stand-in. In that environment a
+  saved profile with no base URL is built for `https://api.openai.com/v1`, and one with a
+  base URL for that base URL; this was read from the built client, and no request was sent
+  to the provider. The console's changes went through the web app's server as before, and a
+  second instance listed the newly active profile, and had taken it up, before any run.

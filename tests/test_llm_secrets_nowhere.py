@@ -312,8 +312,11 @@ def test_the_environments_key_is_removed_from_a_failed_run_too(
     made.models.models["env-model"] = Leaky()
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         seen = Seen(client, sse_events)
-        events = seen.stream("/threads/t-1/runs", {"message": "hello"})
+        # Watched in full, as a saved profile's failing run is: the environment's model is
+        # guarded too, and nothing else in the default suite would notice if it were not.
+        events = seen.stream("/threads/t-1/runs", {"message": "hello"}, debug="true")
         tested = seen.call("POST", "/llm/profiles/environment/test").json()
+        in_threads = kept(made.runtime.agent.checkpointer)
 
     assert events[-1][1] == {
         "code": "model_error",
@@ -321,6 +324,10 @@ def test_the_environments_key_is_removed_from_a_failed_run_too(
     }
     assert tested["reason"] == f"401: Incorrect API key provided: {REDACTED}"
     nowhere(seen.texts, ENV_MARK)
+    debugged = [str(data) for kind, data in events if kind == "debug"]
+    assert any("Incorrect API key provided" in text for text in debugged)
+    assert any("Incorrect API key provided" in text for text in in_threads)
+    nowhere(in_threads, ENV_MARK)
     nowhere([caplog.handler.format(record) for record in caplog.records], ENV_MARK)
 
 

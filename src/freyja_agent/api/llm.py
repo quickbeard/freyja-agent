@@ -207,6 +207,15 @@ async def profile_list(runtime: Runtime) -> LlmProfileList:
     Read from the database and from what this instance was started with. No model endpoint is
     contacted (FR-007, FR-008).
     """
+    # Take up the active choice first, as a run would: whether the active profile's model can
+    # be built is known only once this instance has tried, and the list has to say that no
+    # usable model is active before a run is turned away here, not after (FR-016). Building
+    # opens no connection.
+    try:
+        await runtime.model_for_run()
+    except Exception as exc:
+        # The list is still what the database says; a run reports what is wrong.
+        logger.warning("The active LLM profile could not be applied: %s", type(exc).__name__)
     state = await runtime.llm_profiles.state()
     secret = runtime.settings.secret_key
     # The active profile's model, as this instance applied it: runs are turned away from one

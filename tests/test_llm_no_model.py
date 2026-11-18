@@ -175,6 +175,38 @@ def test_a_saved_active_profile_that_cannot_be_built_is_listed_as_not_usable(
     assert other["id"] != added["id"]
 
 
+def test_every_instance_lists_an_active_profile_that_cannot_be_built_as_not_usable(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    """FR-016: the list says so on the instance that is asked, not only on the one that
+    handled the activation, and before any run has been turned away there."""
+    first = make_llm_app(model="openai:env-model", models=Unbuildable())
+    second = make_llm_app(
+        model="openai:env-model", models=Unbuildable(), store=first.store, instance_id="instance-b"
+    )
+    with TestClient(first.app) as a, TestClient(second.app) as b:
+        added = a.post(
+            "/llm/profiles",
+            json={"name": "Broken", "provider": "openai", "model": "broken", "api_key": KEY},
+        ).json()
+        assert listing(b)["usable_model"] is True
+        assert a.post(f"/llm/profiles/{added['id']}/activate").status_code == 200
+        on_a = listing(a)
+        on_b = listing(b)
+        assert a.post("/llm/profiles/environment/activate").status_code == 200
+        back_on_b = listing(b)
+
+    for body in (on_a, on_b):
+        broken = next(p for p in body["profiles"] if p["name"] == "Broken")
+        assert (broken["active"], broken["usable"], broken["unusable_reason"]) == (
+            True,
+            False,
+            "cannot_build",
+        )
+        assert body["usable_model"] is False
+    assert back_on_b["usable_model"] is True
+
+
 def test_the_service_starts_when_the_active_profiles_key_cannot_be_read(
     make_llm_app: Callable[..., LlmApp], sse_events: Any
 ) -> None:
