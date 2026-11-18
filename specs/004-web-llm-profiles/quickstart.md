@@ -164,6 +164,19 @@ docker compose exec postgres psql -U freyja -d freyja -c \
 
 Search the service's terminal output for `quickstart-key`: nothing.
 
+An endpoint may repeat the key in its error. Add a profile like `Stub` with the model
+`repeat-key`, activate it, and start a run with the debug stream:
+
+```bash
+curl -s -N -X POST 'localhost:8000/threads/llm-5/runs?debug=true' -H 'content-type: application/json' \
+  -d '{"message": "Say hello."}' | tee /dev/stderr | grep -c 'quickstart-key'           # 0
+docker compose exec postgres psql -U freyja -d freyja -At -c \
+  "select count(*) from checkpoint_writes where thread_id = 'llm-5' and convert_from(blob, 'LATIN1') like '%quickstart-key%'"   # 0
+```
+
+The run ends with `model_error`, and the error, a `debug` event, and what the database keeps of
+the failed step all show `<key>` where the key was. Activate `Stub` again.
+
 Remove `FREYJA_SECRET_KEY` from `.env` and restart. The environment's card works as before and
 can be tested; the saved cards are shown as unusable; saving a profile is refused. While a saved
 profile is the active one, the console also says that no usable model is active, as in
@@ -179,14 +192,17 @@ Put the secret back and restart: the saved profiles are usable again.
 Set `FREYJA_SECRET_KEY=not-a-key` and start the service: it does not start, and the error names
 the setting, `secret_key`, without repeating the value. Restore the real secret.
 
-A page from another origin cannot use the API. The service gives a preflight no permission, and
-refuses a body that is not sent as JSON:
+A page from another origin cannot use the API. The service gives a preflight no permission,
+refuses a body that is not sent as JSON, and refuses a request that changes something when the
+browser says a page of another origin made it, which is what stops a plain form:
 
 ```bash
 curl -s -i -X OPTIONS localhost:8000/llm/profiles -H 'Origin: http://other.example' \
   -H 'Access-Control-Request-Method: POST' | grep -i -c 'access-control-allow'       # 0
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/llm/profiles \
   -H 'content-type: text/plain' -d '{"name": "X", "provider": "openai", "model": "ok", "api_key": "k"}'   # 422
+curl -s -X POST localhost:8000/llm/profiles/environment/activate \
+  -H 'Origin: http://other.example' | jq .detail.code                                # "other_origin"
 ```
 
 In the console, type a key into the Add form and close it without saving; open it again: the

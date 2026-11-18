@@ -16,6 +16,7 @@ from freyja_agent.runtime import persistence
 from freyja_agent.runtime.persistence import DatabaseUnavailableError
 from freyja_agent.runtime.runtime import Runtime
 from tests.fakes import ScriptedChatModel
+from tests.test_llm_secrets_nowhere import KEY, MARK, LeakyModel
 
 ACTIONS = "freyja_agent.actions"
 PROPOSED = {"channel": "#ops", "message": "Nightly report is ready."}
@@ -90,3 +91,42 @@ async def test_an_unreachable_database_fails_startup_naming_the_connection(
     message = str(raised.value)
     assert "127.0.0.1:1/freyja" in message
     assert "hunter2" not in message
+
+
+def test_a_failed_steps_error_is_stored_without_the_key(
+    settings: Settings, sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """004 FR-020, FR-021: LangGraph saves a failed step's error with the thread's writes.
+
+    The provider repeats the key in its error. What reaches the database is the provider's
+    words with the key taken out.
+    """
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    settings = settings.model_copy(update={"model": "openai:env-model"})
+    with (
+        TestClient(service(settings, LeakyModel(), "instance-a")) as client,
+        client.stream(
+            "POST", "/threads/pg-key/runs", json={"message": "hello"}, params={"debug": "true"}
+        ) as response,
+    ):
+        lines = list(response.iter_lines())
+    events = sse_events(iter(lines))
+    assert events[-1][0] == "error"
+    assert events[-1][1]["code"] == "model_error"
+    assert MARK not in "\n".join(lines)
+
+    with psycopg.connect(settings.database_uri) as conn:
+        writes = conn.execute(
+            "SELECT blob FROM checkpoint_writes WHERE thread_id = %s", ("pg-key",)
+        ).fetchall()
+        rest = conn.execute(
+            "SELECT checkpoint::text || metadata::text FROM checkpoints WHERE thread_id = %s",
+            ("pg-key",),
+        ).fetchall()
+        blobs = conn.execute(
+            "SELECT blob FROM checkpoint_blobs WHERE thread_id = %s", ("pg-key",)
+        ).fetchall()
+    stored = [bytes(row[0] or b"").decode("latin-1") for row in (*writes, *blobs)]
+    stored += [str(row[0]) for row in rest]
+    assert any("Incorrect API key provided" in text for text in stored)
+    assert all(MARK not in text for text in stored)

@@ -24,12 +24,16 @@ function reason(error: unknown): string {
 
 /** The LLM section: every profile as a card, read from the service in the browser. */
 export function ProfileList() {
+  // How often the list has been read: a card that got a result of its own shows the list's
+  // once the list has been read again.
+  const [reads, setReads] = useState(0);
   const { data, error, isLoading, isValidating, mutate } = useSWR<
     LlmProfileList,
     unknown
   >(PROFILES_PATH, listProfiles, {
     // A failure is shown, with a way to try again, and not retried behind the operator's back.
     shouldRetryOnError: false,
+    onSuccess: () => setReads((count) => count + 1),
   });
   const [adding, setAdding] = useState(false);
   const [activating, setActivating] = useState<LlmProfile | null>(null);
@@ -103,10 +107,14 @@ export function ProfileList() {
             onTested={() => mutate()}
             onEdit={(chosen) => setEditing({ profile: chosen, open: true })}
             onDelete={setDeleting}
+            onGone={() => mutate()}
+            listRead={reads}
           />
         ))}
       </div>
-      {/* After either change the list is read again: the service says what is so. */}
+      {/* After either change the list is read again: the service says what is so. It is
+          read again too when the service says a profile is gone, deleted by someone else
+          since this page last read the list. */}
       <ProfileForm
         open={adding}
         onOpenChange={setAdding}
@@ -118,18 +126,21 @@ export function ProfileList() {
           open={editing.open}
           onOpenChange={(open) => setEditing({ ...editing, open })}
           onSaved={() => mutate()}
+          onGone={() => mutate()}
         />
       )}
       <DeleteDialog
         profile={deleting}
         onClose={() => setDeleting(null)}
         onDeleted={() => mutate()}
+        onGone={() => mutate()}
       />
       <ActivateDialog
         profile={activating}
         onClose={() => setActivating(null)}
         onActivated={(list) => mutate(list)}
         onTested={() => mutate()}
+        onGone={() => mutate()}
       />
     </div>
   );

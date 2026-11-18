@@ -42,3 +42,9 @@ the proposal pending.
 
 `model_error` is unchanged in meaning: an exception raised by the chat model. From this feature
 on its `message` has the active profile's key removed, should a provider repeat it (FR-021).
+
+## `debug` never holds a profile's key
+
+A `debug` event of a failed step carries the model's error. The key is taken out where the
+error is raised, in the model, so the event shows the provider's words with `<key>` in place of
+the key, and so does what the checkpointer saves of the failed step (FR-020, FR-021).

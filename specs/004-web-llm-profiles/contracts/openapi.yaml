@@ -11,6 +11,13 @@ info:
     bind to a local interface. No response, error, or event defined here ever contains an API
     key. The service sends no cross-origin headers, so a page from another origin can neither
     read a response nor send a JSON body; a body that is not sent as JSON is refused with 422.
+    A request that changes something (POST, PATCH, DELETE) and that a browser marks as made by
+    a page of another origin is refused with 403 and the code `other_origin`, on every path
+    here, before anything else is looked at: a form post needs no permission, and two paths
+    take no body. The marks are `Sec-Fetch-Site` other than `same-origin` or `none`, and an
+    `Origin` that is not the host the browser asked for (`X-Forwarded-Host` when the web
+    app's server passed the request on, `Host` otherwise). A client that sends neither header
+    is served.
 paths:
   /llm/profiles:
     get:
@@ -415,6 +422,7 @@ components:
             - name_taken
             - secret_not_configured
             - test_busy
+            - other_origin
           description: The codes this feature adds; the existing ones are unchanged.
         message: { type: string }
     ErrorResponse:

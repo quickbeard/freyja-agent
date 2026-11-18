@@ -3,7 +3,6 @@ servers and the A2A agents, the run-lock, agent task, and LLM profile stores, th
 manager, the delegation worker, and this instance's id."""
 
 import logging
-import os
 import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -46,6 +45,7 @@ from freyja_agent.llm.providers import (
     ModelFactory,
     ModelSpec,
     build_model,
+    environment_key,
     environment_profile,
     environment_spec,
 )
@@ -205,7 +205,7 @@ class Runtime:
                 )
                 spec = environment_spec(settings, model if isinstance(model, str) else None)
                 provider = PROVIDERS.get(spec.provider)
-                key = os.environ.get(provider.key_variable, "") if provider else ""
+                key = environment_key(spec)
                 if isinstance(model, BaseChatModel):
                     environment = partial(_given, model)
                 elif model_factory is not None:

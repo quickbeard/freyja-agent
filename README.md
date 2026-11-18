@@ -314,9 +314,9 @@ A change carries only the fields to change: a key left out keeps the stored key.
 
 ### Keys stay secret
 
-A key goes in and never comes out. No route returns it: a profile shows `key_hint`, the key's last four characters, or nothing when the key has fewer than eight. The key is in no log line, stream event, or thread, and where a provider's error repeats it, in a test's reason or a run's `model_error` message, `<key>` stands in its place. A refused request to an `/llm` route is answered without the value that was sent.
+A key goes in and never comes out. No route returns it: a profile shows `key_hint`, the key's last four characters, or nothing when the key has fewer than eight. The key is in no log line, stream event, or thread, and where a provider's error repeats it, in a test's reason, a run's `model_error` message, a `debug` event, or what is saved of a failed step, `<key>` stands in its place. A key shorter than eight characters is the exception: it is too short to be told from ordinary text and is not searched for. A refused request to an `/llm` route is answered without the value that was sent.
 
-The API gives no other origin permission to call it, and every route that takes a body refuses one that is not sent as JSON, so a page from another site cannot change a profile through a browser that can reach the service.
+The API gives no other origin permission to call it, and every route that takes a body refuses one that is not sent as JSON. A request that changes something is also refused with `403` and code `other_origin` when the browser marks it as made by a page of another origin, by `Sec-Fetch-Site` or by an `Origin` that is not the host it asked for. That covers the routes without a body, which a plain form could otherwise reach. So a page from another site cannot change a profile through a browser that can reach the service. The console and clients that are not web pages, such as `curl`, are unaffected.
 
 ### No usable model
 

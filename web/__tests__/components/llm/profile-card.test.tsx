@@ -297,6 +297,85 @@ describe("ProfileCard, its test", () => {
     expect(screen.queryByText(/Last test passed/)).toBeNull();
   });
 
+  it("shows a newer result from the list over the one it got itself", async () => {
+    // The card's own test failed. Then the profile is tested from somewhere else, which
+    // does not change the profile, and the list reports that later result.
+    stubFetch(answer(failed));
+    const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
+    test();
+    await screen.findByText(/Last test failed at the conversation/);
+
+    const later = { ...passed, at: "2026-11-18T10:00:00.000000+00:00" };
+    rerender(
+      <ProfileCard profile={{ ...SAVED, last_test: later }} listRead={2} />,
+    );
+    expect(screen.getByText(/Last test passed/)).toBeTruthy();
+    expect(screen.queryByText(/Last test failed/)).toBeNull();
+    expect(document.querySelector("time")?.getAttribute("datetime")).toBe(
+      later.at,
+    );
+  });
+
+  it("keeps its own result until the list has been read again", async () => {
+    stubFetch(answer(passed));
+    const { rerender } = render(
+      <ProfileCard profile={ENVIRONMENT} listRead={1} />,
+    );
+    test();
+    await screen.findByText(/Last test passed/);
+
+    // The same reading of the list, which was made before the test ended.
+    rerender(<ProfileCard profile={ENVIRONMENT} listRead={1} />);
+    expect(screen.getByText(/Last test passed/)).toBeTruthy();
+  });
+
+  it("drops a result the service no longer has, such as the environment's after a restart", async () => {
+    stubFetch(answer(passed));
+    const { rerender } = render(
+      <ProfileCard profile={ENVIRONMENT} listRead={1} />,
+    );
+    test();
+    await screen.findByText(/Last test passed/);
+
+    // Read again, the list has no result for it: the service is what says what is so.
+    rerender(<ProfileCard profile={ENVIRONMENT} listRead={2} />);
+    expect(
+      screen.getByText("Not tested since the service started."),
+    ).toBeTruthy();
+    expect(screen.queryByText(/Last test passed/)).toBeNull();
+  });
+
+  it("keeps saying a result was not kept after the list is read again", async () => {
+    stubFetch(answer(passed, false));
+    const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
+    test();
+    await screen.findByText(/This result was not kept/);
+
+    rerender(<ProfileCard profile={SAVED} listRead={2} />);
+    expect(screen.getByText(/This result was not kept/)).toBeTruthy();
+  });
+
+  it("says when the profile it tested is gone, so the list can be read again", async () => {
+    stubFetch({
+      status: 404,
+      json: {
+        detail: {
+          code: "profile_not_found",
+          message: "There is no profile with this id.",
+        },
+      },
+    });
+    const onGone = vi.fn();
+    const onTested = vi.fn();
+    render(<ProfileCard profile={SAVED} onGone={onGone} onTested={onTested} />);
+    test();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("There is no profile with this id.");
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onTested).not.toHaveBeenCalled();
+  });
+
   it("does not offer a test of a profile that is not usable", () => {
     render(
       <ProfileCard

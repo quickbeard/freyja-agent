@@ -4,6 +4,7 @@ import {
   card,
   cards,
   environmentProfile,
+  LONG_REASON,
   ProfileService,
   REFUSES_EARLIER_TURNS,
   savedProfile,
@@ -985,4 +986,112 @@ test("a card whose key cannot be read says why, and its form asks for the key ag
     "Delete",
   ]);
   await expect(page.getByText(NEW_KEY)).toHaveCount(0);
+});
+
+// 004, convergence: what a second read of the spec against the code found.
+
+test("pressing Save twice on the active profile does not change it: confirming takes a press of its own", async ({
+  page,
+}) => {
+  const service = await new ProfileService(
+    environmentProfile({ active: false }),
+    savedProfile("Claude", { active: true }),
+  ).serve(page);
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Claude");
+  const model = edit.getByLabel("Model id", { exact: true });
+  await model.fill("claude-opus-5-5");
+
+  // A double press: its second half lands where Save was, on the button that confirms.
+  await edit.getByRole("button", { name: "Save" }).dblclick();
+  const note = edit.getByRole("note");
+  await expect(note).toContainText("Claude is the active profile.");
+  expect(service.changes).toEqual([]);
+
+  // Enter twice in a field does no more.
+  await edit.getByRole("button", { name: "Back" }).click();
+  await model.press("Enter");
+  await expect(note).toBeVisible();
+  await page.keyboard.press("Enter");
+  await expect(note).toBeVisible();
+  expect(service.changes).toEqual([]);
+
+  await edit.getByRole("button", { name: "Confirm" }).click();
+  await expect(edit).toBeHidden();
+  expect(service.changes.map(({ method }) => method)).toEqual(["PATCH"]);
+});
+
+test("a profile another operator deleted goes from the list when the service says it is gone", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude");
+  const service = await new ProfileService(
+    environmentProfile(),
+    claude,
+    savedProfile("Spare", { id: "f".repeat(32) }),
+  ).serve(page);
+  await page.goto("/llm");
+  await expect(cards(page)).toHaveCount(3);
+
+  // Deleted elsewhere: this page still shows its card.
+  service.deleteElsewhere(claude.id);
+  await card(page, "Claude")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  const confirmation = page.getByRole("alertdialog");
+  await confirmation.getByRole("button", { name: "Set active" }).click();
+
+  // The refusal is the service's, and the list behind it is the current one, with no
+  // Refresh pressed.
+  await expect(confirmation.getByRole("alert")).toHaveText(
+    "There is no profile with this id.",
+  );
+  await expect(cards(page)).toHaveCount(2);
+  // Found by its markup: the dialog in front hides the cards from a lookup by role.
+  await expect(cards(page).locator("h3", { hasText: /^Claude$/ })).toHaveCount(
+    0,
+  );
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(card(page, "Spare")).toBeVisible();
+  await expect(
+    card(page, "Environment").getByText("Active", { exact: true }),
+  ).toBeVisible();
+});
+
+test("in a short, narrow window the confirmation's buttons can be reached under a long reason", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 360, height: 560 });
+  const service = await new ProfileService(
+    environmentProfile(),
+    savedProfile("A profile with a rather long name", { model: "long-reason" }),
+  ).serve(page);
+  await page.goto("/llm");
+
+  await card(page, "A profile with a rather long name")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  const confirmation = page.getByRole("alertdialog");
+  await confirmation.getByRole("button", { name: "Test first" }).click();
+  await expect(confirmation.getByText(LONG_REASON)).toBeVisible();
+
+  // The dialog stays inside the window and scrolls in itself.
+  const box = await confirmation.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box?.y).toBeGreaterThanOrEqual(0);
+  expect((box?.y ?? 0) + (box?.height ?? 0)).toBeLessThanOrEqual(560);
+  for (const name of ["Set active", "Cancel"]) {
+    const button = confirmation.getByRole("button", { name, exact: true });
+    await button.scrollIntoViewIfNeeded();
+    await expect(button).toBeInViewport({ ratio: 1 });
+  }
+  const title = confirmation.getByRole("heading");
+  await title.scrollIntoViewIfNeeded();
+  await expect(title).toBeInViewport({ ratio: 1 });
+
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toBeHidden();
+  expect(service.changes.map(({ path }) => path)).toEqual([
+    expect.stringMatching(/\/test$/),
+  ]);
 });

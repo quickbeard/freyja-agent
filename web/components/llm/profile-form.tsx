@@ -1,6 +1,13 @@
 "use client";
 
-import { type FormEvent, useId, useRef, useState } from "react";
+import {
+  type FormEvent,
+  type MouseEvent,
+  useEffect,
+  useId,
+  useRef,
+  useState,
+} from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -20,7 +27,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { ApiError } from "@/lib/api";
+import { ApiError, isGone } from "@/lib/api";
 import {
   createProfile,
   type LlmProfile,
@@ -125,11 +132,13 @@ function Fields({
   profile,
   onCancel,
   onSaved,
+  onGone,
 }: {
   /** The saved profile being edited; none when one is being added. */
   profile?: LlmProfile;
   onCancel: () => void;
   onSaved: (profile: LlmProfile) => void;
+  onGone?: () => void;
 }) {
   const id = useId();
   const editing = profile !== undefined;
@@ -151,6 +160,12 @@ function Fields({
   );
   // A change to the active profile is confirmed first (FR-010).
   const [confirming, setConfirming] = useState(false);
+  const notice = useRef<HTMLParagraphElement>(null);
+  // What confirming means is read out, and a key pressed again lands on the notice, where it
+  // does nothing, and not on a button.
+  useEffect(() => {
+    if (confirming) notice.current?.focus();
+  }, [confirming]);
   const [errors, setErrors] = useState<Errors>({});
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -176,6 +191,8 @@ function Fields({
   function refused(error: unknown, fallback: string) {
     const told: Errors = {};
     let other: string | null = null;
+    // The profile was deleted since the list was read: the list is read again.
+    if (isGone(error)) onGone?.();
     if (!(error instanceof ApiError)) {
       other = fallback;
     } else if (error.code === "name_taken") {
@@ -226,9 +243,8 @@ function Fields({
     }
   }
 
-  async function submit(event: FormEvent) {
-    event.preventDefault();
-    if (inFlight.current) return;
+  /** The values as they would be saved, or nothing when the form itself finds them wrong. */
+  function checked() {
     const values = {
       name: name.trim(),
       model: model.trim(),
@@ -242,13 +258,32 @@ function Fields({
     );
     setErrors(found);
     setRefusal(null);
-    if (Object.keys(found).length > 0) return;
-    if (profile?.active && !confirming) {
-      // Nothing is sent yet: the form first says what the change means.
+    return Object.keys(found).length > 0 ? null : values;
+  }
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (inFlight.current) return;
+    const values = checked();
+    if (values === null) return;
+    if (profile?.active) {
+      // Nothing is sent: the form says what the change means. Saving again, by Enter or by
+      // the second press of a double press, changes nothing: only Confirm sends it.
       setConfirming(true);
       return;
     }
+    await send(values);
+  }
 
+  async function confirm(event: MouseEvent) {
+    // The second press of a double press on Save lands on this button, which took Save's
+    // place. That was not a decision; a press of its own is.
+    if (event.detail > 1 || inFlight.current) return;
+    const values = checked();
+    if (values !== null) await send(values);
+  }
+
+  async function send(values: NonNullable<ReturnType<typeof checked>>) {
     inFlight.current = true;
     setSending(true);
     try {
@@ -407,8 +442,10 @@ function Fields({
 
       {confirming && profile && (
         <p
+          ref={notice}
           role="note"
-          className="rounded-lg border border-amber-500/50 p-3 text-sm"
+          tabIndex={-1}
+          className="rounded-lg border border-amber-500/50 p-3 text-sm outline-none"
         >
           {profile.name} is the active profile. This change applies from the
           next run; a run in progress finishes on the values it started with.
@@ -441,7 +478,13 @@ function Fields({
             >
               Back
             </Button>
-            <Button type="submit" disabled={sending}>
+            {/* A button of its own, not the form's: Enter in a field does not confirm. */}
+            <Button
+              key="confirm"
+              type="button"
+              disabled={sending}
+              onClick={confirm}
+            >
               Confirm
             </Button>
           </>
@@ -450,7 +493,7 @@ function Fields({
             <Button type="button" variant="outline" onClick={onCancel}>
               Cancel
             </Button>
-            <Button type="submit" disabled={sending}>
+            <Button key="save" type="submit" disabled={sending}>
               Save
             </Button>
           </>
@@ -468,11 +511,14 @@ export function ProfileForm({
   open,
   onOpenChange,
   onSaved,
+  onGone,
   profile,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (profile: LlmProfile) => void;
+  /** Told when the service says the profile being changed no longer exists. */
+  onGone?: () => void;
   profile?: LlmProfile;
 }) {
   // A page stays mounted while it is hidden, so what was typed is thrown away by hand: each
@@ -491,6 +537,7 @@ export function ProfileForm({
         <Fields
           key={session}
           profile={profile}
+          onGone={onGone}
           onCancel={() => change(false)}
           onSaved={(profile) => {
             change(false);

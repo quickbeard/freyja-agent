@@ -10,7 +10,7 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { ApiError } from "@/lib/api";
+import { ApiError, isGone } from "@/lib/api";
 import {
   type LlmProfile,
   type LlmTestResult,
@@ -49,10 +49,16 @@ export function ProfileCard({
   onTested,
   onEdit,
   onDelete,
+  onGone,
+  listRead,
 }: {
   profile: LlmProfile;
   onActivate?: (profile: LlmProfile) => void;
   onTested?: () => void;
+  /** Told when the service says this profile no longer exists. */
+  onGone?: () => void;
+  /** How often the list has been read, so the card knows when the list is newer than it. */
+  listRead?: number;
   /** Offered on a saved profile only: the environment's is read-only (FR-008). */
   onEdit?: (profile: LlmProfile) => void;
   onDelete?: (profile: LlmProfile) => void;
@@ -67,12 +73,30 @@ export function ProfileCard({
   const [tested, setTested] = useState<{
     result: LlmTestResult;
     of: string | null;
+    /** The reading of the list the card had when the result came. */
+    read: number | undefined;
   } | null>(null);
   const [refusal, setRefusal] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const inFlight = useRef(false);
 
-  const fresh = tested !== null && tested.of === profile.updated_at;
+  // The card's own result is shown only until the service says more. A test does not change
+  // the profile, so the list may report a later one, run from the confirmation or by someone
+  // else. And once the list has been read again, a result the service kept is the list's to
+  // show: when it is not there any more, as after a restart for the environment's profile,
+  // it is not shown.
+  const own = tested !== null && tested.of === profile.updated_at;
+  const listHasLater =
+    own &&
+    profile.last_test !== null &&
+    Date.parse(profile.last_test.at) >= Date.parse(tested.result.at);
+  const listReadSince =
+    own &&
+    tested.result.recorded &&
+    listRead !== undefined &&
+    tested.read !== undefined &&
+    listRead > tested.read;
+  const fresh = own && !listHasLater && !listReadSince;
   const shown = fresh ? tested.result : profile.last_test;
 
   async function test() {
@@ -82,9 +106,10 @@ export function ProfileCard({
     setRefusal(null);
     try {
       const result = await testProfile(profile.id);
-      setTested({ result, of: profile.updated_at });
+      setTested({ result, of: profile.updated_at, read: listRead });
       onTested?.();
     } catch (error) {
+      if (isGone(error)) onGone?.();
       setRefusal(
         error instanceof ApiError
           ? error.message

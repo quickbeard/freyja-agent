@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { Button } from "@/components/ui/button";
-import { ApiError } from "@/lib/api";
+import { ApiError, isGone } from "@/lib/api";
 import {
   activateProfile,
   type LlmProfile,
@@ -27,11 +27,13 @@ function Confirmation({
   onClose,
   onActivated,
   onTested,
+  onGone,
 }: {
   profile: LlmProfile;
   onClose: () => void;
   onActivated: (list: LlmProfileList) => void;
   onTested?: () => void;
+  onGone?: () => void;
 }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -49,6 +51,7 @@ function Confirmation({
       setTested(await testProfile(profile.id));
       onTested?.();
     } catch (error) {
+      if (isGone(error)) onGone?.();
       setRefusal(
         error instanceof ApiError
           ? error.message
@@ -69,6 +72,7 @@ function Confirmation({
       onActivated(list);
       onClose();
     } catch (error) {
+      if (isGone(error)) onGone?.();
       setRefusal(
         error instanceof ApiError
           ? error.message
@@ -151,12 +155,15 @@ export function ActivateDialog({
   onClose,
   onActivated,
   onTested,
+  onGone,
 }: {
   profile: LlmProfile | null;
   onClose: () => void;
   onActivated: (list: LlmProfileList) => void;
   /** Told when a test run from the confirmation has ended. */
   onTested?: () => void;
+  /** Told when the service says the profile no longer exists. */
+  onGone?: () => void;
 }) {
   return (
     <AlertDialog
@@ -165,7 +172,9 @@ export function ActivateDialog({
         if (!open) onClose();
       }}
     >
-      <AlertDialogContent>
+      {/* Taller than a short, narrow window once it shows a long reason: it scrolls in itself,
+          so its buttons can always be reached. */}
+      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         {profile !== null && (
           // Keyed by the profile, so one profile's refusal is never shown for another.
           <Confirmation
@@ -173,6 +182,7 @@ export function ActivateDialog({
             profile={profile}
             onClose={onClose}
             onActivated={onActivated}
+            onGone={onGone}
             onTested={onTested}
           />
         )}

@@ -15,6 +15,7 @@ from freyja_agent.llm.providers import (
     NoUsableModelError,
     UnusableChatModel,
     build_model,
+    environment_key,
     environment_profile,
     environment_spec,
 )
@@ -103,6 +104,20 @@ def test_the_environments_profile_shows_the_providers_own_address_and_key_hint(
     assert profile.usable is True
     assert profile.unusable_reason is None
     assert KEY not in repr(profile)
+
+
+def test_the_environments_key_is_its_providers_own_variable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The one place the service reads a provider's variable itself (constitution IV)."""
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    assert environment_key(ModelSpec(provider="openai", model="m")) == KEY
+    assert environment_key(ModelSpec(provider="anthropic", model="m")) == ""
+    # A provider outside the table has no variable the service knows of.
+    assert environment_key(ModelSpec(provider="mistralai", model="m")) == ""
+    # What a caller hands over stands in for the process environment.
+    assert environment_key(ModelSpec(provider="openai", model="m"), {"OPENAI_API_KEY": "k"}) == "k"
 
 
 @pytest.mark.parametrize(("setting", "expected"), [(True, True), (False, False)])

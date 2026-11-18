@@ -56,9 +56,12 @@ environment when both are given (*verified* with the environment's keys unset: `
 profile resolved exactly as the environment's model is (001 research R3).
 
 **The environment's profile** is `FREYJA_MODEL` split at its first colon, plus the provider's
-own key and base URL variables read from the process environment for display only: the last
-four characters of the key and the base URL. The client libraries keep reading those variables
-themselves, as today. A prefix outside the table is shown as written.
+own key and base URL variables read from the process environment. They are read to describe
+the profile and for nothing else: the last four characters of the key and the base URL for the
+card, whether a key is set at all, which FR-011a makes part of "usable", and the key's text so
+that it can be taken out of an error (FR-021). They are read in one module,
+`llm/providers.py`, and never to configure the service: the client libraries keep reading
+those variables themselves, as today. A prefix outside the table is shown as written.
 
 **Usable** means: the model can be built, and the provider's key variable is set when the
 provider is in the table. The second half is needed because `ChatAnthropic` builds without a
@@ -205,7 +208,8 @@ to show again.
 **Decision**: a new router `api/llm.py` under `/llm`, with the shapes in
 [contracts/openapi.yaml](contracts/openapi.yaml): list, add, change, delete, activate, test a
 listed profile, and test unsaved values. Refusals use the existing error shape,
-`{"detail": {"code", "message"}}`, with eight new codes. The environment's profile has the id
+`{"detail": {"code", "message"}}`, with eight new codes, and a ninth, `other_origin`,
+since the converge step (plan, Phase 10 as built). The environment's profile has the id
 `environment`, so one path shape serves both kinds; a write to it is `profile_read_only`.
 Activation answers with the whole list, so the console redraws from one response.
 

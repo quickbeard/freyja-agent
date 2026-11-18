@@ -20,6 +20,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import SecretStr
 
 from freyja_agent.agent.factory import Orchestrator
+from freyja_agent.llm.guard import guard_model
 from freyja_agent.llm.providers import (
     ENVIRONMENT_ID,
     ENVIRONMENT_NAME,
@@ -72,7 +73,9 @@ class ActiveModel:
     revision: int
     profile: RunProfile
     usable: bool = True
-    # Why not, with any key removed; None when usable.
+    # Why not: one of the ``UNUSABLE`` codes, and its sentence, which holds no key. None when
+    # usable.
+    why: str | None = None
     reason: str | None = None
     # The keys that text about this model is cleaned of (FR-021). Never shown.
     secrets: tuple[str, ...] = field(default=(), repr=False)
@@ -178,6 +181,10 @@ class ModelManager:
         reason = UNUSABLE[why] if why is not None else None
         if model is None:
             model = UnusableChatModel(reason=f"profile {profile.name} cannot be used: {reason}")
+        else:
+            # A provider may repeat the key in an error, and LangGraph shows a failed step's
+            # error in the debug stream and saves it with the thread (FR-020, FR-021).
+            model = guard_model(model, secrets)
         orchestrator = self._build(model)
         if self.orchestrator is None:
             pass  # startup: the runtime logs every profile that is not usable, this one too
@@ -198,6 +205,7 @@ class ModelManager:
             revision=state.revision,
             profile=profile,
             usable=reason is None,
+            why=why,
             reason=reason,
             secrets=secrets,
         )

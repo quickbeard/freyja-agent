@@ -106,9 +106,21 @@ Checked against constitution 1.3.0, amended on 2026-11-17 for this feature, and 
 | VI. Deterministic guardrails before model judgment | Yes | Whether a run may call a model is a fixed check in `run_stream` before the graph is invoked (R8). Which profile is active, and that there is exactly one, is enforced by the database, not by code that could race (R5). Key removal is one function applied at every exit (R9). None of these depends on a model. | PASS | PASS |
 | Technology constraints | Yes | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; the Postgres pool; Ruff only for Python. The web app stays Next.js with TypeScript, pnpm, Biome, and Vitest. The two tables use the same database and pool as the run lease. | PASS | PASS |
 
-No deviations from the constitution. Three additions carry complexity the governance section
-asks to justify; none is a violation, so they are justified here rather than in Complexity
-Tracking:
+No deviations from the constitution. One reading of principle IV is recorded here because the
+converge step asked for it (T089): the service reads the providers' own key and base URL
+variables, such as `OPENAI_API_KEY`, from the process environment, outside the `Settings`
+class. Principle IV says deployment configuration is read through `Settings` from `FREYJA_*`
+variables. These are not `FREYJA_*` variables and not the service's configuration: they belong
+to the provider's client library, which has read them itself since feature 001, where
+`.env.example` says that settings never see the key. Feature 002 reads the variables named in
+a tool server's `pass_env` the same way. The service does not use them to configure itself.
+It looks at them to describe the environment's profile (R3): its key's last four characters,
+its base URL, whether a key is set, and the key's text to take out of an error. One module
+reads them, `llm/providers.py`. Putting them into `Settings` would give the service a copy of
+a key it has no use for, which is what feature 001 avoided.
+
+Three additions carry complexity the governance section asks to justify; none is a
+violation, so they are justified here rather than in Complexity Tracking:
 
 - **Two tables.** "Exactly one active profile" has to hold across instances and across a
   restart in the middle of a change, which only the database can guarantee cheaply (R5).
@@ -741,3 +753,83 @@ check, phase by phase.
   | Technology constraints | PASS | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; the same Postgres pool; Ruff only. The web app is Next.js with TypeScript, pnpm, Biome, and Vitest. |
 
   No deviation, and nothing new for Complexity Tracking.
+
+### Phase 10 as built (2026-11-18)
+
+The converge step read the code against the spec again and found fourteen gaps (T081 to
+T094). What closing them settled:
+
+- **A model is guarded where its errors are raised** (T081, T082). `run_stream` cleaned what it
+  logged and sent, but LangGraph is given a failed step's error first: it shows it in a
+  `debug` event and saves it with the step's writes in the checkpointer. `llm/guard.py` makes
+  the model itself raise without the key: `guard_model` gives the model a subclass of its own
+  class that catches what `_generate`, `_agenerate`, `_stream`, and `_astream` raise, and
+  raises a `ModelError` with the same words and `<key>` for the key, outside the handler so
+  that the provider's error is not kept as its context. An error that holds no key is raised
+  as it came, so nothing changes for it, such as the handling of a context that is too long.
+  The model stays the same object under the same class name, so it is bound to tools and
+  recognized by its provider as before; a wrapper around the model would have lost that. A
+  middleware was the other choice and was set aside: it would see only the calls made
+  through it, and Deep Agents' summarizing call is made by a middleware of its own. `ModelManager` guards
+  every model it builds. The proof now streams the failing run with `debug` and searches
+  everything the checkpointer holds, and an opt-in test searches `checkpoint_writes` in
+  Postgres; each fails without the guard.
+- **A page of another origin is refused by what the browser says of the request** (T083). No
+  permission for other origins stops a page from reading an answer and from sending JSON. It
+  does not stop a form post, and two routes take no body. `refuse_other_origins`, on the
+  whole `/llm` router, refuses POST, PATCH, and DELETE with 403 and the new code
+  `other_origin` when `Sec-Fetch-Site` is anything but `same-origin` or `none`, or when
+  `Origin` is not the host the browser asked for: `X-Forwarded-Host` when the web app's
+  server passed the request on, which Next.js sets, and `Host` otherwise. A page cannot set
+  any of the three. A client that sends none, such as curl, is served, so every documented
+  command works as before. A check of the content type was the other choice: it would have
+  made every curl command for the two routes need a header. This does not cover DNS
+  rebinding, where the hostile page's origin and the host it asked for are the same name;
+  FR-003a does not say whether it should.
+- **The card shows the newer of its result and the list's** (T084). The card kept its own
+  result while the profile's `updated_at` stood still, and a test does not move it. The card
+  now gives way when the list reports a result at least as new, and, for a result the
+  service kept, as soon as the list has been read again, so a result the service no longer
+  has is not shown. The list counts its readings and tells the cards.
+- **Confirming a change to the active profile takes a press of its own** (T085). Save and
+  Confirm were one button in place. Confirm is now a button of its own, not the form's, so
+  Enter in a field does not confirm; it ignores a press that the browser counts as the second
+  of a double press (`detail` above 1); and the notice takes the focus, so a key pressed again
+  lands on it.
+- **A profile that is gone goes from the list** (T086). A `profile_not_found` refusal of an
+  activation, a change, a deletion, or a test now has the list read again, while the dialog
+  keeps showing the refusal.
+- **The confirmations scroll in themselves** (T087), as the form does: after a failed "Test
+  first" with a reason of 500 characters the activation dialog was 880 pixels tall and, in a
+  window 360 by 560, its buttons could not be reached.
+- **The subagent's model is proved** (T088) by a run that hands work to it after the profile
+  changed: the subagent is asked through the model the run started with, and the next run's
+  through the new one. The code was right; the test passed as written.
+- **The providers' variables are read in one place** (T089): `environment_key` in
+  `llm/providers.py`. The Constitution Check above records why they are not settings, and R3
+  no longer calls the read "display only".
+- **A saved active profile that cannot be built is listed as not usable** (T090), with
+  `cannot_build`, on the instance that tried. No values of the three providers are known to
+  fail to build; the test uses a factory that raises.
+- **An answer that is an error is not called a silence** (T091). `web/lib/api.ts` says "cannot
+  be reached" for a request that failed and for a server error with no JSON body, which is
+  what the web app's server answers while the service is down, and "answered with an error"
+  for anything else, with the service's words when it gave any.
+- **Three tests were added for code that had none** (T092): the form's own limit on a name, a
+  refused value the form has no field for, and the environment's wording in the activation
+  warning.
+- **Two documents now say what the code does** (T093, T094): FR-021 states that a key shorter
+  than eight characters is not searched for, which R9 had chosen, and FR-023 and SC-006 name
+  the three assertions of feature 003 that Phase 3 changed from `"9877"` to `":9877"`,
+  because a run id can hold those digits.
+- **The checkpoint** was run against the real service on a database made for it and dropped
+  afterwards, with the stand-in on loopback and the built web app in Chromium. Adding,
+  activating, testing, changing, and deleting from the console all passed through the web
+  app's server with the new refusal in place. A fetch and a form post from another origin
+  were answered with `other_origin`, and the active profile did not change. On a profile
+  whose endpoint repeats the key, a run with the debug stream held the key nowhere: not in
+  the stream, not in `checkpoint_writes`, not in the log; each showed `<key>`. A run and a
+  test on the environment's real model went through the guarded client as before.
+- **Looked at and left** by the converge step: whether a browser's password manager saves or
+  fills the key field, which needs a run by hand; announcing field errors to assistive
+  technology; and DNS rebinding.
