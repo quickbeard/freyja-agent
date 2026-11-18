@@ -512,7 +512,7 @@ starts, the console says no usable model is active, and a run ends at once with
 
 ### Tests for User Story 5, part 1
 
-- [ ] T064 [P] [US5] Write `tests/test_llm_no_model.py`: a runtime whose environment names no
+- [X] T064 [P] [US5] Write `tests/test_llm_no_model.py`: a runtime whose environment names no
       usable model, and one whose active saved profile cannot be read, both start; the list
       reports `usable_model` false and the profile's `unusable_reason`; a run emits `start`
       naming the active profile and then `error` with code `no_usable_model`, invokes no model,
@@ -527,20 +527,20 @@ starts, the console says no usable model is active, and a run ends at once with
 
 ### Implementation for User Story 5, part 1
 
-- [ ] T065 [US5] In `src/freyja_agent/llm/active.py` and `src/freyja_agent/runtime/runtime.py`,
+- [X] T065 [US5] In `src/freyja_agent/llm/active.py` and `src/freyja_agent/runtime/runtime.py`,
       stop raising when the active profile cannot be turned into a model: record why, build the
       orchestrator around the placeholder model, and log each unusable profile at startup
       (FR-016, FR-024, R8)
-- [ ] T066 [US5] In `src/freyja_agent/api/streaming.py`, when no usable model is active, emit
+- [X] T066 [US5] In `src/freyja_agent/api/streaming.py`, when no usable model is active, emit
       `start` and then `error` with code `no_usable_model` and the message of
       contracts/sse-events.md without invoking the graph, release the lease, and log the
       refusal. The code belongs to the stream's `error` event, like `step_limit` and
       `model_error`; it is not added to `ErrorDetail`, which is the HTTP refusal shape (FR-016,
       FR-024, R8)
-- [ ] T067 [US5] In `src/freyja_agent/delegates/delegation_worker.py`, start no delivery while
+- [X] T067 [US5] In `src/freyja_agent/delegates/delegation_worker.py`, start no delivery while
       no usable model is active, leaving ready outcomes ready and their attempts untouched
       (FR-016a, R8)
-- [ ] T067a [US5] Extend `web/e2e/llm.spec.ts`: while the active profile is not usable the
+- [X] T067a [US5] Extend `web/e2e/llm.spec.ts`: while the active profile is not usable the
       section says that no usable model is active, and the notice goes once a usable profile is
       activated; activating a profile that is not usable shows the service's refusal and leaves
       the active mark where it was (FR-012, FR-016, US5)
