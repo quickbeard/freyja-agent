@@ -185,6 +185,48 @@ async def test_a_model_that_cannot_be_asked_reports_why_without_the_key() -> Non
 
 
 @APIS
+async def test_a_request_that_asks_for_a_stream_is_answered_as_one(responses_api: bool) -> None:
+    """A run streams its requests, so a profile pointing at the stand-in can be run on."""
+    stub = LlmStub()
+    model = stub.factory(spec("ok", responses_api=responses_api))
+    text = ""
+    async for chunk in model.astream("Say hello."):
+        text += chunk.text
+    assert text == "ready"
+    (request,) = stub.requests
+    assert request.body["stream"] is True
+    assert request.api == ("responses" if responses_api else "chat")
+
+
+def test_a_run_on_a_profile_that_points_at_the_stand_in_completes(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The quickstart's runs: the real client, the real run loop, and the stand-in."""
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key-9f2c")
+    stub = LlmStub()
+    made = make_llm_app(model="openai:env-model", models=stub.factory)
+    values = {
+        "name": "Stub",
+        "provider": "openai",
+        "model": "ok",
+        "base_url": BASE_URL,
+        "api_key": KEY,
+        "responses_api": False,
+    }
+    with TestClient(made.app) as client:
+        stub_id = client.post("/llm/profiles", json=values).json()["id"]
+        client.post(f"/llm/profiles/{stub_id}/activate")
+        with client.stream("POST", "/threads/t-1/runs", json={"message": "Say hello."}) as stream:
+            events = sse_events(stream.iter_lines())
+        reply = client.get("/threads/t-1/state").json()["messages"][-1]
+
+    assert events[0][1]["profile"]["name"] == "Stub"
+    assert events[-1] == ("end", {"status": "completed"})
+    assert (reply["type"], reply["content"]) == ("ai", "ready")
+    assert [r.model for r in stub.requests] == ["ok"]
+
+
+@APIS
 def test_the_routes_test_a_profile_through_the_real_client(
     make_llm_app: Callable[..., LlmApp], responses_api: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:

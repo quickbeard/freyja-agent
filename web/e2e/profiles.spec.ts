@@ -590,3 +590,270 @@ test("the form tests its values before they are saved, and a test saves nothing"
   await expect(card(page, "Local vLLM").getByText(NOT_TESTED)).toBeVisible();
   await expect(page.getByText(KEY)).toHaveCount(0);
 });
+
+// 004, User Story 4: change and remove profiles.
+
+const NEW_KEY = "sk-another-key-for-tests-0002";
+const editForm = (page: Page, name: string) =>
+  page.getByRole("dialog", { name: `Edit ${name}` });
+
+async function openEdit(page: Page, name: string) {
+  await card(page, name).getByRole("button", { name: "Edit" }).click();
+  await expect(editForm(page, name)).toBeVisible();
+  return editForm(page, name);
+}
+
+test("Edit opens with the profile's values and no key, and a save without one keeps the stored key", async ({
+  page,
+}) => {
+  const vllm = savedProfile("Local vLLM", {
+    provider: "openai",
+    model: "served-model",
+    base_url: "http://10.0.0.5:31000/v1",
+    responses_api: false,
+    last_test: testOf("ok"),
+  });
+  const service = await new ProfileService(environmentProfile(), vllm).serve(
+    page,
+  );
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Local vLLM");
+
+  await expect(edit.getByLabel("Name", { exact: true })).toHaveValue(
+    "Local vLLM",
+  );
+  await expect(edit.getByLabel("Model id", { exact: true })).toHaveValue(
+    "served-model",
+  );
+  await expect(edit.getByLabel("Base URL", { exact: true })).toHaveValue(
+    "http://10.0.0.5:31000/v1",
+  );
+  await expect(edit.getByRole("combobox", { name: "Provider" })).toContainText(
+    "OpenAI-compatible",
+  );
+  await expect(
+    edit.getByRole("switch", { name: /Responses API/ }),
+  ).not.toBeChecked();
+  await expect(edit.getByLabel("API key", { exact: true })).toHaveValue("");
+
+  await edit.getByLabel("Name", { exact: true }).fill("Renamed");
+  await edit.getByRole("button", { name: "Save" }).click();
+
+  await expect(edit).toBeHidden();
+  const renamed = card(page, "Renamed");
+  await expect(renamed).toBeVisible();
+  await expect(card(page, "Local vLLM")).toHaveCount(0);
+  // The same key, and a change of name keeps the test result.
+  await expect(renamed.getByText("Ends in 0001")).toBeVisible();
+  await expect(renamed.getByText(/Last test passed/)).toBeVisible();
+  // No key went with the change.
+  expect(service.changes).toEqual([
+    {
+      method: "PATCH",
+      path: `/llm/profiles/${vllm.id}`,
+      body: {
+        name: "Renamed",
+        provider: "openai",
+        model: "served-model",
+        base_url: "http://10.0.0.5:31000/v1",
+        responses_api: false,
+      },
+    },
+  ]);
+});
+
+test("a key typed in the Edit form replaces the stored one, and the card says it is untested", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude", { last_test: testOf("ok") });
+  const service = await new ProfileService(environmentProfile(), claude).serve(
+    page,
+  );
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Claude");
+
+  await edit.getByLabel("API key", { exact: true }).fill(NEW_KEY);
+  await edit.getByRole("button", { name: "Save" }).click();
+
+  await expect(edit).toBeHidden();
+  await expect(card(page, "Claude").getByText("Ends in 0002")).toBeVisible();
+  await expect(card(page, "Claude").getByText(NOT_TESTED)).toBeVisible();
+  await expect(page.getByText(NEW_KEY)).toHaveCount(0);
+  expect((service.changes[0].body as { api_key: string }).api_key).toBe(
+    NEW_KEY,
+  );
+});
+
+test("a taken name is said at the name in the Edit form, and nothing changes", async ({
+  page,
+}) => {
+  const service = await new ProfileService(
+    environmentProfile(),
+    savedProfile("Claude"),
+    savedProfile("Spare", { id: "f".repeat(32) }),
+  ).serve(page);
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Spare");
+
+  await edit.getByLabel("Name", { exact: true }).fill("claude");
+  await edit.getByRole("button", { name: "Save" }).click();
+
+  await expect(edit.getByLabel("Name", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  await expect(edit).toContainText("Another profile has this name.");
+  expect(service.profiles.map((profile) => profile.name)).toEqual([
+    "Environment",
+    "Claude",
+    "Spare",
+  ]);
+});
+
+test("changing the active profile asks first, and nothing is sent until it is confirmed", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude", { active: true });
+  const service = await new ProfileService(
+    environmentProfile({ active: false }),
+    claude,
+  ).serve(page);
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Claude");
+
+  await edit.getByLabel("Model id", { exact: true }).fill("claude-opus-5-5");
+  await edit.getByRole("button", { name: "Save" }).click();
+
+  const note = edit.getByRole("note");
+  await expect(note).toContainText("Claude is the active profile.");
+  await expect(note).toContainText("This change applies from the next run");
+  expect(service.changes).toEqual([]);
+
+  // Going back sends nothing; confirming sends the change.
+  await edit.getByRole("button", { name: "Back" }).click();
+  await expect(note).toBeHidden();
+  expect(service.changes).toEqual([]);
+  await edit.getByRole("button", { name: "Save" }).click();
+  await edit.getByRole("button", { name: "Confirm" }).click();
+
+  await expect(edit).toBeHidden();
+  await expect(card(page, "Claude").getByText("claude-opus-5-5")).toBeVisible();
+  await expect(
+    card(page, "Claude").getByText("Active", { exact: true }),
+  ).toBeVisible();
+  expect(service.changes.map(({ method }) => method)).toEqual(["PATCH"]);
+});
+
+test("the Edit form tests its values with the stored key when the key is left empty", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude");
+  const service = await new ProfileService(environmentProfile(), claude).serve(
+    page,
+  );
+  await page.goto("/llm");
+  const edit = await openEdit(page, "Claude");
+
+  await edit
+    .getByLabel("Model id", { exact: true })
+    .fill("refuse-conversation");
+  await edit.getByRole("button", { name: "Test" }).click();
+
+  await expect(edit.getByRole("status")).toContainText(
+    "The test failed at the conversation",
+  );
+  // The profile's id went in place of a key, and nothing was saved.
+  expect(service.changes).toEqual([
+    {
+      method: "POST",
+      path: "/llm/test",
+      body: {
+        provider: "anthropic",
+        model: "refuse-conversation",
+        base_url: null,
+        profile_id: claude.id,
+      },
+    },
+  ]);
+  await edit.getByRole("button", { name: "Cancel" }).click();
+  await expect(
+    card(page, "Claude").getByText("claude-sonnet-5-5"),
+  ).toBeVisible();
+});
+
+test("Delete asks first, and confirming removes the card", async ({ page }) => {
+  const claude = savedProfile("Claude");
+  const service = await new ProfileService(
+    environmentProfile(),
+    claude,
+    savedProfile("Spare", { id: "f".repeat(32) }),
+  ).serve(page);
+  await page.goto("/llm");
+  await expect(cards(page)).toHaveCount(3);
+
+  // Cancelling leaves it.
+  await card(page, "Claude").getByRole("button", { name: "Delete" }).click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("Delete Claude?");
+  await expect(confirmation).toContainText("This cannot be undone.");
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(cards(page)).toHaveCount(3);
+  expect(service.changes).toEqual([]);
+
+  await card(page, "Claude").getByRole("button", { name: "Delete" }).click();
+  await confirmation.getByRole("button", { name: "Delete" }).click();
+
+  await expect(confirmation).toBeHidden();
+  await expect(card(page, "Claude")).toHaveCount(0);
+  await expect(cards(page)).toHaveCount(2);
+  expect(service.changes).toEqual([
+    { method: "DELETE", path: `/llm/profiles/${claude.id}`, body: undefined },
+  ]);
+  // Still gone when the page is loaded again.
+  await page.reload();
+  await expect(card(page, "Spare")).toBeVisible();
+  await expect(card(page, "Claude")).toHaveCount(0);
+});
+
+test("the active profile is not deleted: the service's refusal is shown and the card stays", async ({
+  page,
+}) => {
+  await new ProfileService(
+    environmentProfile({ active: false }),
+    savedProfile("Claude", { active: true }),
+  ).serve(page);
+  await page.goto("/llm");
+
+  await card(page, "Claude").getByRole("button", { name: "Delete" }).click();
+  const confirmation = page.getByRole("alertdialog");
+  await confirmation.getByRole("button", { name: "Delete" }).click();
+
+  await expect(confirmation.getByRole("alert")).toHaveText(
+    "Profile Claude is the active one and cannot be deleted. Activate another profile first.",
+  );
+  await confirmation.getByRole("button", { name: "Cancel" }).click();
+  await expect(
+    card(page, "Claude").getByText("Active", { exact: true }),
+  ).toBeVisible();
+  await expect(cards(page)).toHaveCount(2);
+});
+
+test("the environment's card offers neither Edit nor Delete, and a saved card offers both", async ({
+  page,
+}) => {
+  await new ProfileService(environmentProfile(), savedProfile("Claude")).serve(
+    page,
+  );
+  await page.goto("/llm");
+
+  await expect(card(page, "Claude").getByRole("button")).toHaveText([
+    "Test",
+    "Set active",
+    "Edit",
+    "Delete",
+  ]);
+  await expect(card(page, "Environment").getByRole("button")).toHaveText([
+    "Test",
+  ]);
+});

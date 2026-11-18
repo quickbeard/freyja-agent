@@ -529,3 +529,50 @@ check, phase by phase.
   the environment's real model passed. In a browser the cards showed the kept results, Test
   on a card showed a pass and a failure with its reason, the confirmation warned and tested
   first when asked, and Test in the form saved nothing. No log held a key.
+
+### Phase 6 as built (2026-11-18)
+
+- **Only a base URL can be taken away** (T059). A field left out of a change is kept. Sending
+  null clears a base URL and is refused with 422 for any other field, the key included, so
+  "no key" can only ever mean "keep the stored key" (FR-009).
+- **A change that changes nothing is not logged and rebuilds nothing** (T059). The log line
+  for a real change names the fields that changed and, of a key, only that it did.
+- **A change to the active profile is applied at once on this instance** (T059), by the same
+  best-effort step as an activation: the change stands whatever that step finds, and every
+  instance takes it up at its next run.
+- **Without a secret, a new key is refused and other changes are not** (T059). A profile's
+  name, model, or address can still be changed; `secret_not_configured` is for the key.
+- **Entering its key again makes an unreadable profile usable** (T059, FR-022): the change
+  stores the new key under the current secret. The card offers Edit on a profile that is not
+  usable for that reason.
+- **Delete is offered on every saved card, the active one included** (T063). The service
+  refuses the active one, and the confirmation shows its refusal as it worded it, which says
+  to activate another profile first (FR-010).
+- **The confirmation for the active profile is part of the form** (T063), not a second
+  dialog over it: Save shows what the change means and the buttons become Back and Confirm.
+  Nothing is sent before Confirm, and changing a value afterwards takes the confirmation back.
+- **The Edit form sends every value but an empty key** (T063). The service ignores a value
+  that is unchanged, so the form does not work out what changed.
+- **The list keeps a profile while its form closes** (T063), so the form does not turn into
+  another one on its way out.
+- **The form test moved from T051 is here** (T058): in the Edit form, Test with the key left
+  empty sends the profile's id in place of a key.
+- **The stand-in answers a request that asks for a stream** (found at this checkpoint). A run
+  streams its requests, and `tests/llm_stub.py` only answered unstreamed ones, so a run on a
+  profile pointing at it ended with `model_error`, while the quickstart expects such runs to
+  complete. It now streams in both APIs' own events, logs the model each request asked for
+  when it is served, as quickstart section 4 relies on, and a test runs a whole run through
+  the real client against it.
+- **End-to-end** (T063a). `ProfileService` gained change and delete, with the service's
+  refusals, and `web/e2e/profiles.spec.ts` eight tests of this story.
+- **The checkpoint** was run by hand against the real service on a database made for it and
+  dropped afterwards, on a port of its own beside a service that was already running, with
+  the stand-in on loopback: a rename with the key left out kept the key's four characters and
+  the test result; a new key changed the four characters and cleared the result, and a test
+  then reached the stand-in with it; with the profile active, a change of model was asked of
+  the stand-in at the next run, with no restart, and again when it was changed back; the
+  active profile and the environment's refused deletion and change as the contract says; an
+  inactive profile was deleted and stayed gone after a restart, where the edit was still
+  there. In a browser the Edit form opened with the values and an empty key, a change to the
+  active profile asked first, the active profile's deletion showed the service's refusal, and
+  a confirmed deletion removed the card. No log held a key.

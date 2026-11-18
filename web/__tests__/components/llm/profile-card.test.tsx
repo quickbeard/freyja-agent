@@ -306,3 +306,38 @@ describe("ProfileCard, its test", () => {
     expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
   });
 });
+
+describe("ProfileCard, changing and removing", () => {
+  it("offers Edit and Delete on a saved profile", () => {
+    const onEdit = vi.fn();
+    const onDelete = vi.fn();
+    render(<ProfileCard profile={SAVED} onEdit={onEdit} onDelete={onDelete} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("button", { name: "Delete" }));
+    expect(onEdit).toHaveBeenCalledWith(SAVED);
+    expect(onDelete).toHaveBeenCalledWith(SAVED);
+  });
+
+  it("offers both on the active profile and on one that is not usable", () => {
+    for (const profile of [
+      { ...SAVED, active: true },
+      { ...SAVED, usable: false, unusable_reason: "key_unreadable" as const },
+    ]) {
+      const { unmount } = render(
+        <ProfileCard profile={profile} onEdit={vi.fn()} onDelete={vi.fn()} />,
+      );
+      // An unreadable key is put right by entering it again, in the Edit form.
+      expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+      expect(screen.getByRole("button", { name: "Delete" })).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("offers neither on the environment's profile, whatever it is given", () => {
+    render(
+      <ProfileCard profile={ENVIRONMENT} onEdit={vi.fn()} onDelete={vi.fn()} />,
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Delete" })).toBeNull();
+  });
+});

@@ -47,11 +47,19 @@ export function ProfileCard({
   profile,
   onActivate,
   onTested,
+  onEdit,
+  onDelete,
 }: {
   profile: LlmProfile;
   onActivate?: (profile: LlmProfile) => void;
   onTested?: () => void;
+  /** Offered on a saved profile only: the environment's is read-only (FR-008). */
+  onEdit?: (profile: LlmProfile) => void;
+  onDelete?: (profile: LlmProfile) => void;
 }) {
+  const saved = profile.source === "saved";
+  const canEdit = saved && onEdit !== undefined;
+  const canDelete = saved && onDelete !== undefined;
   const canActivate =
     onActivate !== undefined && !profile.active && profile.usable;
   // The result of a test run from this card, and the state of the profile it was for. Once
@@ -148,17 +156,19 @@ export function ProfileCard({
           </p>
         )}
       </CardContent>
-      {profile.usable && (
-        <CardFooter className="mt-auto gap-2">
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={testing}
-            aria-busy={testing}
-            onClick={test}
-          >
-            {testing ? "Testing…" : "Test"}
-          </Button>
+      {(profile.usable || canEdit || canDelete) && (
+        <CardFooter className="mt-auto flex-wrap gap-2">
+          {profile.usable && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={testing}
+              aria-busy={testing}
+              onClick={test}
+            >
+              {testing ? "Testing…" : "Test"}
+            </Button>
+          )}
           {canActivate && (
             <Button
               variant="outline"
@@ -166,6 +176,20 @@ export function ProfileCard({
               onClick={() => onActivate(profile)}
             >
               Set active
+            </Button>
+          )}
+          {canEdit && (
+            <Button variant="outline" size="sm" onClick={() => onEdit(profile)}>
+              Edit
+            </Button>
+          )}
+          {canDelete && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onDelete(profile)}
+            >
+              Delete
             </Button>
           )}
         </CardFooter>

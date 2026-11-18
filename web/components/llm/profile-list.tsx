@@ -12,6 +12,7 @@ import {
   PROFILES_PATH,
 } from "@/lib/llm";
 import { ActivateDialog } from "./activate-dialog";
+import { DeleteDialog } from "./delete-dialog";
 import { ProfileCard } from "./profile-card";
 import { ProfileForm } from "./profile-form";
 
@@ -32,6 +33,12 @@ export function ProfileList() {
   });
   const [adding, setAdding] = useState(false);
   const [activating, setActivating] = useState<LlmProfile | null>(null);
+  // The profile stays while its form closes, so the form does not turn into another one.
+  const [editing, setEditing] = useState<{
+    profile: LlmProfile;
+    open: boolean;
+  } | null>(null);
+  const [deleting, setDeleting] = useState<LlmProfile | null>(null);
 
   if (error !== undefined) {
     // Whatever was loaded before is not shown: it may no longer be true.
@@ -94,6 +101,8 @@ export function ProfileList() {
             profile={profile}
             onActivate={setActivating}
             onTested={() => mutate()}
+            onEdit={(chosen) => setEditing({ profile: chosen, open: true })}
+            onDelete={setDeleting}
           />
         ))}
       </div>
@@ -102,6 +111,19 @@ export function ProfileList() {
         open={adding}
         onOpenChange={setAdding}
         onSaved={() => mutate()}
+      />
+      {editing && (
+        <ProfileForm
+          profile={editing.profile}
+          open={editing.open}
+          onOpenChange={(open) => setEditing({ ...editing, open })}
+          onSaved={() => mutate()}
+        />
+      )}
+      <DeleteDialog
+        profile={deleting}
+        onClose={() => setDeleting(null)}
+        onDeleted={() => mutate()}
       />
       <ActivateDialog
         profile={activating}

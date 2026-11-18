@@ -944,3 +944,285 @@ def test_a_test_changes_nothing_but_the_profiles_last_result(
     assert applied == "Local vLLM"
     # Three models were built for the three tests, and the one in use was not rebuilt.
     assert len(made.models.built) == built + 3
+
+
+# Part 4 (T056): changing and deleting a profile.
+
+NEW_KEY = "sk-another-key-for-tests-0002"
+
+
+def change(client: TestClient, profile_id: str, **values: Any) -> Any:
+    return client.patch(f"/llm/profiles/{profile_id}", json=values)
+
+
+def delete(client: TestClient, profile_id: str) -> Any:
+    return client.delete(f"/llm/profiles/{profile_id}")
+
+
+def stored(made: LlmApp, profile_id: str) -> LlmProfileRecord:
+    record = asyncio.run(made.store.get_profile(profile_id))
+    assert record is not None
+    return record
+
+
+def test_a_change_touches_only_the_fields_sent(make_llm_app: Callable[..., LlmApp]) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = change(client, added["id"], model="newer-model")
+        body = response.json()
+        listed = listing(client)["profiles"][1]
+
+    assert response.status_code == 200, response.text
+    assert body == {**added, "model": "newer-model", "updated_at": body["updated_at"]}
+    assert body["updated_at"] >= added["updated_at"]
+    assert listed == body
+    assert KEY not in response.text
+    assert "api_key" not in response.text
+
+
+def test_a_key_left_out_keeps_the_stored_key_and_a_key_sent_replaces_it(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        token = stored(made, added["id"]).api_key_encrypted
+
+        renamed = change(client, added["id"], name="Renamed", base_url=None).json()
+        kept = stored(made, added["id"])
+        assert (renamed["name"], renamed["base_url"], renamed["key_hint"]) == (
+            "Renamed",
+            None,
+            "0001",
+        )
+        assert kept.api_key_encrypted == token
+
+        response = change(client, added["id"], api_key=NEW_KEY)
+        replaced = stored(made, added["id"])
+
+    assert response.status_code == 200, response.text
+    assert response.json()["key_hint"] == "0002"
+    assert decrypt(replaced.api_key_encrypted, made.settings.secret_key) == NEW_KEY
+    assert NEW_KEY not in response.text and KEY not in response.text
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"provider": "openrouter"},
+        {"model": "newer-model"},
+        {"base_url": "http://10.0.0.6:31000/v1"},
+        {"base_url": None},
+        {"api_key": NEW_KEY},
+        {"api_key": KEY},
+        {"responses_api": True},
+    ],
+)
+def test_a_change_to_how_the_model_is_reached_clears_the_last_test(
+    make_llm_app: Callable[..., LlmApp], values: dict[str, Any]
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        assert check(client, added["id"]).json()["recorded"] is True
+        assert last_test_of(client, "Local vLLM") is not None
+        body = change(client, added["id"], **values).json()
+        assert body["last_test"] is None
+        assert last_test_of(client, "Local vLLM") is None
+
+
+def test_a_change_of_name_or_to_the_same_values_keeps_the_last_test(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        tested = check(client, added["id"]).json()
+        renamed = change(client, added["id"], name="Renamed").json()
+        same = change(
+            client, added["id"], model="served-model", responses_api=False, provider="openai"
+        ).json()
+    assert renamed["last_test"]["at"] == tested["at"]
+    assert same["last_test"]["at"] == tested["at"]
+    assert same["updated_at"] == renamed["updated_at"]
+
+
+@pytest.mark.parametrize(
+    ("values", "field"),
+    [
+        ({"name": "n" * 65}, "name"),
+        ({"name": "  "}, "name"),
+        ({"model": "m" * 201}, "model"),
+        ({"provider": "someprovider"}, "provider"),
+        ({"base_url": "not a web address"}, "base_url"),
+        ({"api_key": NEW_KEY + "k" * 4000}, "api_key"),
+        ({"surprise": "sent-by-mistake"}, "surprise"),
+    ],
+)
+def test_a_change_that_breaks_a_rule_is_refused_by_name_and_changes_nothing(
+    make_llm_app: Callable[..., LlmApp], values: dict[str, Any], field: str
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = change(client, added["id"], **values)
+        after = listing(client)["profiles"][1]
+
+    assert response.status_code == 422, response.text
+    assert [error["loc"] for error in response.json()["detail"]] == [["body", field]]
+    assert NEW_KEY not in response.text
+    assert after == added
+
+
+@pytest.mark.parametrize(
+    "values", [{}, {"name": None}, {"model": None}, {"provider": None}, {"api_key": None}]
+)
+def test_a_change_must_change_something_and_only_a_base_url_can_be_cleared(
+    make_llm_app: Callable[..., LlmApp], values: dict[str, Any]
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = change(client, added["id"], **values)
+        after = listing(client)["profiles"][1]
+    assert response.status_code == 422, response.text
+    assert after == added
+
+
+def test_a_change_cannot_take_a_name_in_use_or_the_environments(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        add(client, name="Other")
+        refusal(change(client, added["id"], name="other"), 409, "name_taken")
+        refusal(change(client, added["id"], name="ENVIRONMENT"), 409, "name_taken")
+        # Its own name in another case is its own to take.
+        assert change(client, added["id"], name="LOCAL VLLM").json()["name"] == "LOCAL VLLM"
+
+
+def test_a_new_key_cannot_be_stored_without_a_secret_and_other_changes_can(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    with_secret = make_llm_app(model="openai:env-model")
+    saved = save(with_secret, "Stub")
+    made = make_llm_app(model="openai:env-model", store=with_secret.store, secret=None)
+    with TestClient(made.app) as client:
+        message = refusal(change(client, saved.id, api_key=NEW_KEY), 409, "secret_not_configured")
+        renamed = change(client, saved.id, name="Renamed")
+    assert "FREYJA_SECRET_KEY" in message
+    assert NEW_KEY not in message
+    assert renamed.status_code == 200
+    assert stored(made, saved.id).api_key_encrypted == saved.api_key_encrypted
+
+
+def test_entering_its_key_again_makes_an_unreadable_profile_usable(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    other_secret = SecretStr(Fernet.generate_key().decode())
+    unreadable = save(made, "Unreadable", api_key_encrypted=encrypt(KEY, other_secret))
+    with TestClient(made.app) as client:
+        before = listing(client)["profiles"][1]
+        body = change(client, unreadable.id, api_key=NEW_KEY).json()
+    assert (before["usable"], before["unusable_reason"]) == (False, "key_unreadable")
+    assert (body["usable"], body["unusable_reason"], body["key_hint"]) == (True, None, "0002")
+
+
+def test_the_environments_profile_can_be_neither_changed_nor_deleted(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        before = listing(client)
+        refusal(change(client, "environment", name="Mine"), 409, "profile_read_only")
+        refusal(change(client, "environment", api_key=NEW_KEY), 409, "profile_read_only")
+        refusal(delete(client, "environment"), 409, "profile_read_only")
+        assert listing(client) == before
+
+
+def test_a_profile_that_is_not_active_is_deleted_and_stays_gone(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = delete(client, added["id"])
+        names = [p["name"] for p in listing(client)["profiles"]]
+        # It can no longer be activated, tested, changed, or deleted.
+        refusal(activate(client, added["id"]), 404, "profile_not_found")
+        refusal(check(client, added["id"]), 404, "profile_not_found")
+        refusal(change(client, added["id"], name="Back"), 404, "profile_not_found")
+        refusal(delete(client, added["id"]), 404, "profile_not_found")
+        # Its name is free again.
+        assert add(client).status_code == 201
+
+    assert response.status_code == 204
+    assert response.content == b""
+    assert names == ["Environment"]
+
+    restarted = make_llm_app(model="openai:env-model", store=made.store)
+    with TestClient(restarted.app) as client:
+        assert added["id"] not in [p["id"] for p in listing(client)["profiles"]]
+
+
+def test_the_active_profile_is_not_deleted_and_the_refusal_says_what_to_do(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        activate(client, added["id"])
+        message = refusal(delete(client, added["id"]), 409, "profile_active")
+        after = listing(client)
+        # Once another profile is active it can go.
+        activate(client, "environment")
+        assert delete(client, added["id"]).status_code == 204
+    assert "ctivate another profile first" in message
+    assert after["active_id"] == added["id"]
+
+
+def test_a_change_to_the_active_profile_is_applied_on_this_instance_at_once(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        other = add(client, name="Other").json()
+        activate(client, added["id"])
+        built = len(made.models.built)
+
+        change(client, other["id"], model="not-in-use")
+        assert len(made.models.built) == built  # not the active one: nothing to rebuild
+
+        body = change(client, added["id"], model="newer-model").json()
+        assert body["active"] is True
+        assert len(made.models.built) == built + 1
+        assert made.models.built[-1].model == "newer-model"
+        assert all(model.calls == 0 for model in made.models.models.values())
+
+
+def test_each_change_and_deletion_is_logged_by_name_and_without_a_key(
+    make_llm_app: Callable[..., LlmApp], caplog: pytest.LogCaptureFixture
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        with caplog.at_level(logging.INFO, logger="freyja_agent"):
+            caplog.clear()  # the addition was logged too, and is another test's
+            change(client, added["id"], name="Renamed", api_key=NEW_KEY)
+            change(client, added["id"], name="Renamed")  # changes nothing: not logged
+            change(client, added["id"], name="n" * 65)  # refused: not logged
+            delete(client, added["id"])
+
+    logged = [r.getMessage() for r in caplog.records if r.name == ROUTES]
+    assert len(logged) == 2
+    changed, deleted = logged
+    assert "changed" in changed and "Renamed" in changed and added["id"] in changed
+    # It says what changed, and of the key only that it did.
+    assert "name" in changed and "key" in changed
+    assert "deleted" in deleted and "Renamed" in deleted
+    for record in caplog.records:
+        assert NEW_KEY not in record.getMessage() and KEY not in record.getMessage()

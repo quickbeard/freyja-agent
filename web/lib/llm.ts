@@ -91,6 +91,27 @@ export function createProfile(values: NewLlmProfile): Promise<LlmProfile> {
   return api<LlmProfile>(PROFILES_PATH, { method: "POST", body: values });
 }
 
+/** What to change in a saved profile. A field left out is kept, the key included. */
+export type LlmProfileChanges = Partial<NewLlmProfile>;
+
+/** Change a saved profile; the answer is the profile as it is now. */
+export function updateProfile(
+  id: string,
+  changes: LlmProfileChanges,
+): Promise<LlmProfile> {
+  return api<LlmProfile>(`${PROFILES_PATH}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: changes,
+  });
+}
+
+/** Delete a saved profile that is not the active one. */
+export function deleteProfile(id: string): Promise<void> {
+  return api<void>(`${PROFILES_PATH}/${encodeURIComponent(id)}`, {
+    method: "DELETE",
+  });
+}
+
 /** How a test ended. `recorded` says whether the result was kept with a listed profile. */
 export type LlmTestResult = LlmLastTest & { recorded: boolean };
 

@@ -23,6 +23,7 @@ from freyja_agent.api.schemas import (
     LlmProfileCreate,
     LlmProfileDraft,
     LlmProfileList,
+    LlmProfileUpdate,
     LlmTestResult,
 )
 from freyja_agent.llm.check import CheckResult, LastCheck, check_model
@@ -47,6 +48,7 @@ from freyja_agent.llm.store import (
     InvalidProfileError,
     LlmProfileRecord,
     NameTakenError,
+    ProfileActiveError,
     ProfileLimitError,
     ProfileNotFoundError,
 )
@@ -280,18 +282,114 @@ async def activate_profile(profile_id: ProfileIdPath, request: Request) -> LlmPr
         raise _error(404, "profile_not_found", "There is no profile with this id.") from exc
     if after.revision != before.revision:
         logger.info("LLM profile activated: %s (%s)", name, profile_id)
-        try:
-            await runtime.model_for_run()
-        except Exception as exc:
-            # The choice is made and every instance will take it up at its next run, this one
-            # included. What failed here will fail there, where the run reports it.
-            logger.warning(
-                "LLM profile %s (%s) is active but could not be applied at once: %s",
-                name,
-                profile_id,
-                type(exc).__name__,
-            )
+        await _apply_now(runtime, name, profile_id)
     return await profile_list(runtime)
+
+
+READ_ONLY = (
+    "The environment's profile shows what the service was started with. It cannot be changed "
+    "or deleted here; change the service's environment and restart it."
+)
+
+
+async def _apply_now(runtime: Runtime, name: str, profile_id: str) -> None:
+    """Bring this instance in step at once after the active choice or profile changed (R6).
+
+    The change itself stands whatever happens here: every instance takes it up at its next
+    run, this one included, and a run reports what is wrong.
+    """
+    try:
+        await runtime.model_for_run()
+    except Exception as exc:
+        logger.warning(
+            "LLM profile %s (%s) is active but could not be applied at once: %s",
+            name,
+            profile_id,
+            type(exc).__name__,
+        )
+
+
+@router.patch("/profiles/{profile_id}")
+async def change_profile(
+    profile_id: ProfileIdPath, body: LlmProfileUpdate, request: Request
+) -> LlmProfile:
+    """Change a saved profile. Only the fields sent are changed (FR-009).
+
+    A key left out keeps the stored key. A change to how the model is reached clears the last
+    test result. A change to the active profile takes effect at the next run.
+    """
+    runtime = _runtime(request)
+    if profile_id == ENVIRONMENT_ID:
+        raise _error(409, "profile_read_only", READ_ONLY)
+    store = runtime.llm_profiles
+    secret = runtime.settings.secret_key
+    before = await store.get_profile(profile_id)
+    if before is None:
+        raise _error(404, "profile_not_found", "There is no profile with this id.")
+
+    changes = body.model_dump(exclude_unset=True)
+    key = body.api_key.get_secret_value() if body.api_key is not None else None
+    changes.pop("api_key", None)
+    if key is not None:
+        try:
+            changes["api_key_encrypted"] = encrypt(key, secret)
+        except SecretNotConfiguredError as exc:
+            raise _error(
+                409,
+                "secret_not_configured",
+                "A new key cannot be stored: the service has no secret to protect it with. "
+                "Set FREYJA_SECRET_KEY and restart the service.",
+            ) from exc
+        changes["key_hint"] = key_hint(key)
+    revision = (await store.state()).revision
+    try:
+        record = await store.update_profile(profile_id, **changes)
+    except ProfileNotFoundError as exc:  # deleted since it was read
+        raise _error(404, "profile_not_found", "There is no profile with this id.") from exc
+    except NameTakenError as exc:
+        raise _error(
+            409, "name_taken", "Another profile has this name. Choose a different name."
+        ) from exc
+    except InvalidProfileError as exc:
+        raise _error(500, "internal", "The profile could not be changed.") from exc
+
+    state = await store.state()
+    if record != before:
+        # What changed, by name; of a key, only that it did.
+        what = sorted(
+            "key" if name == "api_key_encrypted" else name
+            for name in changes
+            if name != "key_hint" and getattr(record, name) != getattr(before, name)
+        )
+        logger.info("LLM profile changed: %s (%s): %s", record.name, record.id, ", ".join(what))
+    if state.revision != revision:
+        await _apply_now(runtime, record.name, record.id)
+    return _saved(record, active=state.active_profile_id == record.id, secret=secret)
+
+
+@router.delete("/profiles/{profile_id}", status_code=204)
+async def delete_profile(profile_id: ProfileIdPath, request: Request) -> Response:
+    """Delete a saved profile that is not the active one (FR-010)."""
+    runtime = _runtime(request)
+    if profile_id == ENVIRONMENT_ID:
+        raise _error(409, "profile_read_only", READ_ONLY)
+    store = runtime.llm_profiles
+    record = await store.get_profile(profile_id)
+    if record is None:
+        raise _error(404, "profile_not_found", "There is no profile with this id.")
+    try:
+        await store.delete_profile(profile_id)
+    except ProfileNotFoundError as exc:
+        raise _error(404, "profile_not_found", "There is no profile with this id.") from exc
+    except ProfileActiveError as exc:
+        raise _error(
+            409,
+            "profile_active",
+            f"Profile {record.name} is the active one and cannot be deleted. "
+            "Activate another profile first.",
+        ) from exc
+    logger.info("LLM profile deleted: %s (%s)", record.name, record.id)
+    return Response(status_code=204)
 
 
 def _stored_key(record: LlmProfileRecord, secret: SecretStr | None) -> str:

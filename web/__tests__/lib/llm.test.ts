@@ -3,6 +3,7 @@ import { stubFetch } from "@/__tests__/testing";
 import {
   activateProfile,
   createProfile,
+  deleteProfile,
   type LlmProfile,
   type LlmProfileList,
   listProfiles,
@@ -11,6 +12,7 @@ import {
   testDraft,
   testProfile,
   toDraft,
+  updateProfile,
 } from "@/lib/llm";
 
 const LIST: LlmProfileList = {
@@ -169,6 +171,33 @@ describe("toDraft", () => {
     const draft = toDraft(typed, SAVED.id);
     expect(draft.api_key).toBe("sk-recognizable-key-0001");
     expect("profile_id" in draft).toBe(false);
+  });
+});
+
+describe("updateProfile", () => {
+  it("patches the profile with the fields given and returns it as it is now", async () => {
+    const renamed = { ...SAVED, name: "Renamed" };
+    const fetchStub = stubFetch({ json: renamed });
+    const changes = { name: "Renamed", base_url: null };
+    expect(await updateProfile(SAVED.id, changes)).toEqual(renamed);
+
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/llm/profiles/${SAVED.id}`);
+    expect(init?.method).toBe("PATCH");
+    // Only what was given: a key that is not there is not sent, so the stored one is kept.
+    expect(JSON.parse(String(init?.body))).toEqual(changes);
+  });
+});
+
+describe("deleteProfile", () => {
+  it("deletes the profile and returns nothing", async () => {
+    const fetchStub = stubFetch({ status: 204, text: "" });
+    expect(await deleteProfile(SAVED.id)).toBeUndefined();
+
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/llm/profiles/${SAVED.id}`);
+    expect(init?.method).toBe("DELETE");
+    expect(init?.body).toBeUndefined();
   });
 });
 

@@ -26,7 +26,13 @@ const SAVED: LlmProfile = {
 const CREATED: Reply = { status: 201, json: SAVED };
 
 // The form as the list holds it: a control opens it, and it closes itself.
-function Harness({ onSaved }: { onSaved?: (profile: LlmProfile) => void }) {
+function Harness({
+  onSaved,
+  profile,
+}: {
+  onSaved?: (profile: LlmProfile) => void;
+  profile?: LlmProfile;
+}) {
   const [open, setOpen] = useState(true);
   return (
     <>
@@ -37,6 +43,7 @@ function Harness({ onSaved }: { onSaved?: (profile: LlmProfile) => void }) {
         open={open}
         onOpenChange={setOpen}
         onSaved={onSaved ?? (() => {})}
+        profile={profile}
       />
     </>
   );
@@ -420,5 +427,197 @@ describe("ProfileForm, testing before saving", () => {
     save();
     await waitFor(() => expect(onSaved).toHaveBeenCalledWith(SAVED));
     expect(sent(fetchStub, 1).path).toBe("/api/llm/profiles");
+  });
+});
+
+describe("ProfileForm, editing", () => {
+  const AT = "2026-11-17T09:14:02.118000+00:00";
+  const NEW_KEY = "sk-another-key-for-tests-0002";
+  const changed: LlmProfile = { ...SAVED, model: "newer-model" };
+  const answer: Reply = { json: changed };
+
+  it("opens with the profile's values and an empty key", () => {
+    render(<Harness profile={SAVED} />);
+    expect(
+      screen.getByRole("dialog", { name: "Edit Local vLLM" }),
+    ).toBeTruthy();
+    expect(field("Name").value).toBe("Local vLLM");
+    expect(field("Model id").value).toBe("served-model");
+    expect(field("Base URL").value).toBe("http://10.0.0.5:31000/v1");
+    expect(
+      screen.getByRole("combobox", { name: "Provider" }).textContent,
+    ).toContain("OpenAI-compatible");
+    expect(
+      screen
+        .getByRole("switch", { name: /Responses API/ })
+        .getAttribute("aria-checked"),
+    ).toBe("false");
+    // The stored key is never sent to the page, so there is nothing to show.
+    expect(field("API key").value).toBe("");
+    expect(field("API key").placeholder).toMatch(/keep/i);
+  });
+
+  it("opens with no base URL and no choice of API for a profile that has none", () => {
+    render(
+      <Harness
+        profile={{
+          ...SAVED,
+          provider: "anthropic",
+          base_url: null,
+          responses_api: null,
+        }}
+      />,
+    );
+    expect(field("Base URL").value).toBe("");
+    expect(screen.queryByRole("switch", { name: /Responses API/ })).toBeNull();
+  });
+
+  it("sends no key when the key is left empty, so the stored one is kept", async () => {
+    const fetchStub = stubFetch(answer);
+    const onSaved = vi.fn();
+    render(<Harness profile={SAVED} onSaved={onSaved} />);
+    type("Model id", "newer-model");
+    save();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(changed));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub)).toEqual({
+      path: `/api/llm/profiles/${SAVED.id}`,
+      method: "PATCH",
+      body: {
+        name: "Local vLLM",
+        provider: "openai",
+        model: "newer-model",
+        base_url: "http://10.0.0.5:31000/v1",
+        responses_api: false,
+      },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("sends a key that was typed, to replace the stored one", async () => {
+    const fetchStub = stubFetch(answer);
+    render(<Harness profile={SAVED} />);
+    type("API key", NEW_KEY);
+    type("Base URL", "");
+    save();
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    expect(sent(fetchStub).body).toEqual({
+      name: "Local vLLM",
+      provider: "openai",
+      model: "served-model",
+      base_url: null,
+      responses_api: false,
+      api_key: NEW_KEY,
+    });
+  });
+
+  it("still needs a name and a model id, and no key", () => {
+    const fetchStub = stubFetch(answer);
+    render(<Harness profile={SAVED} />);
+    type("Name", " ");
+    type("Model id", "");
+    save();
+
+    expect(errorAt("Name")).toMatch(/name/i);
+    expect(errorAt("Model id")).toMatch(/model/i);
+    expect(errorAt("API key")).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("shows a name that is taken at the name", async () => {
+    const taken = "Another profile has this name. Choose a different name.";
+    stubFetch({
+      status: 409,
+      json: { detail: { code: "name_taken", message: taken } },
+    });
+    render(<Harness profile={SAVED} />);
+    type("Name", "Other");
+    save();
+    await waitFor(() => expect(errorAt("Name")).toBe(taken));
+  });
+
+  it("saves a profile that is not active without asking", async () => {
+    const fetchStub = stubFetch(answer);
+    render(<Harness profile={SAVED} />);
+    type("Model id", "newer-model");
+    save();
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+
+  it("asks before changing the active profile, and sends nothing until confirmed", async () => {
+    const fetchStub = stubFetch({ json: { ...changed, active: true } });
+    const onSaved = vi.fn();
+    render(<Harness profile={{ ...SAVED, active: true }} onSaved={onSaved} />);
+    type("Model id", "newer-model");
+    save();
+
+    // It says what confirming means.
+    const note = screen.getByRole("note");
+    expect(note.textContent).toContain("Local vLLM");
+    expect(note.textContent).toMatch(/applies from the next run/);
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    // Going back sends nothing and leaves the form as it was.
+    fireEvent.click(screen.getByRole("button", { name: "Back" }));
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(field("Model id").value).toBe("newer-model");
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    save();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub).method).toBe("PATCH");
+    expect(sent(fetchStub).body.model).toBe("newer-model");
+  });
+
+  it("does not ask when what the form says about the active profile is wrong", () => {
+    const fetchStub = stubFetch(answer);
+    render(<Harness profile={{ ...SAVED, active: true }} />);
+    type("Model id", "");
+    save();
+    expect(errorAt("Model id")).toMatch(/model/i);
+    expect(screen.queryByRole("note")).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("tests with the stored key when the key is left empty", async () => {
+    const fetchStub = stubFetch({
+      json: { ok: true, at: AT, step: null, reason: null, recorded: false },
+    });
+    render(<Harness profile={SAVED} />);
+    type("Model id", "newer-model");
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+    await screen.findByRole("status");
+    // The profile's id in place of a key: the service uses the key it has (FR-017).
+    expect(sent(fetchStub)).toEqual({
+      path: "/api/llm/test",
+      method: "POST",
+      body: {
+        provider: "openai",
+        model: "newer-model",
+        base_url: "http://10.0.0.5:31000/v1",
+        responses_api: false,
+        profile_id: SAVED.id,
+      },
+    });
+    expect(errorAt("API key")).toBeNull();
+  });
+
+  it("tests with a key that was typed, and not the stored one", async () => {
+    const fetchStub = stubFetch({
+      json: { ok: true, at: AT, step: null, reason: null, recorded: false },
+    });
+    render(<Harness profile={SAVED} />);
+    type("API key", NEW_KEY);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+    await screen.findByRole("status");
+    expect(sent(fetchStub).body.api_key).toBe(NEW_KEY);
+    expect("profile_id" in sent(fetchStub).body).toBe(false);
   });
 });
