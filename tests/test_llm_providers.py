@@ -178,6 +178,8 @@ def variables_the_client_knows(provider: str) -> set[str]:
 def marked(name: str) -> str:
     """A value for an environment variable that can be told apart wherever it turns up."""
     mark = f"env-marker-{name.lower().replace('_', '-')}"
+    if "TELEMETRY" in name:
+        return "false"  # an opt-out, which stays with the deployment (see ``stays``)
     if "HEADERS" in name:
         return f"X-Env-Marker: {mark}\nAuthorization: Bearer {mark}\nX-Api-Key: {mark}"
     if any(part in name for part in ("URL", "BASE", "PROXY", "HOST", "ENDPOINT")):
@@ -185,10 +187,27 @@ def marked(name: str) -> str:
     return mark
 
 
+def stays(name: str) -> bool:
+    """Whether a provider's variable is the deployment's, not its own model's: how it reaches
+    the outside, and whether it lets the client report traces. Those apply to every client."""
+    return name.endswith("_PROXY") or "TELEMETRY" in name
+
+
 def everything_about(model: Any) -> str:
     """What a built client holds and what it would send, as text: its fields, and the address
-    and headers of a request from each of its clients, built and never sent."""
+    and headers of a request from each of its clients, built and never sent. OpenRouter's
+    client builds no such request, so what its SDK was configured with is read instead."""
     parts = [repr(vars(model))]
+    configuration = getattr(getattr(model, "client", None), "sdk_configuration", None)
+    if configuration is not None:
+        security = configuration.security
+        parts += [
+            f"globals: {configuration.globals!r}",
+            f"security: {security() if callable(security) else security!r}",
+            f"server: {configuration.server_url!r}",
+            f"headers: {dict(configuration.client.headers)!r}",
+            f"async headers: {dict(configuration.async_client.headers)!r}",
+        ]
     for name in ("root_client", "root_async_client", "_client", "_async_client"):
         client = getattr(model, name, None)
         if client is None or not hasattr(client, "_build_request"):
@@ -216,20 +235,37 @@ def test_a_saved_profiles_client_takes_nothing_from_its_providers_environment(
     built = build_model(ModelSpec(provider=provider, model="m", api_key=KEY, base_url=base_url))
     found = everything_about(built)
 
-    reached = {name for name in known if marked(name).split("\n")[0].split(": ")[-1] in found}
-    # A proxy is how the deployment reaches the outside, like HTTP_PROXY: it stays.
-    assert {name for name in reached if not name.endswith("_PROXY")} == set()
-    # Nothing marked is left once the proxies are set aside, whatever it was called.
-    for name in known:
-        if name.endswith("_PROXY"):
-            found = found.replace(marked(name), "")
+    own = {name for name in known if not stays(name)}
+    reached = {name for name in own if marked(name).split("\n")[0].split(": ")[-1] in found}
+    assert reached == set()
+    # Nothing marked is left once what stays is set aside, whatever it was called.
+    for name in known - own:
+        found = found.replace(marked(name), "")
     assert "env-marker" not in found
     # The credential that travels is the profile's own.
-    if provider != "openrouter":
-        assert KEY in found
+    assert KEY in found
     assert sends_to(built) == (base_url or PROVIDERS[provider].address)
     # And the environment is as it was found.
     assert {name: os.environ.get(name) for name in known} == {n: marked(n) for n in known}
+
+
+def test_a_deployments_telemetry_opt_out_holds_for_a_saved_profile_too(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Whether a client reports traces is the deployment's choice, like its proxy. Hidden
+    with the rest, a saved profile's client would report what the deployment turned off."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", KEY)
+    monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY", "false")
+    monkeypatch.setenv("ANTHROPIC_OPEN_TELEMETRY_PROPAGATION", "false")
+
+    environment = build_model(environment_spec(Settings(model="anthropic:m")))
+    saved = build_model(ModelSpec(provider="anthropic", model="m", api_key=KEY))
+
+    chosen = environment._async_client._open_telemetry
+    assert chosen["propagation"] is False
+    assert chosen["traces"]["enabled"] is False
+    assert saved._async_client._open_telemetry == chosen
+    assert saved._client._open_telemetry == chosen
 
 
 def test_the_environments_own_model_still_takes_its_clients_variables(
@@ -386,6 +422,49 @@ def test_the_environments_profile_is_described_by_what_its_client_will_use(
     assert profile.base_url == "https://gateway.smith.langchain.com/openai/v1"
     assert access.key == GATEWAY_KEY
     assert profile.key_hint == "7777"
+
+
+@pytest.mark.parametrize(
+    ("model", "headers_variable", "header"),
+    [
+        ("openai:m", "OPENAI_CUSTOM_HEADERS", "Authorization: Bearer real-credential-9999"),
+        ("anthropic:m", "ANTHROPIC_CUSTOM_HEADERS", "X-Api-Key: real-credential-9999"),
+    ],
+)
+def test_the_environments_credential_is_the_one_its_client_will_send(
+    model: str, headers_variable: str, header: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-008, FR-021: a provider's SDK puts headers from its environment over the client's
+    own key. Where they carry the credential, that is the one a request has, so that is the
+    one the card hints at and the one to take out of an error."""
+    provider = model.partition(":")[0]
+    monkeypatch.setenv(PROVIDERS[provider].key_variable, "placeholder-key-0000")
+    monkeypatch.setenv(headers_variable, header)
+    settings = Settings(model=model)
+    built = build_model(environment_spec(settings))
+    assert "real-credential-9999" in everything_about(built)
+
+    access = environment_access(environment_spec(settings), built)
+    profile = environment_profile(settings)
+
+    assert access.key == "real-credential-9999"
+    assert profile.key_hint == "9999"
+    # Both are kept out of text: the one that is sent, and the one the client holds.
+    assert set(access.secrets) == {"real-credential-9999", "placeholder-key-0000"}
+    assert "real-credential" not in repr(access)
+    assert "real-credential" not in repr(profile)
+
+
+def test_with_no_such_headers_the_environments_credential_is_its_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", KEY)
+    spec = environment_spec(Settings(model="openai:m"))
+
+    access = environment_access(spec, build_model(spec))
+
+    assert (access.key, access.secrets) == (KEY, (KEY,))
+    assert environment_access(ModelSpec(provider="mistralai", model="m")).secrets == ()
 
 
 def test_without_a_client_to_look_at_the_environment_is_described_from_its_variables(

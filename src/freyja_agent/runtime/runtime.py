@@ -4,8 +4,8 @@ manager, the delegation worker, and this instance's id."""
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
@@ -46,7 +46,6 @@ from freyja_agent.llm.providers import (
     ModelSpec,
     build_model,
     environment_access,
-    environment_key,
     environment_profile,
     environment_spec,
 )
@@ -69,6 +68,11 @@ logger = logging.getLogger(__name__)
 def _given(model: BaseChatModel) -> BaseChatModel:
     """The chat model a caller handed to ``assemble``, standing for the environment's."""
     return model
+
+
+def _first_then(first: list[BaseChatModel], build: Callable[[], BaseChatModel]) -> BaseChatModel:
+    """The model built beforehand, the first time it is asked for; a new one after that."""
+    return first.pop() if first else build()
 
 
 def _already_built(_spec: ModelSpec) -> None:
@@ -217,19 +221,21 @@ class Runtime:
                     )
                 # How the environment's model is reached is what its client holds: with the
                 # LangSmith gateway on, that is the gateway and its key, with no provider key
-                # at all, and such a deployment ran before feature 004 (FR-023). Only a real
-                # client is looked at; a stand-in or a model handed over says nothing.
-                client = None
-                if model_factory is None and not isinstance(model, BaseChatModel):
-                    try:
-                        client = environment()
-                    except Exception:
-                        client = None  # the manager meets the same failure and records it
-                access = environment_access(spec, client)
+                # at all, and such a deployment ran before feature 004 (FR-023). So the
+                # client is built once here to be looked at, and the manager is handed that
+                # one for its first build, not a second. A model handed over built is not
+                # looked at: it needs nothing from the environment.
+                first: list[BaseChatModel] = []
+                if not isinstance(model, BaseChatModel):
+                    build = environment
+                    with suppress(Exception):  # the manager meets the failure and records it
+                        first.append(build())
+                    environment = partial(_first_then, first, build)
+                access = environment_access(spec, first[0] if first else None)
                 key = access.key
-                # The keys to take out of an error: the one that is sent, and the provider's
-                # own if the environment has another.
-                secrets = tuple(dict.fromkeys(k for k in (key, environment_key(spec)) if k))
+                # The credentials to take out of an error: the one that is sent, and the
+                # key the client holds or the environment names where that is another.
+                secrets = access.secrets
                 manager = ModelManager(
                     store=profile_store,
                     secret=settings.secret_key,

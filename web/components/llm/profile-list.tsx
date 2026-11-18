@@ -147,6 +147,7 @@ export function ProfileList() {
         onActivated={(list) => mutate(list)}
         onTested={() => mutate()}
         onGone={() => mutate()}
+        listRead={reads}
       />
     </div>
   );

@@ -414,6 +414,33 @@ describe("ProfileCard, its test", () => {
     expect(screen.queryByText(/The test passed/)).toBeNull();
   });
 
+  it("lets a result that was not kept go once the list reports a later test", async () => {
+    stubFetch(answer(passed, false));
+    const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
+    test();
+    await screen.findByText(/This result was not kept/);
+
+    // Someone tests the profile as it is now: that is the last word, and the earlier result
+    // of other values has nothing more to say.
+    const later = { ...failed, at: "2026-11-18T10:00:00.000000+00:00" };
+    rerender(
+      <ProfileCard
+        profile={{
+          ...SAVED,
+          model: "another-model",
+          updated_at: "2026-11-18T09:00:00.000000+00:00",
+          last_test: later,
+        }}
+        listRead={2}
+      />,
+    );
+    expect(
+      screen.getByText(/Last test failed at the conversation/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/This result was not kept/)).toBeNull();
+    expect(screen.queryByText(/The test passed/)).toBeNull();
+  });
+
   it("says when the profile it tested is gone, so the list can be read again", async () => {
     stubFetch({
       status: 404,

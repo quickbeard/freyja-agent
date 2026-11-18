@@ -42,6 +42,14 @@ is active, ends its runs with `no_usable_model` (spec Assumptions).
 environment's profile: read-only in the console, and active until a saved profile is activated
 (FR-008, FR-011).
 
+So do the LangSmith gateway's variables, `LANGSMITH_GATEWAY`, `LANGSMITH_GATEWAY_API_KEY`, and
+`LANGSMITH_API_KEY`, which the provider's client reads itself. An environment may reach an
+`openai:` or `anthropic:` model through the gateway with no provider key at all: its profile
+is usable, and it shows the gateway's address and the last four characters of the gateway's
+key (FR-011a). None of these is a setting of the service, and none applies to a saved
+profile: a saved profile's client is built with its provider's variables hidden, apart from a
+proxy and a telemetry opt-out, which are the deployment's.
+
 One difference: a model that cannot be built from them no longer stops startup. The service
 starts, the environment's profile is listed as unusable, and runs end with `no_usable_model`
 (FR-016).

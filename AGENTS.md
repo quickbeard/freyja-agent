@@ -101,8 +101,10 @@ startup and exits with an error naming the connection when it is unreachable.
   the one module that reads a provider's own variables (`environment_key`). A saved profile's
   client is built with its provider's variables hidden (`build_model`), and for the
   provider's own address when it has no base URL, so nothing the environment sets for its own
-  model reaches a saved profile's endpoint; the environment's profile is described from what
-  its built client holds (`environment_access`), a LangSmith gateway included; `secrets.py`
+  model reaches a saved profile's endpoint, apart from a proxy and a telemetry opt-out; the
+  environment's profile is described from what its built client holds and will send
+  (`environment_access`), a LangSmith gateway and a credential in the SDK's custom headers
+  included; `secrets.py`
   encrypts stored API keys under `FREYJA_SECRET_KEY` and removes keys from text (`redact`);
   `guard.py` makes a model raise its errors with its profile's key already taken out
   (`guard_model`), because LangGraph shows a failed step's error in the debug stream and

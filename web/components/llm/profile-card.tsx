@@ -106,8 +106,18 @@ export function ProfileCard({
   const shown = fresh ? tested.result : profile.last_test;
   // A result the service did not keep, because the profile changed while it was tested, is
   // nobody's but the card's: it is not of the profile as it is now, so the list will never
-  // have it. It stays beside what the list says, until the next test from here.
-  const unkept = tested !== null && !tested.result.recorded ? tested : null;
+  // have it. It stays beside what the list says, until the next test.
+  // A later test of the profile as it is now is the last word, and the earlier result then
+  // has nothing more to say.
+  const unkept =
+    tested !== null &&
+    !tested.result.recorded &&
+    !(
+      profile.last_test !== null &&
+      Date.parse(profile.last_test.at) > Date.parse(tested.result.at)
+    )
+      ? tested
+      : null;
 
   async function test() {
     if (inFlight.current) return;

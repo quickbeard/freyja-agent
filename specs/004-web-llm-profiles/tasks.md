@@ -951,3 +951,49 @@ proceed at the same time once Phase 4 is merged.
       round trip. Replace the case in `web/__tests__/components/llm/profile-card.test.tsx`
       that rerenders with an unchanged `updated_at`, which the service cannot produce per
       Edge Cases: a test is running when its profile is edited, FR-019a (partial)
+
+## Phase 13: Convergence
+
+- [X] T110 Take the credential the environment's client will send from the client itself when
+      it is not the key the client holds: with `OPENAI_CUSTOM_HEADERS` or
+      `ANTHROPIC_CUSTOM_HEADERS` carrying an `Authorization` or `X-Api-Key`, the SDK puts
+      that over the client's key, so the environment's requests carry it, while
+      `environment_access` in `src/freyja_agent/llm/providers.py` reads the key field and the
+      card's hint and `environment_secrets` in `src/freyja_agent/runtime/runtime.py` are the
+      provider key's. An error that repeats the credential would not be cleaned. First add
+      the case to `tests/test_llm_providers.py`, with a request built and not sent per FR-021,
+      FR-008 (partial)
+- [X] T111 [P] Add the gateway's key to the proof in `tests/test_llm_secrets_nowhere.py`, as
+      T107 named and Phase 12 did not write: an environment that reaches its model through
+      `LANGSMITH_GATEWAY`, an endpoint that repeats the key it was sent, a failing run with
+      the debug stream and a failing test, and the key in nothing returned, streamed, kept, or
+      logged per FR-020, FR-021, T107 (partial)
+- [X] T112 [P] Make the test of T104 look at OpenRouter's client as it looks at the others, in
+      `tests/test_llm_providers.py`: `everything_about` builds a request for the OpenAI and
+      Anthropic clients only, and the credential check skips OpenRouter, so the six cases
+      pass with `OPENROUTER_HTTP_REFERER` and its siblings left visible. Read the SDK's
+      configuration of the built client (its globals, its security, its server address) and
+      assert the profile's key there per FR-004, Constitution V (partial)
+- [X] T113 Keep a provider's telemetry opt-out visible while a saved profile's client is built,
+      as a proxy is, in `_own_variables_hidden` of `src/freyja_agent/llm/providers.py`: with
+      `ANTHROPIC_OPEN_TELEMETRY=false` and `ANTHROPIC_OPEN_TELEMETRY_PROPAGATION=false` the
+      environment's client has tracing and propagation off, and a saved Anthropic profile's
+      client has both on, so it may add trace headers and spans that the deployment turned
+      off. Test in `tests/test_llm_providers.py` first per FR-004, T104 (unrequested)
+- [X] T114 [P] Drop the activation dialog's own test result when the service did not keep it,
+      and for the environment's profile when a later reading of the list has no result, in
+      `web/components/llm/activate-dialog.tsx`: the dialog compares only `updated_at`, which
+      the environment's profile does not have, and never looks at `recorded`. Cases in
+      `web/__tests__/components/llm/activate-dialog.test.tsx` first per FR-012, SC-011
+      (partial)
+- [X] T115 [P] Clear a card's result that was not kept when the list reports a test later than
+      it, in `web/components/llm/profile-card.tsx`: today it stays beside the later result
+      until a test is started from that card. Add the case to
+      `web/__tests__/components/llm/profile-card.test.tsx` first per Edge Cases: a test is
+      running when its profile is edited (partial)
+- [X] T116 [P] Document the LangSmith gateway's variables where the environment's others are:
+      `LANGSMITH_GATEWAY`, `LANGSMITH_GATEWAY_API_KEY`, and `LANGSMITH_API_KEY` in
+      `.env.example`, beside the providers' own, and under "What is unchanged" in
+      `specs/004-web-llm-profiles/contracts/settings.md`, saying that an environment may
+      reach its model through the gateway with no provider key per FR-011a, contract:
+      settings (partial)

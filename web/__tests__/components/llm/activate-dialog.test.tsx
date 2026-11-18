@@ -276,6 +276,20 @@ describe("ActivateDialog, an untested profile", () => {
     ).toBe(false);
   });
 
+  it("keeps warning when the test it ran passed but was not kept", async () => {
+    // The profile was changed while it was tested: the result is of other values.
+    stubFetch({ json: { ...passed, recorded: false } });
+    open(SAVED);
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/The test passed/);
+    expect(result.textContent).toMatch(/not kept/);
+    expect(warning()?.textContent).toMatch(
+      /has not been tested since its last change/,
+    );
+  });
+
   it("shows why a test could not be run", async () => {
     stubFetch({
       status: 409,
@@ -520,6 +534,42 @@ describe("Set active, from the list", () => {
     await waitFor(() =>
       expect(dialog.querySelector('[role="note"]')?.textContent).toMatch(
         warning,
+      ),
+    );
+    expect(dialog.textContent).not.toMatch(/Last test passed/);
+  });
+
+  it("warns again for the environment's profile when the service no longer has the result", async () => {
+    const AT = "2026-11-17T09:14:02.118000+00:00";
+    const passed = { ok: true, at: AT, step: null, reason: null };
+    const listed = (last: LlmProfile["last_test"]): LlmProfileList => ({
+      ...list("saved"),
+      profiles: [
+        { ...ENVIRONMENT, active: false, last_test: last },
+        { ...SAVED, active: true },
+      ],
+    });
+    stubFetch(
+      { json: listed(null) },
+      { json: { ...passed, recorded: true } },
+      { json: listed(passed) },
+      // The service was started again: the environment's result is kept in memory only.
+      { json: listed(null) },
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "Environment" });
+    fireEvent.click(screen.getByRole("button", { name: "Set active" }));
+    const dialog = await screen.findByRole("alertdialog");
+
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+    await waitFor(() =>
+      expect(dialog.querySelector('[role="note"]')).toBeNull(),
+    );
+
+    fireEvent.click(screen.getByText("Refresh"));
+    await waitFor(() =>
+      expect(dialog.querySelector('[role="note"]')?.textContent).toMatch(
+        /Environment has not been tested since the service started/,
       ),
     );
     expect(dialog.textContent).not.toMatch(/Last test passed/);

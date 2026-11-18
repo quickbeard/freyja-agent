@@ -12,7 +12,7 @@ base URL reads nothing from the environment.
 
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import cached_property
 from typing import Any
@@ -158,6 +158,11 @@ def model_arguments(spec: ModelSpec) -> dict[str, Any]:
     return arguments
 
 
+def _is_the_deployments(name: str) -> bool:
+    """Whether a provider's variable says something of the deployment, not of its own model."""
+    return name.endswith("_PROXY") or "TELEMETRY" in name
+
+
 @contextmanager
 def _own_variables_hidden(provider: Provider) -> Iterator[None]:
     """Take the provider's variables out of the process environment while a client is built.
@@ -165,8 +170,10 @@ def _own_variables_hidden(provider: Provider) -> Iterator[None]:
     A provider's client reads many variables of its own beside the key and the address:
     headers to add to every request, an organization, a project. Its parameters cannot switch
     all of them off, and a later version may read more. Hidden, none of them reaches a client
-    that is not the environment's. A proxy stays: like ``HTTP_PROXY`` it is how the deployment
-    reaches the outside, not something of the environment's model.
+    that is not the environment's. Two kinds stay, because they are the deployment's and not
+    its own model's: a proxy, which like ``HTTP_PROXY`` is how the deployment reaches the
+    outside, and what says whether a client may report traces, which a deployment that
+    turned it off turned off for every client.
 
     The environment is the process's, so this holds only because nothing else reads these
     variables meanwhile: a client is built in one go on the event loop's thread, with no
@@ -176,7 +183,7 @@ def _own_variables_hidden(provider: Provider) -> Iterator[None]:
     hidden = {
         name: os.environ.pop(name)
         for name in list(os.environ)
-        if name.startswith(provider.variable_prefix) and not name.endswith("_PROXY")
+        if name.startswith(provider.variable_prefix) and not _is_the_deployments(name)
     }
     try:
         yield
@@ -260,9 +267,13 @@ def environment_key(spec: ModelSpec, environ: Mapping[str, str] | None = None) -
 class EnvironmentAccess:
     """How the environment's model is reached: the key that is sent and where. Never shown."""
 
+    # The credential a request carries, which is what the card hints at.
     key: str = field(default="", repr=False)
     # None when it is the provider's own address.
     base_url: str | None = None
+    # Every credential to take out of text about this model: the one that is sent, and the
+    # key the client holds or the environment names, where that is another.
+    secrets: tuple[str, ...] = field(default=(), repr=False)
 
 
 def environment_access(
@@ -283,6 +294,7 @@ def environment_access(
     environ = os.environ if environ is None else environ
     held = getattr(built, provider.key_field, None)
     key = held.get_secret_value() if isinstance(held, SecretStr) else ""
+    key = key or environment_key(spec, environ)
     address = getattr(built, provider.base_url_field, None)
     if not isinstance(address, str) or not address:
         address = next(
@@ -290,7 +302,41 @@ def environment_access(
         )
     if address is not None and address.rstrip("/") == provider.address.rstrip("/"):
         address = None
-    return EnvironmentAccess(key=key or environment_key(spec, environ), base_url=address)
+    # A provider's SDK puts headers from its environment over the client's own key, so the
+    # credential a request carries may be another than the key the client holds.
+    sent = _credentials_sent(built)
+    known = (key, environment_key(spec, environ))
+    return EnvironmentAccess(
+        key=key if key in sent or not sent else sent[0],
+        base_url=address,
+        secrets=tuple(dict.fromkeys(value for value in (*sent, *known) if value)),
+    )
+
+
+# Where a client keeps the SDK clients it sends through, and the headers a credential is in.
+_SDK_CLIENTS = ("root_async_client", "root_client", "_async_client", "_client")
+_CREDENTIAL_HEADERS = ("authorization", "x-api-key")
+
+
+def _credentials_sent(built: object) -> tuple[str, ...]:
+    """The credentials in the headers every request of ``built`` carries, as its SDK says.
+
+    Read from the SDK client's own account of its default headers. A stand-in for a model,
+    or a client that keeps its SDK elsewhere, has none to read, and says nothing.
+    """
+    found: list[str] = []
+    for name in _SDK_CLIENTS:
+        headers = None
+        # No such client on this model, or one that cannot be made: nothing to read.
+        with suppress(Exception):
+            headers = getattr(built, name).default_headers
+        if not isinstance(headers, Mapping):
+            continue
+        for header, value in headers.items():
+            if str(header).lower() in _CREDENTIAL_HEADERS and isinstance(value, str) and value:
+                scheme, _, token = value.partition(" ")
+                found.append(token if scheme.lower() == "bearer" and token else value)
+    return tuple(dict.fromkeys(found))
 
 
 def environment_profile(

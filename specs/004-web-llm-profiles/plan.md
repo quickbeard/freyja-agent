@@ -944,3 +944,40 @@ opened: what a provider's client takes from the environment by itself.
   `HTTP_PROXY` does; and an open form is lost when the list fails to load meanwhile, since the
   section is then replaced by the error and its way to try again.
 
+### Phase 13 as built (2026-11-18)
+
+A fourth converge run found nothing critical or high. All six Phase 12 tasks held, and the
+hiding of a provider's variables withstood an attempt to break it: the environment is as it
+was after a build and after a failed one, nothing on the request path reads it afterwards,
+and every place a client is built runs on the event loop with no wait inside. Seven smaller
+gaps remained (T110 to T116):
+
+- **The environment's credential is the one its client will send** (T110). Where the
+  environment's credential is in `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS`, the
+  SDK puts it over the client's key. `environment_access` now reads the SDK client's own
+  account of its default headers: the card hints at the credential a request carries, and
+  every credential found, with the key the client holds and the one the environment names, is
+  taken out of errors.
+- **The environment's client is built once at startup** (T110, T111). Phase 12 built it a
+  second time to look at it, and only where no model factory was handed in, so a gateway
+  could not be seen in the suite. It is now built once, looked at, and handed to the manager
+  for its first build, with any factory.
+- **The gateway's key is in the proof** (T111): an environment that reaches its model
+  through the gateway, the real client sent to the stand-in, which now also answers at the
+  gateway's path, and the key in nothing returned, streamed, kept, or logged. It fails when
+  the gateway's key is left out of what is taken out of errors.
+- **The test of what a saved profile's client takes looks at OpenRouter's client** (T112):
+  what its SDK was configured with. With OpenRouter's variables left visible it now fails.
+- **A telemetry opt-out stays visible** (T113), as a proxy does: hidden with the rest, a
+  saved Anthropic profile's client had tracing and propagation on where the deployment had
+  turned them off.
+- **The activation dialog does not trust a result the service did not keep** (T114), and it
+  shows that result with its note. For the environment's profile it gives way when a later
+  reading of the list has no result, which is how a restart shows.
+- **A card lets a result that was not kept go** (T115) when the list reports a later test.
+- **The gateway's variables are documented** (T116) in `.env.example` and in
+  [contracts/settings.md](contracts/settings.md).
+- **Known and left**: a copy of an SDK client (`with_options`, `copy`) reads the environment
+  again. Nothing installed makes one of a saved profile's client. If a later version of the
+  agent libraries does, T104 opens again, and the test of T104 would not notice.
+
