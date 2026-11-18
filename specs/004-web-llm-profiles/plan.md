@@ -391,6 +391,11 @@ check, phase by phase.
   service would answer, in the browser. The app under test forwards `/api/...` to an address
   nothing listens on, so the two tests about a stopped service go through the web app's own
   server, as the hand check did.
+- **Every later story has an end-to-end task too** (T047a, T055a, T063a, T067a, T073a, added
+  with Phase 4). They follow the story's implementation and drive the built console in
+  Chromium and Firefox. From Phase 4 on a page changes profiles, so `web/e2e/api.ts` becomes
+  a stand-in for the profile routes that keeps what a page saved and activated, still in the
+  browser and with no service.
 - **The sidebar now closes once a section is chosen in a narrow window** (T032, FR-001). The
   end-to-end test found that it stayed open over the page it had just led to; the hand
   check of T037 had only opened it. `web/components/app-sidebar.tsx` closes it on a link's

@@ -349,6 +349,14 @@ the environment's card: the next run names the environment.
 - [ ] T046 [P] [US2] Implement `web/components/llm/activate-dialog.tsx` (FR-012)
 - [ ] T047 [US2] Add the Add button to `web/components/llm/profile-list.tsx` and Set active to
       `web/components/llm/profile-card.tsx`; after either, the list is read again (FR-007)
+- [ ] T047a [US2] Write `web/e2e/profiles.spec.ts`, with `web/e2e/api.ts` grown into a stand-in
+      for the profile routes that keeps what a page saved and activated: Add opens the form;
+      saving shows a new card with the key's last four characters, not active; a taken name and
+      a base URL that is not a web address are shown at their field and nothing is saved; a
+      closed form opens again with an empty key; Set active asks for confirmation, naming the
+      profile and saying where existing conversations will go, and confirming moves the Active
+      mark so exactly one card has it; cancelling changes nothing; the environment's card can be
+      activated again (FR-003, FR-004, FR-006, FR-012, US2 scenarios 1, 2, 7, 8, 9, 12)
 
 **Checkpoint**: quickstart section 2 works against a model factory or the stand-in; a switch
 needs no restart and interrupts no run.
@@ -419,6 +427,11 @@ warning is gone. Nothing else changed.
       warning to `web/components/llm/activate-dialog.tsx`, and Test to
       `web/components/llm/profile-form.tsx`; show the time the service returned, never one
       computed during render (FR-007, FR-012, FR-017, R14)
+- [ ] T055a [US3] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with the
+      two test routes: Test on a card shows a pass, and a failure with its step and reason; a
+      result is cleared from the card once the profile changes; the activation confirmation says
+      when the profile's last test did not pass or it was never tested, and offers to test first;
+      the form tests unsaved values before saving (FR-012, FR-017 to FR-019, US3)
 
 **Checkpoint**: quickstart section 3 works with the stand-in served on loopback.
 
@@ -475,6 +488,12 @@ works; delete an inactive profile; see the active one refuse deletion.
 - [ ] T063 [US4] Give `web/components/llm/profile-form.tsx` its editing mode with the
       confirmation for the active profile, and add Edit and Delete to
       `web/components/llm/profile-card.tsx` for saved profiles only (FR-008 to FR-010)
+- [ ] T063a [US4] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with
+      change and delete: Edit opens the form with the profile's values and an empty key, and a
+      save without a key keeps the stored one; a changed name shows on the card; editing the
+      active profile asks for confirmation first; Delete asks for confirmation and removes the
+      card; the active profile's refusal is shown and its card stays; the environment's card
+      offers neither Edit nor Delete (FR-009, FR-010, US4)
 
 **Checkpoint**: quickstart section 4 works.
 
@@ -519,6 +538,10 @@ starts, the console says no usable model is active, and a run ends at once with
 - [ ] T067 [US5] In `src/freyja_agent/delegates/delegation_worker.py`, start no delivery while
       no usable model is active, leaving ready outcomes ready and their attempts untouched
       (FR-016a, R8)
+- [ ] T067a [US5] Extend `web/e2e/llm.spec.ts`: while the active profile is not usable the
+      section says that no usable model is active, and the notice goes once a usable profile is
+      activated; activating a profile that is not usable shows the service's refusal and leaves
+      the active mark where it was (FR-012, FR-016, US5)
 
 **Checkpoint**: quickstart section 6 works; every earlier test still passes.
 
@@ -567,6 +590,11 @@ the secret: saving is refused and the environment's model still works.
       T053; this task closes what the proof turns up (FR-011a, FR-012, FR-022)
 - [ ] T073 [US5] Show the unusable state and its reason on `web/components/llm/profile-card.tsx`
       (FR-007, FR-022)
+- [ ] T073a [US5] Extend `web/e2e/profiles.spec.ts`: after a save the page shows the key's last
+      four characters and nowhere the key; a refused save leaves the key out of what the page
+      shows; `localStorage` and `sessionStorage` hold nothing after adding, editing, and testing;
+      a card whose key cannot be read says why and its form asks for the key again (FR-003,
+      FR-020, FR-022, US5 scenario 8)
 
 **Checkpoint**: quickstart section 5 works; User Story 5 is complete.
 
@@ -591,7 +619,8 @@ the secret: saving is refused and the environment's model still works.
       implementation settled differently from the plan
 - [ ] T078 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
       `FREYJA_TEST_DATABASE_URI=... uv run pytest tests/integration`, in `web/` `pnpm lint`,
-      `pnpm test`, and `pnpm build`, and `uv run pre-commit run --all-files`; confirm no Ruff
+      `pnpm test`, `pnpm build`, and `pnpm test:e2e`, and `uv run pre-commit run --all-files`;
+      confirm no Ruff
       suppression was added and that both default suites pass with the network disconnected
       (FR-025, principle V)
 - [ ] T079 Run `specs/004-web-llm-profiles/quickstart.md`, all seven sections, against the real
@@ -639,7 +668,10 @@ the secret: saving is refused and the environment's model still works.
   `src/freyja_agent/api/llm.py` in T029, T042, T043, T053, T059, T060, T072; `web/lib/llm.ts` in
   T031, T044, T054, T061, and its test file in T025, T041, T051, T058;
   `web/__tests__/next.config.test.ts` in T006 and T026; the card, list, and form components
-  likewise.
+  likewise. `web/e2e/api.ts` and `web/e2e/profiles.spec.ts` grow in T047a, T055a, T063a, and
+  T073a, and `web/e2e/llm.spec.ts` in T037a and T067a.
+- A story's end-to-end task (the ones numbered with an `a`) comes after its implementation: it
+  drives the built console. It is not one of the tests that must fail first.
 
 ### Parallel Opportunities
 
