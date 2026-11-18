@@ -175,6 +175,116 @@ describe("ActivateDialog", () => {
   });
 });
 
+describe("ActivateDialog, an untested profile", () => {
+  const AT = "2026-11-17T09:14:02.118000+00:00";
+  const passed = { ok: true, at: AT, step: null, reason: null };
+  const failed = {
+    ok: false,
+    at: AT,
+    step: "conversation" as const,
+    reason: "Error code: 422 - Input should be a valid string",
+  };
+  const open = (profile: LlmProfile, onTested = vi.fn()) =>
+    render(
+      <ActivateDialog
+        profile={profile}
+        onClose={vi.fn()}
+        onActivated={vi.fn()}
+        onTested={onTested}
+      />,
+    );
+  const warning = () => screen.queryByRole("note");
+
+  it("says so when the profile has not been tested since its last change", () => {
+    open(SAVED);
+    expect(warning()?.textContent).toMatch(
+      /has not been tested since its last change/,
+    );
+    expect(screen.getByRole("button", { name: "Test first" })).toBeTruthy();
+  });
+
+  it("says so when the profile's last test failed, and at which step", () => {
+    open({ ...SAVED, last_test: failed });
+    expect(warning()?.textContent).toMatch(
+      /last test failed at the conversation/,
+    );
+    expect(screen.getByRole("button", { name: "Test first" })).toBeTruthy();
+  });
+
+  it("says nothing of it when the last test passed", () => {
+    open({ ...SAVED, last_test: passed });
+    expect(warning()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Test first" })).toBeNull();
+  });
+
+  it("still lets the operator activate without testing", async () => {
+    const fetchStub = stubFetch({ json: list("saved") });
+    open(SAVED);
+    confirm();
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(1));
+    expect(fetchStub.mock.calls[0][0]).toBe(
+      `/api/llm/profiles/${SAVED.id}/activate`,
+    );
+  });
+
+  it("tests first when asked, and drops the warning once the test passes", async () => {
+    const fetchStub = stubFetch({ json: { ...passed, recorded: true } });
+    const onTested = vi.fn();
+    open(SAVED, onTested);
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/test passed/i);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(fetchStub.mock.calls[0][0]).toBe(
+      `/api/llm/profiles/${SAVED.id}/test`,
+    );
+    expect(onTested).toHaveBeenCalledTimes(1);
+    expect(warning()).toBeNull();
+    // Nothing was activated by testing.
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(
+      (screen.getByRole("button", { name: "Set active" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("keeps warning when the test it ran failed, with the step and the reason", async () => {
+    stubFetch({ json: { ...failed, recorded: true } });
+    open(SAVED);
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+
+    await waitFor(() =>
+      expect(warning()?.textContent).toMatch(
+        /last test failed at the conversation/,
+      ),
+    );
+    expect(screen.getByRole("alertdialog").textContent).toContain(
+      failed.reason,
+    );
+    expect(
+      (screen.getByRole("button", { name: "Set active" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("shows why a test could not be run", async () => {
+    stubFetch({
+      status: 409,
+      json: {
+        detail: {
+          code: "test_busy",
+          message: "This profile is already being tested.",
+        },
+      },
+    });
+    open(SAVED);
+    fireEvent.click(screen.getByRole("button", { name: "Test first" }));
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/already being tested/);
+  });
+});
+
 describe("Set active, from the list", () => {
   function renderList() {
     return render(

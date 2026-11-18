@@ -30,8 +30,8 @@ test("a service configured through its environment shows one card, active and re
   await expect(environment.getByText("Chat completions")).toBeVisible();
   await expect(environment.getByText("Ends in 9f2c")).toBeVisible();
   await expect(environment.getByText("Not usable")).toBeHidden();
-  // Nothing on the card changes or removes the profile.
-  await expect(environment.getByRole("button")).toHaveCount(0);
+  // Nothing on the card changes or removes the profile: it can be tested, and that is all.
+  await expect(environment.getByRole("button")).toHaveText(["Test"]);
   await expect(environment.getByRole("link")).toHaveCount(0);
   await expect(alerts(page)).toHaveCount(0);
 });

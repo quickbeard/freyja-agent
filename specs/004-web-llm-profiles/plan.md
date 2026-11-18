@@ -467,3 +467,65 @@ check, phase by phase.
   No log held either key. **Not checked**: a run answered by the environment's real model
   after switching back to it. The run named the environment's profile, and the model's
   endpoint could not be reached from the machine at the time, with or without Freyja.
+
+### Phase 5 as built (2026-11-18)
+
+- **A model built for a test tries nothing twice** (T052). `ModelSpec` gained `max_retries`,
+  which `model_arguments` passes on when it is set, and a test builds its model with 0. All
+  three providers' clients take the argument (*verified*). Without it a refused request was
+  sent three times and the time limit was only ever reached.
+- **The limit is called `limit`, not `timeout`** (T052). Ruff's `ASYNC109` refuses an async
+  function with a `timeout` parameter; `check_model` takes `limit` and applies it with one
+  `asyncio.timeout` around both steps.
+- **The time limit covers both steps together**, as FR-019 says. Seen by hand: with the limit
+  set to 4 seconds the environment's real model answered the first message and ran out of
+  time on the second; with the default it passed in 3.5 seconds.
+- **Values that make no model are a failed test** (T053), reported at the first step with the
+  reason, not an error of the service.
+- **Which tests count against which limit** (T053, FR-019b). The environment's profile is a
+  listed profile here, under the id `environment`, so it too is tested once at a time. A test
+  of unsaved values counts only toward the four. Both limits are checked before a model is
+  built.
+- **The environment's profile is tested as the environment configures it** (T053): from the
+  model setting, with no key or address of its own, so the client reads its variables as a
+  run's does. A model handed to the runtime already built, as tests do, is asked as it is.
+  An environment that is not usable is refused with `profile_unusable`, like a saved profile
+  whose key cannot be read.
+- **The time in a result** (T053). A kept result carries the time the store recorded it. A
+  result that is not kept, and the environment's, carry the service's own clock.
+- **One log line per test** (T053), naming the profile and the step that failed, with no
+  reason and no key. FR-024 does not ask for it; a failed test is worth finding later.
+- **The stand-in** (T048) answers in both APIs' real shapes, so the suite reaches it through
+  the real `ChatOpenAI` client with only the transport replaced (`LlmStub.factory`). One test
+  goes the whole way: the routes, the model built for a test, the client, and the stand-in.
+- **A card's own result gives way once the profile changes** (T055). A result of a test run
+  from a card is shown at once and tied to the profile's `updated_at`; when that moves, the
+  card shows what the list says again, so an old pass is never shown for new values.
+- **The time is the service's, put in the reader's words in the browser** (T055, R14): a
+  `<time>` element carries the value the service gave, formatted there. Cards are only
+  rendered in the browser, after the list is read, so nothing is formatted while a page is
+  prerendered.
+- **The environment's card says "Not tested since the service started"** (T055), because its
+  result is kept in memory; a saved profile's says "since its last change".
+- **Test in the Edit form with an empty key** (T051). `toDraft(values, storedKeyOf)` in
+  `web/lib/llm.ts` sends the profile's id in place of a key and is unit tested. The form that
+  uses it with a profile is the Edit form, which arrives in Phase 6 (T063); its form-level
+  test moved to T058.
+- **Test needs no name** (T055): the form checks the model id, the base URL, and the key
+  before a test, and the name only before a save. A changed value takes a shown result back.
+- **End-to-end** (T055a). `ProfileService` answers the two test routes by model id, as the
+  stand-in does, and `change()` plays another operator editing a profile. While a
+  confirmation is open, the page behind it cannot be looked into by role, so one test asks
+  the stand-in what is active. The environment card's test in `llm.spec.ts` now expects the
+  one button a card always has, Test.
+- **The checkpoint** was run by hand against the real service on a database made for it and
+  dropped afterwards, with `tests/llm_stub.py` served on loopback: a working profile passed;
+  one refusing earlier turns failed at the conversation over the Responses API with the
+  endpoint's reason; one rejecting the key failed at the first message; one that never
+  answers ended at the limit, in 4.02 seconds with the limit at 4; a second test of a profile
+  being tested was refused with `test_busy`; unsaved values were tested and nothing was saved,
+  with a repeated key removed from the reason; unsaved values with no key used a saved
+  profile's; results were still there after a restart and the environment's was gone; and
+  the environment's real model passed. In a browser the cards showed the kept results, Test
+  on a card showed a pass and a failure with its reason, the confirmation warned and tested
+  first when asked, and Test in the form saved nothing. No log held a key.

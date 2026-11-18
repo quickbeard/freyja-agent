@@ -7,7 +7,9 @@ that returns scripted models, so no model endpoint exists to be contacted (resea
 import asyncio
 import json
 import logging
+import threading
 from collections.abc import Callable
+from contextlib import ExitStack
 from typing import Any
 
 import pytest
@@ -21,7 +23,7 @@ from freyja_agent.api.schemas import LlmProfileCreate
 from freyja_agent.llm.secrets import decrypt, encrypt
 from freyja_agent.llm.store import PROFILE_LIMIT, LlmProfileRecord
 from tests.conftest import LlmApp, McpApp
-from tests.fakes import ScriptedChatModel
+from tests.fakes import FailingChatModel, ScriptedChatModel
 
 KEY = "sk-recognizable-key-0001"
 ENV_KEY = "sk-environment-key-9f2c"
@@ -620,3 +622,325 @@ def test_each_addition_and_activation_is_logged_by_name_and_without_the_key(
     for record in caplog.records:
         assert KEY not in record.getMessage()
         assert KEY[:-4] not in record.getMessage()
+
+
+# Part 3 (T050): testing a profile.
+
+
+def check(client: TestClient, profile_id: str) -> Any:
+    return client.post(f"/llm/profiles/{profile_id}/test")
+
+
+def check_values(client: TestClient, **values: Any) -> Any:
+    draft = {key: value for key, value in NEW.items() if key != "name"}
+    sent = {key: value for key, value in {**draft, **values}.items() if value is not None}
+    return client.post("/llm/test", json=sent)
+
+
+def in_background(call: Callable[[], Any]) -> tuple[threading.Thread, dict[str, Any]]:
+    """Start a request that will wait inside a held model, and where its answer goes."""
+    answer: dict[str, Any] = {}
+    thread = threading.Thread(target=lambda: answer.update(response=call()))
+    thread.start()
+    return thread, answer
+
+
+def last_test_of(client: TestClient, name: str) -> dict[str, Any] | None:
+    (profile,) = [p for p in listing(client)["profiles"] if p["name"] == name]
+    return profile["last_test"]
+
+
+def test_a_test_that_passes_is_answered_and_kept_with_the_profile(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        built = len(made.models.built)
+        response = check(client, added["id"])
+        body = response.json()
+        kept = last_test_of(client, "Local vLLM")
+
+    assert response.status_code == 200, response.text
+    assert body == {"ok": True, "step": None, "reason": None, "at": body["at"], "recorded": True}
+    assert kept == {"ok": True, "step": None, "reason": None, "at": body["at"]}
+    # The model was built for the test from the profile's values, to try nothing twice, and
+    # was asked the two steps.
+    assert len(made.models.built) == built + 1
+    spec = made.models.built[-1]
+    assert (spec.provider, spec.model, spec.base_url) == (
+        "openai",
+        "served-model",
+        "http://10.0.0.5:31000/v1",
+    )
+    assert (spec.api_key, spec.responses_api, spec.max_retries) == (KEY, False, 0)
+    assert made.models.model("served-model").calls == 2
+    assert KEY not in response.text
+
+
+def test_a_test_that_fails_says_which_step_and_why_without_the_key(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    made.models.models["served-model"] = FailingChatModel(
+        fail_on_call=2, error=f"Error code: 422 - earlier turns refused for {KEY}"
+    )
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = check(client, added["id"])
+        body = response.json()
+        kept = last_test_of(client, "Local vLLM")
+
+    # A failed test is still an answer: the result says what failed.
+    assert response.status_code == 200, response.text
+    assert (body["ok"], body["step"], body["recorded"]) == (False, "conversation", True)
+    assert body["reason"] == "Error code: 422 - earlier turns refused for <key>"
+    assert kept == {key: body[key] for key in ("ok", "step", "reason", "at")}
+    assert KEY not in response.text
+
+
+def test_a_test_ends_at_the_time_limit(make_llm_app: Callable[..., LlmApp]) -> None:
+    made = make_llm_app(model="openai:env-model", llm_test_timeout_seconds=0.2)
+    model = made.models.model("served-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        model.hold()
+        body = check(client, added["id"]).json()
+        with model.held():
+            pass  # let the held call go, now that the test gave up on it
+    assert (body["ok"], body["step"], body["recorded"]) == (False, "first_message", True)
+    assert "did not answer within 0.2 seconds" in body["reason"]
+
+
+@pytest.mark.parametrize("change", ["edited", "deleted"])
+def test_a_result_for_a_profile_that_changed_while_it_was_tested_is_not_kept(
+    make_llm_app: Callable[..., LlmApp], change: str
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    model = made.models.model("served-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        model.hold()
+        thread, answer = in_background(lambda: check(client, added["id"]))
+        with model.held():
+            if change == "edited":
+                client.portal.call(
+                    lambda: made.store.update_profile(added["id"], model="another-model")
+                )
+            else:
+                client.portal.call(made.store.delete_profile, added["id"])
+        thread.join(10)
+        body = answer["response"].json()
+        names = [p["name"] for p in listing(client)["profiles"]]
+
+    # The operator is told how the test went, and that it says nothing of the profile now.
+    assert answer["response"].status_code == 200
+    assert (body["ok"], body["recorded"]) == (True, False)
+    if change == "edited":
+        record = asyncio.run(made.store.get_profile(added["id"]))
+        assert record is not None and record.last_test_ok is None
+    else:
+        assert names == ["Environment"]
+
+
+def test_the_environments_result_is_kept_until_the_service_starts_again(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        response = check(client, "environment")
+        body = response.json()
+        kept = last_test_of(client, "Environment")
+        # The environment's model is tested as it is configured: no key or address of its own.
+        spec = made.models.built[-1]
+        assert (spec.name, spec.api_key, spec.base_url, spec.max_retries) == (
+            "openai:env-model",
+            None,
+            None,
+            0,
+        )
+
+    assert response.status_code == 200, response.text
+    assert (body["ok"], body["recorded"]) == (True, True)
+    assert kept == {key: body[key] for key in ("ok", "step", "reason", "at")}
+
+    restarted = make_llm_app(model="openai:env-model", store=made.store)
+    with TestClient(restarted.app) as client:
+        assert last_test_of(client, "Environment") is None
+
+
+def test_a_failed_test_of_the_environment_has_its_key_removed(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    made.models.models["env-model"] = FailingChatModel(
+        fail_on_call=1, error=f"401: Incorrect API key provided: {ENV_KEY}"
+    )
+    with TestClient(made.app) as client:
+        body = check(client, "environment").json()
+    assert (body["ok"], body["step"]) == (False, "first_message")
+    assert body["reason"] == "401: Incorrect API key provided: <key>"
+
+
+def test_unsaved_values_are_tested_and_nothing_is_saved_or_kept(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        response = check_values(client)
+        body = response.json()
+        after = listing(client)
+
+    assert response.status_code == 200, response.text
+    assert body == {"ok": True, "step": None, "reason": None, "at": body["at"], "recorded": False}
+    assert [p["name"] for p in after["profiles"]] == ["Environment"]
+    assert asyncio.run(made.store.list_profiles()) == []
+    spec = made.models.built[-1]
+    assert (spec.model, spec.base_url, spec.api_key, spec.responses_api, spec.max_retries) == (
+        "served-model",
+        "http://10.0.0.5:31000/v1",
+        KEY,
+        False,
+        0,
+    )
+    assert KEY not in response.text
+
+
+def test_unsaved_values_with_no_key_are_tested_with_a_saved_profiles_key(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        response = check_values(client, api_key=None, profile_id=added["id"], model="newer-model")
+        body = response.json()
+        kept = last_test_of(client, "Local vLLM")
+
+    assert response.status_code == 200, response.text
+    assert (body["ok"], body["recorded"]) == (True, False)
+    # The form's values, with the key the profile already has.
+    spec = made.models.built[-1]
+    assert (spec.model, spec.api_key) == ("newer-model", KEY)
+    # The profile itself was not tested and not changed.
+    assert kept is None
+    (record,) = asyncio.run(made.store.list_profiles())
+    assert (record.model, record.config_version) == ("served-model", 1)
+
+
+def test_unsaved_values_need_a_key_from_somewhere(make_llm_app: Callable[..., LlmApp]) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        built = len(made.models.built)
+        neither = check_values(client, api_key=None)
+        bad_address = check_values(client, base_url="not a web address")
+        unknown = check_values(client, api_key=None, profile_id="0" * 32)
+    assert neither.status_code == 422
+    assert all(set(error) == {"type", "loc", "msg"} for error in neither.json()["detail"])
+    assert bad_address.status_code == 422
+    assert [error["loc"] for error in bad_address.json()["detail"]] == [["body", "base_url"]]
+    refusal(unknown, 404, "profile_not_found")
+    assert len(made.models.built) == built
+
+
+def test_a_profile_that_is_not_usable_or_not_there_is_not_tested(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    other_secret = SecretStr(Fernet.generate_key().decode())
+    unreadable = save(made, "Unreadable", api_key_encrypted=encrypt(KEY, other_secret))
+    with TestClient(made.app) as client:
+        built = len(made.models.built)
+        message = refusal(check(client, unreadable.id), 409, "profile_unusable")
+        refusal(
+            check_values(client, api_key=None, profile_id=unreadable.id), 409, "profile_unusable"
+        )
+        refusal(check(client, "0" * 32), 404, "profile_not_found")
+    assert "Unreadable" in message
+    assert len(made.models.built) == built
+
+
+def test_a_profile_is_tested_once_at_a_time(make_llm_app: Callable[..., LlmApp]) -> None:
+    made = make_llm_app(model="openai:env-model")
+    model = made.models.model("served-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        other = add(client, name="Other", model="other-model").json()
+        model.hold()
+        thread, answer = in_background(lambda: check(client, added["id"]))
+        with model.held():
+            built = len(made.models.built)
+            message = refusal(check(client, added["id"]), 409, "test_busy")
+            # Nothing was built for the refused test, and so nothing was sent.
+            assert len(made.models.built) == built
+            # Another profile can be tested meanwhile.
+            assert check(client, other["id"]).json()["ok"] is True
+        thread.join(10)
+        # Once it has ended, the profile can be tested again.
+        again = check(client, added["id"])
+
+    assert "already being tested" in message
+    assert answer["response"].json()["ok"] is True
+    assert again.status_code == 200
+    assert made.models.model("served-model").calls == 4
+
+
+def test_a_fifth_test_on_the_instance_is_refused(make_llm_app: Callable[..., LlmApp]) -> None:
+    made = make_llm_app(model="openai:env-model")
+    held = [made.models.model(f"held-{number}") for number in range(4)]
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        for model in held:
+            model.hold()
+        running = [
+            in_background(lambda label=model.label: check_values(client, model=label))
+            for model in held
+        ]
+        with ExitStack() as stack:
+            for model in held:
+                stack.enter_context(model.held())
+            built = len(made.models.built)
+            for refused in (
+                check_values(client, model="one-more"),
+                check(client, added["id"]),
+            ):
+                message = refusal(refused, 409, "test_busy")
+                assert "4 tests" in message
+            assert len(made.models.built) == built
+        for thread, _answer in running:
+            thread.join(10)
+        # A slot is free again.
+        assert check(client, added["id"]).json()["ok"] is True
+
+    assert all(answer["response"].json()["ok"] for _thread, answer in running)
+
+
+def test_a_test_changes_nothing_but_the_profiles_last_result(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    with TestClient(made.app) as client:
+        added = add(client).json()
+        activate(client, added["id"])
+        before = listing(client)
+        state = asyncio.run(made.store.state())
+        built = len(made.models.built)
+
+        check(client, added["id"])
+        check(client, "environment")
+        check_values(client)
+
+        after = listing(client)
+        # No thread exists: a test is not a run.
+        assert client.get("/threads/any/state").status_code == 404
+        applied = made.runtime.applied_model().profile.name
+
+    def without_tests(body: dict[str, Any]) -> dict[str, Any]:
+        profiles = [{**profile, "last_test": None} for profile in body["profiles"]]
+        return {**body, "profiles": profiles}
+
+    assert without_tests(after) == without_tests(before)
+    assert [p["last_test"] is not None for p in after["profiles"]] == [True, True]
+    assert asyncio.run(made.store.state()) == state
+    assert applied == "Local vLLM"
+    # Three models were built for the three tests, and the one in use was not rebuilt.
+    assert len(made.models.built) == built + 3

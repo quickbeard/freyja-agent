@@ -93,6 +93,7 @@ export function ProfileList() {
             key={profile.id}
             profile={profile}
             onActivate={setActivating}
+            onTested={() => mutate()}
           />
         ))}
       </div>
@@ -106,6 +107,7 @@ export function ProfileList() {
         profile={activating}
         onClose={() => setActivating(null)}
         onActivated={(list) => mutate(list)}
+        onTested={() => mutate()}
       />
     </div>
   );

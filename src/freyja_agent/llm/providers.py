@@ -65,6 +65,9 @@ class ModelSpec:
     api_key: str | None = field(default=None, repr=False)
     # True: the Responses API where the provider profile turns it on. False: chat completions.
     responses_api: bool = True
+    # How often the client tries again by itself. None leaves the client's own default; a
+    # profile's test asks for none, so that its time limit is a limit (research R7).
+    max_retries: int | None = None
 
     @property
     def name(self) -> str:
@@ -90,6 +93,8 @@ def model_arguments(spec: ModelSpec) -> dict[str, Any]:
         arguments["api_key"] = spec.api_key
     if spec.base_url:
         arguments["base_url"] = spec.base_url
+    if spec.max_retries is not None:
+        arguments["max_retries"] = spec.max_retries
     return arguments
 
 

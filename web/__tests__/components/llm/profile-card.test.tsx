@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
+import { type Reply, stubFetch } from "@/__tests__/testing";
 import { ProfileCard } from "@/components/llm/profile-card";
 import type { LlmProfile } from "@/lib/llm";
 
@@ -125,12 +126,183 @@ describe("ProfileCard", () => {
 
   it("offers it only where something can be done with it", () => {
     render(<ProfileCard profile={SAVED} />);
-    expect(screen.queryByRole("button")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Set active" })).toBeNull();
   });
 
   it("gives the environment's profile no way to be edited or deleted", () => {
     render(<ProfileCard profile={ENVIRONMENT} />);
     expect(screen.queryByRole("button", { name: /edit/i })).toBeNull();
     expect(screen.queryByRole("button", { name: /delete/i })).toBeNull();
+  });
+});
+
+describe("ProfileCard, its test", () => {
+  const AT = "2026-11-17T09:14:02.118000+00:00";
+  const passed = { ok: true, at: AT, step: null, reason: null };
+  const failed = {
+    ok: false,
+    at: AT,
+    step: "conversation" as const,
+    reason: "Error code: 422 - Input should be a valid string",
+  };
+  const answer = (result: object, recorded = true): Reply => ({
+    json: { ...result, recorded },
+  });
+  const test = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+  it("says a saved profile has not been tested since its last change", () => {
+    render(<ProfileCard profile={SAVED} />);
+    expect(screen.getByText("Not tested since its last change.")).toBeTruthy();
+  });
+
+  it("says the environment's profile has not been tested since the service started", () => {
+    render(<ProfileCard profile={ENVIRONMENT} />);
+    expect(
+      screen.getByText("Not tested since the service started."),
+    ).toBeTruthy();
+  });
+
+  it("says its last test passed, and when the service said it ended", () => {
+    const { container } = render(
+      <ProfileCard profile={{ ...SAVED, last_test: passed }} />,
+    );
+    expect(screen.getByText(/Last test passed/)).toBeTruthy();
+    // The time is the one the service gave, not one worked out here.
+    const time = container.querySelector("time");
+    expect(time?.getAttribute("datetime")).toBe(AT);
+    expect(time?.textContent).not.toBe("");
+    expect(screen.queryByText(/Not tested/)).toBeNull();
+  });
+
+  it("says its last test failed, at which step, and why", () => {
+    render(<ProfileCard profile={{ ...SAVED, last_test: failed }} />);
+    expect(
+      screen.getByText(/Last test failed at the conversation/),
+    ).toBeTruthy();
+    expect(screen.getByText(failed.reason)).toBeTruthy();
+  });
+
+  it("names the first step when that is the one that failed", () => {
+    render(
+      <ProfileCard
+        profile={{
+          ...SAVED,
+          last_test: {
+            ...failed,
+            step: "first_message",
+            reason: "Connection error.",
+          },
+        }}
+      />,
+    );
+    expect(
+      screen.getByText(/Last test failed at the first message/),
+    ).toBeTruthy();
+  });
+
+  it("tests the profile once, and shows the result when it ends", async () => {
+    const fetchStub = stubFetch(answer(passed));
+    const onTested = vi.fn();
+    render(<ProfileCard profile={SAVED} onTested={onTested} />);
+    test();
+    // While it runs the card says so and takes no second press.
+    const running = screen.getByRole("button", { name: "Testing…" });
+    expect((running as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(running);
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/Last test passed/);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/llm/profiles/${SAVED.id}/test`);
+    expect(init?.method).toBe("POST");
+    // The list is read again, so the result is the service's from then on.
+    expect(onTested).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("button", { name: "Test" })).toBeTruthy();
+    expect(screen.queryByText(/Not tested/)).toBeNull();
+  });
+
+  it("shows a failure with the step that failed and the endpoint's reason", async () => {
+    stubFetch(answer(failed));
+    render(<ProfileCard profile={SAVED} />);
+    test();
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/Last test failed at the conversation/);
+    expect(result.textContent).toContain(failed.reason);
+  });
+
+  it("says when a result was not kept because the profile changed meanwhile", async () => {
+    stubFetch(answer(passed, false));
+    render(<ProfileCard profile={SAVED} />);
+    test();
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/not kept/);
+  });
+
+  it.each([
+    [
+      "the service's refusal",
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "test_busy",
+            message: "This profile is already being tested.",
+          },
+        },
+      },
+      /already being tested/,
+    ],
+    [
+      "that the service cannot be reached",
+      { fails: "Failed to fetch" },
+      /cannot be reached/,
+    ],
+  ] as [
+    string,
+    Reply,
+    RegExp,
+  ][])("shows %s when the test could not be run", async (_case, reply, message) => {
+    stubFetch(reply);
+    const onTested = vi.fn();
+    render(<ProfileCard profile={SAVED} onTested={onTested} />);
+    test();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(message);
+    expect(onTested).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Test" })).toBeTruthy(),
+    );
+  });
+
+  it("drops a result it showed once the profile has changed", async () => {
+    stubFetch(answer(passed));
+    const { rerender } = render(<ProfileCard profile={SAVED} />);
+    test();
+    await screen.findByRole("status");
+
+    rerender(
+      <ProfileCard
+        profile={{
+          ...SAVED,
+          model: "another-model",
+          updated_at: "2026-11-18T10:00:00.000000+00:00",
+        }}
+      />,
+    );
+    expect(screen.getByText("Not tested since its last change.")).toBeTruthy();
+    expect(screen.queryByText(/Last test passed/)).toBeNull();
+  });
+
+  it("does not offer a test of a profile that is not usable", () => {
+    render(
+      <ProfileCard
+        profile={{ ...SAVED, usable: false, unusable_reason: "key_unreadable" }}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Test" })).toBeNull();
   });
 });

@@ -316,3 +316,109 @@ describe("ProfileForm, adding", () => {
     expect(sessionStorage.length).toBe(0);
   });
 });
+
+describe("ProfileForm, testing before saving", () => {
+  const AT = "2026-11-17T09:14:02.118000+00:00";
+  const passed: Reply = {
+    json: { ok: true, at: AT, step: null, reason: null, recorded: false },
+  };
+  const test = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+
+  it("sends the form's values to be tested, shows the result, and saves nothing", async () => {
+    const fetchStub = stubFetch(passed);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill({ Name: "" });
+    test();
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/test passed/i);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    // The values as they are in the form: no name is needed to test them.
+    expect(sent(fetchStub)).toEqual({
+      path: "/api/llm/test",
+      method: "POST",
+      body: {
+        provider: "openai",
+        model: "served-model",
+        base_url: "http://10.0.0.5:31000/v1",
+        api_key: KEY,
+        responses_api: true,
+      },
+    });
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(errorAt("Name")).toBeNull();
+    // The key is still in the form, unseen, to be saved with.
+    expect(field("API key").value).toBe(KEY);
+    expect(document.body.textContent).not.toContain(KEY);
+  });
+
+  it("shows a failed test with the step that failed and the reason", async () => {
+    stubFetch({
+      json: {
+        ok: false,
+        at: AT,
+        step: "conversation",
+        reason: "Error code: 422 - Input should be a valid string",
+        recorded: false,
+      },
+    });
+    render(<Harness />);
+    fill();
+    test();
+
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/test failed at the conversation/i);
+    expect(result.textContent).toContain("Input should be a valid string");
+  });
+
+  it("says what is missing for a test and sends nothing", () => {
+    const fetchStub = stubFetch(passed);
+    render(<Harness />);
+    type("Base URL", "not a web address");
+    test();
+
+    expect(errorAt("Model id")).toMatch(/model/i);
+    expect(errorAt("API key")).toMatch(/key/i);
+    expect(errorAt("Base URL")).toMatch(/http/);
+    expect(errorAt("Name")).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("takes back a result once a value is changed", async () => {
+    stubFetch(passed);
+    render(<Harness />);
+    fill();
+    test();
+    await screen.findByRole("status");
+    type("Model id", "another-model");
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("shows why a test could not be run, and can still save", async () => {
+    const fetchStub = stubFetch(
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "test_busy",
+            message: "4 tests are already running on this instance.",
+          },
+        },
+      },
+      CREATED,
+    );
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    test();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/4 tests are already running/);
+
+    save();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(SAVED));
+    expect(sent(fetchStub, 1).path).toBe("/api/llm/profiles");
+  });
+});

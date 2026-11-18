@@ -1,3 +1,6 @@
+"use client";
+
+import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -7,7 +10,15 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { type LlmProfile, providerLabel, type UnusableReason } from "@/lib/llm";
+import { ApiError } from "@/lib/api";
+import {
+  type LlmProfile,
+  type LlmTestResult,
+  providerLabel,
+  testProfile,
+  type UnusableReason,
+} from "@/lib/llm";
+import { TestResult } from "./test-result";
 
 const UNUSABLE: Record<UnusableReason, string> = {
   key_unreadable:
@@ -29,17 +40,53 @@ function Value({ label, children }: { label: string; children: string }) {
 
 /**
  * One LLM profile, as the service describes it. It never holds or shows a whole key.
- * `onActivate` is offered on a usable profile that is not the active one.
+ * `onActivate` is offered on a usable profile that is not the active one. A usable profile
+ * can be tested from its card; `onTested` is told when a test has ended.
  */
 export function ProfileCard({
   profile,
   onActivate,
+  onTested,
 }: {
   profile: LlmProfile;
   onActivate?: (profile: LlmProfile) => void;
+  onTested?: () => void;
 }) {
   const canActivate =
     onActivate !== undefined && !profile.active && profile.usable;
+  // The result of a test run from this card, and the state of the profile it was for. Once
+  // the profile has changed, that result says nothing of it any more.
+  const [tested, setTested] = useState<{
+    result: LlmTestResult;
+    of: string | null;
+  } | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [testing, setTesting] = useState(false);
+  const inFlight = useRef(false);
+
+  const fresh = tested !== null && tested.of === profile.updated_at;
+  const shown = fresh ? tested.result : profile.last_test;
+
+  async function test() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setTesting(true);
+    setRefusal(null);
+    try {
+      const result = await testProfile(profile.id);
+      setTested({ result, of: profile.updated_at });
+      onTested?.();
+    } catch (error) {
+      setRefusal(
+        error instanceof ApiError
+          ? error.message
+          : "The profile could not be tested.",
+      );
+    } finally {
+      inFlight.current = false;
+      setTesting(false);
+    }
+  }
   return (
     <Card>
       <CardHeader>
@@ -75,16 +122,52 @@ export function ProfileCard({
             {UNUSABLE[profile.unusable_reason]}
           </p>
         )}
+        {/* Announced when it comes from a test run here; otherwise it is the list's. */}
+        <div
+          role={fresh ? "status" : undefined}
+          className="flex flex-col gap-1 text-sm"
+        >
+          {shown === null ? (
+            <p className="text-muted-foreground">
+              {profile.source === "environment"
+                ? "Not tested since the service started."
+                : "Not tested since its last change."}
+            </p>
+          ) : (
+            <TestResult test={shown} />
+          )}
+          {fresh && !tested.result.recorded && (
+            <p className="text-muted-foreground">
+              This result was not kept: the profile changed while it was tested.
+            </p>
+          )}
+        </div>
+        {refusal && (
+          <p role="alert" className="text-sm text-destructive">
+            {refusal}
+          </p>
+        )}
       </CardContent>
-      {canActivate && (
-        <CardFooter className="mt-auto">
+      {profile.usable && (
+        <CardFooter className="mt-auto gap-2">
           <Button
             variant="outline"
             size="sm"
-            onClick={() => onActivate(profile)}
+            disabled={testing}
+            aria-busy={testing}
+            onClick={test}
           >
-            Set active
+            {testing ? "Testing…" : "Test"}
           </Button>
+          {canActivate && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onActivate(profile)}
+            >
+              Set active
+            </Button>
+          )}
         </CardFooter>
       )}
     </Card>

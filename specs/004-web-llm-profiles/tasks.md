@@ -374,14 +374,14 @@ warning is gone. Nothing else changed.
 
 ### Tests for User Story 3
 
-- [ ] T048 [P] [US3] Write `tests/llm_stub.py`: an OpenAI-compatible stand-in serving chat
+- [X] T048 [P] [US3] Write `tests/llm_stub.py`: an OpenAI-compatible stand-in serving chat
       completions and the Responses API in the test process, recording every request. It
       behaves by model id: `refuse-conversation` answers a first message and refuses a request
       carrying earlier turns with a 422; `repeat-key` fails with an error that repeats the key
       it was sent; `reject-key` answers 401 to every request; `never-answer` does not answer;
       `slow` answers after 20 seconds; any other id answers everything. With `--http <port>` it
       listens on loopback for the quickstart (R18, R20)
-- [ ] T049 [P] [US3] Write `tests/test_llm_check.py` against the stand-in, through the real
+- [X] T049 [P] [US3] Write `tests/test_llm_check.py` against the stand-in, through the real
       `ChatOpenAI` client, over chat completions and over the Responses API: a working endpoint
       passes after exactly two requests, the second carrying the first user message, an
       assistant turn with a tool call, its result, a second user message, and the tool's
@@ -390,7 +390,7 @@ warning is gone. Nothing else changed.
       time limit, reporting that the endpoint did not answer in time; `repeat-key` gives a
       reason without the key; a reason is cut at 500 characters; no retry is made (FR-018,
       FR-019, FR-021, SC-005, US3 scenarios 1 to 3, 8)
-- [ ] T050 [P] [US3] Write `tests/test_llm_profiles_api.py` part 3: `POST
+- [X] T050 [P] [US3] Write `tests/test_llm_profiles_api.py` part 3: `POST
       /llm/profiles/{id}/test` answers 200 with the result and `recorded` true, and the list
       then shows it; a result for a profile changed or deleted while the test ran is returned
       with `recorded` false and not kept; the environment's result is kept until a new runtime
@@ -400,7 +400,7 @@ warning is gone. Nothing else changed.
       `test_busy` and reach no endpoint; an unreadable key is `profile_unusable`; a test
       changes no profile's values, not the active profile, and no thread (FR-017, FR-019,
       FR-019a, FR-019b, US3 scenarios 4 to 7, 9)
-- [ ] T051 [P] [US3] Extend `web/__tests__/components/llm/profile-card.test.tsx`,
+- [X] T051 [P] [US3] Extend `web/__tests__/components/llm/profile-card.test.tsx`,
       `web/__tests__/components/llm/activate-dialog.test.tsx`, and
       `web/__tests__/components/llm/profile-form.test.tsx`: Test on a card shows the result when it
       ends, with the failed step and reason; a card shows whether its last test passed or failed and
@@ -413,21 +413,21 @@ warning is gone. Nothing else changed.
 
 ### Implementation for User Story 3
 
-- [ ] T052 [US3] Implement `src/freyja_agent/llm/check.py`: build the model with no retries,
+- [X] T052 [US3] Implement `src/freyja_agent/llm/check.py`: build the model with no retries,
       send the two steps of data-model.md under one `asyncio.timeout` of
       `llm_test_timeout_seconds`, and return the step that failed with a reason cleaned by
       `redact` and cut to 500 characters (FR-018, FR-019, FR-021, R7)
-- [ ] T053 [US3] Add `POST /llm/profiles/{profile_id}/test` and `POST /llm/test` to
+- [X] T053 [US3] Add `POST /llm/profiles/{profile_id}/test` and `POST /llm/test` to
       `src/freyja_agent/api/llm.py`: count tests in progress per instance, one per listed
       profile and four in all, and refuse beyond either before a model is built; record a
       listed profile's result against the `config_version` read at the start; keep the
       environment's result in memory (FR-017, FR-019a, FR-019b, R7)
-- [ ] T054 [US3] Add `testProfile` and `testDraft` to `web/lib/llm.ts` (R14)
-- [ ] T055 [US3] Add Test and the last result to `web/components/llm/profile-card.tsx`, the
+- [X] T054 [US3] Add `testProfile` and `testDraft` to `web/lib/llm.ts` (R14)
+- [X] T055 [US3] Add Test and the last result to `web/components/llm/profile-card.tsx`, the
       warning to `web/components/llm/activate-dialog.tsx`, and Test to
       `web/components/llm/profile-form.tsx`; show the time the service returned, never one
       computed during render (FR-007, FR-012, FR-017, R14)
-- [ ] T055a [US3] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with the
+- [X] T055a [US3] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with the
       two test routes: Test on a card shows a pass, and a failure with its step and reason; a
       result is cleared from the card once the profile changes; the activation confirmation says
       when the profile's last test did not pass or it was never tested, and offers to test first;
@@ -471,7 +471,9 @@ works; delete an inactive profile; see the active one refuse deletion.
       nothing when cancelled; Delete asks for confirmation and removes the card; the refusal for the
       active profile is shown as the service worded it; the environment's card offers neither.
       Extend `web/__tests__/lib/llm.test.ts`: `updateProfile` and `deleteProfile` send what the
-      contract asks (FR-008 to FR-010, US4 scenarios 1 to 6)
+      contract asks; in the Edit form, Test with the key left empty sends the profile's id in place
+      of a key (moved here from T051: the Edit form arrives with T063) (FR-008 to FR-010, US4
+      scenarios 1 to 6)
 
 ### Implementation for User Story 4
 

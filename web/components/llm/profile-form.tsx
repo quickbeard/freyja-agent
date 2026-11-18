@@ -25,8 +25,12 @@ import {
   createProfile,
   type LlmProfile,
   type LlmProvider,
+  type LlmTestResult,
   PROVIDERS,
+  testDraft,
+  toDraft,
 } from "@/lib/llm";
+import { TestResult } from "./test-result";
 
 type FieldName = "name" | "provider" | "model" | "baseUrl" | "apiKey";
 type Errors = Partial<Record<FieldName, string>>;
@@ -51,15 +55,18 @@ function isWebAddress(value: string): boolean {
   }
 }
 
-/** What the form itself can tell is wrong, before anything is sent. */
-function check(values: {
-  name: string;
-  model: string;
-  baseUrl: string;
-  apiKey: string;
-}): Errors {
+/**
+ * What the form itself can tell is wrong, before anything is sent. A test needs no name:
+ * it is the values that reach the model that are tested.
+ */
+function check(
+  values: { name: string; model: string; baseUrl: string; apiKey: string },
+  purpose: "save" | "test",
+): Errors {
   const errors: Errors = {};
-  if (values.name === "") {
+  if (purpose === "test") {
+    // No name is needed.
+  } else if (values.name === "") {
     errors.name = "Enter a name.";
   } else if (values.name.length > NAME_LIMIT) {
     errors.name = `A name has at most ${NAME_LIMIT} characters.`;
@@ -128,13 +135,69 @@ function Fields({
   const [sending, setSending] = useState(false);
   // A second press arriving before the first one shows as sending still sends nothing.
   const inFlight = useRef(false);
+  // The result of testing the values as they were when Test was pressed.
+  const [tested, setTested] = useState<LlmTestResult | null>(null);
+  const [testing, setTesting] = useState(false);
 
-  // Changing a field takes back what was said about it.
-  function changing<T>(field: FieldName, set: (value: T) => void) {
+  // Changing a value takes back what was said about it, and a result for the old values.
+  function changing<T>(field: FieldName | null, set: (value: T) => void) {
     return (value: T) => {
       set(value);
-      setErrors(({ [field]: _gone, ...rest }) => rest);
+      setTested(null);
+      if (field !== null) {
+        setErrors(({ [field]: _gone, ...rest }) => rest);
+      }
     };
+  }
+
+  /** What went wrong with a request, put where it belongs: at a field, or over the form. */
+  function refused(error: unknown, fallback: string) {
+    const told: Errors = {};
+    let other: string | null = null;
+    if (!(error instanceof ApiError)) {
+      other = fallback;
+    } else if (error.code === "name_taken") {
+      told.name = error.message;
+    } else if (error.code === "invalid") {
+      for (const { field, message } of error.fields) {
+        const at = FIELD_OF[field];
+        if (at) {
+          told[at] = message;
+        } else {
+          other = message;
+        }
+      }
+    } else {
+      other = error.message;
+    }
+    setErrors(told);
+    setRefusal(other);
+  }
+
+  async function test() {
+    if (testing) return;
+    const found = check(
+      { name, model: model.trim(), baseUrl: baseUrl.trim(), apiKey },
+      "test",
+    );
+    setErrors(found);
+    setRefusal(null);
+    setTested(null);
+    if (Object.keys(found).length > 0) return;
+
+    setTesting(true);
+    try {
+      // Nothing is saved: the values go to be tested as they are in the form.
+      setTested(
+        await testDraft(
+          toDraft({ provider, model, baseUrl, apiKey, responsesApi }),
+        ),
+      );
+    } catch (error) {
+      refused(error, "The values could not be tested.");
+    } finally {
+      setTesting(false);
+    }
   }
 
   async function submit(event: FormEvent) {
@@ -146,7 +209,7 @@ function Fields({
       baseUrl: baseUrl.trim(),
       apiKey,
     };
-    const found = check(values);
+    const found = check(values, "save");
     setErrors(found);
     setRefusal(null);
     if (Object.keys(found).length > 0) return;
@@ -165,26 +228,7 @@ function Fields({
       });
       onSaved(saved);
     } catch (error) {
-      const told: Errors = {};
-      let other: string | null = null;
-      if (!(error instanceof ApiError)) {
-        other = "The profile could not be saved.";
-      } else if (error.code === "name_taken") {
-        told.name = error.message;
-      } else if (error.code === "invalid") {
-        for (const { field, message } of error.fields) {
-          const at = FIELD_OF[field];
-          if (at) {
-            told[at] = message;
-          } else {
-            other = message;
-          }
-        }
-      } else {
-        other = error.message;
-      }
-      setErrors(told);
-      setRefusal(other);
+      refused(error, "The profile could not be saved.");
     } finally {
       inFlight.current = false;
       setSending(false);
@@ -293,12 +337,28 @@ function Fields({
           <Switch
             aria-labelledby={`${id}-responses-api`}
             checked={responsesApi}
-            onCheckedChange={setResponsesApi}
+            onCheckedChange={changing(null, setResponsesApi)}
           />
         </div>
       )}
 
+      {tested && (
+        <output className="flex flex-col gap-1 text-sm">
+          <TestResult test={tested} subject="The test" />
+        </output>
+      )}
+
       <DialogFooter>
+        <Button
+          type="button"
+          variant="outline"
+          className="sm:mr-auto"
+          disabled={testing}
+          aria-busy={testing}
+          onClick={test}
+        >
+          {testing ? "Testing…" : "Test"}
+        </Button>
         <Button type="button" variant="outline" onClick={onCancel}>
           Cancel
         </Button>

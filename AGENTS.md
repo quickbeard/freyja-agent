@@ -29,6 +29,10 @@ Always go through uv. Never call python, pip, or pytest directly.
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
   `http://127.0.0.1:9998` for a manual run; add it to `FREYJA_A2A_AGENTS` under any name.
+- `uv run --env-file .env python -m tests.llm_stub --http 9997` serves the stand-in model
+  endpoint for a manual run; use `http://127.0.0.1:9997/v1` as an LLM profile's base URL. It
+  behaves by model id: `refuse-conversation`, `reject-key`, `repeat-key`, `never-answer`,
+  `slow`, and any other id answers.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
   tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
@@ -88,13 +92,16 @@ startup and exits with an error naming the connection when it is unreachable.
   delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
   loop never waits for a delivery; `tick()` does, for the tests.
 - `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API lists, adds,
-  and activates them.
+  activates, and tests them.
   `providers.py` holds the provider table, `build_model` for a saved profile, and the
   environment's profile; `secrets.py` encrypts stored API keys under `FREYJA_SECRET_KEY` and
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
   `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
-  rebuilds the orchestrator through `build_agent` when the active profile's revision moved.
+  rebuilds the orchestrator through `build_agent` when the active profile's revision moved;
+  `check.py` is a profile's test (`check_model`: two requests under one time limit, the
+  second carrying earlier turns and a tool call) and the count of tests in progress
+  (`CheckSlots`).
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, and agent
@@ -108,14 +115,17 @@ startup and exits with an error naming the connection when it is unreachable.
   an LLM profile into a chat model and is the seam the profile tests swap. Every run calls
   `Runtime.model_for_run()` first, which brings `agent` and `catalog` in step with the active
   profile. `Runtime.environment` is the environment's profile as the list shows it, described
-  once at startup.
+  once at startup. `Runtime.model_to_check` builds the model a profile's test asks, and
+  `Runtime.checks` and `Runtime.environment_test` hold the tests in progress and the
+  environment's last result, in memory.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
   `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, `POST /llm/profiles`,
-  and `POST /llm/profiles/{id}/activate`, none of which asks a model anything; an activation
-  is applied on this instance at once; its routes answer a refused request without repeating
-  the value (`NoInputRoute`);
+  and `POST /llm/profiles/{id}/activate`, none of which asks a model anything, and `POST
+  /llm/profiles/{id}/test` and `POST /llm/test`, which hold a profile's test with its
+  endpoint; an activation is applied on this instance at once; its routes answer a refused
+  request without repeating the value (`NoInputRoute`);
   `streaming.py` the SSE run loop with the lease heartbeat, also driven by the worker for
   background runs; `outcomes.py` records pending tasks' outcomes in their thread exactly once
   and answers messages to agents that a stop left in flight; `decisions.py` resume
@@ -127,11 +137,12 @@ startup and exits with an error naming the connection when it is unreachable.
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
   `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` is a placeholder.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile
-  (`profile-form.tsx`, which keeps nothing once it is sent or closed), and the confirmation before a
-  profile is activated (`activate-dialog.tsx`). `web/lib/api.ts` is the one function that calls the
-  service, always through `/api`, and its error type; `web/lib/llm.ts` holds the profile types and
-  the calls that list, add, and activate. Lists are read with SWR in Client Components. shadcn/ui is
-  set up: `components.json`, components under `web/components/ui/`, and the `cn` helper in
+  (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmation before a
+  profile is activated (`activate-dialog.tsx`), and how a test's result is shown
+  (`test-result.tsx`). `web/lib/api.ts` is the one function that calls the service, always through
+  `/api`, and its error type; `web/lib/llm.ts` holds the profile types and the calls that list, add,
+  activate, and test. Lists are read with SWR in Client Components. shadcn/ui is set up:
+  `components.json`, components under `web/components/ui/`, and the `cn` helper in
   `web/lib/utils.ts`. Generated components need `pnpm format` after they are added, and three lint
   rules they do not meet are off for `web/components/ui/` only (`web/biome.json`).
   `web/next.config.ts` is the one place the web app reads its configuration: `FREYJA_API_URL`, where
@@ -145,7 +156,7 @@ startup and exits with an error naming the connection when it is unreachable.
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest
   is told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read, and
-  `profiles.spec.ts` adding and activating; `api.ts` holds what the service would answer
+  `profiles.spec.ts` adding, activating, and testing; `api.ts` holds what the service would answer
   (`answerProfiles` for a list, `ProfileService` for a page that changes profiles, which
   keeps what the page saved and activated) and the locators the specs share. The app under
   test forwards `/api/...` to an address nothing listens on, so a test that hands a page no
@@ -164,7 +175,9 @@ startup and exits with an error naming the connection when it is unreachable.
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
   with stub tool servers, `make_a2a_app` with stand-in agents, and `make_llm_app` with LLM
   profiles and a model factory. `fakes.py` holds the scripted chat model, a labelled one that
-  can hold a call open, and the test model factory; `mcp_stub.py` the stub MCP server, which
+  can hold a call open, and the test model factory; `llm_stub.py` the stand-in model
+  endpoint, OpenAI-compatible, which the suite reaches through the real client;
+  `mcp_stub.py` the stub MCP server, which
   records every call it
   receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
   records every message and cancel and behaves by a keyword at the start of the message;

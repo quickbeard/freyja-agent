@@ -5,7 +5,10 @@ import {
   cards,
   environmentProfile,
   ProfileService,
+  REFUSES_EARLIER_TURNS,
   savedProfile,
+  TESTED_AT,
+  testOf,
 } from "./api";
 
 // 004, User Story 2: add a profile and switch Freyja to it.
@@ -343,4 +346,247 @@ test("a refused activation is shown in the confirmation, and the mark stays wher
     card(page, "Environment").getByText("Active", { exact: true }),
   ).toBeVisible();
   await expect(activeMarks(page)).toHaveCount(1);
+});
+
+// 004, User Story 3: test a profile before relying on it.
+
+const NOT_TESTED = "Not tested since its last change.";
+
+test("Test on a card shows that the profile works, and the result is still there after a reload", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude");
+  const service = await new ProfileService(environmentProfile(), claude).serve(
+    page,
+  );
+  await page.goto("/llm");
+  await expect(card(page, "Claude").getByText(NOT_TESTED)).toBeVisible();
+
+  await card(page, "Claude").getByRole("button", { name: "Test" }).click();
+
+  await expect(
+    card(page, "Claude").getByText(/Last test passed/),
+  ).toBeVisible();
+  // The time shown is the one the service gave.
+  await expect(card(page, "Claude").locator("time")).toHaveAttribute(
+    "datetime",
+    TESTED_AT,
+  );
+  await expect(card(page, "Claude").getByText(NOT_TESTED)).toBeHidden();
+  // Only that profile was tested, and nothing else changed.
+  await expect(
+    card(page, "Environment").getByText(
+      "Not tested since the service started.",
+    ),
+  ).toBeVisible();
+  expect(service.changes).toEqual([
+    {
+      method: "POST",
+      path: `/llm/profiles/${claude.id}/test`,
+      body: undefined,
+    },
+  ]);
+
+  await page.reload();
+  await expect(
+    card(page, "Claude").getByText(/Last test passed/),
+  ).toBeVisible();
+});
+
+test("a failed test names the step that failed and shows the endpoint's reason", async ({
+  page,
+}) => {
+  await new ProfileService(
+    environmentProfile(),
+    savedProfile("Refuses", { model: "refuse-conversation" }),
+    savedProfile("Rejected", { id: "e".repeat(32), model: "reject-key" }),
+  ).serve(page);
+  await page.goto("/llm");
+
+  await card(page, "Refuses").getByRole("button", { name: "Test" }).click();
+  await expect(
+    card(page, "Refuses").getByText(/Last test failed at the conversation/),
+  ).toBeVisible();
+  await expect(
+    card(page, "Refuses").getByText(REFUSES_EARLIER_TURNS),
+  ).toBeVisible();
+
+  await card(page, "Rejected").getByRole("button", { name: "Test" }).click();
+  await expect(
+    card(page, "Rejected").getByText(/Last test failed at the first message/),
+  ).toBeVisible();
+  await expect(
+    card(page, "Rejected").getByText("Incorrect API key provided."),
+  ).toBeVisible();
+});
+
+test("the environment's card can be tested the same way", async ({ page }) => {
+  await new ProfileService().serve(page);
+  await page.goto("/llm");
+  await card(page, "Environment").getByRole("button", { name: "Test" }).click();
+  await expect(
+    card(page, "Environment").getByText(/Last test passed/),
+  ).toBeVisible();
+});
+
+test("a card whose profile changed since its test says it has not been tested since", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude", { last_test: testOf("ok") });
+  const service = await new ProfileService(environmentProfile(), claude).serve(
+    page,
+  );
+  await page.goto("/llm");
+  await expect(
+    card(page, "Claude").getByText(/Last test passed/),
+  ).toBeVisible();
+
+  // Its model is changed, as by another operator, and the list is read again.
+  service.change(claude.id, { model: "claude-opus-5-5" });
+  await page.getByRole("button", { name: "Refresh" }).click();
+
+  await expect(card(page, "Claude").getByText("claude-opus-5-5")).toBeVisible();
+  await expect(card(page, "Claude").getByText(NOT_TESTED)).toBeVisible();
+  await expect(card(page, "Claude").getByText(/Last test passed/)).toBeHidden();
+});
+
+test("the confirmation says when a profile was never tested, tests it first when asked, and then activates", async ({
+  page,
+}) => {
+  const claude = savedProfile("Claude");
+  const service = await new ProfileService(environmentProfile(), claude).serve(
+    page,
+  );
+  await page.goto("/llm");
+
+  await card(page, "Claude")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  const confirmation = page.getByRole("alertdialog");
+  const warning = confirmation.getByRole("note");
+  await expect(warning).toContainText(
+    "Claude has not been tested since its last change.",
+  );
+  await expect(warning).toContainText("You can still set it active.");
+
+  await warning.getByRole("button", { name: "Test first" }).click();
+  await expect(confirmation.getByRole("status")).toContainText(
+    "Last test passed",
+  );
+  await expect(warning).toBeHidden();
+  // Testing activated nothing. (The page behind the confirmation cannot be looked into by
+  // role while it is open, so the service is asked.)
+  expect(service.list().active_id).toBe("environment");
+
+  await confirmation.getByRole("button", { name: "Set active" }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(
+    card(page, "Claude").getByText("Active", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card(page, "Claude").getByText(/Last test passed/),
+  ).toBeVisible();
+  expect(service.changes.map(({ path }) => path)).toEqual([
+    `/llm/profiles/${claude.id}/test`,
+    `/llm/profiles/${claude.id}/activate`,
+  ]);
+});
+
+test("the confirmation says when the last test failed, and the profile can still be activated", async ({
+  page,
+}) => {
+  const refuses = savedProfile("Refuses", {
+    model: "refuse-conversation",
+    last_test: testOf("refuse-conversation"),
+  });
+  const service = await new ProfileService(environmentProfile(), refuses).serve(
+    page,
+  );
+  await page.goto("/llm");
+
+  await card(page, "Refuses")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation.getByRole("note")).toContainText(
+    "Refuses's last test failed at the conversation.",
+  );
+  // Testing again says the same, with the endpoint's reason.
+  await confirmation.getByRole("button", { name: "Test first" }).click();
+  await expect(confirmation.getByRole("status")).toContainText(
+    REFUSES_EARLIER_TURNS,
+  );
+  await expect(confirmation.getByRole("note")).toBeVisible();
+
+  await confirmation.getByRole("button", { name: "Set active" }).click();
+  await expect(confirmation).toBeHidden();
+  await expect(
+    card(page, "Refuses").getByText("Active", { exact: true }),
+  ).toBeVisible();
+  expect(service.changes.at(-1)?.path).toBe(
+    `/llm/profiles/${refuses.id}/activate`,
+  );
+});
+
+test("a profile whose last test passed is activated with no warning", async ({
+  page,
+}) => {
+  await new ProfileService(
+    environmentProfile(),
+    savedProfile("Claude", { last_test: testOf("ok") }),
+  ).serve(page);
+  await page.goto("/llm");
+  await card(page, "Claude")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  const confirmation = page.getByRole("alertdialog");
+  await expect(confirmation).toContainText("Claude");
+  await expect(confirmation.getByRole("note")).toHaveCount(0);
+  await expect(
+    confirmation.getByRole("button", { name: "Test first" }),
+  ).toHaveCount(0);
+});
+
+test("the form tests its values before they are saved, and a test saves nothing", async ({
+  page,
+}) => {
+  const service = await new ProfileService().serve(page);
+  await page.goto("/llm");
+  await openForm(page);
+  await fill(page, { Name: "", "Model id": "refuse-conversation" });
+
+  await form(page).getByRole("button", { name: "Test" }).click();
+  const result = form(page).getByRole("status");
+  await expect(result).toContainText("The test failed at the conversation");
+  await expect(result).toContainText(REFUSES_EARLIER_TURNS);
+  // The values went to be tested, with no name; nothing was saved and no card appeared.
+  expect(service.changes).toEqual([
+    {
+      method: "POST",
+      path: "/llm/test",
+      body: {
+        provider: "openai",
+        model: "refuse-conversation",
+        base_url: "http://10.0.0.5:31000/v1",
+        api_key: KEY,
+        responses_api: true,
+      },
+    },
+  ]);
+  expect(service.profiles).toHaveLength(1);
+  await expect(form(page)).toBeVisible();
+
+  // A changed value takes the result back; the new values pass and are then saved.
+  await input(page, "Model id").fill("served-model");
+  await expect(result).toBeHidden();
+  await form(page).getByRole("button", { name: "Test" }).click();
+  await expect(result).toContainText("The test passed");
+  await input(page, "Name").fill("Local vLLM");
+  await save(page);
+
+  await expect(form(page)).toBeHidden();
+  await expect(card(page, "Local vLLM")).toBeVisible();
+  // A test of unsaved values is not kept with the profile they became.
+  await expect(card(page, "Local vLLM").getByText(NOT_TESTED)).toBeVisible();
+  await expect(page.getByText(KEY)).toHaveCount(0);
 });

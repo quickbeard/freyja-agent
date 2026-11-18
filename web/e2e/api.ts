@@ -2,7 +2,7 @@
 // answers to its requests for the profile list, so no test needs the service itself.
 
 import type { Page, Route } from "@playwright/test";
-import type { LlmProfile, LlmProfileList } from "../lib/llm";
+import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/llm";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
 export function environmentProfile(
@@ -87,6 +87,37 @@ export async function answerProfiles(
       await route.fulfill({ status, json: { detail: { code, message } } });
     }
   });
+}
+
+/** When the stand-in says a test ended. */
+export const TESTED_AT = "2026-11-18T09:14:02.118000+00:00";
+/** What the stand-in's endpoints say when they refuse. */
+export const REFUSES_EARLIER_TURNS =
+  "Error code: 422 - Input should be a valid string: this endpoint takes no earlier turns as input";
+export const REJECTS_KEY = "Error code: 401 - Incorrect API key provided.";
+
+/**
+ * How a test of a model goes, by its id, as `tests/llm_stub.py` behaves: `refuse-conversation`
+ * fails at the second step, `reject-key` at the first, and any other id passes.
+ */
+export function testOf(model: string): LlmLastTest {
+  if (model === "refuse-conversation") {
+    return {
+      ok: false,
+      at: TESTED_AT,
+      step: "conversation",
+      reason: REFUSES_EARLIER_TURNS,
+    };
+  }
+  if (model === "reject-key") {
+    return {
+      ok: false,
+      at: TESTED_AT,
+      step: "first_message",
+      reason: REJECTS_KEY,
+    };
+  }
+  return { ok: true, at: TESTED_AT, step: null, reason: null };
 }
 
 /** A request a page made to the stand-in. */
@@ -185,6 +216,38 @@ export class ProfileService {
     return route.fulfill({ json: this.list() });
   }
 
+  /** Test a listed profile and keep the result with it, as the service does. */
+  private test(route: Route, id: string) {
+    const target = this.profiles.find((profile) => profile.id === id);
+    if (target === undefined) {
+      return this.refuse(
+        route,
+        404,
+        "profile_not_found",
+        "There is no profile with this id.",
+      );
+    }
+    const result = testOf(target.model);
+    this.profiles = this.profiles.map((profile) =>
+      profile.id === id ? { ...profile, last_test: result } : profile,
+    );
+    return route.fulfill({ json: { ...result, recorded: true } });
+  }
+
+  /** What another operator does meanwhile: change a profile, which clears its test. */
+  change(id: string, values: Partial<LlmProfile>) {
+    this.profiles = this.profiles.map((profile) =>
+      profile.id === id
+        ? {
+            ...profile,
+            ...values,
+            last_test: null,
+            updated_at: "2026-11-18T10:00:00.000000+00:00",
+          }
+        : profile,
+    );
+  }
+
   /** Answer this page's requests to the profile routes, in the browser. */
   async serve(page: Page): Promise<this> {
     await page.route("**/api/llm/**", async (route) => {
@@ -203,6 +266,15 @@ export class ProfileService {
       }
       if (method === "POST" && activation) {
         return this.activate(route, decodeURIComponent(activation[1]));
+      }
+      const test = path.match(/^\/llm\/profiles\/([^/]+)\/test$/);
+      if (method === "POST" && test) {
+        return this.test(route, decodeURIComponent(test[1]));
+      }
+      if (method === "POST" && path === "/llm/test") {
+        // Values that are not saved: tested, and nothing is kept.
+        const { model } = body as { model: string };
+        return route.fulfill({ json: { ...testOf(model), recorded: false } });
       }
       return route.fulfill({ status: 404, json: { detail: "Not Found" } });
     });
