@@ -16,20 +16,29 @@ It behaves by the model id it is asked for:
 - ``never-answer``: does not answer;
 - ``slow``: answers after 20 seconds;
 - any other id: answers everything.
+
+A request that asks for a stream is answered as one, in the API's own events, because that is
+how a run asks: a profile that points here can be run on, not only tested.
 """
 
 import argparse
 import asyncio
+import json
+import logging
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse, StreamingResponse
 from langchain.chat_models import init_chat_model
 from langchain_core.language_models.chat_models import BaseChatModel
 
 from freyja_agent.llm.providers import ModelSpec, model_arguments
+
+# Shown in the terminal when the stand-in is served for the quickstart; silent in the suite.
+logger = logging.getLogger("uvicorn.error")
 
 REFUSAL = "Input should be a valid string: this endpoint takes no earlier turns as input"
 SLOW_SECONDS = 20.0
@@ -122,6 +131,47 @@ def _responses_answer(model: str) -> dict[str, Any]:
     }
 
 
+def _chat_stream(model: str) -> Iterator[str]:
+    """Chat completions, streamed: one chunk with the text, one that ends it, the usage."""
+    chunk = {"id": "chatcmpl-stub", "object": "chat.completion.chunk", "created": 0, "model": model}
+    delta = {"role": "assistant", "content": "ready"}
+    usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    for part in (
+        {"choices": [{"index": 0, "delta": delta, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+        {"choices": [], "usage": usage},
+    ):
+        yield f"data: {json.dumps({**chunk, **part})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
+def _responses_stream(model: str) -> Iterator[str]:
+    """The Responses API, streamed: the events of one message with one piece of text."""
+    done = _responses_answer(model)
+    started = {**done, "status": "in_progress", "output": []}
+    item = done["output"][0]
+    text = {"type": "output_text", "text": "ready", "annotations": []}
+    where = {"item_id": item["id"], "output_index": 0, "content_index": 0}
+    events: list[dict[str, Any]] = [
+        {"type": "response.created", "response": started},
+        {"type": "response.in_progress", "response": started},
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {**item, "status": "in_progress", "content": []},
+        },
+        {"type": "response.content_part.added", **where, "part": {**text, "text": ""}},
+        {"type": "response.output_text.delta", **where, "delta": "ready", "logprobs": []},
+        {"type": "response.output_text.done", **where, "text": "ready", "logprobs": []},
+        {"type": "response.content_part.done", **where, "part": text},
+        {"type": "response.output_item.done", "output_index": 0, "item": item},
+        {"type": "response.completed", "response": done},
+    ]
+    for number, event in enumerate(events):
+        body = json.dumps({**event, "sequence_number": number})
+        yield f"event: {event['type']}\ndata: {body}\n\n"
+
+
 @dataclass
 class LlmStub:
     """The stand-in and what it received."""
@@ -131,19 +181,20 @@ class LlmStub:
 
     def __post_init__(self) -> None:
         @self.app.post("/v1/chat/completions")
-        async def chat(request: Request) -> JSONResponse:
+        async def chat(request: Request) -> Response:
             return await self._answer("chat", request)
 
         @self.app.post("/v1/responses")
-        async def responses(request: Request) -> JSONResponse:
+        async def responses(request: Request) -> Response:
             return await self._answer("responses", request)
 
-    async def _answer(self, api: str, request: Request) -> JSONResponse:
+    async def _answer(self, api: str, request: Request) -> Response:
         body = await request.json()
         key = request.headers.get("authorization", "").removeprefix("Bearer ")
         received = StubRequest(api=api, key=key, model=str(body.get("model")), body=body)
         self.requests.append(received)
         model = received.model
+        logger.info("%s request for model %s, %d turns", api, model, len(received.turns))
 
         if model == "reject-key":
             return error(401, "Incorrect API key provided.", "invalid_api_key")
@@ -155,6 +206,9 @@ class LlmStub:
             await asyncio.sleep(SLOW_SECONDS)
         if model == "refuse-conversation" and received.earlier_turns:
             return error(422, REFUSAL, "invalid_type")
+        if body.get("stream"):
+            events = _chat_stream(model) if api == "chat" else _responses_stream(model)
+            return StreamingResponse(events, media_type="text/event-stream")
         answer = _chat_answer(model) if api == "chat" else _responses_answer(model)
         return JSONResponse(content=answer)
 

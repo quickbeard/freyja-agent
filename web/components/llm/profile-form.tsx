@@ -29,6 +29,7 @@ import {
   PROVIDERS,
   testDraft,
   toDraft,
+  updateProfile,
 } from "@/lib/llm";
 import { TestResult } from "./test-result";
 
@@ -62,6 +63,8 @@ function isWebAddress(value: string): boolean {
 function check(
   values: { name: string; model: string; baseUrl: string; apiKey: string },
   purpose: "save" | "test",
+  // A saved profile already has a key: an empty one means the stored key (FR-009, FR-017).
+  hasStoredKey: boolean,
 ): Errors {
   const errors: Errors = {};
   if (purpose === "test") {
@@ -78,7 +81,7 @@ function check(
     errors.baseUrl =
       "Enter an http or https address, such as http://10.0.0.5:8000/v1.";
   }
-  if (values.apiKey === "") {
+  if (values.apiKey === "" && !hasStoredKey) {
     errors.apiKey = "Enter the API key.";
   }
   return errors;
@@ -116,20 +119,32 @@ function invalid(id: string, error?: string) {
 }
 
 function Fields({
+  profile,
   onCancel,
   onSaved,
 }: {
+  /** The saved profile being edited; none when one is being added. */
+  profile?: LlmProfile;
   onCancel: () => void;
   onSaved: (profile: LlmProfile) => void;
 }) {
   const id = useId();
-  const [name, setName] = useState("");
-  const [provider, setProvider] = useState<LlmProvider>("openai");
-  const [model, setModel] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
+  const editing = profile !== undefined;
+  const [name, setName] = useState(profile?.name ?? "");
+  const [provider, setProvider] = useState<LlmProvider>(
+    PROVIDERS.find(({ value }) => value === profile?.provider)?.value ??
+      "openai",
+  );
+  const [model, setModel] = useState(profile?.model ?? "");
+  const [baseUrl, setBaseUrl] = useState(profile?.base_url ?? "");
   // The key lives here and nowhere else: it goes when the form is sent or closed (FR-003).
+  // The service never sends a stored key, so an edit starts with none.
   const [apiKey, setApiKey] = useState("");
-  const [responsesApi, setResponsesApi] = useState(true);
+  const [responsesApi, setResponsesApi] = useState(
+    profile?.responses_api ?? true,
+  );
+  // A change to the active profile is confirmed first (FR-010).
+  const [confirming, setConfirming] = useState(false);
   const [errors, setErrors] = useState<Errors>({});
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
@@ -144,6 +159,7 @@ function Fields({
     return (value: T) => {
       set(value);
       setTested(null);
+      setConfirming(false);
       if (field !== null) {
         setErrors(({ [field]: _gone, ...rest }) => rest);
       }
@@ -179,6 +195,7 @@ function Fields({
     const found = check(
       { name, model: model.trim(), baseUrl: baseUrl.trim(), apiKey },
       "test",
+      editing,
     );
     setErrors(found);
     setRefusal(null);
@@ -190,7 +207,10 @@ function Fields({
       // Nothing is saved: the values go to be tested as they are in the form.
       setTested(
         await testDraft(
-          toDraft({ provider, model, baseUrl, apiKey, responsesApi }),
+          toDraft(
+            { provider, model, baseUrl, apiKey, responsesApi },
+            profile?.id,
+          ),
         ),
       );
     } catch (error) {
@@ -209,23 +229,34 @@ function Fields({
       baseUrl: baseUrl.trim(),
       apiKey,
     };
-    const found = check(values, "save");
+    const found = check(values, "save", editing);
     setErrors(found);
     setRefusal(null);
     if (Object.keys(found).length > 0) return;
+    if (profile?.active && !confirming) {
+      // Nothing is sent yet: the form first says what the change means.
+      setConfirming(true);
+      return;
+    }
 
     inFlight.current = true;
     setSending(true);
     try {
-      const saved = await createProfile({
+      const sent = {
         name: values.name,
         provider,
         model: values.model,
         base_url: values.baseUrl === "" ? null : values.baseUrl,
-        api_key: values.apiKey,
         // Only an OpenAI-compatible endpoint has the choice.
         ...(provider === "openai" ? { responses_api: responsesApi } : {}),
-      });
+      };
+      const saved = editing
+        ? // A key left empty is not sent, so the stored one is kept (FR-009).
+          await updateProfile(profile.id, {
+            ...sent,
+            ...(values.apiKey === "" ? {} : { api_key: values.apiKey }),
+          })
+        : await createProfile({ ...sent, api_key: values.apiKey });
       onSaved(saved);
     } catch (error) {
       refused(error, "The profile could not be saved.");
@@ -238,10 +269,13 @@ function Fields({
   return (
     <form onSubmit={submit} noValidate className="grid gap-4">
       <DialogHeader>
-        <DialogTitle>Add a profile</DialogTitle>
+        <DialogTitle>
+          {editing ? `Edit ${profile.name}` : "Add a profile"}
+        </DialogTitle>
         <DialogDescription>
-          A model Freyja can run on. Saving it does not change the profile in
-          use.
+          {editing
+            ? "Leave the key empty to keep the one that is stored."
+            : "A model Freyja can run on. Saving it does not change the profile in use."}
         </DialogDescription>
       </DialogHeader>
 
@@ -322,6 +356,9 @@ function Fields({
             changing("apiKey", setApiKey)(event.target.value)
           }
           autoComplete="off"
+          placeholder={
+            editing ? "Leave empty to keep the stored key" : undefined
+          }
           {...invalid(`${id}-api-key`, errors.apiKey)}
         />
       </Field>
@@ -342,6 +379,16 @@ function Fields({
         </div>
       )}
 
+      {confirming && profile && (
+        <p
+          role="note"
+          className="rounded-lg border border-amber-500/50 p-3 text-sm"
+        >
+          {profile.name} is the active profile. This change applies from the
+          next run; a run in progress finishes on the values it started with.
+        </p>
+      )}
+
       {tested && (
         <output className="flex flex-col gap-1 text-sm">
           <TestResult test={tested} subject="The test" />
@@ -359,26 +406,48 @@ function Fields({
         >
           {testing ? "Testing…" : "Test"}
         </Button>
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={sending}>
-          Save
-        </Button>
+        {confirming ? (
+          <>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => setConfirming(false)}
+            >
+              Back
+            </Button>
+            <Button type="submit" disabled={sending}>
+              Confirm
+            </Button>
+          </>
+        ) : (
+          <>
+            <Button type="button" variant="outline" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button type="submit" disabled={sending}>
+              Save
+            </Button>
+          </>
+        )}
       </DialogFooter>
     </form>
   );
 }
 
-/** The dialog that adds a profile. It keeps nothing once it is sent or closed. */
+/**
+ * The dialog that adds a profile, or changes the saved `profile` it is given. It keeps
+ * nothing once it is sent or closed.
+ */
 export function ProfileForm({
   open,
   onOpenChange,
   onSaved,
+  profile,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: (profile: LlmProfile) => void;
+  profile?: LlmProfile;
 }) {
   // A page stays mounted while it is hidden, so what was typed is thrown away by hand: each
   // time the form opens or closes its fields start again, the key included.
@@ -395,6 +464,7 @@ export function ProfileForm({
       <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
         <Fields
           key={session}
+          profile={profile}
           onCancel={() => change(false)}
           onSaved={(profile) => {
             change(false);

@@ -430,3 +430,99 @@ def test_an_activation_through_one_instance_reaches_another_at_its_next_run(
 
         switch_to(b, "environment")
         assert profile_of(run(a, "t-a", sse_events)) == ENVIRONMENT
+
+
+# Part 3 (T057): editing and deleting while runs go on.
+
+
+def edit(client: TestClient, profile_id: str, **values: Any) -> None:
+    response = client.patch(f"/llm/profiles/{profile_id}", json=values)
+    assert response.status_code == 200, response.text
+
+
+def test_an_edit_of_the_active_profile_is_used_by_the_next_run_everywhere(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    first = make_llm_app(model="openai:env-model")
+    second = make_llm_app(
+        model="openai:env-model",
+        store=first.store,
+        models=first.models,
+        instance_id="instance-b",
+    )
+    with TestClient(first.app) as a, TestClient(second.app) as b:
+        stub_id = add(a)
+        switch_to(a, stub_id)
+        assert reply_after(a, "t-a", sse_events) == "Answered by saved-model."
+        assert reply_after(b, "t-b", sse_events) == "Answered by saved-model."
+
+        edit(a, stub_id, model="newer-model", name="Renamed")
+
+        # No restart: the instance that took the edit, and the one that was told nothing.
+        after = run(a, "t-a", sse_events, "and again")
+        assert profile_of(after) == {"id": stub_id, "name": "Renamed", "source": "saved"}
+        assert reply(a, "t-a") == "Answered by newer-model."
+        assert reply_after(b, "t-b", sse_events, "and again") == "Answered by newer-model."
+        assert humans(first, "newer-model") == ["hello", "and again"]
+        assert (len(first.runtimes), len(second.runtimes)) == (1, 1)
+
+
+def reply_after(client: TestClient, thread: str, sse_events: Any, message: str = "hello") -> str:
+    assert run(client, thread, sse_events, message)[-1] == ("end", {"status": "completed"})
+    return reply(client, thread)
+
+
+def test_a_run_in_progress_during_an_edit_finishes_on_the_values_it_started_with(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    saved = made.models.model("saved-model")
+    streamed: dict[str, Events] = {}
+    with TestClient(made.app) as client:
+        stub_id = add(client)
+        switch_to(client, stub_id)
+        saved.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "t-1", sse_events))
+        )
+        running.start()
+        with saved.held():
+            edit(client, stub_id, model="newer-model")
+        running.join(10)
+        assert not running.is_alive()
+
+        assert streamed["events"][-1] == ("end", {"status": "completed"})
+        assert reply(client, "t-1") == "Answered by saved-model."
+        assert made.models.model("newer-model").calls == 0
+        assert reply_after(client, "t-1", sse_events, "and again") == "Answered by newer-model."
+
+
+def test_a_run_in_progress_on_a_profile_that_is_then_deleted_finishes_normally(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    saved = made.models.model("saved-model")
+    streamed: dict[str, Events] = {}
+    with TestClient(made.app) as client:
+        stub_id = add(client)
+        switch_to(client, stub_id)
+        saved.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "t-1", sse_events))
+        )
+        running.start()
+        with saved.held():
+            # The deletion does not wait for the run.
+            switch_to(client, "environment")
+            assert client.delete(f"/llm/profiles/{stub_id}").status_code == 204
+            assert [p["name"] for p in client.get("/llm/profiles").json()["profiles"]] == [
+                "Environment"
+            ]
+        running.join(10)
+        assert not running.is_alive()
+
+        events = streamed["events"]
+        assert profile_of(events) == {"id": stub_id, "name": "Stub", "source": "saved"}
+        assert events[-1] == ("end", {"status": "completed"})
+        assert reply(client, "t-1") == "Answered by saved-model."
+        assert profile_of(run(client, "t-1", sse_events, "and again")) == ENVIRONMENT

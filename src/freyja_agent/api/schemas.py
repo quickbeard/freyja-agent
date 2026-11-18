@@ -289,6 +289,12 @@ class LlmProfileUpdate(BaseModel):
     def _something_to_change(self) -> Self:
         if not self.model_fields_set:
             raise ValueError("send at least one field to change")
+        # Left out means unchanged. Only a base URL can be taken away by sending null.
+        cleared = sorted(
+            name for name in self.model_fields_set - {"base_url"} if getattr(self, name) is None
+        )
+        if cleared:
+            raise ValueError(f"{', '.join(cleared)} cannot be null; leave it out to keep it")
         return self
 
 

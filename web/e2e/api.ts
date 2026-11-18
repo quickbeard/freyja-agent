@@ -134,6 +134,7 @@ export class ProfileService {
   /** Every request the page made, in order. */
   readonly asked: Asked[] = [];
   private saved = 0;
+  private edits = 0;
 
   constructor(...profiles: LlmProfile[]) {
     this.profiles = profiles.length > 0 ? profiles : [environmentProfile()];
@@ -216,6 +217,113 @@ export class ProfileService {
     return route.fulfill({ json: this.list() });
   }
 
+  /** Change a saved profile: only the fields sent, as the service does. */
+  private update(route: Route, id: string, body: Record<string, unknown>) {
+    const target = this.profiles.find((profile) => profile.id === id);
+    if (target === undefined) {
+      return this.refuse(
+        route,
+        404,
+        "profile_not_found",
+        "There is no profile with this id.",
+      );
+    }
+    if (target.source === "environment") {
+      return this.refuse(
+        route,
+        409,
+        "profile_read_only",
+        "The environment's profile cannot be changed or deleted here.",
+      );
+    }
+    const name =
+      body.name === undefined ? target.name : String(body.name).trim();
+    const taken = this.profiles.some(
+      (profile) =>
+        profile.id !== id && profile.name.toLowerCase() === name.toLowerCase(),
+    );
+    if (taken) {
+      return this.refuse(
+        route,
+        409,
+        "name_taken",
+        "Another profile has this name. Choose a different name.",
+      );
+    }
+    const provider =
+      body.provider === undefined ? target.provider : String(body.provider);
+    const changed: LlmProfile = {
+      ...target,
+      name,
+      provider,
+      model:
+        body.model === undefined ? target.model : String(body.model).trim(),
+      base_url:
+        body.base_url === undefined
+          ? target.base_url
+          : (body.base_url as string | null),
+      responses_api:
+        provider !== "openai"
+          ? null
+          : body.responses_api === undefined
+            ? (target.responses_api ?? true)
+            : body.responses_api === true,
+      // A key left out keeps the stored one, and so its last four characters.
+      key_hint:
+        body.api_key === undefined
+          ? target.key_hint
+          : String(body.api_key).slice(-4),
+    };
+    // A change to how the model is reached clears the last test; a new name keeps it.
+    const reach =
+      body.api_key !== undefined ||
+      changed.provider !== target.provider ||
+      changed.model !== target.model ||
+      changed.base_url !== target.base_url ||
+      changed.responses_api !== target.responses_api;
+    this.edits += 1;
+    const updated: LlmProfile = {
+      ...changed,
+      last_test: reach ? null : target.last_test,
+      updated_at: `2026-11-18T11:00:${String(this.edits).padStart(2, "0")}.000000+00:00`,
+    };
+    this.profiles = this.profiles.map((profile) =>
+      profile.id === id ? updated : profile,
+    );
+    return route.fulfill({ json: updated });
+  }
+
+  /** Delete a saved profile that is not the active one. */
+  private remove(route: Route, id: string) {
+    const target = this.profiles.find((profile) => profile.id === id);
+    if (target === undefined) {
+      return this.refuse(
+        route,
+        404,
+        "profile_not_found",
+        "There is no profile with this id.",
+      );
+    }
+    if (target.source === "environment") {
+      return this.refuse(
+        route,
+        409,
+        "profile_read_only",
+        "The environment's profile cannot be changed or deleted here.",
+      );
+    }
+    if (target.active) {
+      return this.refuse(
+        route,
+        409,
+        "profile_active",
+        `Profile ${target.name} is the active one and cannot be deleted. Activate another profile first.`,
+      );
+    }
+    this.profiles = this.profiles.filter((profile) => profile.id !== id);
+    return route.fulfill({ status: 204 });
+  }
+
   /** Test a listed profile and keep the result with it, as the service does. */
   private test(route: Route, id: string) {
     const target = this.profiles.find((profile) => profile.id === id);
@@ -266,6 +374,17 @@ export class ProfileService {
       }
       if (method === "POST" && activation) {
         return this.activate(route, decodeURIComponent(activation[1]));
+      }
+      const one = path.match(/^\/llm\/profiles\/([^/]+)$/);
+      if (method === "PATCH" && one) {
+        return this.update(
+          route,
+          decodeURIComponent(one[1]),
+          body as Record<string, unknown>,
+        );
+      }
+      if (method === "DELETE" && one) {
+        return this.remove(route, decodeURIComponent(one[1]));
       }
       const test = path.match(/^\/llm\/profiles\/([^/]+)\/test$/);
       if (method === "POST" && test) {

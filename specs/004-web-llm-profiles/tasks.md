@@ -448,7 +448,7 @@ works; delete an inactive profile; see the active one refuse deletion.
 
 ### Tests for User Story 4
 
-- [ ] T056 [P] [US4] Write `tests/test_llm_profiles_api.py` part 4: `PATCH` changes only the
+- [X] T056 [P] [US4] Write `tests/test_llm_profiles_api.py` part 4: `PATCH` changes only the
       fields sent; a key left out keeps the stored key and its four characters; a key sent
       replaces both; a change of provider, model, base URL, key, or API choice clears the last
       test result and a change of name keeps it; a used name, and the name `Environment`, are
@@ -459,12 +459,12 @@ works; delete an inactive profile; see the active one refuse deletion.
       activate another first; an unknown id is `profile_not_found`; each change and deletion is
       logged without a key (FR-005, FR-008 to FR-010, FR-019a, FR-024, US4 scenarios 1, 2, 4 to
       7)
-- [ ] T057 [P] [US4] Write `tests/test_llm_switch.py` part 3: an edit of the active profile is
+- [X] T057 [P] [US4] Write `tests/test_llm_switch.py` part 3: an edit of the active profile is
       used by the next run on this instance and on a second runtime sharing the store, with no
       restart; a run in progress during the edit finishes on the values it started with; a run
       in progress on a profile that is then deactivated and deleted finishes normally (FR-013,
       FR-014, US4 scenario 3, spec Edge Cases)
-- [ ] T058 [P] [US4] Extend `web/__tests__/components/llm/profile-form.test.tsx` and write
+- [X] T058 [P] [US4] Extend `web/__tests__/components/llm/profile-form.test.tsx` and write
       `web/__tests__/components/llm/delete-dialog.test.tsx`: the Edit form opens with the profile's
       values and an empty key; saving with the key empty sends no key; saving a change to the active
       profile first asks for confirmation, saying the change applies from the next run, and sends
@@ -477,20 +477,20 @@ works; delete an inactive profile; see the active one refuse deletion.
 
 ### Implementation for User Story 4
 
-- [ ] T059 [US4] Add `PATCH /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
+- [X] T059 [US4] Add `PATCH /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
       refuse the environment's profile and the reserved name, apply the fields sent, encrypt a
       new key, and, when the
       profile is the active one, rebuild on this instance at once; log it (FR-005, FR-009,
       FR-013, FR-024)
-- [ ] T060 [US4] Add `DELETE /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
+- [X] T060 [US4] Add `DELETE /llm/profiles/{profile_id}` to `src/freyja_agent/api/llm.py`:
       refuse the environment's profile and the active one, delete, and log it (FR-005, FR-010,
       FR-024)
-- [ ] T061 [US4] Add `updateProfile` and `deleteProfile` to `web/lib/llm.ts` (R14)
-- [ ] T062 [P] [US4] Implement `web/components/llm/delete-dialog.tsx` (FR-010)
-- [ ] T063 [US4] Give `web/components/llm/profile-form.tsx` its editing mode with the
+- [X] T061 [US4] Add `updateProfile` and `deleteProfile` to `web/lib/llm.ts` (R14)
+- [X] T062 [P] [US4] Implement `web/components/llm/delete-dialog.tsx` (FR-010)
+- [X] T063 [US4] Give `web/components/llm/profile-form.tsx` its editing mode with the
       confirmation for the active profile, and add Edit and Delete to
       `web/components/llm/profile-card.tsx` for saved profiles only (FR-008 to FR-010)
-- [ ] T063a [US4] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with
+- [X] T063a [US4] Extend `web/e2e/profiles.spec.ts` and the stand-in in `web/e2e/api.ts` with
       change and delete: Edit opens the form with the profile's values and an empty key, and a
       save without a key keeps the stored one; a changed name shows on the card; editing the
       active profile asks for confirmation first; Delete asks for confirmation and removes the
