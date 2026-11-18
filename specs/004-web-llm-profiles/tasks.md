@@ -846,3 +846,154 @@ proceed at the same time once Phase 4 is merged.
       in `tests/test_a2a_catalog.py` and `tests/test_a2a_handoff.py`, from `"9877"` to
       `":9877"`: a run id could hold those digits, so the tests failed now and then; no
       behaviour changed per FR-023, SC-006 (contradicts)
+
+## Phase 11: Convergence
+
+- [X] T095 Build a saved profile's model for its provider's own address when the profile has no
+      base URL, whatever the environment's variables say: `model_arguments` in
+      `src/freyja_agent/llm/providers.py` passes a base URL only when the profile has one, so
+      the client falls back to `OPENAI_API_BASE`, `OPENAI_BASE_URL`, `ANTHROPIC_API_URL`,
+      `ANTHROPIC_BASE_URL`, or `OPENROUTER_API_BASE`, and the profile's key and its
+      conversations go to the environment's endpoint while the card shows no base URL and
+      the form says to leave it empty for the provider's own address. The environment's
+      profile keeps reading those variables. First add tests to `tests/test_llm_providers.py`
+      with each variable set, for the three providers, and see them fail; the same holds for a
+      test of unsaved values per FR-004, FR-007, spec Assumptions: trust (contradicts)
+- [X] T096 Prove the guard on the environment's model in the default suite: make
+      `test_the_environments_key_is_removed_from_a_failed_run_too` in
+      `tests/test_llm_secrets_nowhere.py` stream its failing run with `debug="true"` and
+      search what the checkpointer kept, as the saved profile's test does. Today the suite
+      passes with the environment's model left unguarded, and only the opt-in Postgres test
+      would notice per FR-020, FR-021, Constitution V (partial)
+- [X] T097 [P] Show on the environment's card the address its client will use when it is set
+      through the client's other variable name, `OPENAI_BASE_URL` or `ANTHROPIC_BASE_URL`:
+      `environment_profile` in `src/freyja_agent/llm/providers.py` reads only the table's
+      variable and shows no base URL. Tests in `tests/test_llm_providers.py` first per FR-008
+      (partial)
+- [X] T098 [P] Add `other_origin` to the codes of `ErrorDetail` in
+      `src/freyja_agent/api/schemas.py`, which lists eight where
+      `specs/004-web-llm-profiles/contracts/openapi.yaml` has nine, and to the test of the
+      codes in `tests/test_llm_schemas.py` per contract: openapi.yaml (contradicts)
+- [X] T099 [P] Hold in place by tests that a page of another origin cannot start or resume a
+      run: `POST /threads/{id}/runs` and `POST /threads/{id}/resume` refuse a body sent as
+      text, as a form, or with no content type, and call no model, which today rests on a
+      FastAPI default and on no test. Add the case of no content type for the `/llm` routes
+      to `tests/test_llm_profiles_api.py` too per FR-003a, Constitution V (partial)
+- [X] T100 Make the list say that no usable model is active on every instance, not only on the
+      one that tried to build the active profile's model: `profile_list` in
+      `src/freyja_agent/api/llm.py` knows `cannot_build` from what this instance applied, so
+      another instance lists the profile as usable until its first run. Either bring the
+      instance in step with the active profile before listing, or state the limit in FR-016;
+      test with two apps on one store in `tests/test_llm_no_model.py` per FR-016 (partial)
+- [X] T101 [P] Note the list's reading when a card's test result arrives, not when Test is
+      pressed, in `web/components/llm/profile-card.tsx`: a list read while the test runs
+      makes the card take its new result for superseded and show the list's older one until
+      the next reading. Add the case to
+      `web/__tests__/components/llm/profile-card.test.tsx` first per FR-007 (partial)
+- [X] T102 Give the activation dialog and the Edit form the profile as the list has it now,
+      found by its id, in `web/components/llm/profile-list.tsx`: both decide from the copy
+      taken when they opened, so a test that fails after the activation dialog opened brings
+      no warning, and a profile activated elsewhere meanwhile is saved without the
+      confirmation. Tests first, in the list-level cases of
+      `web/__tests__/components/llm/activate-dialog.test.tsx` per FR-012, SC-011, FR-010
+      (partial)
+- [X] T103 [P] Bring three documents in line with Phase 10: the `why` field in "Model in use"
+      of `specs/004-web-llm-profiles/data-model.md`; `llm/guard.py` and
+      `tests/test_llm_guard.py` in the trees of `specs/004-web-llm-profiles/plan.md`; and the
+      403 `other_origin` answer on each path that changes something in
+      `specs/004-web-llm-profiles/contracts/openapi.yaml` per plan: data model, project
+      structure, contract (partial)
+
+## Phase 12: Convergence
+
+- [X] T104 Build a saved profile's client so that it takes no header from the environment:
+      with `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS` set, the provider's SDK adds
+      those headers to every client, over the client's own credential, so a saved profile's
+      request carries the environment's `Authorization` or `X-Api-Key` to the profile's
+      endpoint and its own key is not sent. `model_arguments` in
+      `src/freyja_agent/llm/providers.py` passes a key and a base URL and leaves the rest to
+      the client. First add a test to `tests/test_llm_providers.py` that builds a request
+      without sending it, for each provider and each such variable, and asserts that the
+      credential on it is the profile's key and that nothing of the environment's is there;
+      the environment's own model keeps them per FR-004, spec Assumptions: trust (partial)
+- [X] T105 Decide whether an environment that reaches its model through the LangSmith gateway
+      alone is supported, and make the service and the spec agree: with `LANGSMITH_GATEWAY`
+      on and its key set, and no provider key, the client is built for the gateway as it was
+      before this feature, but `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py`
+      and `environment_profile` call the environment's profile `not_configured`, and every
+      run ends with `no_usable_model`. Either count the gateway's key as the provider's in
+      `environment_key` and in the rule for usable, with tests in
+      `tests/test_llm_providers.py` and `tests/test_llm_no_model.py`, or state in FR-011a and
+      the README that the gateway is not supported per FR-023, FR-011a (contradicts)
+- [X] T106 Keep the environment's organization and project off a saved OpenAI profile's client:
+      `OPENAI_ORG_ID`, `OPENAI_ORGANIZATION`, and `OPENAI_PROJECT_ID` put `OpenAI-Organization`
+      and `OpenAI-Project` on its requests, which names the environment's account to the
+      profile's endpoint and may have the provider refuse a key of another organization. Add
+      the variables to the test of T104 first per FR-004 (partial)
+- [X] T107 Describe the environment's profile by what its built client will use when the
+      LangSmith gateway is on, in `environment_profile` of
+      `src/freyja_agent/llm/providers.py`: the card shows no base URL, or the one in
+      `OPENAI_BASE_URL`, while the client goes to the gateway, and the gateway's key is not
+      among the keys taken out of an error (`environment_secrets` in
+      `src/freyja_agent/runtime/runtime.py`). Follows T105's decision; tests in
+      `tests/test_llm_providers.py` and `tests/test_llm_secrets_nowhere.py` per FR-008, FR-021
+      (partial)
+- [X] T108 [P] Drop the activation dialog's own test result when the list's copy of the profile
+      has a later result or was changed since, in
+      `web/components/llm/activate-dialog.tsx`: after "Test first" passes, a later reading
+      that says the test failed, or that the profile's model or base URL changed, leaves the
+      dialog saying it passed, with no warning. A list-level case in
+      `web/__tests__/components/llm/activate-dialog.test.tsx` first per FR-012, SC-011
+      (partial)
+- [X] T109 [P] Keep a test result that was not kept by the service, and its note, on the card
+      until the next test, in `web/components/llm/profile-card.tsx`: the card reads the list
+      again at once, the profile's `updated_at` has moved, and the result is gone after one
+      round trip. Replace the case in `web/__tests__/components/llm/profile-card.test.tsx`
+      that rerenders with an unchanged `updated_at`, which the service cannot produce per
+      Edge Cases: a test is running when its profile is edited, FR-019a (partial)
+
+## Phase 13: Convergence
+
+- [X] T110 Take the credential the environment's client will send from the client itself when
+      it is not the key the client holds: with `OPENAI_CUSTOM_HEADERS` or
+      `ANTHROPIC_CUSTOM_HEADERS` carrying an `Authorization` or `X-Api-Key`, the SDK puts
+      that over the client's key, so the environment's requests carry it, while
+      `environment_access` in `src/freyja_agent/llm/providers.py` reads the key field and the
+      card's hint and `environment_secrets` in `src/freyja_agent/runtime/runtime.py` are the
+      provider key's. An error that repeats the credential would not be cleaned. First add
+      the case to `tests/test_llm_providers.py`, with a request built and not sent per FR-021,
+      FR-008 (partial)
+- [X] T111 [P] Add the gateway's key to the proof in `tests/test_llm_secrets_nowhere.py`, as
+      T107 named and Phase 12 did not write: an environment that reaches its model through
+      `LANGSMITH_GATEWAY`, an endpoint that repeats the key it was sent, a failing run with
+      the debug stream and a failing test, and the key in nothing returned, streamed, kept, or
+      logged per FR-020, FR-021, T107 (partial)
+- [X] T112 [P] Make the test of T104 look at OpenRouter's client as it looks at the others, in
+      `tests/test_llm_providers.py`: `everything_about` builds a request for the OpenAI and
+      Anthropic clients only, and the credential check skips OpenRouter, so the six cases
+      pass with `OPENROUTER_HTTP_REFERER` and its siblings left visible. Read the SDK's
+      configuration of the built client (its globals, its security, its server address) and
+      assert the profile's key there per FR-004, Constitution V (partial)
+- [X] T113 Keep a provider's telemetry opt-out visible while a saved profile's client is built,
+      as a proxy is, in `_own_variables_hidden` of `src/freyja_agent/llm/providers.py`: with
+      `ANTHROPIC_OPEN_TELEMETRY=false` and `ANTHROPIC_OPEN_TELEMETRY_PROPAGATION=false` the
+      environment's client has tracing and propagation off, and a saved Anthropic profile's
+      client has both on, so it may add trace headers and spans that the deployment turned
+      off. Test in `tests/test_llm_providers.py` first per FR-004, T104 (unrequested)
+- [X] T114 [P] Drop the activation dialog's own test result when the service did not keep it,
+      and for the environment's profile when a later reading of the list has no result, in
+      `web/components/llm/activate-dialog.tsx`: the dialog compares only `updated_at`, which
+      the environment's profile does not have, and never looks at `recorded`. Cases in
+      `web/__tests__/components/llm/activate-dialog.test.tsx` first per FR-012, SC-011
+      (partial)
+- [X] T115 [P] Clear a card's result that was not kept when the list reports a test later than
+      it, in `web/components/llm/profile-card.tsx`: today it stays beside the later result
+      until a test is started from that card. Add the case to
+      `web/__tests__/components/llm/profile-card.test.tsx` first per Edge Cases: a test is
+      running when its profile is edited (partial)
+- [X] T116 [P] Document the LangSmith gateway's variables where the environment's others are:
+      `LANGSMITH_GATEWAY`, `LANGSMITH_GATEWAY_API_KEY`, and `LANGSMITH_API_KEY` in
+      `.env.example`, beside the providers' own, and under "What is unchanged" in
+      `specs/004-web-llm-profiles/contracts/settings.md`, saying that an environment may
+      reach its model through the gateway with no provider key per FR-011a, contract:
+      settings (partial)

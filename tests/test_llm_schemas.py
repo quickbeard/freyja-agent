@@ -1,8 +1,10 @@
 """004 FR-006, FR-020: the shapes of the LLM profile routes (contracts/openapi.yaml)."""
 
-from typing import Any
+from pathlib import Path
+from typing import Any, get_args
 
 import pytest
+import yaml
 from pydantic import BaseModel, ValidationError
 
 from freyja_agent.api.schemas import (
@@ -113,6 +115,9 @@ def test_no_response_shape_has_a_field_for_a_key(model: type[BaseModel]) -> None
         assert "token" not in name, name
 
 
+ROOT = Path(__file__).resolve().parent.parent
+
+
 @pytest.mark.parametrize(
     "code",
     [
@@ -124,10 +129,30 @@ def test_no_response_shape_has_a_field_for_a_key(model: type[BaseModel]) -> None
         "name_taken",
         "secret_not_configured",
         "test_busy",
+        "other_origin",
     ],
 )
 def test_the_refusals_of_the_profile_routes_have_their_codes(code: str) -> None:
     assert ErrorDetail(code=code, message="x").code == code
+
+
+def test_the_codes_are_the_ones_the_contract_lists() -> None:
+    """The contract's list and the service's are one list, so neither gains a code alone."""
+    contract = yaml.safe_load(
+        (ROOT / "specs/004-web-llm-profiles/contracts/openapi.yaml").read_text()
+    )
+    listed = contract["components"]["schemas"]["ErrorDetail"]["properties"]["code"]["enum"]
+    codes = set(get_args(ErrorDetail.model_fields["code"].annotation))
+    assert set(listed) <= codes
+    # What the service has beyond the contract's are the codes of the earlier features.
+    assert codes - set(listed) == {
+        "run_active",
+        "decision_pending",
+        "nothing_pending",
+        "proposal_mismatch",
+        "thread_not_found",
+        "internal",
+    }
 
 
 def test_a_stream_error_code_is_not_an_http_refusal() -> None:

@@ -7,17 +7,24 @@ falls back to another profile, and no background run starts while that is so.
 import asyncio
 import logging
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.store.memory import InMemoryStore
 from pydantic import SecretStr
 
+from freyja_agent.api.llm import profile_list
+from freyja_agent.config import Settings
 from freyja_agent.llm.providers import ModelSpec
 from freyja_agent.llm.secrets import encrypt
 from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileRecord
+from freyja_agent.runtime.locks import InMemoryRunLocks
+from freyja_agent.runtime.runtime import Runtime
 from tests.conftest import TEST_SECRET, A2aApp, LlmApp
 from tests.fakes import LabelledChatModel, ProfileModels, ScriptedChatModel
 from tests.test_a2a_pending import (
@@ -173,6 +180,88 @@ def test_a_saved_active_profile_that_cannot_be_built_is_listed_as_not_usable(
     assert back["usable_model"] is True
     assert {p["name"]: p["usable"] for p in back["profiles"]}["Broken"] is True
     assert other["id"] != added["id"]
+
+
+def test_every_instance_lists_an_active_profile_that_cannot_be_built_as_not_usable(
+    make_llm_app: Callable[..., LlmApp],
+) -> None:
+    """FR-016: the list says so on the instance that is asked, not only on the one that
+    handled the activation, and before any run has been turned away there."""
+    first = make_llm_app(model="openai:env-model", models=Unbuildable())
+    second = make_llm_app(
+        model="openai:env-model", models=Unbuildable(), store=first.store, instance_id="instance-b"
+    )
+    with TestClient(first.app) as a, TestClient(second.app) as b:
+        added = a.post(
+            "/llm/profiles",
+            json={"name": "Broken", "provider": "openai", "model": "broken", "api_key": KEY},
+        ).json()
+        assert listing(b)["usable_model"] is True
+        assert a.post(f"/llm/profiles/{added['id']}/activate").status_code == 200
+        on_a = listing(a)
+        on_b = listing(b)
+        assert a.post("/llm/profiles/environment/activate").status_code == 200
+        back_on_b = listing(b)
+
+    for body in (on_a, on_b):
+        broken = next(p for p in body["profiles"] if p["name"] == "Broken")
+        assert (broken["active"], broken["usable"], broken["unusable_reason"]) == (
+            True,
+            False,
+            "cannot_build",
+        )
+        assert body["usable_model"] is False
+    assert back_on_b["usable_model"] is True
+
+
+GATEWAY_KEY = "ls-gateway-key-7777"
+
+
+@pytest.mark.parametrize("model", ["openai:served-model", "anthropic:claude-x"])
+def test_a_service_that_reaches_its_model_through_the_gateway_alone_has_a_usable_model(
+    model: str, workspace: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """FR-023: a deployment with the LangSmith gateway on and no provider key ran before this
+    feature. Its client is built with the gateway's key, so it is not one without a key, and
+    its runs are not turned away. The service is assembled as in production, with the real
+    client; nothing is asked of it."""
+    for name in ("OPENAI_API_KEY", "ANTHROPIC_API_KEY", "OPENAI_API_BASE", "OPENAI_BASE_URL"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("LANGSMITH_GATEWAY", "true")
+    monkeypatch.setenv("LANGSMITH_GATEWAY_API_KEY", GATEWAY_KEY)
+    settings = Settings(workspace_dir=str(workspace), model=model, secret_key=TEST_SECRET)
+
+    async def started() -> tuple[Any, Any, Any, Any]:
+        async with Runtime.assemble(
+            settings,
+            checkpointer=InMemorySaver(),
+            store=InMemoryStore(),
+            locks=InMemoryRunLocks(settings.run_lock_ttl_seconds),
+            instance_id="instance-a",
+            run_worker=False,
+            llm_profiles=InMemoryLlmProfileStore(),
+        ) as runtime:
+            listed = await profile_list(runtime)
+            return (
+                await runtime.model_for_run(),
+                runtime.environment_profile(),
+                runtime.environment_secrets,
+                listed,
+            )
+
+    active, described, secrets, listed = asyncio.run(started())
+
+    assert (active.usable, active.why) == (True, None)
+    assert (described.usable, described.unusable_reason) == (True, None)
+    assert described.key_hint == "7777"
+    assert described.base_url is not None
+    assert described.base_url.startswith("https://gateway.smith.langchain.com/")
+    assert listed.usable_model is True
+    # The key that is sent is the one taken out of an error, and it is shown nowhere.
+    assert secrets == (GATEWAY_KEY,)
+    assert active.secrets == (GATEWAY_KEY,)
+    assert GATEWAY_KEY not in repr(described)
+    assert GATEWAY_KEY not in listed.model_dump_json()
 
 
 def test_the_service_starts_when_the_active_profiles_key_cannot_be_read(

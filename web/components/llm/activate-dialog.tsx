@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -28,19 +28,52 @@ function Confirmation({
   onActivated,
   onTested,
   onGone,
+  listRead,
 }: {
   profile: LlmProfile;
   onClose: () => void;
   onActivated: (list: LlmProfileList) => void;
   onTested?: () => void;
   onGone?: () => void;
+  listRead?: number;
 }) {
   const [refusal, setRefusal] = useState<string | null>(null);
   const [sending, setSending] = useState(false);
   const inFlight = useRef(false);
-  // A test run from here, which then says more than the profile's last one.
-  const [tested, setTested] = useState<LlmTestResult | null>(null);
+  // A test run from here says more than the profile's last one, for as long as the service
+  // kept it, the profile is the one that was tested, and the list knows of no later test.
+  const [ran, setRan] = useState<{
+    result: LlmTestResult;
+    of: string | null;
+    /** The reading of the list the dialog had when the result came. */
+    read: number | undefined;
+  } | null>(null);
   const [testing, setTesting] = useState(false);
+  const latestRead = useRef(listRead);
+  useEffect(() => {
+    latestRead.current = listRead;
+  }, [listRead]);
+  // Once the list has been read again it has every result the service kept. One it does
+  // not have is gone: the environment's is, after the service was started again.
+  const goneFromTheList =
+    ran !== null &&
+    profile.last_test === null &&
+    listRead !== undefined &&
+    ran.read !== undefined &&
+    listRead > ran.read;
+  const tested =
+    ran?.result.recorded === true &&
+    ran.of === profile.updated_at &&
+    !goneFromTheList &&
+    !(
+      profile.last_test !== null &&
+      Date.parse(profile.last_test.at) > Date.parse(ran.result.at)
+    )
+      ? ran.result
+      : null;
+  // A result the service did not keep is of values the profile no longer has: it is told,
+  // and it takes no warning away.
+  const unkept = ran !== null && !ran.result.recorded ? ran.result : null;
   const last = tested ?? profile.last_test;
 
   async function testFirst() {
@@ -48,7 +81,8 @@ function Confirmation({
     setTesting(true);
     setRefusal(null);
     try {
-      setTested(await testProfile(profile.id));
+      const result = await testProfile(profile.id);
+      setRan({ result, of: profile.updated_at, read: latestRead.current });
       onTested?.();
     } catch (error) {
       if (isGone(error)) onGone?.();
@@ -128,6 +162,14 @@ function Confirmation({
           <TestResult test={tested} />
         </output>
       )}
+      {unkept && (
+        <output className="flex flex-col gap-1 text-sm">
+          <TestResult test={unkept} subject="The test" />
+          <p className="text-muted-foreground">
+            This result was not kept: the profile changed while it was tested.
+          </p>
+        </output>
+      )}
       {refusal && (
         <p
           role="alert"
@@ -156,6 +198,7 @@ export function ActivateDialog({
   onActivated,
   onTested,
   onGone,
+  listRead,
 }: {
   profile: LlmProfile | null;
   onClose: () => void;
@@ -164,6 +207,8 @@ export function ActivateDialog({
   onTested?: () => void;
   /** Told when the service says the profile no longer exists. */
   onGone?: () => void;
+  /** How often the list has been read, so the dialog knows when the list is newer than it. */
+  listRead?: number;
 }) {
   return (
     <AlertDialog
@@ -183,6 +228,7 @@ export function ActivateDialog({
             onClose={onClose}
             onActivated={onActivated}
             onGone={onGone}
+            listRead={listRead}
             onTested={onTested}
           />
         )}

@@ -1433,15 +1433,50 @@ def test_the_console_and_a_client_that_is_no_page_are_not_turned_away(
     ]
 
 
+# How a page of another origin can send a body without asking first: as text, as a form, or
+# with no content type at all.
+NOT_JSON = ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data", None]
+
+
+@pytest.mark.parametrize(
+    ("path", "body"),
+    [
+        ("/threads/t-1/runs", {"message": "hello"}),
+        ("/threads/t-1/resume", {"interrupt_id": "any", "decisions": [{"type": "approve"}]}),
+    ],
+)
+@pytest.mark.parametrize("content_type", NOT_JSON)
+def test_a_page_of_another_origin_cannot_start_or_resume_a_run(
+    make_llm_app: Callable[..., LlmApp], path: str, body: dict[str, Any], content_type: str | None
+) -> None:
+    """FR-003a is about the service's API, the thread routes included.
+
+    They take a body, so a page of another origin can only reach them with one of these. Each
+    is refused before anything is looked at: a resume that was read would be answered with
+    `nothing_pending`, and a run would start.
+    """
+    made = make_llm_app(model="openai:env-model")
+    headers = {"Origin": OTHER_ORIGIN, "Sec-Fetch-Site": "cross-site"}
+    if content_type:
+        headers["content-type"] = content_type
+    with TestClient(made.app) as client:
+        response = client.post(path, content=json.dumps(body), headers=headers)
+        state = client.get("/threads/t-1/state")
+
+    assert response.status_code == 422, response.text
+    assert not response.headers.get("content-type", "").startswith("text/event-stream")
+    # No run started: the thread does not exist, and no model was asked anything.
+    assert state.status_code == 404
+    assert all(model.calls == 0 for model in made.models.models.values())
+
+
 @pytest.mark.parametrize(
     ("method", "path"),
     [("POST", "/llm/profiles"), ("PATCH", "/llm/profiles/{id}"), ("POST", "/llm/test")],
 )
-@pytest.mark.parametrize(
-    "content_type", ["text/plain", "application/x-www-form-urlencoded", "multipart/form-data"]
-)
+@pytest.mark.parametrize("content_type", NOT_JSON)
 def test_every_route_that_takes_a_body_refuses_one_not_sent_as_json(
-    make_llm_app: Callable[..., LlmApp], method: str, path: str, content_type: str
+    make_llm_app: Callable[..., LlmApp], method: str, path: str, content_type: str | None
 ) -> None:
     """FR-003a: these are the bodies a page from another origin can send without asking."""
     made = make_llm_app(model="openai:env-model")
@@ -1453,7 +1488,7 @@ def test_every_route_that_takes_a_body_refuses_one_not_sent_as_json(
             method,
             path.format(id=added["id"]),
             content=body,
-            headers={"content-type": content_type},
+            headers={"content-type": content_type} if content_type else {},
         )
         after = listing(client)
 

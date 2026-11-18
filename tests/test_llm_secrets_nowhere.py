@@ -312,8 +312,11 @@ def test_the_environments_key_is_removed_from_a_failed_run_too(
     made.models.models["env-model"] = Leaky()
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         seen = Seen(client, sse_events)
-        events = seen.stream("/threads/t-1/runs", {"message": "hello"})
+        # Watched in full, as a saved profile's failing run is: the environment's model is
+        # guarded too, and nothing else in the default suite would notice if it were not.
+        events = seen.stream("/threads/t-1/runs", {"message": "hello"}, debug="true")
         tested = seen.call("POST", "/llm/profiles/environment/test").json()
+        in_threads = kept(made.runtime.agent.checkpointer)
 
     assert events[-1][1] == {
         "code": "model_error",
@@ -321,7 +324,61 @@ def test_the_environments_key_is_removed_from_a_failed_run_too(
     }
     assert tested["reason"] == f"401: Incorrect API key provided: {REDACTED}"
     nowhere(seen.texts, ENV_MARK)
+    debugged = [str(data) for kind, data in events if kind == "debug"]
+    assert any("Incorrect API key provided" in text for text in debugged)
+    assert any("Incorrect API key provided" in text for text in in_threads)
+    nowhere(in_threads, ENV_MARK)
     nowhere([caplog.handler.format(record) for record in caplog.records], ENV_MARK)
+
+
+GATEWAY_KEY = "ls-gateway-secret-7777"
+GATEWAY_MARK = "gateway-secret"
+
+
+def test_the_gateways_key_is_removed_from_a_failed_run_and_a_failed_test(
+    make_llm_app: Callable[..., LlmApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An environment that reaches its model through the LangSmith gateway, with no provider
+    key: the key that travels is the gateway's, so that is the one an endpoint can say back.
+
+    The real client is built for the gateway and sent to the stand-in, which repeats the key
+    it was given in its error.
+    """
+    monkeypatch.delenv("OPENAI_API_KEY")
+    monkeypatch.setenv("LANGSMITH_GATEWAY", "true")
+    monkeypatch.setenv("LANGSMITH_GATEWAY_API_KEY", GATEWAY_KEY)
+    stub = LlmStub()
+    made = make_llm_app(model="openai:repeat-key", models=stub.factory)
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = Seen(client, sse_events)
+        listed = seen.call("GET", "/llm/profiles").json()
+        events = seen.stream("/threads/t-1/runs", {"message": "hello"}, debug="true")
+        tested = seen.call("POST", "/llm/profiles/environment/test").json()
+        seen.state("t-1")
+        in_threads = kept(made.runtime.agent.checkpointer)
+
+    # The environment's profile is usable, and it was the gateway's key that was sent.
+    environment = listed["profiles"][0]
+    assert (environment["usable"], environment["key_hint"]) == (True, "7777")
+    assert environment["base_url"] == "https://gateway.smith.langchain.com/openai/v1"
+    assert {request.key for request in stub.requests} == {GATEWAY_KEY}
+    # The endpoint said it back, and everywhere it is taken out.
+    kind, error = events[-1]
+    assert (kind, error["code"]) == ("error", "model_error")
+    assert f"The key {REDACTED} is not allowed" in error["message"]
+    assert (tested["ok"], tested["step"]) == (False, "first_message")
+    assert f"The key {REDACTED} is not allowed" in tested["reason"]
+    debugged = [str(data) for kind, data in events if kind == "debug"]
+    assert any("is not allowed" in text for text in debugged)
+    assert any("is not allowed" in text for text in in_threads)
+    nowhere(seen.texts, GATEWAY_MARK)
+    nowhere(in_threads, GATEWAY_MARK)
+    logged = [caplog.handler.format(record) for record in caplog.records]
+    assert any("model error" in line and REDACTED in line for line in logged)
+    nowhere(logged, GATEWAY_MARK)
 
 
 @pytest.mark.parametrize(

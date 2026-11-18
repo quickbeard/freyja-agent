@@ -13,11 +13,21 @@ gives them. Python names are the planned ones; API shapes are in
 A fixed table, one row per provider a saved profile may use (FR-004). It is the only place a
 provider's names appear (research R3).
 
-| `id` | Label in the console | Model string prefix | Variables the environment's profile reads | Has the API choice |
-|---|---|---|---|---|
-| `openai` | OpenAI-compatible | `openai:` | `OPENAI_API_KEY`, `OPENAI_API_BASE` | yes |
-| `anthropic` | Anthropic | `anthropic:` | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | no |
-| `openrouter` | OpenRouter | `openrouter:` | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | no |
+| `id` | Label in the console | Model string prefix | Variables the environment's profile reads | Its own address | Has the API choice |
+|---|---|---|---|---|---|
+| `openai` | OpenAI-compatible | `openai:` | `OPENAI_API_KEY`; `OPENAI_API_BASE`, then `OPENAI_BASE_URL` | `https://api.openai.com/v1` | yes |
+| `anthropic` | Anthropic | `anthropic:` | `ANTHROPIC_API_KEY`; `ANTHROPIC_API_URL`, then `ANTHROPIC_BASE_URL` | `https://api.anthropic.com` | no |
+| `openrouter` | OpenRouter | `openrouter:` | `OPENROUTER_API_KEY`; `OPENROUTER_API_BASE` | `https://openrouter.ai/api/v1` | no |
+
+The base URL variables are the ones the provider's client reads, in the order it reads them;
+the environment's profile shows the first that is set. A provider's own address is where a
+saved profile with no base URL is sent: it is passed to the client, which would otherwise take
+an address from those variables.
+
+A saved profile's client is built with every variable of its provider's hidden from it, the
+ones above and any other its client reads, such as headers, an organization, or a project. A
+proxy variable is the exception. So a saved profile is its provider, its model, its base URL,
+and its key, and nothing the environment sets for its own model travels with its requests.
 
 A saved profile's provider is one of the three ids. The environment's profile may carry any
 prefix LangChain accepts; one outside the table is shown as written, with no key hint and no
@@ -84,10 +94,10 @@ Built at startup from what the service was started with (FR-008).
 | `id` | the constant `environment` |
 | `name` | the constant `Environment` |
 | `provider`, `model` | the two halves of `FREYJA_MODEL` |
-| `base_url` | the provider's base URL variable, when set and the provider is in the table |
-| `key_hint` | from the provider's key variable, by the same rule as a saved profile |
+| `base_url` | the address the environment's client will use, when it is not the provider's own: what the built client holds, which is the LangSmith gateway's when that is on, and otherwise the first that is set of the provider's base URL variables |
+| `key_hint` | from the key the environment's client will send, by the same rule as a saved profile: the built client's, which is the gateway's when the gateway is on, and otherwise the provider's key variable |
 | `responses_api` | `FREYJA_OPENAI_RESPONSES_API`, when the provider is `openai` |
-| `usable` | the model can be built, and the provider's key is set when the provider is in the table (research R3) |
+| `usable` | the model can be built, and its client has a key when the provider is in the table (research R3, FR-011a) |
 | last test | kept in memory on the instance; cleared when it restarts (FR-019a) |
 
 It has no `created_at` or `updated_at`. Each service instance has its own, read from its own
@@ -102,7 +112,8 @@ What one service instance holds between runs (research R5, R6).
 | `revision` | the `revision` this instance last applied |
 | `profile` | id, name, and source of the profile the built orchestrator uses, for the run's first event and log line (FR-024a) |
 | `usable` | false when no usable model is active (FR-016) |
-| `reason` | why not, with the key removed; null when usable |
+| `why` | why not, as one of the codes a profile's `unusable_reason` has; null when usable. The list reads `cannot_build` from here, since a key that can be read does not tell whether a model can be built |
+| `reason` | why not, as a sentence with the key removed; null when usable |
 | `secrets` | the keys text must be cleaned of (FR-021): the active profile's key |
 
 ### Profile test (`ProfileTest`, not stored beyond the last result)

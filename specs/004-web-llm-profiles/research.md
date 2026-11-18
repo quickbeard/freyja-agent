@@ -52,7 +52,20 @@ provider profile set.
 environment when both are given (*verified* with the environment's keys unset: `ChatOpenAI`,
 `ChatAnthropic`, `ChatOpenRouter` each built, with the base URL in `openai_api_base`,
 `anthropic_api_url`, and `openrouter_api_base`). None shows the key in its `repr`
-(*verified*). Going through `init_chat_model` with Deep Agents' provider profile keeps a saved
+(*verified*). Given a key and no base URL, each takes its address from the environment's
+variables (*verified* by the converge step: `OPENAI_API_BASE`, `OPENAI_BASE_URL`,
+`ANTHROPIC_API_URL`, `ANTHROPIC_BASE_URL`, `OPENROUTER_API_BASE`), which would send an
+operator's key to the environment's endpoint. So a saved profile with no base URL is built
+with its provider's own address, kept in the provider table, and never without one. The
+clients read more than an address: headers for every request (`OPENAI_CUSTOM_HEADERS`,
+`ANTHROPIC_CUSTOM_HEADERS`), which are put over the client's own credential, an organization,
+a project, and attribution values (*verified* by the third converge run). No parameter
+switches all of them off, so a saved profile's client is built with its provider's variables
+taken out of the process environment for that moment, and what a client would build lazily
+is built then too. The environment's own client is described from what it holds once built,
+because with the LangSmith gateway on, `langchain-core` sends it to the gateway with the
+gateway's key by rules of its own. Going
+through `init_chat_model` with Deep Agents' provider profile keeps a saved
 profile resolved exactly as the environment's model is (001 research R3).
 
 **The environment's profile** is `FREYJA_MODEL` split at its first colon, plus the provider's

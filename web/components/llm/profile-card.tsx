@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -79,34 +79,59 @@ export function ProfileCard({
   const [refusal, setRefusal] = useState<string | null>(null);
   const [testing, setTesting] = useState(false);
   const inFlight = useRef(false);
+  // The list's latest reading, for when a result arrives: the list may be read while a test
+  // runs, and that reading is older than the result, not newer.
+  const latestRead = useRef(listRead);
+  useEffect(() => {
+    latestRead.current = listRead;
+  }, [listRead]);
 
   // The card's own result is shown only until the service says more. A test does not change
   // the profile, so the list may report a later one, run from the confirmation or by someone
   // else. And once the list has been read again, a result the service kept is the list's to
   // show: when it is not there any more, as after a restart for the environment's profile,
   // it is not shown.
-  const own = tested !== null && tested.of === profile.updated_at;
+  const own =
+    tested?.result.recorded === true && tested.of === profile.updated_at;
   const listHasLater =
     own &&
     profile.last_test !== null &&
     Date.parse(profile.last_test.at) >= Date.parse(tested.result.at);
   const listReadSince =
     own &&
-    tested.result.recorded &&
     listRead !== undefined &&
     tested.read !== undefined &&
     listRead > tested.read;
   const fresh = own && !listHasLater && !listReadSince;
   const shown = fresh ? tested.result : profile.last_test;
+  // A result the service did not keep, because the profile changed while it was tested, is
+  // nobody's but the card's: it is not of the profile as it is now, so the list will never
+  // have it. It stays beside what the list says, until the next test.
+  // A later test of the profile as it is now is the last word, and the earlier result then
+  // has nothing more to say.
+  const unkept =
+    tested !== null &&
+    !tested.result.recorded &&
+    !(
+      profile.last_test !== null &&
+      Date.parse(profile.last_test.at) > Date.parse(tested.result.at)
+    )
+      ? tested
+      : null;
 
   async function test() {
     if (inFlight.current) return;
     inFlight.current = true;
     setTesting(true);
     setRefusal(null);
+    setTested((last) => (last?.result.recorded ? last : null));
     try {
       const result = await testProfile(profile.id);
-      setTested({ result, of: profile.updated_at, read: listRead });
+      setTested({
+        result,
+        of: profile.updated_at,
+        read: latestRead.current,
+      });
       onTested?.();
     } catch (error) {
       if (isGone(error)) onGone?.();
@@ -169,12 +194,15 @@ export function ProfileCard({
           ) : (
             <TestResult test={shown} />
           )}
-          {fresh && !tested.result.recorded && (
+        </div>
+        {unkept && (
+          <output className="flex flex-col gap-1 text-sm">
+            <TestResult test={unkept.result} subject="The test" />
             <p className="text-muted-foreground">
               This result was not kept: the profile changed while it was tested.
             </p>
-          )}
-        </div>
+          </output>
+        )}
         {refusal && (
           <p role="alert" className="text-sm text-destructive">
             {refusal}

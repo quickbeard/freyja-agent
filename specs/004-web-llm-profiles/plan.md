@@ -119,6 +119,14 @@ its base URL, whether a key is set, and the key's text to take out of an error. 
 reads them, `llm/providers.py`. Putting them into `Settings` would give the service a copy of
 a key it has no use for, which is what feature 001 avoided.
 
+A second reading of the same principle, recorded with T095: it says hosts are not hardcoded
+in application code, and the provider table holds each provider's own address, such as
+`https://api.openai.com/v1`. That is not where a deployment's parts are; it is what the
+provider is, like its name, and it is the constant its client library already carries. It is
+passed to the client only for a saved profile with no base URL, so that the client does not
+take one from the environment's variables instead. Nothing a deployment could want to change
+is fixed by it: an operator who wants another address gives the profile a base URL.
+
 Three additions carry complexity the governance section asks to justify; none is a
 violation, so they are justified here rather than in Complexity Tracking:
 
@@ -188,6 +196,7 @@ src/freyja_agent/
 │   ├── providers.py           # the provider table; ModelSpec; build_model (R3);
 │   │                          #   environment_profile(); the placeholder model (R8)
 │   ├── secrets.py             # encrypt, decrypt, key_hint (R4); redact (R9)
+│   ├── guard.py               # guard_model: a model raises its errors without its key
 │   ├── store.py               # LlmProfileStore protocol; InMemoryLlmProfileStore;
 │   │                          #   PostgresLlmProfileStore with the two tables (R5)
 │   ├── active.py              # ActiveModel and the manager: load the active profile, compare
@@ -215,6 +224,7 @@ tests/
 ├── fakes.py                           # + the test model factory and a labelled model
 ├── conftest.py                        # + make_llm_app
 ├── test_llm_secrets.py                # encrypt, hint, redact
+├── test_llm_guard.py                  # a guarded model's errors, called, streamed, unchanged
 ├── test_llm_providers.py              # the provider table, building a model, the
 │                                      #   environment's profile
 ├── test_llm_schemas.py                # the request and response shapes of the routes
@@ -770,8 +780,9 @@ T094). What closing them settled:
   The model stays the same object under the same class name, so it is bound to tools and
   recognized by its provider as before; a wrapper around the model would have lost that. A
   middleware was the other choice and was set aside: it would see only the calls made
-  through it, and Deep Agents' summarizing call is made by a middleware of its own. `ModelManager` guards
-  every model it builds. The proof now streams the failing run with `debug` and searches
+  through it, and Deep Agents' summarizing call is made by a middleware of its own.
+  `ModelManager` guards every model it builds. The proof now streams the failing run with `debug`
+  and searches
   everything the checkpointer holds, and an opt-in test searches `checkpoint_writes` in
   Postgres; each fails without the guard.
 - **A page of another origin is refused by what the browser says of the request** (T083). No
@@ -833,3 +844,140 @@ T094). What closing them settled:
 - **Looked at and left** by the converge step: whether a browser's password manager saves or
   fills the key field, which needs a run by hand; announcing field errors to assistive
   technology; and DNS rebinding.
+
+### Phase 11 as built (2026-11-18)
+
+A second converge run read the Phase 10 changes with a reviewer that did not write them. All
+fourteen held, and the three security fixes withstood an attempt to break them. Nine gaps
+remained (T095 to T103), one of them in code no earlier phase had questioned:
+
+- **A saved profile with no base URL goes to its provider's own address** (T095). R3 had
+  verified that a client given a key and a base URL reads nothing from the environment. It
+  had not looked at a key with no base URL: the client then takes its address from the
+  environment's variables, so on a deployment that points `OPENAI_API_BASE` at a self-hosted
+  endpoint, a profile saved for the provider's own service sent its key and its
+  conversations to that endpoint, while its card showed no base URL. The provider table now
+  holds each provider's own address, and `model_arguments` passes it for a spec that has a
+  key and no base URL. The environment's own model, which has no key in its spec, is built
+  as it always was. The Constitution Check above records why those three addresses are not
+  hardcoded configuration.
+- **The environment's card shows the address its client uses** (T097): the first that is set
+  of the variables the client reads, `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL` included.
+- **The guard on the environment's model is proved in the default suite** (T096). The test of
+  the environment's key now streams its failing run with `debug` and searches the
+  checkpointer; it fails when that model is left unguarded.
+- **The service's list of codes has `other_origin`** (T098), and a test reads the contract's
+  list and the service's together, so neither gains a code alone.
+- **A page of another origin cannot start or resume a run** (T099): held in place by tests for
+  a body sent as text, as a form, and with no content type, which until now rested on a
+  FastAPI default. The behaviour was already so; the tests passed as written.
+- **The list brings its instance in step first** (T100): `profile_list` takes up the active
+  choice as a run would before it answers, so an active profile that cannot be built is
+  listed as not usable on every instance, before a run is turned away there. Building opens
+  no connection, and a rebuild is the same one the next run would have made.
+- **A card notes the list's reading when its result arrives** (T101), from a ref, so a list
+  read while the test runs is not taken for a later one.
+- **The dialogs are given the profile as the list has it now** (T102), found by its id: a
+  test that fails after the activation dialog opened brings the warning, and a profile that
+  became the active one while its form was open is saved only after the confirmation. What
+  was typed in the form stays, since the fields keep their own state.
+- **Three documents were brought in line** (T103): `why` in the data model's "Model in use"
+  and each provider's own address in its table; `llm/guard.py` and `tests/test_llm_guard.py`
+  in the trees above; and a 403 `other_origin` answer on each of the six operations of the
+  contract that change something.
+- **The checkpoint** was run against the real service on a database made for it and dropped
+  afterwards, started with `OPENAI_API_BASE` pointing at the stand-in. In that environment a
+  saved profile with no base URL is built for `https://api.openai.com/v1`, and one with a
+  base URL for that base URL; this was read from the built client, and no request was sent
+  to the provider. The console's changes went through the web app's server as before, and a
+  second instance listed the newly active profile, and had taken it up, before any run.
+
+### Phase 12 as built (2026-11-18)
+
+A third converge run found six gaps (T104 to T109). Four were at the edge the second run had
+opened: what a provider's client takes from the environment by itself.
+
+- **A saved profile's client is built with its provider's variables hidden** (T104, T106).
+  Phase 11 passed an address so that the client would not take one from the environment. The
+  clients read more: `OPENAI_CUSTOM_HEADERS` and `ANTHROPIC_CUSTOM_HEADERS` add headers to
+  every request, over the client's own credential, so a saved profile's request carried the
+  environment's `Authorization` or `X-Api-Key` and not its own key; `OPENAI_ORG_ID` and
+  `OPENAI_PROJECT_ID` named the environment's account; OpenRouter's attribution variables
+  went along too. No parameter switches all of that off, and a later version may read more,
+  so `build_model` takes every variable with the provider's prefix out of the process
+  environment while it builds a client for a spec that has a key, and has the client make
+  then what it would otherwise make at its first call (`_settled`: Anthropic's client is
+  built lazily and reads the environment when it is). A proxy variable is left in: it is how
+  the deployment reaches the outside. This changes the process environment for a moment,
+  which is safe because nothing else reads those variables meanwhile: a client is built in
+  one go on the event loop's thread, and the environment's own client is built and called on
+  that thread too. The test reads the variable names out of the installed client packages,
+  sets every one, and looks at the client's fields and at a request built and not sent, from
+  each of its clients; a variable a later version starts to read is in the test the day that
+  version is installed. It fails without the hiding, and for Anthropic without the settling.
+- **The LangSmith gateway is supported, as it was** (T105). With the gateway on and no
+  provider key, the client is built for the gateway with the gateway's key, and such a
+  deployment ran before this feature. FR-011a asked for "that provider's key", so the
+  profile was called not configured and every run was turned away. The decision was not the
+  author's to leave open, so the reading that keeps earlier behaviour was taken: FR-011a now
+  says the client has a key to send, the provider's own or the gateway's. Say so if the
+  gateway should be refused instead.
+- **The environment's profile is described from its built client** (T107):
+  `environment_access` reads the key and the address the client holds, and falls back to the
+  variables where the client says nothing or there is none to look at, as in the suite.
+  `langchain-core` decides between the gateway and the provider's variables by rules of its
+  own, in a private module; reading the result follows them without repeating them. At
+  startup the runtime builds the environment's client once to look at it, in production
+  only. The key that is sent is the one taken out of an error, with the provider's own beside
+  it when the environment has both.
+- **The activation dialog drops its own result when the list knows better** (T108): when the
+  profile was changed since, or the list reports a later test.
+- **A result the service did not keep stays on the card** (T109), beside what the list says
+  of the profile as it is now, with its note, until the next test from that card. Before, it
+  was gone after the list was read again, which the card does at once.
+- **The checkpoint** was run against the real service on a database made for it and dropped
+  afterwards, started with `OPENAI_API_BASE` and `OPENAI_ORG_ID` set for the environment. The
+  console's changes went through as before; a run and a test on the environment's real
+  model passed; and a saved OpenAI-compatible profile was tested against the stand-in at its
+  own base URL.
+- **Looked at and left**: a client's own proxy variable applies to saved profiles too, as
+  `HTTP_PROXY` does; and an open form is lost when the list fails to load meanwhile, since the
+  section is then replaced by the error and its way to try again.
+
+### Phase 13 as built (2026-11-18)
+
+A fourth converge run found nothing critical or high. All six Phase 12 tasks held, and the
+hiding of a provider's variables withstood an attempt to break it: the environment is as it
+was after a build and after a failed one, nothing on the request path reads it afterwards,
+and every place a client is built runs on the event loop with no wait inside. Seven smaller
+gaps remained (T110 to T116):
+
+- **The environment's credential is the one its client will send** (T110). Where the
+  environment's credential is in `OPENAI_CUSTOM_HEADERS` or `ANTHROPIC_CUSTOM_HEADERS`, the
+  SDK puts it over the client's key. `environment_access` now reads the SDK client's own
+  account of its default headers: the card hints at the credential a request carries, and
+  every credential found, with the key the client holds and the one the environment names, is
+  taken out of errors.
+- **The environment's client is built once at startup** (T110, T111). Phase 12 built it a
+  second time to look at it, and only where no model factory was handed in, so a gateway
+  could not be seen in the suite. It is now built once, looked at, and handed to the manager
+  for its first build, with any factory.
+- **The gateway's key is in the proof** (T111): an environment that reaches its model
+  through the gateway, the real client sent to the stand-in, which now also answers at the
+  gateway's path, and the key in nothing returned, streamed, kept, or logged. It fails when
+  the gateway's key is left out of what is taken out of errors.
+- **The test of what a saved profile's client takes looks at OpenRouter's client** (T112):
+  what its SDK was configured with. With OpenRouter's variables left visible it now fails.
+- **A telemetry opt-out stays visible** (T113), as a proxy does: hidden with the rest, a
+  saved Anthropic profile's client had tracing and propagation on where the deployment had
+  turned them off.
+- **The activation dialog does not trust a result the service did not keep** (T114), and it
+  shows that result with its note. For the environment's profile it gives way when a later
+  reading of the list has no result, which is how a restart shows.
+- **A card lets a result that was not kept go** (T115) when the list reports a later test.
+- **The gateway's variables are documented** (T116) in `.env.example` and in
+  [contracts/settings.md](contracts/settings.md).
+- **Known and left**: a copy of an SDK client (`with_options`, `copy`) reads the environment
+  again. Nothing installed makes one of a saved profile's client. If a later version of the
+  agent libraries does, T104 opens again, and the test of T104 would not notice.
+

@@ -183,11 +183,15 @@ class LlmStub:
     requests: list[StubRequest] = field(default_factory=list)
 
     def __post_init__(self) -> None:
+        # Also under the path the LangSmith gateway gives OpenAI, so that an environment
+        # which reaches its model through the gateway can be pointed here.
         @self.app.post("/v1/chat/completions")
+        @self.app.post("/openai/v1/chat/completions")
         async def chat(request: Request) -> Response:
             return await self._answer("chat", request)
 
         @self.app.post("/v1/responses")
+        @self.app.post("/openai/v1/responses")
         async def responses(request: Request) -> Response:
             return await self._answer("responses", request)
 

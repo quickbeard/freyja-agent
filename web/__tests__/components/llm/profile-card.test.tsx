@@ -329,6 +329,42 @@ describe("ProfileCard, its test", () => {
     expect(screen.getByText(/Last test passed/)).toBeTruthy();
   });
 
+  it("shows its result when the list was read while the test was running", async () => {
+    // The answer comes only when the test lets it.
+    let answerNow: (response: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        () =>
+          new Promise<Response>((resolve) => {
+            answerNow = resolve;
+          }),
+      ),
+    );
+    const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
+    test();
+
+    // Meanwhile the list is read again, for another reason, and knows of no result yet.
+    rerender(<ProfileCard profile={SAVED} listRead={2} />);
+    answerNow(
+      new Response(JSON.stringify({ ...passed, recorded: true }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+
+    // The result is newer than that reading of the list, so it is shown, and announced.
+    const result = await screen.findByRole("status");
+    expect(result.textContent).toMatch(/Last test passed/);
+    expect(screen.queryByText(/Not tested/)).toBeNull();
+
+    // The next reading, which has the result, takes over.
+    rerender(
+      <ProfileCard profile={{ ...SAVED, last_test: passed }} listRead={3} />,
+    );
+    expect(screen.getByText(/Last test passed/)).toBeTruthy();
+  });
+
   it("drops a result the service no longer has, such as the environment's after a restart", async () => {
     stubFetch(answer(passed));
     const { rerender } = render(
@@ -345,14 +381,64 @@ describe("ProfileCard, its test", () => {
     expect(screen.queryByText(/Last test passed/)).toBeNull();
   });
 
-  it("keeps saying a result was not kept after the list is read again", async () => {
+  it("keeps a result that was not kept, with its note, once the list shows the changed profile", async () => {
+    // The profile was changed while it was tested: the service reports the result to
+    // whoever asked and keeps none. The card reads the list again at once, and the list has
+    // the profile as it is now.
+    stubFetch(answer(passed, false), answer(failed));
+    const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
+    test();
+    await screen.findByText(/This result was not kept/);
+
+    rerender(
+      <ProfileCard
+        profile={{
+          ...SAVED,
+          model: "another-model",
+          updated_at: "2026-11-18T10:00:00.000000+00:00",
+        }}
+        listRead={2}
+      />,
+    );
+    // What the list says of the profile, and beside it what the test said.
+    expect(screen.getByText("Not tested since its last change.")).toBeTruthy();
+    const told = screen.getByRole("status");
+    expect(told.textContent).toMatch(/The test passed/);
+    expect(told.textContent).toMatch(/This result was not kept/);
+    expect(screen.queryByText(/Last test passed/)).toBeNull();
+
+    // The next test takes its place.
+    test();
+    await screen.findByText(/Last test failed at the conversation/);
+    expect(screen.queryByText(/This result was not kept/)).toBeNull();
+    expect(screen.queryByText(/The test passed/)).toBeNull();
+  });
+
+  it("lets a result that was not kept go once the list reports a later test", async () => {
     stubFetch(answer(passed, false));
     const { rerender } = render(<ProfileCard profile={SAVED} listRead={1} />);
     test();
     await screen.findByText(/This result was not kept/);
 
-    rerender(<ProfileCard profile={SAVED} listRead={2} />);
-    expect(screen.getByText(/This result was not kept/)).toBeTruthy();
+    // Someone tests the profile as it is now: that is the last word, and the earlier result
+    // of other values has nothing more to say.
+    const later = { ...failed, at: "2026-11-18T10:00:00.000000+00:00" };
+    rerender(
+      <ProfileCard
+        profile={{
+          ...SAVED,
+          model: "another-model",
+          updated_at: "2026-11-18T09:00:00.000000+00:00",
+          last_test: later,
+        }}
+        listRead={2}
+      />,
+    );
+    expect(
+      screen.getByText(/Last test failed at the conversation/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/This result was not kept/)).toBeNull();
+    expect(screen.queryByText(/The test passed/)).toBeNull();
   });
 
   it("says when the profile it tested is gone, so the list can be read again", async () => {

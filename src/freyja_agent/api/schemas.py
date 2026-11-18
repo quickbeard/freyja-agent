@@ -222,6 +222,7 @@ class ErrorDetail(BaseModel):
         "name_taken",
         "secret_not_configured",
         "test_busy",
+        "other_origin",
     ]
     message: str
 

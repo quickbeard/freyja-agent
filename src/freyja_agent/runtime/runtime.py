@@ -4,8 +4,8 @@ manager, the delegation worker, and this instance's id."""
 
 import logging
 import uuid
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import Any
@@ -45,7 +45,7 @@ from freyja_agent.llm.providers import (
     ModelFactory,
     ModelSpec,
     build_model,
-    environment_key,
+    environment_access,
     environment_profile,
     environment_spec,
 )
@@ -68,6 +68,11 @@ logger = logging.getLogger(__name__)
 def _given(model: BaseChatModel) -> BaseChatModel:
     """The chat model a caller handed to ``assemble``, standing for the environment's."""
     return model
+
+
+def _first_then(first: list[BaseChatModel], build: Callable[[], BaseChatModel]) -> BaseChatModel:
+    """The model built beforehand, the first time it is asked for; a new one after that."""
+    return first.pop() if first else build()
 
 
 def _already_built(_spec: ModelSpec) -> None:
@@ -205,7 +210,6 @@ class Runtime:
                 )
                 spec = environment_spec(settings, model if isinstance(model, str) else None)
                 provider = PROVIDERS.get(spec.provider)
-                key = environment_key(spec)
                 if isinstance(model, BaseChatModel):
                     environment = partial(_given, model)
                 elif model_factory is not None:
@@ -215,12 +219,29 @@ class Runtime:
                     environment = partial(
                         resolve_model, spec.name, openai_responses_api=spec.responses_api
                     )
+                # How the environment's model is reached is what its client holds: with the
+                # LangSmith gateway on, that is the gateway and its key, with no provider key
+                # at all, and such a deployment ran before feature 004 (FR-023). So the
+                # client is built once here to be looked at, and the manager is handed that
+                # one for its first build, not a second. A model handed over built is not
+                # looked at: it needs nothing from the environment.
+                first: list[BaseChatModel] = []
+                if not isinstance(model, BaseChatModel):
+                    build = environment
+                    with suppress(Exception):  # the manager meets the failure and records it
+                        first.append(build())
+                    environment = partial(_first_then, first, build)
+                access = environment_access(spec, first[0] if first else None)
+                key = access.key
+                # The credentials to take out of an error: the one that is sent, and the
+                # key the client holds or the environment names where that is another.
+                secrets = access.secrets
                 manager = ModelManager(
                     store=profile_store,
                     secret=settings.secret_key,
                     factory=model_factory or build_model,
                     environment=environment,
-                    environment_secrets=(key,) if key else (),
+                    environment_secrets=secrets,
                     # One of the three providers with no key set is not usable, whatever a
                     # client would make of it (FR-011a). A model handed over built is.
                     environment_unusable=(
@@ -255,6 +276,7 @@ class Runtime:
                     settings,
                     factory=_already_built if built else model_factory or build_model,
                     model=model if isinstance(model, str) else None,
+                    access=access,
                 )
                 if given:
                     # A model handed over needs no key from the environment.
@@ -271,7 +293,7 @@ class Runtime:
                     model_factory=model_factory or build_model,
                     environment_model=model if given else None,
                     environment_values=spec,
-                    environment_secrets=(key,) if key else (),
+                    environment_secrets=secrets,
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
