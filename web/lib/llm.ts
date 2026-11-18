@@ -91,6 +91,68 @@ export function createProfile(values: NewLlmProfile): Promise<LlmProfile> {
   return api<LlmProfile>(PROFILES_PATH, { method: "POST", body: values });
 }
 
+/** How a test ended. `recorded` says whether the result was kept with a listed profile. */
+export type LlmTestResult = LlmLastTest & { recorded: boolean };
+
+/** Values to test without saving them. One of `api_key` and `profile_id` gives the key. */
+export type LlmDraft = {
+  provider: LlmProvider;
+  model: string;
+  base_url: string | null;
+  responses_api?: boolean;
+  api_key?: string;
+  /** A saved profile whose stored key is used when no key is sent. */
+  profile_id?: string;
+};
+
+/** What the console calls each step of a test. */
+export const TEST_STEPS: Record<LlmTestStep, string> = {
+  first_message: "the first message",
+  conversation: "the conversation",
+};
+
+/** Test a listed profile; `environment` is the environment's. The result is kept with it. */
+export function testProfile(id: string): Promise<LlmTestResult> {
+  return api<LlmTestResult>(`${PROFILES_PATH}/${encodeURIComponent(id)}/test`, {
+    method: "POST",
+  });
+}
+
+/** Test values that are not saved. Nothing is saved and no result is kept. */
+export function testDraft(values: LlmDraft): Promise<LlmTestResult> {
+  return api<LlmTestResult>("/llm/test", { method: "POST", body: values });
+}
+
+/** A form's values as they are typed. */
+export type FormValues = {
+  provider: LlmProvider;
+  model: string;
+  baseUrl: string;
+  apiKey: string;
+  responsesApi: boolean;
+};
+
+/**
+ * A form's values as the service takes them for a test. With the key left empty and
+ * `storedKeyOf` given, the test uses that saved profile's stored key: the Edit form.
+ */
+export function toDraft(values: FormValues, storedKeyOf?: string): LlmDraft {
+  const baseUrl = values.baseUrl.trim();
+  const draft: LlmDraft = {
+    provider: values.provider,
+    model: values.model.trim(),
+    base_url: baseUrl === "" ? null : baseUrl,
+    // Only an OpenAI-compatible endpoint has the choice.
+    ...(values.provider === "openai"
+      ? { responses_api: values.responsesApi }
+      : {}),
+  };
+  if (values.apiKey === "" && storedKeyOf !== undefined) {
+    return { ...draft, profile_id: storedKeyOf };
+  }
+  return { ...draft, api_key: values.apiKey };
+}
+
 /** Make a profile the one Freyja runs on; `environment` is the environment's. */
 export function activateProfile(id: string): Promise<LlmProfileList> {
   return api<LlmProfileList>(

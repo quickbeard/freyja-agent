@@ -8,6 +8,9 @@ import {
   listProfiles,
   PROVIDERS,
   providerLabel,
+  testDraft,
+  testProfile,
+  toDraft,
 } from "@/lib/llm";
 
 const LIST: LlmProfileList = {
@@ -83,6 +86,89 @@ describe("activateProfile", () => {
     expect(fetchStub.mock.calls[0][0]).toBe(
       "/api/llm/profiles/environment/activate",
     );
+  });
+});
+
+const PASSED = {
+  ok: true,
+  at: "2026-11-17T09:14:02.118000+00:00",
+  step: null,
+  reason: null,
+  recorded: true,
+};
+
+describe("testProfile", () => {
+  it("posts to the profile's test and returns the result", async () => {
+    const fetchStub = stubFetch({ json: PASSED });
+    expect(await testProfile(SAVED.id)).toEqual(PASSED);
+
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/llm/profiles/${SAVED.id}/test`);
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+  });
+});
+
+describe("testDraft", () => {
+  it("posts the values to be tested without saving them", async () => {
+    const fetchStub = stubFetch({ json: { ...PASSED, recorded: false } });
+    const draft = {
+      provider: "openai" as const,
+      model: "served-model",
+      base_url: "http://10.0.0.5:31000/v1",
+      api_key: "sk-recognizable-key-0001",
+      responses_api: false,
+    };
+    expect((await testDraft(draft)).recorded).toBe(false);
+
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe("/api/llm/test");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual(draft);
+  });
+});
+
+describe("toDraft", () => {
+  const typed = {
+    provider: "openai" as const,
+    model: " served-model ",
+    baseUrl: " http://10.0.0.5:31000/v1 ",
+    apiKey: "sk-recognizable-key-0001",
+    responsesApi: false,
+  };
+
+  it("is the form's values, trimmed, with the key as typed", () => {
+    expect(toDraft(typed)).toEqual({
+      provider: "openai",
+      model: "served-model",
+      base_url: "http://10.0.0.5:31000/v1",
+      api_key: "sk-recognizable-key-0001",
+      responses_api: false,
+    });
+  });
+
+  it("has no base URL when none was typed, and no choice of API where there is none", () => {
+    expect(toDraft({ ...typed, provider: "anthropic", baseUrl: "  " })).toEqual(
+      {
+        provider: "anthropic",
+        model: "served-model",
+        base_url: null,
+        api_key: "sk-recognizable-key-0001",
+      },
+    );
+  });
+
+  it("names the profile whose stored key to use when the key is left empty", () => {
+    // The Edit form: an empty key means the key the profile already has (FR-017).
+    const draft = toDraft({ ...typed, apiKey: "" }, SAVED.id);
+    expect(draft.profile_id).toBe(SAVED.id);
+    expect("api_key" in draft).toBe(false);
+  });
+
+  it("sends a typed key and not the profile's when both are there", () => {
+    const draft = toDraft(typed, SAVED.id);
+    expect(draft.api_key).toBe("sk-recognizable-key-0001");
+    expect("profile_id" in draft).toBe(false);
   });
 });
 

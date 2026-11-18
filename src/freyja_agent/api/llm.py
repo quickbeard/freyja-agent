@@ -7,7 +7,8 @@ be one (research R9).
 """
 
 import logging
-from collections.abc import Callable, Coroutine
+from collections.abc import Callable, Coroutine, Sequence
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, HTTPException, Path, Request, Response
@@ -16,12 +17,21 @@ from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from pydantic import SecretStr
 
-from freyja_agent.api.schemas import LlmLastTest, LlmProfile, LlmProfileCreate, LlmProfileList
+from freyja_agent.api.schemas import (
+    LlmLastTest,
+    LlmProfile,
+    LlmProfileCreate,
+    LlmProfileDraft,
+    LlmProfileList,
+    LlmTestResult,
+)
+from freyja_agent.llm.check import CheckResult, LastCheck, check_model
 from freyja_agent.llm.providers import (
     ENVIRONMENT_ID,
     ENVIRONMENT_NAME,
     PROVIDERS,
     EnvironmentProfile,
+    ModelSpec,
 )
 from freyja_agent.llm.secrets import (
     KeyUnreadableError,
@@ -33,6 +43,7 @@ from freyja_agent.llm.secrets import (
 )
 from freyja_agent.llm.store import (
     PROFILE_LIMIT,
+    REASON_LIMIT,
     InvalidProfileError,
     LlmProfileRecord,
     NameTakenError,
@@ -130,7 +141,9 @@ def _saved(record: LlmProfileRecord, *, active: bool, secret: SecretStr | None) 
     )
 
 
-def _environment(profile: EnvironmentProfile, *, active: bool) -> LlmProfile:
+def _environment(
+    profile: EnvironmentProfile, *, active: bool, last: LastCheck | None
+) -> LlmProfile:
     return LlmProfile(
         id=profile.id,
         name=profile.name,
@@ -143,7 +156,10 @@ def _environment(profile: EnvironmentProfile, *, active: bool) -> LlmProfile:
         active=active,
         usable=profile.usable,
         unusable_reason=profile.unusable_reason,
-        last_test=None,
+        # Kept in memory, so until the service starts again (FR-019a).
+        last_test=None
+        if last is None
+        else LlmLastTest(ok=last.ok, at=last.at, step=last.step, reason=last.reason),
         created_at=None,
         updated_at=None,
     )
@@ -158,7 +174,11 @@ async def profile_list(runtime: Runtime) -> LlmProfileList:
     state = await runtime.llm_profiles.state()
     secret = runtime.settings.secret_key
     profiles = [
-        _environment(runtime.environment_profile(), active=state.active_profile_id is None),
+        _environment(
+            runtime.environment_profile(),
+            active=state.active_profile_id is None,
+            last=runtime.environment_test,
+        ),
         *(
             _saved(record, active=record.id == state.active_profile_id, secret=secret)
             for record in await runtime.llm_profiles.list_profiles()
@@ -272,3 +292,124 @@ async def activate_profile(profile_id: ProfileIdPath, request: Request) -> LlmPr
                 type(exc).__name__,
             )
     return await profile_list(runtime)
+
+
+def _stored_key(record: LlmProfileRecord, secret: SecretStr | None) -> str:
+    """A saved profile's key, or the refusal that it cannot be used on this instance."""
+    reason = _unusable(record, secret)
+    if reason is not None:
+        raise _error(
+            409, "profile_unusable", f"Profile {record.name} cannot be used: {UNUSABLE[reason]}."
+        )
+    return decrypt(record.api_key_encrypted, secret)
+
+
+async def _check(
+    runtime: Runtime, *, profile_id: str | None, spec: ModelSpec | None, secrets: Sequence[str]
+) -> CheckResult:
+    """Run one test within this instance's limits. ``spec`` None is the environment's model.
+
+    A test beyond a limit is refused before a model is built, so nothing is sent (FR-019b).
+    """
+    busy = runtime.checks.refusal(profile_id)
+    if busy is not None:
+        raise _error(409, "test_busy", busy)
+    runtime.checks.take(profile_id)
+    try:
+        try:
+            model = runtime.model_to_check(spec)
+        except Exception as exc:
+            # Values that make no model are a failed test, not a failure of the service.
+            reason = redact(f"No model can be built from these values: {exc}", secrets)
+            return CheckResult(ok=False, step="first_message", reason=reason[:REASON_LIMIT])
+        return await check_model(
+            model, limit=runtime.settings.llm_test_timeout_seconds, secrets=secrets
+        )
+    finally:
+        runtime.checks.release(profile_id)
+
+
+def _log_test(name: str, profile_id: str, result: CheckResult) -> None:
+    outcome = "passed" if result.ok else f"failed at {result.step}"
+    logger.info("LLM profile tested: %s (%s): %s", name, profile_id, outcome)
+
+
+@router.post("/profiles/{profile_id}/test")
+async def test_profile(profile_id: ProfileIdPath, request: Request) -> LlmTestResult:
+    """Test a listed profile, and keep the result with it.
+
+    A failed test is still a 200: the result says which step failed and why. The result is
+    not kept when the profile was changed or deleted while the test ran (FR-019a).
+    """
+    runtime = _runtime(request)
+    if profile_id == ENVIRONMENT_ID:
+        reason = runtime.environment_profile().unusable_reason
+        if reason is not None:
+            raise _error(
+                409,
+                "profile_unusable",
+                f"Profile {ENVIRONMENT_NAME} cannot be used: {UNUSABLE[reason]}.",
+            )
+        result = await _check(
+            runtime, profile_id=ENVIRONMENT_ID, spec=None, secrets=runtime.environment_secrets
+        )
+        at = datetime.now(UTC)
+        runtime.environment_test = LastCheck(
+            ok=result.ok, at=at, step=result.step, reason=result.reason
+        )
+        _log_test(ENVIRONMENT_NAME, ENVIRONMENT_ID, result)
+        return LlmTestResult(
+            ok=result.ok, at=at, step=result.step, reason=result.reason, recorded=True
+        )
+
+    store = runtime.llm_profiles
+    record = await store.get_profile(profile_id)
+    if record is None:
+        raise _error(404, "profile_not_found", "There is no profile with this id.")
+    key = _stored_key(record, runtime.settings.secret_key)
+    spec = ModelSpec(
+        provider=record.provider,
+        model=record.model,
+        base_url=record.base_url,
+        api_key=key,
+        responses_api=record.responses_api,
+    )
+    result = await _check(runtime, profile_id=record.id, spec=spec, secrets=[key])
+    # Kept only for the values that were tested: the version read before the test began.
+    recorded = await store.record_test(
+        record.id, record.config_version, ok=result.ok, step=result.step, reason=result.reason
+    )
+    tested = await store.get_profile(record.id) if recorded else None
+    at = tested.last_test_at if tested and tested.last_test_at else datetime.now(UTC)
+    _log_test(record.name, record.id, result)
+    return LlmTestResult(
+        ok=result.ok, at=at, step=result.step, reason=result.reason, recorded=recorded
+    )
+
+
+@router.post("/test")
+async def test_draft(body: LlmProfileDraft, request: Request) -> LlmTestResult:
+    """Test values that are not saved, for the Add and Edit forms. Nothing is saved or kept.
+
+    With no key, the stored key of ``profile_id`` is used: the Edit form with its key left
+    empty (FR-017).
+    """
+    runtime = _runtime(request)
+    if body.api_key is not None:
+        key = body.api_key.get_secret_value()
+    else:
+        record = await runtime.llm_profiles.get_profile(body.profile_id or "")
+        if record is None:
+            raise _error(404, "profile_not_found", "There is no profile with this id.")
+        key = _stored_key(record, runtime.settings.secret_key)
+    spec = ModelSpec(
+        provider=body.provider,
+        model=body.model,
+        base_url=body.base_url,
+        api_key=key,
+        responses_api=body.responses_api,
+    )
+    result = await _check(runtime, profile_id=None, spec=spec, secrets=[key])
+    return LlmTestResult(
+        ok=result.ok, at=datetime.now(UTC), step=result.step, reason=result.reason, recorded=False
+    )

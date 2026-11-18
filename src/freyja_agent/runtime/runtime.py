@@ -33,6 +33,7 @@ from freyja_agent.delegates.mcp_servers import (
     open_tool_servers,
 )
 from freyja_agent.llm.active import ENVIRONMENT_PROFILE, ActiveModel, ModelManager
+from freyja_agent.llm.check import CheckSlots, LastCheck
 from freyja_agent.llm.providers import (
     PROVIDERS,
     EnvironmentProfile,
@@ -91,12 +92,34 @@ class Runtime:
     # The environment's model as a read-only profile, described once at startup: what the
     # environment configures cannot change while the service runs (FR-008).
     environment: EnvironmentProfile | None = None
+    # What a profile's test needs (FR-017 to FR-019b): the factory that turns values into a
+    # model, the environment's values or the model that was handed over built, the tests in
+    # progress on this instance, and the environment's last result, which is kept in memory
+    # until the service starts again.
+    model_factory: ModelFactory = build_model
+    environment_model: BaseChatModel | None = None
+    environment_values: ModelSpec | None = None
+    environment_secrets: tuple[str, ...] = ()
+    checks: CheckSlots = field(default_factory=CheckSlots)
+    environment_test: LastCheck | None = None
 
     def environment_profile(self) -> EnvironmentProfile:
         """The environment's profile; worked out from the settings for a hand-built runtime."""
         if self.environment is None:
             self.environment = environment_profile(self.settings)
         return self.environment
+
+    def model_to_check(self, spec: ModelSpec | None) -> BaseChatModel:
+        """The model a profile's test asks: built for ``spec``, or the environment's for None.
+
+        It is built to try nothing twice, so that the test's time limit is a limit (research
+        R7). A model that was handed to the runtime built is asked as it is.
+        """
+        if spec is None:
+            if self.environment_model is not None:
+                return self.environment_model
+            spec = self.environment_values or environment_spec(self.settings)
+        return self.model_factory(replace(spec, max_retries=0))
 
     def applied_model(self) -> ActiveModel:
         """The model this instance last built its orchestrator for; reads nothing."""
@@ -230,6 +253,10 @@ class Runtime:
                     llm_profiles=profile_store,
                     models=manager,
                     environment=described,
+                    model_factory=model_factory or build_model,
+                    environment_model=model if given else None,
+                    environment_values=spec,
+                    environment_secrets=(key,) if key else (),
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
