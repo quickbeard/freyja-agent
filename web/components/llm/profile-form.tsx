@@ -63,8 +63,9 @@ function isWebAddress(value: string): boolean {
 function check(
   values: { name: string; model: string; baseUrl: string; apiKey: string },
   purpose: "save" | "test",
-  // A saved profile already has a key: an empty one means the stored key (FR-009, FR-017).
-  hasStoredKey: boolean,
+  // A saved profile already has a key: an empty one means the stored key (FR-009, FR-017),
+  // unless the stored key cannot be read.
+  hasStoredKey: boolean | "unreadable",
 ): Errors {
   const errors: Errors = {};
   if (purpose === "test") {
@@ -81,8 +82,10 @@ function check(
     errors.baseUrl =
       "Enter an http or https address, such as http://10.0.0.5:8000/v1.";
   }
-  if (values.apiKey === "" && !hasStoredKey) {
+  if (values.apiKey === "" && hasStoredKey === false) {
     errors.apiKey = "Enter the API key.";
+  } else if (values.apiKey === "" && hasStoredKey === "unreadable") {
+    errors.apiKey = "Enter the API key again: the stored one cannot be read.";
   }
   return errors;
 }
@@ -130,6 +133,9 @@ function Fields({
 }) {
   const id = useId();
   const editing = profile !== undefined;
+  // A stored key that cannot be read is no key to keep: it has to be entered again (FR-022).
+  const unreadable = profile?.unusable_reason === "key_unreadable";
+  const hasStoredKey = editing && !unreadable;
   const [name, setName] = useState(profile?.name ?? "");
   const [provider, setProvider] = useState<LlmProvider>(
     PROVIDERS.find(({ value }) => value === profile?.provider)?.value ??
@@ -195,7 +201,7 @@ function Fields({
     const found = check(
       { name, model: model.trim(), baseUrl: baseUrl.trim(), apiKey },
       "test",
-      editing,
+      unreadable ? "unreadable" : hasStoredKey,
     );
     setErrors(found);
     setRefusal(null);
@@ -209,7 +215,7 @@ function Fields({
         await testDraft(
           toDraft(
             { provider, model, baseUrl, apiKey, responsesApi },
-            profile?.id,
+            hasStoredKey ? profile?.id : undefined,
           ),
         ),
       );
@@ -229,7 +235,11 @@ function Fields({
       baseUrl: baseUrl.trim(),
       apiKey,
     };
-    const found = check(values, "save", editing);
+    const found = check(
+      values,
+      "save",
+      unreadable ? "unreadable" : hasStoredKey,
+    );
     setErrors(found);
     setRefusal(null);
     if (Object.keys(found).length > 0) return;
@@ -273,11 +283,23 @@ function Fields({
           {editing ? `Edit ${profile.name}` : "Add a profile"}
         </DialogTitle>
         <DialogDescription>
-          {editing
-            ? "Leave the key empty to keep the one that is stored."
-            : "A model Freyja can run on. Saving it does not change the profile in use."}
+          {unreadable
+            ? "Change the profile, and enter its key again."
+            : editing
+              ? "Leave the key empty to keep the one that is stored."
+              : "A model Freyja can run on. Saving it does not change the profile in use."}
         </DialogDescription>
       </DialogHeader>
+
+      {unreadable && (
+        <p
+          role="note"
+          className="rounded-lg border border-amber-500/50 p-3 text-sm"
+        >
+          This profile's stored key cannot be read with the service's current
+          secret. Enter the key again to use the profile.
+        </p>
+      )}
 
       {refusal && (
         <p
@@ -357,7 +379,11 @@ function Fields({
           }
           autoComplete="off"
           placeholder={
-            editing ? "Leave empty to keep the stored key" : undefined
+            unreadable
+              ? "Enter the key again"
+              : editing
+                ? "Leave empty to keep the stored key"
+                : undefined
           }
           {...invalid(`${id}-api-key`, errors.apiKey)}
         />

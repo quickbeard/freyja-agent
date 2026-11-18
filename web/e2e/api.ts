@@ -273,6 +273,10 @@ export class ProfileService {
         body.api_key === undefined
           ? target.key_hint
           : String(body.api_key).slice(-4),
+      // A key sent again is stored under the secret the service has now, so it can be read.
+      ...(body.api_key === undefined
+        ? {}
+        : { usable: true, unusable_reason: null }),
     };
     // A change to how the model is reached clears the last test; a new name keeps it.
     const reach =

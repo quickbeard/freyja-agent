@@ -626,3 +626,49 @@ check, phase by phase.
   started, the environment's profile was `not_configured`, a run was turned away, and the
   console in a browser showed the notice and both cards as not usable. The log named each
   unusable profile at startup and each refused run, and held no key.
+
+### Phase 8 as built (2026-11-18)
+
+- **The proof found one leak** (T068, T071). `tests/test_llm_secrets_nowhere.py` saves one
+  recognizable key, drives every `/llm` route with it, refusals and all, with tests that pass
+  and fail and runs that complete, pause, and fail, and then searches every response, every
+  stream as it went over the wire, every thread, every log record with its traceback, and the
+  stored row. One thing held the key: the `model_error` message of a run, and its log line,
+  when a provider repeats the key it was sent. `run_stream` now takes the keys of the profile
+  the run uses out of that text before it is logged or sent. With that fix taken out again,
+  the proof fails.
+- **Nothing else turned up** (T072). Every other place was already clean: the routes return
+  no key and repeat no refused value since Phases 3 and 4, a test's reason is cleaned since
+  Phase 5, and the logs name profiles and fields, not values.
+- **Which keys are taken out of a run's error** (T071): those of the profile the run uses,
+  which the manager keeps with the active model. For the environment's profile that is the
+  provider's key from the environment.
+- **A missing or changed secret needed no change** (T069). Its tests passed as written: with
+  no secret a save is refused and the environment's profile lists, runs, and tests as before;
+  under another secret the service starts, each profile is `key_unreadable`, cannot be
+  activated or tested, and is usable again once its key is sent. These prove what Phases 4 to
+  7 built, so they were not seen failing first.
+- **No other origin is given permission, because nothing gives any** (T069, SC-012). The
+  service has no cross-origin middleware, so a preflight to any `/llm` route is answered with
+  no `access-control-*` header, and so is the request itself. Every route that takes a body
+  refuses one sent as text or as a form, which are the bodies a page from another origin can
+  send without asking. Seven routes and three content types are held in place by tests.
+- **The Edit form asks for the key again when the stored one cannot be read** (T073). The card
+  has said why a profile is not usable since Phase 3. Its form now says that the key has to
+  be entered again, does not save or test without it, since there is no stored key to keep,
+  and no longer offers the stored key for a test.
+- **No type the web app receives has a key field** (T070). The check is in the types: a
+  field with "key" in its name, other than `key_hint`, in anything the service sends would
+  not compile. It is checked when the app is built, which the end-to-end job does.
+- **An open form's own field is the one place a page holds a key** (T073a). The end-to-end
+  tests search the page's markup and the browser's storage. While the form is open the key is
+  the value of its password field and nowhere else, in no text; once the form is closed or
+  sent the page holds it nowhere, and storage and cookies are empty throughout.
+- **The checkpoint** was run by hand against the real service on a database made for it and
+  dropped afterwards, on a port of its own, with the stand-in on loopback: the key was in no
+  response; the stored rows began with `gAAAA` and did not hold it; a run and a test on a
+  profile whose endpoint repeats the key gave `<key>` in its place; a preflight from another
+  origin got no permission and a body sent as text was refused; with no secret the saved
+  profiles were listed as not usable, a save was refused, and a run on the environment's real
+  model completed; with the secret back they were usable; with a secret that is not a key the
+  service did not start and named the setting without its value. No log held a key.

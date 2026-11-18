@@ -26,6 +26,7 @@ from freyja_agent.api.serialize import (
     to_jsonable,
     update_to_dict,
 )
+from freyja_agent.llm.secrets import redact
 
 if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
     from freyja_agent.llm.active import ActiveModel
@@ -234,11 +235,15 @@ async def run_stream(
             return
         except Exception as exc:
             if _is_model_error(exc):
-                logger.warning("run %s on thread %s: model error: %s", run_id, thread_id, exc)
+                # A provider may repeat the key it was sent in its error. The key of the
+                # profile this run uses is taken out before the text is logged or sent
+                # (feature 004, FR-021, research R9).
+                reason = redact(str(exc), active.secrets)
+                logger.warning("run %s on thread %s: model error: %s", run_id, thread_id, reason)
                 ended = ("error", "model_error")
                 yield _event(
                     "error",
-                    {"code": "model_error", "message": f"The model request failed: {exc}"},
+                    {"code": "model_error", "message": f"The model request failed: {reason}"},
                 )
             else:
                 logger.exception("run %s on thread %s failed", run_id, thread_id)

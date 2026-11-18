@@ -4,9 +4,13 @@ import {
   activateProfile,
   createProfile,
   deleteProfile,
+  type LlmDraft,
+  type LlmLastTest,
   type LlmProfile,
   type LlmProfileList,
+  type LlmTestResult,
   listProfiles,
+  type NewLlmProfile,
   PROVIDERS,
   providerLabel,
   testDraft,
@@ -218,5 +222,27 @@ describe("providerLabel", () => {
     expect(providerLabel("openrouter")).toBe("OpenRouter");
     expect(providerLabel("someprovider")).toBe("someprovider");
     expect(providerLabel("")).toBe("Unknown provider");
+  });
+});
+
+describe("what the web app receives", () => {
+  // Checked when the app is built: a field for a key in anything the service sends would not
+  // compile here. The key goes one way, to the service (FR-020).
+  type Received =
+    | keyof LlmProfile
+    | keyof LlmProfileList
+    | keyof LlmLastTest
+    | keyof LlmTestResult;
+  type KeyFields = Extract<Received, `${string}key${string}`>;
+  const onlyTheHint: KeyFields extends "key_hint" ? true : false = true;
+  // And it is sent in exactly these two shapes.
+  const sent: [keyof NewLlmProfile, keyof LlmDraft] = ["api_key", "api_key"];
+
+  it("has no field for a key, only for its last four characters", () => {
+    expect(onlyTheHint).toBe(true);
+    expect(sent).toEqual(["api_key", "api_key"]);
+    expect(Object.keys(SAVED).filter((name) => name.includes("key"))).toEqual([
+      "key_hint",
+    ]);
   });
 });

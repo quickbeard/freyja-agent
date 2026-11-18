@@ -857,3 +857,132 @@ test("the environment's card offers neither Edit nor Delete, and a saved card of
     "Test",
   ]);
 });
+
+// 004, User Story 5: API keys stay secret.
+
+/** Everything the page holds that could be read back: its markup and the browser's storage. */
+async function whatThePageHolds(page: Page) {
+  const stored = await page.evaluate(() => ({
+    local: Object.entries(localStorage),
+    session: Object.entries(sessionStorage),
+    cookies: document.cookie,
+  }));
+  return { markup: await page.content(), stored };
+}
+
+test("a key is nowhere on the page or in the browser's storage after adding, testing, and editing", async ({
+  page,
+}) => {
+  const service = await new ProfileService().serve(page);
+  await page.goto("/llm");
+
+  // Added through the form, after testing the values there.
+  await openForm(page);
+  await fill(page);
+  await form(page).getByRole("button", { name: "Test" }).click();
+  await expect(form(page).getByRole("status")).toContainText("The test passed");
+  await save(page);
+  await expect(
+    card(page, "Local vLLM").getByText("Ends in 0001"),
+  ).toBeVisible();
+
+  // Tested from its card, then given another key in the Edit form.
+  await card(page, "Local vLLM").getByRole("button", { name: "Test" }).click();
+  await expect(
+    card(page, "Local vLLM").getByText(/Last test passed/),
+  ).toBeVisible();
+  const edit = await openEdit(page, "Local vLLM");
+  await expect(edit.getByLabel("API key", { exact: true })).toHaveValue("");
+  await edit.getByLabel("API key", { exact: true }).fill(NEW_KEY);
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(
+    card(page, "Local vLLM").getByText("Ends in 0002"),
+  ).toBeVisible();
+
+  // Both keys reached the service, and neither is anywhere a reader of the page could look.
+  const sentKeys = service.changes
+    .map(({ body }) => (body as { api_key?: string } | undefined)?.api_key)
+    .filter(Boolean);
+  expect(sentKeys).toEqual([KEY, KEY, NEW_KEY]);
+  const held = await whatThePageHolds(page);
+  for (const key of [KEY, NEW_KEY]) {
+    expect(held.markup).not.toContain(key);
+    expect(JSON.stringify(held.stored)).not.toContain(key);
+    await expect(page.getByText(key)).toHaveCount(0);
+  }
+  expect(held.stored).toEqual({ local: [], session: [], cookies: "" });
+});
+
+test("a save that is refused leaves the key out of what the page shows", async ({
+  page,
+}) => {
+  await new ProfileService(environmentProfile(), savedProfile("Claude")).serve(
+    page,
+  );
+  await page.goto("/llm");
+  await openForm(page);
+  await fill(page, { Name: "Claude" });
+  await save(page);
+
+  await expect(form(page)).toContainText("Another profile has this name.");
+  // The key is still in its field, unseen. The field is the one place in the page that
+  // holds it: it is in no text, and nowhere else in the markup.
+  await expect(input(page, "API key")).toHaveValue(KEY);
+  await expect(input(page, "API key")).toHaveAttribute("type", "password");
+  await expect(page.getByText(KEY)).toHaveCount(0);
+  const open = await whatThePageHolds(page);
+  expect(open.markup.split(KEY)).toHaveLength(2);
+  expect(open.markup).toMatch(new RegExp(`type="password"[^>]*value="${KEY}"`));
+  expect(open.stored).toEqual({ local: [], session: [], cookies: "" });
+
+  // Once the form is closed the page holds it nowhere.
+  await form(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(form(page)).toBeHidden();
+  const closed = await whatThePageHolds(page);
+  expect(closed.markup).not.toContain(KEY);
+  expect(closed.stored).toEqual({ local: [], session: [], cookies: "" });
+});
+
+test("a card whose key cannot be read says why, and its form asks for the key again", async ({
+  page,
+}) => {
+  const unreadable = savedProfile("Claude", {
+    usable: false,
+    unusable_reason: "key_unreadable",
+  });
+  const service = await new ProfileService(
+    environmentProfile(),
+    unreadable,
+  ).serve(page);
+  await page.goto("/llm");
+
+  const claude = card(page, "Claude");
+  await expect(claude.getByText("Not usable")).toBeVisible();
+  await expect(claude.getByText(/stored key cannot be read/)).toBeVisible();
+  // As it is it can be neither tested nor activated.
+  await expect(claude.getByRole("button")).toHaveText(["Edit", "Delete"]);
+
+  const edit = await openEdit(page, "Claude");
+  await expect(edit.getByRole("note")).toContainText("Enter the key again");
+  // There is no stored key to keep, so saving without one is not sent.
+  await edit.getByRole("button", { name: "Save" }).click();
+  await expect(edit.getByLabel("API key", { exact: true })).toHaveAttribute(
+    "aria-invalid",
+    "true",
+  );
+  expect(service.changes).toEqual([]);
+
+  await edit.getByLabel("API key", { exact: true }).fill(NEW_KEY);
+  await edit.getByRole("button", { name: "Save" }).click();
+
+  await expect(edit).toBeHidden();
+  await expect(claude.getByText("Not usable")).toBeHidden();
+  await expect(claude.getByText("Ends in 0002")).toBeVisible();
+  await expect(claude.getByRole("button")).toHaveText([
+    "Test",
+    "Set active",
+    "Edit",
+    "Delete",
+  ]);
+  await expect(page.getByText(NEW_KEY)).toHaveCount(0);
+});

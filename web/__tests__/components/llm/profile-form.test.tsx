@@ -621,3 +621,48 @@ describe("ProfileForm, editing", () => {
     expect("profile_id" in sent(fetchStub).body).toBe(false);
   });
 });
+
+describe("ProfileForm, a profile whose key cannot be read", () => {
+  const NEW_KEY = "sk-another-key-for-tests-0002";
+  const unreadable: LlmProfile = {
+    ...SAVED,
+    usable: false,
+    unusable_reason: "key_unreadable",
+  };
+
+  it("says the key has to be entered again", () => {
+    render(<Harness profile={unreadable} />);
+    expect(screen.getByRole("note").textContent).toMatch(
+      /stored key cannot be read.*Enter the key again/,
+    );
+    expect(field("API key").placeholder).toMatch(/Enter the key again/);
+  });
+
+  it("does not save or test without the key, since there is none to keep", () => {
+    const fetchStub = stubFetch({ json: SAVED });
+    render(<Harness profile={unreadable} />);
+    save();
+    expect(errorAt("API key")).toMatch(/again/);
+    fireEvent.click(screen.getByRole("button", { name: "Test" }));
+    expect(errorAt("API key")).toMatch(/again/);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("sends the key that was entered, which makes the profile usable", async () => {
+    const usable = { ...SAVED, key_hint: "0002" };
+    const fetchStub = stubFetch({ json: usable });
+    const onSaved = vi.fn();
+    render(<Harness profile={unreadable} onSaved={onSaved} />);
+    type("API key", NEW_KEY);
+    save();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(usable));
+    expect(sent(fetchStub).method).toBe("PATCH");
+    expect(sent(fetchStub).body.api_key).toBe(NEW_KEY);
+  });
+
+  it("says nothing of the kind for a profile whose key can be read", () => {
+    render(<Harness profile={SAVED} />);
+    expect(screen.queryByRole("note")).toBeNull();
+  });
+});
