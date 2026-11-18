@@ -395,6 +395,13 @@ check, phase by phase.
   end-to-end test found that it stayed open over the page it had just led to; the hand
   check of T037 had only opened it. `web/components/app-sidebar.tsx` closes it on a link's
   click, and a unit test covers that.
+- **The sidebar has a grey and an edge of its own** (T032, decided in review). With the stock
+  theme the sidebar was a 0.985 grey beside a white page, and its edge the page's border
+  color, so neither could be seen. `web/app/globals.css` now gives the light theme's sidebar
+  a 0.955 grey, a 0.85 edge, and a 0.9 accent for the section in use, which has to stay
+  darker than the sidebar; `web/components/app-sidebar.tsx` draws the edge in the sidebar's
+  border color. The dark theme's values already differed and are unchanged. An end-to-end
+  test compares the computed colors, which a unit test in jsdom cannot.
 - **Two things a browser test of this app must allow for.** Next.js keeps an element with
   the alert role of its own outside the page, to announce navigations, so the tests look
   for alerts inside the main landmark. And after moving to another section, the one left

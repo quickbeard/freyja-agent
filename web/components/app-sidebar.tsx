@@ -25,7 +25,9 @@ export function AppSidebar() {
   const pathname = usePathname();
   const { setOpenMobile } = useSidebar();
   return (
-    <Sidebar>
+    // The generated sidebar draws its edge in the page's border color; the sidebar's own is
+    // the one that shows against it.
+    <Sidebar className="border-sidebar-border">
       <SidebarHeader>
         <span className="px-2 py-1 font-heading text-base font-semibold">
           Freyja
