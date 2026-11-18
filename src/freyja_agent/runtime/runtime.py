@@ -32,7 +32,13 @@ from freyja_agent.delegates.mcp_servers import (
     default_connect,
     open_tool_servers,
 )
-from freyja_agent.llm.active import ENVIRONMENT_PROFILE, ActiveModel, ModelManager
+from freyja_agent.llm.active import (
+    ENVIRONMENT_PROFILE,
+    UNUSABLE,
+    ActiveModel,
+    ModelManager,
+    unusable_reason,
+)
 from freyja_agent.llm.check import CheckSlots, LastCheck
 from freyja_agent.llm.providers import (
     PROVIDERS,
@@ -215,6 +221,13 @@ class Runtime:
                     factory=model_factory or build_model,
                     environment=environment,
                     environment_secrets=(key,) if key else (),
+                    # One of the three providers with no key set is not usable, whatever a
+                    # client would make of it (FR-011a). A model handed over built is.
+                    environment_unusable=(
+                        "not_configured"
+                        if provider and not key and not isinstance(model, BaseChatModel)
+                        else None
+                    ),
                     build=partial(
                         build_agent,
                         checkpointer=checkpointer,
@@ -235,7 +248,9 @@ class Runtime:
                 # Whether the environment's model can be built is known when the manager has
                 # just built it, or it was handed over built; otherwise building one says.
                 given = isinstance(model, BaseChatModel)
-                built = given or manager.active.profile is ENVIRONMENT_PROFILE
+                built = given or (
+                    manager.active.profile is ENVIRONMENT_PROFILE and manager.active.usable
+                )
                 described = environment_profile(
                     settings,
                     factory=_already_built if built else model_factory or build_model,
@@ -261,6 +276,23 @@ class Runtime:
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
                 )
+                # At startup, each profile that is not usable, with the reason (FR-024).
+                if described.unusable_reason is not None:
+                    logger.warning(
+                        "LLM profile %s (%s) is not usable: %s",
+                        described.name,
+                        described.id,
+                        UNUSABLE[described.unusable_reason],
+                    )
+                for record in await profile_store.list_profiles():
+                    why = unusable_reason(record, settings.secret_key)
+                    if why is not None:
+                        logger.warning(
+                            "LLM profile %s (%s) is not usable: %s",
+                            record.name,
+                            record.id,
+                            UNUSABLE[why],
+                        )
                 runtime.worker = DelegationWorker(runtime)
                 if run_worker:
                     runtime.worker.start()

@@ -78,20 +78,21 @@ startup and exits with an error naming the connection when it is unreachable.
   gated placeholder tool `send_notification`. `agent_tasks.py` is `AgentTasksMiddleware`, which
   lists the thread's pending agent tasks in the prompt, and the `check_agent_tasks` tool; both
   are added only when an agent is configured (`build_agent(agent_tasks=...)`).
-- `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol.
-  `mcp_servers.py` connects to the configured MCP servers (`open_tool_servers`, `ToolServer`,
-  `default_connect`), applies the call time limit, records each server's status, and redacts
-  `pass_env` values from everything a server link emits. `mcp_tools.py` turns each listed tool
-  into a `DelegateTool`, classifies it from the `read_only` list (`classify`), and turns a
-  result into text. `a2a_agents.py` reads and checks each agent's card at startup
-  (`open_agents`, `AgentLink`), pins every request to the configured address, sends messages
-  and reads and cancels tasks under the call time limit, records each agent's status, and
-  removes the address from everything it emits (`describe`). `a2a_tools.py` builds each
-  agent's `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step
-  that runs again never sends twice, and turns a reply into text. `delegation_worker.py` is the
-  `DelegationWorker`: each poll it claims pending tasks, checks or gives them up, and starts a
-  delivery for each ready outcome: a background run of `run_stream`, retried when it fails. The
-  loop never waits for a delivery; `tick()` does, for the tests.
+- `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
+  connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
+  applies the call time limit, records each server's status, and redacts `pass_env` values from
+  everything a server link emits. `mcp_tools.py` turns each listed tool into a `DelegateTool`,
+  classifies it from the `read_only` list (`classify`), and turns a result into text.
+  `a2a_agents.py` reads and checks each agent's card at startup (`open_agents`, `AgentLink`),
+  pins every request to the configured address, sends messages and reads and cancels tasks under
+  the call time limit, records each agent's status, and removes the address from everything it
+  emits (`describe`). `a2a_tools.py` builds each agent's `handoff_to_<agent>` and
+  `cancel_<agent>_task` tools over the send ledger, so a step that runs again never sends twice,
+  and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
+  claims pending tasks, checks or gives them up, and starts a delivery for each ready outcome: a
+  background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
+  `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
+  is ready waits.
 - `src/freyja_agent/llm/`: LLM profiles, feature 004 in progress; so far the API lists, adds,
   activates, tests, changes, and deletes them.
   `providers.py` holds the provider table, `build_model` for a saved profile, and the
@@ -99,7 +100,9 @@ startup and exits with an error naming the connection when it is unreachable.
   removes keys from text (`redact`); `store.py` is the `LlmProfileStore` for saved profiles
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
   `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
-  rebuilds the orchestrator through `build_agent` when the active profile's revision moved;
+  rebuilds the orchestrator through `build_agent` when the active profile's revision moved,
+  around a placeholder model when the active profile is not usable, so that the service
+  starts and runs end with `no_usable_model`;
   `check.py` is a profile's test (`check_model`: two requests under one time limit, the
   second carrying earlier turns and a tool call) and the count of tests in progress
   (`CheckSlots`).
@@ -123,16 +126,16 @@ startup and exits with an error naming the connection when it is unreachable.
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
   `llm.py` the profile routes under `/llm`, so far `GET /llm/profiles`, `POST /llm/profiles`,
-  `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of
-  which asks a model anything, and `POST
-  /llm/profiles/{id}/test` and `POST /llm/test`, which hold a profile's test with its
-  endpoint; an activation is applied on this instance at once; its routes answer a refused
-  request without repeating the value (`NoInputRoute`);
-  `streaming.py` the SSE run loop with the lease heartbeat, also driven by the worker for
-  background runs; `outcomes.py` records pending tasks' outcomes in their thread exactly once
-  and answers messages to agents that a stop left in flight; `decisions.py` resume
-  validation, including edits checked against a server tool's JSON Schema and pinned
-  arguments; `schemas.py` and `serialize.py` the request, response, and event shapes.
+  `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
+  asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
+  profile's test with its endpoint; an activation is applied on this instance at once; its
+  routes answer a refused request without repeating the value (`NoInputRoute`); `streaming.py`
+  the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
+  which turns a run away with `no_usable_model` before the graph when no usable model is active;
+  `outcomes.py` records pending tasks' outcomes in their thread exactly once and answers
+  messages to agents that a stop left in flight; `decisions.py` resume validation, including
+  edits checked against a server tool's JSON Schema and pinned arguments; `schemas.py` and
+  `serialize.py` the request, response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the

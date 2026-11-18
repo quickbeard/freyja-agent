@@ -71,6 +71,8 @@ class DelegationWorker:
         # The deliveries under way or waiting for a slot, by thread.
         self._deliveries: dict[str, asyncio.Task[None]] = {}
         self._slots = asyncio.Semaphore(runtime.settings.background_run_concurrency)
+        # Whether deliveries are held back for want of a usable model, to say so once.
+        self._held = False
 
     @property
     def _links(self) -> dict[str, AgentLink]:
@@ -131,6 +133,23 @@ class DelegationWorker:
         store = self.runtime.agent_tasks
         threads = set(await store.threads_with_ready_outcomes())
         threads |= set(await store.threads_with_due_followups())
+        if not threads:
+            return
+        # While no usable model is active a background run could only fail, and each failure
+        # would use up one of the outcome's attempts. So none starts: what is ready stays
+        # ready, untouched, until a usable profile is active (004 FR-016a).
+        if not (await self.runtime.model_for_run()).usable:
+            if not self._held:
+                logger.warning(
+                    "Delegation worker: no usable model is active, so no background run "
+                    "starts; %d thread(s) wait with an outcome to deliver",
+                    len(threads),
+                )
+            self._held = True
+            return
+        if self._held:
+            logger.info("Delegation worker: a usable model is active again; delivering")
+            self._held = False
         for thread_id in sorted(threads - set(self._deliveries)):
             self._deliveries[thread_id] = asyncio.create_task(
                 self._deliver_in_turn(thread_id), name=f"freyja-delivery-{thread_id}"

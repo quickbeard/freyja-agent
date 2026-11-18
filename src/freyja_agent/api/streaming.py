@@ -40,6 +40,9 @@ OnEnd = Callable[[str, str | None], Awaitable[None]]
 # Told once that the run's input is in a checkpoint (feature 003, FR-018, research R10).
 OnRecorded = Callable[[], Awaitable[None]]
 _MESSAGE_METADATA_KEYS = ("langgraph_node", "langgraph_step")
+# The code of the stream's error when no usable model is active (contracts/sse-events.md).
+# It belongs to the stream, like step_limit and model_error, not to the HTTP refusals.
+NO_USABLE_MODEL = "no_usable_model"
 
 
 def lease_owner(runtime: Runtime, run_id: str) -> str:
@@ -133,6 +136,33 @@ async def run_stream(
             return
         agent = runtime.agent
         profile = active.profile
+        if not active.usable:
+            # A fixed rule ahead of the model (principle VI): the graph is not invoked, so
+            # nothing is added to the thread and a pending proposal stays pending. The service
+            # never falls back to another profile by itself (FR-016).
+            logger.warning(
+                "run %s on thread %s (%s) refused: no usable model is active; "
+                "LLM profile %s (%s) is not usable: %s",
+                run_id,
+                thread_id,
+                mode,
+                profile.name,
+                profile.id,
+                active.reason,
+            )
+            ended = ("error", NO_USABLE_MODEL)
+            yield _event("start", _start(active, thread_id, run_id, mode, debug))
+            yield _event(
+                "error",
+                {
+                    "code": NO_USABLE_MODEL,
+                    "message": (
+                        "No usable model is active. Activate a usable LLM profile, then send "
+                        "the message again."
+                    ),
+                },
+            )
+            return
         logger.info(
             "run %s on thread %s (%s) uses LLM profile %s (%s, %s)",
             run_id,

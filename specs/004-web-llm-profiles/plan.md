@@ -576,3 +576,53 @@ check, phase by phase.
   there. In a browser the Edit form opened with the values and an empty key, a change to the
   active profile asked first, the active profile's deletion showed the service's refusal, and
   a confirmed deletion removed the card. No log held a key.
+
+### Phase 7 as built (2026-11-18)
+
+- **What "not usable" is for the active profile** (T065). A saved profile: its key cannot be
+  read on this instance, or the model factory cannot build a model from its values. The
+  environment's: its provider is one of the three and that provider's key is not set, or no
+  model can be built from the setting (FR-011a). Either way the manager records the reason,
+  builds the orchestrator around the placeholder model, and the service starts.
+- **The environment's model is still built as it was, key or no key** (T065). Whether the
+  result may be used is decided after the build. Deciding before it, and skipping the build
+  when the key is missing, made one earlier test fail (`tests/test_factory.py`, which builds
+  the environment's model with no key set and a stand-in for the client). Building first
+  keeps an environment-only deployment on the path it took, and every earlier test passes
+  unchanged, as FR-023 asks.
+- **A run is turned away in `run_stream`, before the graph** (T066): `start` naming the active
+  profile, then `error` with `no_usable_model`. The thread's input is never given to the
+  graph, so nothing is added to the thread, an outcome carried by the run is not counted as
+  delivered, and a proposal a resume was for stays pending. The lease is released as for any
+  run. `no_usable_model` is the stream's code, as planned, and is not one of the HTTP
+  refusals.
+- **A refused run does not count as a failed background run** (T067). `no_usable_model` is
+  not among the codes a background run is retried for, so even a run that slips in while the
+  model becomes unusable uses up no attempt and clears no retry.
+- **The worker starts no delivery while no usable model is active** (T067). It asks once per
+  round, only when an outcome is waiting, and brings this instance in step with the active
+  profile by the same single-row read a run does. It says once that it is holding back, and
+  once when it delivers again.
+- **What is logged** (FR-024). At startup, every profile that is not usable, the
+  environment's included, by name with the reason. Each refused run, with the profile and the
+  reason. A profile that becomes the active one later and is not usable on this instance is
+  logged when this instance takes it up. No line holds a key: a build error is recorded as
+  "no model can be built from its values", not as the error's own text.
+- **The reason helpers moved** to `llm/active.py` (`UNUSABLE`, `unusable_reason`), where the
+  manager, the routes, and startup all use them.
+- **End-to-end** (T067a). Two tests in `web/e2e/llm.spec.ts`: the notice while the active
+  profile is not usable, gone once the environment's is activated, and a console that opens
+  on a service with no key in its environment. The refusal of activating a profile that is
+  not usable already had its test in `web/e2e/profiles.spec.ts` since Phase 4. No web code
+  changed in this phase: the notice, the "Not usable" mark, and its reason were built in
+  Phases 3 and 4.
+- **The checkpoint** was run by hand against the real service on a database made for it and
+  dropped afterwards, on a port of its own. Started with a secret that cannot read the active
+  profile's key: it started, the health check answered `ok`, the list said no usable model
+  is active with the profile still the active one and the environment's not, a run ended with
+  `start` and `no_usable_model` and left no thread, activating the unusable profile again was
+  refused, and after the environment's profile was activated the same message completed on
+  the real model with no restart. Started with no provider key in the environment: it
+  started, the environment's profile was `not_configured`, a run was turned away, and the
+  console in a browser showed the notice and both cards as not usable. The log named each
+  unusable profile at startup and each refused run, and held no key.

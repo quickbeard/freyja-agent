@@ -26,6 +26,7 @@ from freyja_agent.api.schemas import (
     LlmProfileUpdate,
     LlmTestResult,
 )
+from freyja_agent.llm.active import UNUSABLE, unusable_reason
 from freyja_agent.llm.check import CheckResult, LastCheck, check_model
 from freyja_agent.llm.providers import (
     ENVIRONMENT_ID,
@@ -35,7 +36,6 @@ from freyja_agent.llm.providers import (
     ModelSpec,
 )
 from freyja_agent.llm.secrets import (
-    KeyUnreadableError,
     SecretNotConfiguredError,
     decrypt,
     encrypt,
@@ -87,13 +87,6 @@ ProfileIdPath = Annotated[
     str, Path(min_length=1, max_length=64, description="A saved profile's id, or `environment`.")
 ]
 
-UNUSABLE = {
-    "key_unreadable": "its stored key cannot be read with the service's current secret",
-    "secret_not_configured": "no secret is set on the service, so its stored key cannot be read",
-    "not_configured": "the environment names no key for its provider",
-    "cannot_build": "no model can be built from its values",
-}
-
 
 def _runtime(request: Request) -> Runtime:
     return request.app.state.runtime
@@ -103,19 +96,8 @@ def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
-def _unusable(record: LlmProfileRecord, secret: SecretStr | None) -> str | None:
-    """Why a saved profile cannot be used on this instance, or None (FR-011a)."""
-    try:
-        decrypt(record.api_key_encrypted, secret)
-    except SecretNotConfiguredError:
-        return "secret_not_configured"
-    except KeyUnreadableError:
-        return "key_unreadable"
-    return None
-
-
 def _saved(record: LlmProfileRecord, *, active: bool, secret: SecretStr | None) -> LlmProfile:
-    reason = _unusable(record, secret)
+    reason = unusable_reason(record, secret)
     last = None
     if record.last_test_ok is not None and record.last_test_at is not None:
         last = LlmLastTest(
@@ -266,7 +248,7 @@ async def activate_profile(profile_id: ProfileIdPath, request: Request) -> LlmPr
         if record is None:
             raise _error(404, "profile_not_found", "There is no profile with this id.")
         target, name = record.id, record.name
-        reason = _unusable(record, runtime.settings.secret_key)
+        reason = unusable_reason(record, runtime.settings.secret_key)
     if reason is not None:
         raise _error(
             409,
@@ -394,7 +376,7 @@ async def delete_profile(profile_id: ProfileIdPath, request: Request) -> Respons
 
 def _stored_key(record: LlmProfileRecord, secret: SecretStr | None) -> str:
     """A saved profile's key, or the refusal that it cannot be used on this instance."""
-    reason = _unusable(record, secret)
+    reason = unusable_reason(record, secret)
     if reason is not None:
         raise _error(
             409, "profile_unusable", f"Profile {record.name} cannot be used: {UNUSABLE[reason]}."

@@ -5,6 +5,7 @@ import {
   card,
   cards,
   environmentProfile,
+  ProfileService,
   profileList,
   savedProfile,
 } from "./api";
@@ -173,4 +174,71 @@ test("cards shown before are not shown as current once the service stops answeri
 
   await expect(alerts(page)).toContainText(UNREACHABLE);
   await expect(cards(page)).toHaveCount(0);
+});
+
+// 004, User Story 5: the console while no usable model is active.
+
+test("while the active profile is not usable the section says so, until a usable one is activated", async ({
+  page,
+}) => {
+  const service = await new ProfileService(
+    environmentProfile({ active: false }),
+    savedProfile("Claude", {
+      active: true,
+      usable: false,
+      unusable_reason: "key_unreadable",
+    }),
+  ).serve(page);
+  await page.goto("/llm");
+
+  // The service did not fall back to the environment's profile: the unusable one is active.
+  await expect(alerts(page)).toContainText("No usable model is active");
+  const claude = card(page, "Claude");
+  await expect(claude.getByText("Active", { exact: true })).toBeVisible();
+  await expect(claude.getByText("Not usable")).toBeVisible();
+  await expect(claude.getByText(/stored key cannot be read/)).toBeVisible();
+  // It can be neither tested nor activated as it is; its key can be entered again.
+  await expect(claude.getByRole("button")).toHaveText(["Edit", "Delete"]);
+  await expect(
+    card(page, "Environment").getByText("Active", { exact: true }),
+  ).toBeHidden();
+
+  await card(page, "Environment")
+    .getByRole("button", { name: "Set active" })
+    .click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Set active" })
+    .click();
+
+  await expect(
+    card(page, "Environment").getByText("Active", { exact: true }),
+  ).toBeVisible();
+  await expect(alerts(page)).toHaveCount(0);
+  await expect(claude.getByText("Not usable")).toBeVisible();
+  expect(service.changes.map(({ path }) => path)).toEqual([
+    "/llm/profiles/environment/activate",
+  ]);
+});
+
+test("a console that opens on a service with no key in its environment says no usable model is active", async ({
+  page,
+}) => {
+  await new ProfileService(
+    environmentProfile({
+      key_hint: "",
+      usable: false,
+      unusable_reason: "not_configured",
+    }),
+  ).serve(page);
+  await page.goto("/llm");
+
+  await expect(alerts(page)).toContainText("No usable model is active");
+  const environment = card(page, "Environment");
+  await expect(environment.getByText("Not usable")).toBeVisible();
+  // Nothing can be done with the environment's card; a profile can still be added.
+  await expect(environment.getByRole("button")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Add", exact: true }),
+  ).toBeVisible();
 });
