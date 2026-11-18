@@ -386,7 +386,7 @@ check, phase by phase.
   `web/public/`, which only that page used.
 - **End-to-end tests** (T037a, added after the plan). Playwright came to `main` while this phase
   was in review, so the browser check of T037 is now kept as tests: `web/e2e/console.spec.ts`
-  and `web/e2e/llm.spec.ts`, ten tests beside the existing smoke test, run in Chromium and
+  and `web/e2e/llm.spec.ts`, eleven tests beside the existing smoke test, run in Chromium and
   Firefox against the built app. They need no service: `web/e2e/api.ts` hands a page what the
   service would answer, in the browser. The app under test forwards `/api/...` to an address
   nothing listens on, so the two tests about a stopped service go through the web app's own
