@@ -108,11 +108,9 @@ authentication, a set of agents per thread, renaming, and DNS rebinding.
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Checked against constitution 1.4.0. Constitution 1.5.0 (2026-11-19) added three gates to
-principle V: a secret scan, Trivy and Semgrep, and a coverage floor for each suite. They
-change nothing this plan decides. The commit hook and CI hold every phase from Phase 3 on to
-them; a phase that adds a Postgres store, which CI does not measure, says in its pull request
-what that does to the service's coverage.
+Checked against constitution 1.4.0, and again against 1.5.0 on 2026-11-19, which added three
+gates to principle V: a secret scan, Trivy and Semgrep, and a coverage floor for each suite.
+The second check changed the row for principle V and nothing the plan decides.
 
 | Principle | Touched? | How the plan satisfies it | Pre-research | Post-design |
 |---|---|---|---|---|
@@ -120,7 +118,7 @@ what that does to the service's coverage.
 | II. Protocol-based delegation | Yes | Agents are still reached over A2A through the SDK's client, at the configured host and port only. No agent framework is imported. The card request is made with the link's own HTTP client and parsed by the SDK's parser (R5). | PASS | PASS |
 | III. One runtime, every environment | Yes | `build_agent` stays the only assembly point and is what a rebuild calls (R3). `run_stream` stays the only run loop. The web app is a client of the API only: it calls no agent, holds no credential, and decides nothing about approval; a confirmation is the operator's own act, and the service applies the same rules to a request sent without the console (R16, R17). Tests swap the two seams they already swap. | PASS | PASS |
 | IV. Configuration through settings | Yes, central | Saved agents are operator-managed configuration: kept in the database, changed only through the API (R1, R16). What the environment configures stays valid as a read-only default: environment agents are listed, used, and never stored or changed (FR-017). No secret is entered: an address may carry no user name or password (R11). No setting is added; the limits are fixed rules of the feature, like the profile limit. No address is hardcoded outside tests. | PASS, with one reading recorded below | PASS |
-| V. Automated quality gates | Yes | Every FR has a test (map below). The default suites need no network, database, or agent. Card reads and database calls are async; time limits are `asyncio.timeout`; SQL is parameterized. The web app passes `biome check` and its Vitest suite; every user story's console part also has a Playwright test. No new Ruff suppression is planned. | PASS | PASS |
+| V. Automated quality gates | Yes | Every FR has a test (map below). The default suites need no network, database, or agent. Card reads and database calls are async; time limits are `asyncio.timeout`; SQL is parameterized. The web app passes `biome check` and its Vitest suite; every user story's console part also has a Playwright test. No new Ruff suppression is planned. Against 1.5.0: the feature stores no secret, and its tests use addresses, not keys, so nothing is added to the secret scan's allowlist. No dependency is added on either side, so the lock files Trivy reads do not change. A statement composed with psycopg's `sql` module carries the Semgrep mark its rule needs, as the saved-agent store's do. Each phase keeps both coverage floors; the table of proposed calls (Phase 5) is a Postgres store, which CI does not measure, so that phase's pull request says what it does to the service's number. | PASS | PASS |
 | VI. Deterministic guardrails before model judgment | Yes | Whether a message may still be sent, whether a call still belongs to its agent, whether a task still belongs to its address, whether an address is this machine's and is not another agent's, and whether a saved agent is in use are all fixed checks on stored values (R7, R8, R10, R11, R4). None asks a model, and none depends on what a card says. | PASS | PASS |
 | Technology constraints | Yes | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; the Postgres pool; Ruff only for Python. The web app stays Next.js with TypeScript, pnpm, Biome, and Vitest. | PASS | PASS |
 
