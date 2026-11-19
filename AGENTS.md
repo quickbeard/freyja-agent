@@ -171,6 +171,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
   learn whether the agents or the active profile changed, contacts nothing, and lists the
   agents;
+  `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
+  which is the one answer of the service that holds a saved agent's address and which answers
+  500 when the saved agents cannot be read;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
@@ -189,7 +192,9 @@ startup and exits with an error naming the connection when it is unreachable.
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
-  `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` is a placeholder.
+  `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
+  `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`); nothing is managed from the
+  Agents section yet.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
   (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmations before a
   profile is activated (`activate-dialog.tsx`) and deleted (`delete-dialog.tsx`), and how a test's
@@ -209,11 +214,11 @@ startup and exits with an error naming the connection when it is unreachable.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest is
   told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
-  `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read, and
-  `profiles.spec.ts` adding, activating, testing, changing, and deleting; `api.ts` holds what
-  the service would answer (`answerProfiles` for a list, `ProfileService` for a page that
-  changes profiles, which keeps what the page saved and activated) and the locators the specs
-  share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
+  `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
+  `profiles.spec.ts` adding, activating, testing, changing, and deleting, and `agents.spec.ts`
+  the Agents section as it is read; `api.ts` holds what the service would answer
+  (`answerProfiles` and `answerAgents` for a list, `ProfileService` for a page that changes
+  profiles, which keeps what the page saved and activated) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
   hands a page no answer sees the console as it is with the service stopped.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and

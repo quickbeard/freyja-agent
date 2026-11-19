@@ -2,6 +2,7 @@
 // answers to its requests for the profile list, so no test needs the service itself.
 
 import type { Page, Route } from "@playwright/test";
+import type { Agent, AgentList } from "../lib/agents";
 import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/llm";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
@@ -78,6 +79,93 @@ export async function answerProfiles(
 ): Promise<void> {
   let asked = 0;
   await page.route("**/api/llm/profiles", async (route) => {
+    const answer = answers[Math.min(asked, answers.length - 1)];
+    asked += 1;
+    if ("list" in answer) {
+      await route.fulfill({ json: answer.list });
+    } else {
+      const { status, code, message } = answer.refusal;
+      await route.fulfill({ status, json: { detail: { code, message } } });
+    }
+  });
+}
+
+/** An agent named in the service's environment: no address, and nothing to change it by. */
+export function environmentAgent(
+  name: string,
+  values: Partial<Agent> = {},
+): Agent {
+  return {
+    id: `env.${name}`,
+    name,
+    source: "environment",
+    approval: "required",
+    url: null,
+    version: null,
+    state: "reachable",
+    checked_at: "2026-11-19T09:00:00Z",
+    reason: null,
+    card: {
+      name: `${name} agent`,
+      description: `What the ${name} agent says it does.`,
+      version: "1.0.0",
+      skills: [
+        {
+          id: "report",
+          name: "Report",
+          description: "Writes a short report.",
+          tags: ["writing"],
+        },
+      ],
+      cut: false,
+    },
+    pending_tasks: 0,
+    created_at: null,
+    updated_at: null,
+    ...values,
+  };
+}
+
+/** An agent an operator saved, with its address. */
+export function savedAgent(name: string, values: Partial<Agent> = {}): Agent {
+  return {
+    ...environmentAgent(name),
+    id: "0123456789abcdef0123456789abcdef",
+    source: "saved",
+    url: "http://127.0.0.1:9998",
+    version: 1,
+    created_at: "2026-11-19T08:50:00Z",
+    updated_at: "2026-11-19T08:50:00Z",
+    ...values,
+  };
+}
+
+/** The list as the service sends it: how many agents are down follows from the agents. */
+export function agentList(...agents: Agent[]): AgentList {
+  return {
+    agents,
+    limit: 20,
+    unusable: agents.filter(
+      (agent) => agent.state === "unreachable" || agent.state === "not_in_use",
+    ).length,
+  };
+}
+
+export type AgentsAnswer =
+  | { list: AgentList }
+  | { refusal: { status: number; code: string; message: string } };
+
+/**
+ * Answer this page's requests for the list of agents, in the browser, before they leave it.
+ * Each request takes the next answer, and the last one is given to every request after it.
+ * A page that is given no answer asks the web app's server, as a deployed console does.
+ */
+export async function answerAgents(
+  page: Page,
+  ...answers: AgentsAnswer[]
+): Promise<void> {
+  let asked = 0;
+  await page.route("**/api/agents", async (route) => {
     const answer = answers[Math.min(asked, answers.length - 1)];
     asked += 1;
     if ("list" in answer) {
@@ -424,14 +512,14 @@ export class ProfileService {
   }
 }
 
-/** The card of the profile with this name. */
+/** The card of the profile, or of the agent, with this name. */
 export function card(page: Page, name: string) {
   return page
     .locator('[data-slot="card"]')
     .filter({ has: page.getByRole("heading", { name, exact: true }) });
 }
 
-/** Every profile card on the page. */
+/** Every card on the page: profiles in the LLM section, agents in the Agents section. */
 export function cards(page: Page) {
   return page.locator('[data-slot="card"]');
 }
