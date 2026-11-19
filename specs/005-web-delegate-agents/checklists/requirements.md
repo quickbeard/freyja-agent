@@ -99,3 +99,7 @@
 - The first answer was extended the same day: beside the log, the console itself warns about
   every agent that is down, on its card, above the cards by name, and on the sidebar's Agents
   entry from every section (FR-001a, SC-017). 16 of 16 items still pass.
+- Read again on 2026-11-19 after the security and reliability checklist review, which changed
+  FR-002, FR-004, FR-013, FR-017, FR-022, FR-023, FR-025, FR-028, FR-030, three edge cases,
+  and five assumptions (see `security-reliability.md`, "Review record"). 16 of 16 items still
+  pass: no marker was added, and the new text names no implementation.

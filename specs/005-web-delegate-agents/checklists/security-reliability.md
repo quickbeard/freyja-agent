@@ -14,67 +14,115 @@
 
 ## Requirement Completeness
 
-- [ ] CHK001 - Is every kind of message to an agent, from every place a run can send one, named as subject to the approval choice: a hand-off, a follow-up, an answer, and a cancel, on the orchestrator, on its subagent, in the continuation of a resumed run, and in a background run? [Completeness, Spec §FR-022, §SC-004]
-- [ ] CHK002 - Does a requirement say what a run in progress may still send after each change an operator can make: a choice tightened, a choice loosened, an agent moved, an agent removed? [Completeness, Spec §FR-019, §FR-022, §Edge Cases]
-- [ ] CHK003 - Does the rule that keeps a message back cover every message SC-004 counts, including one that was approved before a removal and is sent by a continuation that began before it? [Gap, Spec §FR-022, §SC-004, Plan §Corrections to the spec, Research §R7]
-- [ ] CHK004 - Is there a requirement for a run in progress that still has an agent at its earlier address after that address became another agent's? [Gap, Spec §FR-006, §FR-019, §FR-022, Research §R7]
-- [ ] CHK005 - Are requirements defined for a waiting proposal and for a pending task when a name passes between the environment and a saved agent at a restart, in both directions? [Gap, Spec §FR-017, §FR-023, §FR-025, Research §R8, §R10]
-- [ ] CHK006 - Is every place an address could leave the service named as forbidden: responses outside the Agents routes, the catalog, a tool's name and description, a pause, an error result, a refusal's reason, a failed check's reason, streams, threads, card details, and log lines at every level? [Completeness, Spec §FR-028, §SC-008]
-- [ ] CHK007 - Does a requirement say what the service may do with an address an operator entered that was refused, and not only with a saved one? [Gap, Spec §FR-006, §FR-028, Research §R12]
-- [ ] CHK008 - Does a requirement say that the Agents routes cannot be used by pages of other origins, for reads, for changes that take a body, and for changes that take none? [Completeness, Spec §FR-029, §SC-009]
-- [ ] CHK009 - Are the events the service must log complete for someone investigating why a message was or was not sent: each change of an agent, each check, each message a fixed rule kept back, and a resume that was refused? [Completeness, Spec §FR-030, Data model §What a call gives without sending]
-- [ ] CHK010 - Is it specified what becomes of a pending task in every state its agent can come to: unreachable, checked, approval changed, moved, removed, removed and added again, not in use? [Completeness, Spec §FR-017, §FR-024, §FR-025, §FR-026]
-- [ ] CHK011 - Does the spec say what becomes of a saved agent that was not in use once the environment no longer overrides it? [Gap, Spec §FR-017]
-- [ ] CHK012 - Is the way back specified for every state an operator can leave a thread or an agent in: a resume blocked by a tightened choice, an agent that is unreachable, an agent that is not in use? [Coverage, Recovery, Spec §FR-017, §FR-021, §FR-023, §Edge Cases]
+- [x] CHK001 - Is every kind of message to an agent, from every place a run can send one, named as subject to the approval choice: a hand-off, a follow-up, an answer, and a cancel, on the orchestrator, on its subagent, in the continuation of a resumed run, and in a background run? [Completeness, Spec §FR-022, §SC-004]
+- [x] CHK002 - Does a requirement say what a run in progress may still send after each change an operator can make: a choice tightened, a choice loosened, an agent moved, an agent removed? [Completeness, Spec §FR-019, §FR-022, §Edge Cases]
+- [x] CHK003 - Does the rule that keeps a message back cover every message SC-004 counts, including one that was approved before a removal and is sent by a continuation that began before it? [Gap, Spec §FR-022, §SC-004, Plan §Corrections to the spec, Research §R7]
+- [x] CHK004 - Is there a requirement for a run in progress that still has an agent at its earlier address after that address became another agent's? [Gap, Spec §FR-006, §FR-019, §FR-022, Research §R7]
+- [x] CHK005 - Are requirements defined for a waiting proposal and for a pending task when a name passes between the environment and a saved agent at a restart, in both directions? [Gap, Spec §FR-017, §FR-023, §FR-025, Research §R8, §R10]
+- [x] CHK006 - Is every place an address could leave the service named as forbidden: responses outside the Agents routes, the catalog, a tool's name and description, a pause, an error result, a refusal's reason, a failed check's reason, streams, threads, card details, and log lines at every level? [Completeness, Spec §FR-028, §SC-008]
+- [x] CHK007 - Does a requirement say what the service may do with an address an operator entered that was refused, and not only with a saved one? [Gap, Spec §FR-006, §FR-028, Research §R12]
+- [x] CHK008 - Does a requirement say that the Agents routes cannot be used by pages of other origins, for reads, for changes that take a body, and for changes that take none? [Completeness, Spec §FR-029, §SC-009]
+- [x] CHK009 - Are the events the service must log complete for someone investigating why a message was or was not sent: each change of an agent, each check, each message a fixed rule kept back, and a resume that was refused? [Completeness, Spec §FR-030, Data model §What a call gives without sending]
+- [x] CHK010 - Is it specified what becomes of a pending task in every state its agent can come to: unreachable, checked, approval changed, moved, removed, removed and added again, not in use? [Completeness, Spec §FR-017, §FR-024, §FR-025, §FR-026]
+- [x] CHK011 - Does the spec say what becomes of a saved agent that was not in use once the environment no longer overrides it? [Gap, Spec §FR-017]
+- [x] CHK012 - Is the way back specified for every state an operator can leave a thread or an agent in: a resume blocked by a tightened choice, an agent that is unreachable, an agent that is not in use? [Coverage, Recovery, Spec §FR-017, §FR-021, §FR-023, §Edge Cases]
 
 ## Requirement Clarity
 
-- [ ] CHK013 - Is "at once" in the rules for a tightened choice and for a removal tied to a moment a test can observe, on the instance that handled the change and on every other? [Clarity, Spec §FR-022, §SC-004]
-- [ ] CHK014 - Are "can be used" and "the same address" defined precisely enough that two implementations would refuse the same agents and count the same entries as a move? [Clarity, Spec §FR-006, §FR-007, §Edge Cases, Research §R11]
-- [ ] CHK015 - Is the error a resume ends with when a tightened choice blocks it specified well enough for a client to tell it from any other failure and to know what to do next? [Clarity, Spec §FR-023, Contract §sse-events]
-- [ ] CHK016 - Are the limits on what an agent's card can make the service keep and show stated for every part of the card, the tags of a skill included? [Clarity, Spec §FR-002, Contract §AgentCard]
+- [x] CHK013 - Is "at once" in the rules for a tightened choice and for a removal tied to a moment a test can observe, on the instance that handled the change and on every other? [Clarity, Spec §FR-022, §SC-004]
+- [x] CHK014 - Are "can be used" and "the same address" defined precisely enough that two implementations would refuse the same agents and count the same entries as a move? [Clarity, Spec §FR-006, §FR-007, §Edge Cases, Research §R11]
+- [x] CHK015 - Is the error a resume ends with when a tightened choice blocks it specified well enough for a client to tell it from any other failure and to know what to do next? [Clarity, Spec §FR-023, Contract §sse-events]
+- [x] CHK016 - Are the limits on what an agent's card can make the service keep and show stated for every part of the card, the tags of a skill included? [Clarity, Spec §FR-002, Contract §AgentCard]
 
 ## Requirement Consistency
 
-- [ ] CHK017 - Do FR-019 ("a run in progress keeps the tools it started with") and FR-022 ("holds at once, also for runs in progress") say the same thing about what such a run can still do? [Consistency, Spec §FR-019, §FR-022]
-- [ ] CHK018 - Does the statement that an operator sees a card's text before the model does agree with what an add, a move, and a check do with the text they read? [Conflict, Spec §FR-013, §FR-015, §Assumptions]
-- [ ] CHK019 - Does the reason given for "one address, one agent" hold for everything the rule lets through, two saved paths whose cards name one interface included? [Consistency, Spec §FR-006, §FR-027, §Assumptions, Research §Known and not covered]
-- [ ] CHK020 - Are confirmations required consistently for every change that can remove a human check or keep a thread from continuing? [Consistency, Spec §FR-011]
-- [ ] CHK021 - Do the spec, the data model, and the contract agree on which changes move an agent's version, which give up tasks, and which reach running instances? [Consistency, Spec §FR-012, §FR-013, §FR-024, Data model §State transitions, Contract §openapi]
-- [ ] CHK022 - Does the requirement that the service starts when an agent cannot be used agree with the cases that still stop startup, and with the constitution's sentence about a deployment configured only through the environment? [Consistency, Spec §FR-018, §FR-020, Plan §Constitution Check]
-- [ ] CHK023 - Does the contract give an answer for every way a route of the Agents section can fail that the spec or the research names, the list included? [Consistency, Contract §openapi, Spec §FR-004, Research §R3]
+- [x] CHK017 - Do FR-019 ("a run in progress keeps the tools it started with") and FR-022 ("holds at once, also for runs in progress") say the same thing about what such a run can still do? [Consistency, Spec §FR-019, §FR-022]
+- [x] CHK018 - Does the statement that an operator sees a card's text before the model does agree with what an add, a move, and a check do with the text they read? [Conflict, Spec §FR-013, §FR-015, §Assumptions]
+- [x] CHK019 - Does the reason given for "one address, one agent" hold for everything the rule lets through, two saved paths whose cards name one interface included? [Consistency, Spec §FR-006, §FR-027, §Assumptions, Research §Known and not covered]
+- [x] CHK020 - Are confirmations required consistently for every change that can remove a human check or keep a thread from continuing? [Consistency, Spec §FR-011]
+- [x] CHK021 - Do the spec, the data model, and the contract agree on which changes move an agent's version, which give up tasks, and which reach running instances? [Consistency, Spec §FR-012, §FR-013, §FR-024, Data model §State transitions, Contract §openapi]
+- [x] CHK022 - Does the requirement that the service starts when an agent cannot be used agree with the cases that still stop startup, and with the constitution's sentence about a deployment configured only through the environment? [Consistency, Spec §FR-018, §FR-020, Plan §Constitution Check]
+- [x] CHK023 - Does the contract give an answer for every way a route of the Agents section can fail that the spec or the research names, the list included? [Consistency, Contract §openapi, Spec §FR-004, Research §R3]
 
 ## Acceptance Criteria Quality
 
-- [ ] CHK024 - Can SC-004 be verified objectively: is it said whose record counts, and from which moment? [Measurability, Spec §SC-004]
-- [ ] CHK025 - Can SC-008 be verified objectively: are the forms to search for and the places to search listed? [Measurability, Spec §SC-008, §FR-028, §User Story 6]
-- [ ] CHK026 - Are acceptance scenarios defined for both directions of an approval change, for a run in progress and for a run that is paused? [Acceptance Criteria, Spec §User Story 4]
+- [x] CHK024 - Can SC-004 be verified objectively: is it said whose record counts, and from which moment? [Measurability, Spec §SC-004]
+- [x] CHK025 - Can SC-008 be verified objectively: are the forms to search for and the places to search listed? [Measurability, Spec §SC-008, §FR-028, §User Story 6]
+- [x] CHK026 - Are acceptance scenarios defined for both directions of an approval change, for a run in progress and for a run that is paused? [Acceptance Criteria, Spec §User Story 4]
 
 ## Scenario Coverage
 
-- [ ] CHK027 - Are requirements defined for two operators, or two instances, acting at the same moment: two adds, a change from a page that is no longer current, a change during a check? [Coverage, Spec §FR-006, §FR-012, §FR-014, §Edge Cases]
-- [ ] CHK028 - Are requirements defined for a change that is interrupted: the service stopping in the middle, and the console getting no answer? [Coverage, Recovery, Spec §FR-004, §FR-024, §Edge Cases]
-- [ ] CHK029 - Are requirements defined for an instance that cannot read the current set of agents, for a run that starts and for a page or a client that reads? [Coverage, Exception Flow, Spec §FR-004, §FR-019]
-- [ ] CHK030 - Are requirements or assumptions stated for instances that run different versions of the service while agents are saved, going forward and going back? [Gap, Spec §Assumptions, Plan §Rollout, Research §R2]
-- [ ] CHK031 - Is misuse of the routes that read a card addressed: adds and checks repeated over time, and the service made to request any port of this machine? [Coverage, Spec §FR-014, §Assumptions]
-- [ ] CHK032 - Are requirements defined for an agent whose card changes after it was saved, for the worse and merely for something else? [Coverage, Spec §FR-015, §Edge Cases]
+- [x] CHK027 - Are requirements defined for two operators, or two instances, acting at the same moment: two adds, a change from a page that is no longer current, a change during a check? [Coverage, Spec §FR-006, §FR-012, §FR-014, §Edge Cases]
+- [x] CHK028 - Are requirements defined for a change that is interrupted: the service stopping in the middle, and the console getting no answer? [Coverage, Recovery, Spec §FR-004, §FR-024, §Edge Cases]
+- [x] CHK029 - Are requirements defined for an instance that cannot read the current set of agents, for a run that starts and for a page or a client that reads? [Coverage, Exception Flow, Spec §FR-004, §FR-019]
+- [x] CHK030 - Are requirements or assumptions stated for instances that run different versions of the service while agents are saved, going forward and going back? [Gap, Spec §Assumptions, Plan §Rollout, Research §R2]
+- [x] CHK031 - Is misuse of the routes that read a card addressed: adds and checks repeated over time, and the service made to request any port of this machine? [Coverage, Spec §FR-014, §Assumptions]
+- [x] CHK032 - Are requirements defined for an agent whose card changes after it was saved, for the worse and merely for something else? [Coverage, Spec §FR-015, §Edge Cases]
 
 ## Edge Case Coverage
 
-- [ ] CHK033 - Is the outcome defined for a proposal that is waiting when its agent is moved, removed, and removed and added again? [Edge Case, Spec §FR-023, §Edge Cases]
-- [ ] CHK034 - Is the outcome defined for a task that becomes pending between a confirmation and its change, and for one a run starts at an earlier address afterwards? [Edge Case, Spec §FR-025, §Edge Cases]
+- [x] CHK033 - Is the outcome defined for a proposal that is waiting when its agent is moved, removed, and removed and added again? [Edge Case, Spec §FR-023, §Edge Cases]
+- [x] CHK034 - Is the outcome defined for a task that becomes pending between a confirmation and its change, and for one a run starts at an earlier address afterwards? [Edge Case, Spec §FR-025, §Edge Cases]
 
 ## Non-Functional Requirements
 
-- [ ] CHK035 - Is the exposure created by an unauthenticated API that can now switch an agent's approval off stated, with the condition under which it must be revisited? [Security, Spec §Assumptions]
-- [ ] CHK036 - Is everything the address rule knowingly leaves uncovered named in the spec, and not only in the research? [Gap, Security, Spec §FR-028, §Assumptions, Research §Known and not covered]
-- [ ] CHK037 - Does the spec say what the health check reports while agents cannot be used, and which signal an operator has instead? [Observability, Spec §FR-001a, §FR-020]
+- [x] CHK035 - Is the exposure created by an unauthenticated API that can now switch an agent's approval off stated, with the condition under which it must be revisited? [Security, Spec §Assumptions]
+- [x] CHK036 - Is everything the address rule knowingly leaves uncovered named in the spec, and not only in the research? [Gap, Security, Spec §FR-028, §Assumptions, Research §Known and not covered]
+- [x] CHK037 - Does the spec say what the health check reports while agents cannot be used, and which signal an operator has instead? [Observability, Spec §FR-001a, §FR-020]
 
 ## Dependencies & Assumptions
 
-- [ ] CHK038 - Is the trust placed in the operator, the model, an agent, and an agent's card stated in one place and consistent with the requirements? [Assumption, Spec §Assumptions]
-- [ ] CHK039 - Does the plan's Constitution Check name every principle the feature touches, and justify what the design adds? [Dependency, Plan §Constitution Check]
-- [ ] CHK040 - Is the assumption that every instance is given the same environment agents and tool servers stated together with what happens when it does not hold? [Assumption, Gap, Spec §Assumptions, §Edge Cases]
+- [x] CHK038 - Is the trust placed in the operator, the model, an agent, and an agent's card stated in one place and consistent with the requirements? [Assumption, Spec §Assumptions]
+- [x] CHK039 - Does the plan's Constitution Check name every principle the feature touches, and justify what the design adds? [Dependency, Plan §Constitution Check]
+- [x] CHK040 - Is the assumption that every instance is given the same environment agents and tool servers stated together with what happens when it does not hold? [Assumption, Gap, Spec §Assumptions, §Edge Cases]
+
+## Review record
+
+Evaluated on 2026-11-19 by the agent that generated the list, as `AGENTS.md` asks of the
+checklist step, against the spec as clarified, the plan, the research, the data model, the
+contracts, and the tasks. The reviewer of this pull request confirms or reopens each marker.
+
+24 of 40 items were satisfied as written. The other 16 came down to 15 findings. All were
+resolved the same day, in the spec and, where another document said otherwise or said nothing,
+in the plan, the research, the data model, the contract, and the tasks. All 40 items are now
+marked. Most findings are rules the plan or the task list had already settled and the spec had
+not caught up with, which is what running this step after `/speckit-tasks` was bound to find.
+One finding, F4, adds behavior a client sees, and F6 adds log lines.
+
+The fixes were then read by a reviewer that had not written them. It found one high and five
+medium problems in them, which are folded into the resolutions below, and reopened two items
+that had been marked as satisfied: CHK024, now F15, and CHK017, which held until F2 and F3
+changed FR-022 and holds again now that FR-019 and SC-003 say what FR-022 says.
+
+**Higher impact**
+
+| # | Items | Finding | Resolution |
+|---|---|---|---|
+| F1 | CHK005 | FR-023 and FR-025 said a proposal and a task of an environment agent "follow its name". Read literally, after a restart they would pass to a saved agent given that name, and nothing said what a proposal for a saved agent does when the environment takes its name. | FR-017, FR-023, FR-025, and one edge case: a proposal and a task never pass between an environment agent and a saved agent that come to hold one name, in either direction. Research R8 and tasks T029, T050, and T059 had the rule with one hole: a call with no record of which agent it was proposed for followed the name. That now holds for an environment agent's tool only, and a saved agent's tool sends nothing (R8, the data model, T050, T059, T095). |
+| F2 | CHK003 | FR-022 required the check only before a message sent without a pause. SC-004 counts zero messages of any kind after a removal, and a continuation that began before a removal still holds an approved message. The plan noted that the design does more than the spec asks; the spec stayed narrower than its own criterion. | FR-022: the check is made before any message to a saved agent, and the approval choice is looked at when no person decided the message. FR-019, SC-003, and one assumption say the same. Plan, "Corrections to the spec", updated. |
+| F3 | CHK004 | The spec had no rule for a run in progress that still has an agent at an earlier address after another agent was saved there. An agent that runs without approval could be moved, and one that requires approval saved where it was. Only research R7 and the data model had the rule. | FR-022 and the edge case for a moved agent: nothing more is sent to an earlier address that is another agent's now. |
+| F4 | CHK018 | The assumptions said an operator sees a card's text before the model does. A check replaces the kept text, and the next run uses it, with nothing telling the operator that it changed. | FR-013, FR-030, User Story 3 scenario 6, and the contract's new `card_changed`: a check says when it replaced the details, the console says so, and it is logged. The assumption now says what is true: the text changes only by the operator's act and is used from the next run. A confirmation before new text is used was considered and not adopted: it would make a check a two-step change. Tasks T065, T068, T071, and T076 updated. |
+
+**Medium impact**
+
+| # | Items | Finding | Resolution |
+|---|---|---|---|
+| F5 | CHK019 | "One address, one agent" is justified by two names for one destination. Two agents saved at different paths of one port whose cards name the same interface are that, and only the research said the rule does not catch it. | Stated in Assumptions, with the reason it is not caught. |
+| F6 | CHK009 | FR-030 required a log line for two reasons a message is kept back. The design has six, and a refused resume was not listed. | FR-030: every message an agent's tool kept back under a fixed rule of FR-021 to FR-025, with the rule, and every resume refused under FR-023. Tasks T019 and T086 log them, and T029, T050, and T078 look for the lines. |
+| F8 | CHK030 | That every instance must run this version before the first agent is saved was in the plan only, and going back to the earlier version was addressed nowhere. | Assumptions state the forward constraint. Plan, "Rollout", says what going back does and the one condition it holds under, reasoned from the code and not tested. |
+| F9 | CHK023, CHK029 | Nothing in the spec or the contract said what the list answers when the saved agents cannot be read, and the research had first had it fall back to an earlier set, against FR-004. | FR-004: the list answers with an error and never an earlier list. FR-019: the catalog and the thread state answer from the last set meanwhile. Contract: `GET /agents` gains its 500. |
+| F14 | CHK040 | The assumption that instances are given the same environment agents was stated without its consequence: an instance whose environment overrides a saved agent gives up that agent's tasks for every instance. | New edge case. |
+
+**Lower impact**
+
+| # | Items | Finding | Resolution |
+|---|---|---|---|
+| F7 | CHK007 | FR-028 named a saved agent's address only. An address that was entered and refused was covered for the refusal's text (FR-006) and not for log lines. | FR-028: a refused address is kept out of the same places. |
+| F10 | CHK011 | FR-017 did not say what becomes of a saved agent once nothing overrides it any more. | FR-017: it is in use again as it was saved, tasks given up meanwhile stay given up, and a proposal still waiting for it is decided as for any saved agent. Task T029 updated. |
+| F11 | CHK016 | FR-002 bounded a card's texts and skills. The number of tags of a skill was bounded in the contract only. | FR-002, one edge case, the limits in Assumptions, the data model, and the contract's descriptions: the first 50 tags. |
+| F12 | CHK031 | FR-014 limits card reads at once. That nothing limits them over time was not said. | Stated in Assumptions beside the unauthenticated API. |
+| F13 | CHK036 | Tracing, which the address rule does not reach, was named in the research only. | Listed in Assumptions among what is left open. |
+| F15 | CHK024 | SC-004 counts zero messages after a removal was answered, while FR-022 does not recall a message whose sending had begun. | SC-004: such a message is not counted. |
 
 ## Notes
 
@@ -82,3 +130,6 @@
 - Leave items unchecked when they still require clarification, correction, or reviewer evaluation
 - `/speckit-implement` reads checklist checkbox state as a gate and must not modify markers
 - `checklists/requirements.md` has a separate built-in lifecycle maintained by `/speckit-specify` and `/speckit-clarify`
+- The items were generated unchecked and committed that way. The markers above were set in
+  the review recorded in "Review record".
+- The items a finding kept open were marked once its resolution was written into the documents.

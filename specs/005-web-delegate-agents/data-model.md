@@ -49,8 +49,8 @@ What is kept, shown, and used to describe an agent's tools: `name`, `description
 and `skills` (`id`, `name`, `description`, `tags`), as today, plus `cut`, which the Agents
 routes return and the catalog does not: the catalog keeps its shape.
 
-- Each text is cut to its first 2,000 characters and `skills` to the first 50; `cut` is true
-  when anything was cut (FR-002).
+- Each text is cut to its first 2,000 characters, `skills` to the first 50, and a skill's
+  `tags` to the first 50; `cut` is true when anything was cut (FR-002).
 - Every text has every agent address the process knows removed, in the forms of R12, before
   it is kept or returned (FR-028).
 - For a saved agent the details are the row's `card`: the same on every instance, whether or
@@ -209,7 +209,7 @@ Each is an error result of the tool; the run continues, and nothing reaches an a
 
 | When | Result names |
 |---|---|
-| The call's row names another agent than the link's, an environment agent included: the agent it was proposed for was removed, and another was added under its name (FR-023) | the agent, and that the agent the message was proposed for was removed |
+| The call's row names another agent than the link's, an environment agent included, or a saved agent's tool finds no row for the call: the agent it was proposed for was removed, and another was added under its name (FR-023) | the agent, and that the agent the message was proposed for was removed |
 | The saved agent the tool was built for is gone (FR-022) | the agent, and that it was removed |
 | The tool needed no decision when its run was built, and the agent now requires approval (FR-022) | the agent, and that it now requires approval |
 | The tool's link is of an earlier address, and another agent now has that address (R7) | the agent, and that the address the run started with is another agent's now |
