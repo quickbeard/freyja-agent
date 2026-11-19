@@ -361,6 +361,9 @@ def _record(row: dict[str, Any]) -> LlmProfileRecord:
     return LlmProfileRecord(**{name: row[name] for name in _COLUMNS})
 
 
+# Semgrep's rule for SQLAlchemy takes a statement composed with psycopg's ``sql`` module for
+# one built from strings, so each such statement below is marked ``nosemgrep`` for that rule.
+# Their parts are constants and identifiers of this file, and every value is a parameter.
 class PostgresLlmProfileStore:
     """The service's store: two tables in the shared pool (research R5)."""
 
@@ -374,11 +377,13 @@ class PostgresLlmProfileStore:
 
     async def list_profiles(self) -> list[LlmProfileRecord]:
         async with self._pool.connection() as conn:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(_SELECT + sql.SQL(" ORDER BY lower(name)"))
             return [_record(row) for row in await cursor.fetchall()]
 
     async def get_profile(self, profile_id: str) -> LlmProfileRecord | None:
         async with self._pool.connection() as conn:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(_SELECT + sql.SQL(" WHERE id = %(id)s"), {"id": profile_id})
             row = await cursor.fetchone()
             return _record(row) if row else None
@@ -414,6 +419,7 @@ class PostgresLlmProfileStore:
                 cursor = await conn.execute("SELECT count(*) AS count FROM freyja_llm_profiles")
                 if (await cursor.fetchone())["count"] >= PROFILE_LIMIT:
                     raise ProfileLimitError
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(insert + _RETURNING, values)
                 return _record(await cursor.fetchone())
         except errors.UniqueViolation:
@@ -422,6 +428,7 @@ class PostgresLlmProfileStore:
     async def update_profile(self, profile_id: str, **changes: Any) -> LlmProfileRecord:
         try:
             async with self._pool.connection() as conn, conn.transaction():
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(
                     _SELECT + sql.SQL(" WHERE id = %(id)s FOR UPDATE"), {"id": profile_id}
                 )
@@ -445,6 +452,7 @@ class PostgresLlmProfileStore:
                             " last_test_reason = NULL"
                         )
                     )
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(
                     sql.SQL("UPDATE freyja_llm_profiles SET {} WHERE id = %(id)s").format(
                         sql.SQL(", ").join(assignments)

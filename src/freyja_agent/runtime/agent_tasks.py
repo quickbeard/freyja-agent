@@ -475,6 +475,9 @@ def _send(row: dict[str, Any]) -> AgentSend:
     return AgentSend(**{name: row[name] for name in _SEND_COLUMNS})
 
 
+# Semgrep's rule for SQLAlchemy takes a statement composed with psycopg's ``sql`` module for
+# one built from strings, so each such statement below is marked ``nosemgrep`` for that rule.
+# Their parts are constants and identifiers of this file, and every value is a parameter.
 class PostgresAgentTaskStore:
     """The service's store: three tables in the shared pool (research R8)."""
 
@@ -490,6 +493,7 @@ class PostgresAgentTaskStore:
                 return
             try:
                 async with conn.transaction():
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     await conn.execute(
                         sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT))
                     )

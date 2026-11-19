@@ -40,6 +40,32 @@ describe("the path from the browser to the service", () => {
   });
 });
 
+describe("the build the container image is made from", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.resetModules();
+  });
+
+  // The setting is read once, when the configuration is loaded, so each case loads it anew.
+  async function output(value: string | undefined) {
+    vi.stubEnv("FREYJA_WEB_STANDALONE", value);
+    vi.resetModules();
+    return (await import("@/next.config")).default.output;
+  }
+
+  it("is the ordinary one unless it is asked for", async () => {
+    expect(await output(undefined)).toBeUndefined();
+    expect(await output("")).toBeUndefined();
+    expect(await output("0")).toBeUndefined();
+    expect(await output("true")).toBeUndefined();
+  });
+
+  it("is a standalone server when FREYJA_WEB_STANDALONE is 1", async () => {
+    expect(await output("1")).toBe("standalone");
+    expect(await output(" 1 ")).toBe("standalone");
+  });
+});
+
 describe("the web app's address alone", () => {
   it("leads to the LLM section, and not for good", async () => {
     expect(await nextConfig.redirects?.()).toEqual([

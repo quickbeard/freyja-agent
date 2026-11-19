@@ -1,0 +1,13 @@
+# The build context of the service's image (Dockerfile). Everything is left out, and what
+# the image is built from is named: a new file at the root, a .env among them, never reaches
+# an image by accident.
+*
+
+!pyproject.toml
+!uv.lock
+!README.md
+!src/
+!workspace/skills/
+
+**/__pycache__/
+**/*.py[cod]

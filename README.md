@@ -449,13 +449,60 @@ Playwright builds the app and serves it on port 3100 itself, so nothing needs to
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 
+## Container images
+
+Two images, one per process: the service (`Dockerfile`, built from the repository root) and the web console (`web/Dockerfile`, built from `web/`).
+
+```bash
+docker build -t freyja-agent .
+docker build -t freyja-web web
+```
+
+Both are built on Chainguard's Wolfi base, hold no configuration and no credential, run as an unprivileged user (65532), and need no writable file system apart from `/tmp`. The service also writes case files under `/app/workspace/cases`; mount a volume there to keep them.
+
+**Both listen on loopback inside their container.** The API and the console have no login, so the images keep the default a developer's machine has: the service on `127.0.0.1:8000` and the console on `127.0.0.1:3000`. Two containers that share a network namespace reach each other there, which is how they are meant to run: as two containers of one pod, or on the host's network.
+
+```bash
+docker run -d --network host --read-only --tmpfs /tmp \
+  -e FREYJA_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja freyja-agent
+docker run -d --network host --read-only --tmpfs /tmp freyja-web
+```
+
+The service container reads the same `FREYJA_*` variables as `freyja-api` does anywhere; `FREYJA_DATABASE_URI` is the one it cannot start without. Give them one by one or from the orchestrator's own configuration: `docker run --env-file` keeps the quotes that `.env.example` puts around a JSON value. To reach either from outside its container, for example through `docker run -p` or a Kubernetes Service, set `FREYJA_HOST=0.0.0.0` for the service or `HOSTNAME=0.0.0.0` for the console, and do it only where the network around the container already decides who may connect: whoever reaches the console can change the service's configuration.
+
+**The web image holds the service's address.** Next.js writes `FREYJA_API_URL` into the build, so it is given when the image is built and a container cannot change it. The default, `http://127.0.0.1:8000`, is right for the shared network namespace above. For another layout, build the image for it:
+
+```bash
+docker build --build-arg FREYJA_API_URL=http://freyja-agent:8000 -t freyja-web web
+```
+
+The base image and the image uv is taken from can come from a mirror: `--build-arg BASE_IMAGE=...` for both Dockerfiles and `--build-arg UV_IMAGE=...` for the service's. The service image carries Python and the service alone. A tool server that Freyja launches with a command (`FREYJA_MCP_SERVERS` with `command`) needs that command in the image, and `uvx`, `npx`, and `git` are not there: use a server with a `url`, or build an image of your own on top of this one.
+
+Each image has a health check: the service's asks `/healthz`, the console's its own LLM page, both on loopback.
+
+## Security scans
+
+[Trivy](https://trivy.dev) looks for known vulnerabilities in what `uv.lock` and `web/pnpm-lock.yaml` install and for mistakes in the Dockerfiles, and [Semgrep](https://semgrep.dev) for insecure code. Trivy is installed by hand; Semgrep runs through uv.
+
+```bash
+trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 \
+  --skip-dirs .venv --skip-dirs web/node_modules --skip-dirs web/.next .
+uvx semgrep@1.178.0 scan --metrics=off --error \
+  --config p/default --config p/security-audit --config p/owasp-top-ten --config p/dockerfile .
+trivy image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 freyja-agent   # a built image
+```
+
+Both must report nothing. A vulnerable package is upgraded in its lock file (`uv lock --upgrade-package <name>`). A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before it, with the reason near it. `--metrics=off` keeps Semgrep from sending anything about the repository; the rule sets are named because `auto` needs metrics on. Leave Trivy's `secret` scanner off locally: it reads files git ignores, `.env` among them, and prints what it finds.
+
+CI runs the two scans of the source on every pull request and merge request and on `main`: the `trivy` and `semgrep` jobs of `.github/workflows/scan.yml` on GitHub and of `.gitlab-ci.yml` on GitLab. On GitHub a third job, `images`, builds both images, starts them beside a Postgres, asks the service and the console for a page, checks that the console does not answer on a published port unless `HOSTNAME=0.0.0.0` is set, and scans both images. GitLab has no such job: building an image needs a runner that allows it.
+
 ## Configuration
 
 Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/config.py`. Load them with `uv run --env-file .env <command>`.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `FREYJA_HOST` | `127.0.0.1` | Bind address for `freyja-api`. Containers set `0.0.0.0`. |
+| `FREYJA_HOST` | `127.0.0.1` | Bind address for `freyja-api`. The container image keeps the default; see [Container images](#container-images). |
 | `FREYJA_PORT` | `8000` | Bind port for `freyja-api`. |
 | `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer, store, and run locks. No default because it carries credentials; `.env.example` has the value the compose container uses. |
 | `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. With the provider's variables below it is the environment's [LLM profile](#llm-profiles), used until a saved profile is activated. |

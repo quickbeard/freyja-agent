@@ -1,0 +1,130 @@
+name: Scan
+# Trivy and Semgrep over the source, and the two container images built, run, and scanned.
+# The dev deploy pipeline runs the same scanners with limits of its own; a change that passes
+# here with no finding passes there.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+env:
+  # The versions .gitlab-ci.yml names; change both together. The checksum is the release's
+  # own, from its checksums file.
+  TRIVY_VERSION: 0.76.2
+  TRIVY_SHA256: bc0fc726e017b8927a62b2d3531d7a84ee01769daf5c99ed866dced54089fdbf
+  SEMGREP_VERSION: 1.178.0
+jobs:
+  trivy:
+    name: trivy
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Trivy
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
+      - name: Run Trivy over the source
+        # Known vulnerabilities in what uv.lock and web/pnpm-lock.yaml install, and mistakes
+        # in the Dockerfiles. Secrets are gitleaks' job (secrets.yml).
+        run: |
+          "$RUNNER_TEMP/trivy" fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 \
+            --skip-dirs .venv --skip-dirs web/node_modules --skip-dirs web/.next .
+  semgrep:
+    name: semgrep
+    timeout-minutes: 15
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+      - name: Run Semgrep
+        # --error: any finding fails. --metrics=off: nothing about the repository is sent;
+        # the rules are fetched, which is why they are named and `auto` is not used.
+        run: |
+          uv tool run --from "semgrep==${SEMGREP_VERSION}" semgrep scan --metrics=off --error \
+            --config p/default --config p/security-audit --config p/owasp-top-ten \
+            --config p/dockerfile .
+  images:
+    name: images
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    services:
+      # The service needs Postgres to start. The same container as docker-compose.yml.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: freyja
+          POSTGRES_PASSWORD: freyja
+          POSTGRES_DB: freyja
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U freyja -d freyja"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install Trivy
+        run: |
+          curl -sSfL -o "$RUNNER_TEMP/trivy.tar.gz" \
+            "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          echo "${TRIVY_SHA256}  $RUNNER_TEMP/trivy.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/trivy.tar.gz" -C "$RUNNER_TEMP" trivy
+      - name: Build the service's image
+        run: docker build --tag freyja-agent:ci .
+      - name: Build the web console's image
+        run: docker build --tag freyja-web:ci web
+      - name: Run both and ask them
+        run: |
+          set -euo pipefail
+          # Both on the host's network, as two containers of one pod would share theirs: each
+          # listens on loopback and the console reaches the service there.
+          docker run --detach --name service --network host --read-only --tmpfs /tmp \
+            --env FREYJA_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja \
+            freyja-agent:ci
+          docker run --detach --name web --network host --read-only --tmpfs /tmp freyja-web:ci
+          for _ in $(seq 1 30); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:8000/healthz && break
+            sleep 2
+          done
+          curl --silent --show-error --fail http://127.0.0.1:8000/healthz
+          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3000/llm
+          # Through the console to the service.
+          curl --silent --show-error --fail http://127.0.0.1:3000/api/healthz
+          # Neither runs as root.
+          test "$(docker exec service id -u)" = 65532
+          test "$(docker exec web id -u)" = 65532
+          docker rm --force web
+      - name: The console is not reachable from outside its container unless it is told to be
+        run: |
+          set -euo pipefail
+          docker run --detach --name web-default --publish 127.0.0.1:3001:3000 freyja-web:ci
+          docker run --detach --name web-open --publish 127.0.0.1:3002:3000 \
+            --env HOSTNAME=0.0.0.0 freyja-web:ci
+          for _ in $(seq 1 15); do
+            curl --silent --fail --output /dev/null http://127.0.0.1:3002/llm && break
+            sleep 2
+          done
+          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3002/llm
+          # The one left as built answers inside its container and nowhere else.
+          docker exec web-default node -e "fetch('http://127.0.0.1:3000/llm').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+          if curl --silent --max-time 5 --output /dev/null http://127.0.0.1:3001/llm; then
+            echo "The console answered on a published port without HOSTNAME=0.0.0.0." >&2
+            exit 1
+          fi
+      - name: Show the containers' logs
+        if: failure()
+        run: |
+          for name in service web web-default web-open; do
+            echo "--- $name"
+            docker logs "$name" 2>&1 | tail -n 50 || true
+          done
+      - name: Run Trivy over the images
+        # What the deploy pipeline counts: known vulnerabilities in the image's packages.
+        run: |
+          "$RUNNER_TEMP/trivy" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 freyja-agent:ci
+          "$RUNNER_TEMP/trivy" image --scanners vuln --severity HIGH,CRITICAL --exit-code 1 freyja-web:ci

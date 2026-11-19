@@ -56,6 +56,15 @@ Always go through uv. Never call python, pip, or pytest directly.
   hook does not run these tests; CI does.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
+- `docker build -t freyja-agent .` and `docker build -t freyja-web web` build the two container
+  images, the service and the web console. `--build-arg FREYJA_API_URL=...` gives the web
+  image another address for the service; it is written into the build.
+- `trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1 --skip-dirs .venv
+  --skip-dirs web/node_modules --skip-dirs web/.next .` and `uvx semgrep@1.178.0 scan
+  --metrics=off --error --config p/default --config p/security-audit --config p/owasp-top-ten
+  --config p/dockerfile .` are the two scans of the source CI runs, and `trivy image --scanners
+  vuln --severity HIGH,CRITICAL --exit-code 1 freyja-agent` the scan of a built image. Trivy
+  is installed by hand; leave its `secret` scanner off locally, where it would print `.env`.
 
 `.env` is git-ignored; copy it from `.env.example`. Settings do not read `.env` themselves, so
 pass `--env-file .env` to `uv run` whenever a command needs it. The service needs Postgres at
@@ -197,6 +206,17 @@ startup and exits with an error naming the connection when it is unreachable.
   to the other side too. The linters only report in CI; the commit hook is where files get
   fixed. CI does not run the opt-in Postgres tests.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
+- `Dockerfile` and `web/Dockerfile`: the two container images, the service and the web
+  console, each with its `.dockerignore` (the service's names the files that are let in).
+  Both are built on Chainguard's Wolfi base, run as user 65532, and listen on loopback inside
+  the container: the service because the image sets no `FREYJA_*` value, the console because
+  the image sets `HOSTNAME=127.0.0.1`. The web image is a standalone Next.js server
+  (`FREYJA_WEB_STANDALONE=1` in its build), with `FREYJA_API_URL` written into it when it is
+  built. `.github/workflows/scan.yml` runs Trivy and Semgrep over the source (`trivy`,
+  `semgrep`) and builds, runs, and scans both images (`images`); GitLab's `trivy` and
+  `semgrep` jobs do the first two, and no GitLab job builds an image.
+  `tests/test_container_images.py` holds the images' defaults and keeps the scanners' versions
+  and questions equal on both sides.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
   with stub tool servers, `make_a2a_app` with stand-in agents, and `make_llm_app` with LLM
@@ -229,6 +249,16 @@ startup and exits with an error naming the connection when it is unreachable.
   alike. A change that needs no test, such as documentation or a dependency bump, says so in
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
+- Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
+  lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
+  file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before
+  it, with the reason near it, and never by leaving a file or a rule out of the scan. SQL is
+  composed with psycopg's `sql` module, which Semgrep's SQLAlchemy rule takes for string
+  building; each such statement carries that mark.
+- A GitHub Action is named by its commit, with its version in a comment beside it.
+- The container images keep the safe local choice: neither sets an address to listen on other
+  than loopback, and neither runs as root. A deployment that needs otherwise says so in its
+  own configuration (`FREYJA_HOST`, `HOSTNAME`).
 - A stored API key appears nowhere beyond its last four characters: in no response, stream,
   thread, or log. Text that may hold one, such as a provider's error, goes through `redact`
   first, and a model is guarded before it is used (`guard_model`), so its errors hold no key
