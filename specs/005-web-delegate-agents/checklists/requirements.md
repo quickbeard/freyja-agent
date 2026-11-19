@@ -89,3 +89,10 @@
       the console asked for.
 - No dependency outside this feature: the constitution needs no amendment (Assumptions,
   "Environment and dependencies").
+- Validated again on 2026-11-19 after `/speckit-clarify`: 16 of 16 items still pass. Five
+  questions were asked and answered; each is in the spec's Clarifications section. They
+  settled calls 1, 2, 3, and 6 above and the proposal half of call 4, and changed two of
+  them: a removed agent is now cut off from runs in progress as a tightened one is (call 2,
+  FR-022), and a pending proposal follows its agent across a move but not across a removal
+  and a new addition (call 4, FR-023). Calls 5 and 7 to 10, and the task half of call 4,
+  were not asked about and stay as written.
