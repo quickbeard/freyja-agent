@@ -15,7 +15,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from freyja_agent.llm.check import FIRST_MESSAGE, SECOND_MESSAGE, TOOL_NAME, check_model
+from freyja_agent.llm.check import (
+    FIRST_MESSAGE,
+    SECOND_MESSAGE,
+    TESTS_AT_ONCE,
+    TOOL_NAME,
+    CheckSlots,
+    check_model,
+)
 from freyja_agent.llm.providers import ModelSpec, build_model
 from freyja_agent.llm.secrets import REDACTED
 from tests.conftest import LlmApp
@@ -269,3 +276,31 @@ def test_the_routes_test_a_profile_through_the_real_client(
     ]
     assert {r.key for r in stub.requests} == {KEY}
     assert {r.api for r in stub.requests} == {"responses" if responses_api else "chat"}
+
+
+def test_slots_refuse_in_the_words_they_were_made_with() -> None:
+    """Feature 005, research R15: card reads are counted as tests are, in words of their own."""
+    slots = CheckSlots()
+    slots.take("p1")
+    assert slots.refusal("p1") == "This profile is already being tested. Wait for that test to end."
+    for _ in range(TESTS_AT_ONCE - 1):
+        slots.take(None)
+    assert slots.refusal("p2") == (
+        f"{TESTS_AT_ONCE} tests are already running on this instance. "
+        "Try again when one of them ends."
+    )
+
+    reads = CheckSlots(
+        busy="This agent is already being checked.",
+        full="{at_once} card reads are already under way.",
+        at_once=2,
+    )
+    assert reads.refusal("a1") is None
+    reads.take("a1")
+    assert reads.refusal("a1") == "This agent is already being checked."
+    assert reads.refusal("a2") is None
+    reads.take(None)
+    assert reads.refusal("a2") == "2 card reads are already under way."
+    reads.release(None)
+    reads.release("a1")
+    assert reads.refusal("a1") is None
