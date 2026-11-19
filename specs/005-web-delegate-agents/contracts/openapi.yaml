@@ -1,0 +1,395 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.5.0
+  description: >
+    Additions made by feature 005, the Agents section of the web console. Every path here is
+    new. The thread routes, the catalog, and the LLM routes keep their shapes; see
+    ../../001-thread-runs-api/contracts/, ../../002-mcp-tool-delegation/contracts/,
+    ../../003-a2a-agent-delegation/contracts/, and ../../004-web-llm-profiles/contracts/.
+    The catalog (`GET /tools`) now lists saved agents beside environment agents, in the shape
+    it already has, and still shows no address. The run stream's `error` gains one code; see
+    sse-events.md. No authentication in this increment; bind to a local interface.
+
+    A saved agent's address appears only in the bodies defined here: in `Agent.url` of an
+    answer, and in `url` of a request. It is in no path, no query, no error, and no other
+    route. An environment agent's address appears nowhere.
+
+    The service sends no cross-origin headers, so a page from another origin can neither read
+    a response nor send a JSON body; a body that is not sent as JSON is refused with 422, and
+    a 422 never repeats the value that was refused. A request that changes something (POST,
+    PATCH, DELETE) and that a browser marks as made by a page of another origin is refused
+    with 403 and the code `other_origin`, on every path here, before anything else is looked
+    at, by the rule the LLM routes apply (feature 004, contracts/openapi.yaml).
+paths:
+  /agents:
+    get:
+      summary: List every agent Freyja may hand work to
+      description: >
+        Environment agents first, in configuration order, then saved agents by name. Read from
+        the database and from what this instance holds in memory; no agent is contacted.
+        `state`, `checked_at`, and `reason` are this instance's.
+      responses:
+        "200":
+          description: The agents
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentList" }
+              example:
+                limit: 20
+                unusable: 1
+                agents:
+                  - id: env.hello
+                    name: hello
+                    source: environment
+                    approval: none
+                    url: null
+                    version: null
+                    created_at: null
+                    updated_at: null
+                    state: reachable
+                    checked_at: "2026-11-19T09:00:00Z"
+                    reason: null
+                    card:
+                      name: Hello World Agent
+                      description: Just a hello world agent
+                      version: 1.0.0
+                      skills:
+                        - { id: hello_world, name: Returns hello world, description: just returns hello world, tags: [hello world] }
+                      cut: false
+                    pending_tasks: 0
+                  - id: 7c9e6679f0a54b3e8d2a1f4b6c8e0a2d
+                    name: stub
+                    source: saved
+                    approval: required
+                    url: "http://127.0.0.1:9998"
+                    version: 2
+                    state: unreachable
+                    checked_at: "2026-11-19T09:04:10Z"
+                    reason: Nothing answered at the address.
+                    card:
+                      name: Stub agent
+                      description: A stand-in agent for tests.
+                      version: 0.1.0
+                      skills: []
+                      cut: false
+                    pending_tasks: 3
+                    created_at: "2026-11-19T08:50:00Z"
+                    updated_at: "2026-11-19T08:58:00Z"
+    post:
+      summary: Add an agent
+      description: >
+        Reads the agent's card at `url` first, within the card time limit and at most twenty
+        seconds, and saves the agent only when it can be used. The agent receives no message
+        and no task. On success the next run on every instance has the agent's two tools.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentCreate" }
+      responses:
+        "201":
+          description: The saved agent
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Agent" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "409":
+          description: >
+            `name_taken` (another agent, saved or from the environment, or a tool server, has
+            the name, or one of the agent's two tool names is another tool's), `address_taken`
+            (another agent, saved or from the environment, is at this address), `agent_limit`
+            (twenty agents are saved), or `check_busy` (four card reads are under way on this
+            instance), or `agent_unusable` (the card at the address cannot be used; `reason`
+            says which check failed). Nothing is saved.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Error" }
+                  - { $ref: "#/components/schemas/UnusableError" }
+        "422":
+          description: >
+            A value breaks a rule: the usual list of field errors, without the refused value
+            and in the service's own words.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrors" }
+  /agents/{agent_id}:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    patch:
+      summary: Change a saved agent's address, its approval choice, or both
+      description: >
+        A field left out is kept. `version` is the one the page read; when the agent was
+        changed since, the request is refused with `agent_changed` and nothing changes. A
+        change of `url` reads the card at the new address first and is refused when the agent
+        there cannot be used; it gives up every task pending for the agent, in the same
+        transaction, and `given_up` says how many. A change of `approval` alone contacts no
+        agent. `required` holds at once, also for runs in progress; `none` holds from the next
+        run. `name` is not accepted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentUpdate" }
+      responses:
+        "200":
+          description: The agent as it is now, and how many tasks were given up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentChanged" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            `agent_changed` (the agent is no longer at `version`), `agent_read_only` (an
+            environment agent, or a saved agent that is not in use, which can only be
+            removed), `address_taken`, `check_busy`, or `agent_unusable` (the card at the new
+            address cannot be used). Nothing changes.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - { $ref: "#/components/schemas/Error" }
+                  - { $ref: "#/components/schemas/UnusableError" }
+        "422":
+          description: A value breaks a rule.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrors" }
+    delete:
+      summary: Remove a saved agent
+      description: >
+        Gives up every task pending for the agent, in the same transaction. Holds at once: a
+        run in progress sends the agent nothing more, and the next run has neither of its
+        tools. No cancel is sent.
+      parameters:
+        - name: version
+          in: query
+          required: true
+          schema: { type: integer, minimum: 1 }
+          description: The version the page read.
+      responses:
+        "200":
+          description: How many tasks were given up
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentRemoved" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: "`agent_changed`, or `agent_read_only` for an environment agent."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: "`version` is missing or not a number, or the id is in neither form."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrors" }
+  /agents/{agent_id}/check:
+    parameters:
+      - { $ref: "#/components/parameters/AgentId" }
+    post:
+      summary: Read an agent's card again and say whether the agent can be used
+      description: >
+        For a saved agent and for an environment agent. Takes no body. Reads the card and
+        nothing more, within the card time limit and at most twenty seconds. Updates this
+        instance's `state` for the agent and, when the card can be used, the card details kept
+        for it. Changes no address, no approval choice, no thread, and no task.
+      responses:
+        "200":
+          description: The result
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentCheck" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: >
+            `check_busy` (this agent is being checked, or four card reads are under way on
+            this instance), or `agent_read_only` for a saved agent that is not in use. No
+            agent is contacted.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422":
+          description: The id is in neither form.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrors" }
+components:
+  parameters:
+    AgentId:
+      name: agent_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 64, pattern: "^([0-9a-f]{32}|env\\.[a-z][a-z0-9_-]{0,31})$" }
+      description: A saved agent's id, or `env.<name>` for an environment agent.
+  responses:
+    NotFound:
+      description: "`agent_not_found`: there is no agent with this id."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    OtherOrigin:
+      description: "`other_origin`: the request was made by a page of another origin."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Approval:
+      type: string
+      enum: [required, none]
+      description: >
+        `required`: every message to the agent pauses for a person's decision. `none`:
+        messages run without approval. Any other value is refused.
+    AgentCard:
+      type: object
+      description: >
+        What the agent says of itself: its own claim, never an input to approval. Each text is
+        cut to 2,000 characters and `skills` to 50, with the agent's address removed.
+      required: [name, description, version, skills, cut]
+      properties:
+        name: { type: string, maxLength: 2000 }
+        description: { type: string, maxLength: 2000 }
+        version: { type: string, maxLength: 2000 }
+        skills:
+          type: array
+          maxItems: 50
+          items:
+            type: object
+            required: [id, name, description, tags]
+            properties:
+              id: { type: string, maxLength: 2000 }
+              name: { type: string, maxLength: 2000 }
+              description: { type: string, maxLength: 2000 }
+              tags: { type: array, maxItems: 50, items: { type: string, maxLength: 2000 } }
+        cut: { type: boolean, description: True when a text or the list of skills was cut. }
+    Agent:
+      type: object
+      required: [id, name, source, approval, url, version, state, checked_at, reason, card, pending_tasks, created_at, updated_at]
+      properties:
+        id: { type: string }
+        name: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        source: { type: string, enum: [saved, environment] }
+        approval: { $ref: "#/components/schemas/Approval" }
+        url:
+          type: [string, "null"]
+          maxLength: 2000
+          description: >
+            A saved agent's address, in the form the service keeps it in. Null for an
+            environment agent.
+        version:
+          type: [integer, "null"]
+          minimum: 1
+          description: What a change or a removal sends back. Null for an environment agent.
+        state:
+          type: string
+          enum: [reachable, unreachable, not_tried, not_in_use]
+          description: >
+            This instance's most recent attempt to use the agent; `not_tried` before any, and
+            `not_in_use` for a saved agent the environment overrides.
+        checked_at: { type: [string, "null"], format: date-time, description: Null while `not_tried` or `not_in_use`. }
+        reason:
+          type: [string, "null"]
+          maxLength: 500
+          description: Why the agent is unreachable or not in use. Holds no address.
+        card:
+          oneOf: [{ $ref: "#/components/schemas/AgentCard" }, { type: "null" }]
+          description: Null for an environment agent whose card this instance has not read.
+        pending_tasks: { type: integer, minimum: 0, description: Tasks pending for the agent, on every thread. }
+        created_at: { type: [string, "null"], format: date-time, description: Null for an environment agent. }
+        updated_at: { type: [string, "null"], format: date-time, description: Null for an environment agent. }
+    AgentList:
+      type: object
+      required: [agents, limit, unusable]
+      properties:
+        agents: { type: array, items: { $ref: "#/components/schemas/Agent" } }
+        limit: { type: integer, const: 20, description: How many agents can be saved. }
+        unusable: { type: integer, minimum: 0, description: How many agents are `unreachable` or `not_in_use`. }
+    AgentCreate:
+      type: object
+      additionalProperties: false
+      required: [name, url]
+      properties:
+        name: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        url:
+          type: string
+          maxLength: 2000
+          description: >
+            `http` or `https`, host `localhost` or a loopback IP address, with no user name,
+            password, query, or fragment, and a path with no empty, `.`, or `..` segment, no
+            `%`, and no backslash.
+        approval: { $ref: "#/components/schemas/Approval", default: required }
+    AgentUpdate:
+      type: object
+      additionalProperties: false
+      required: [version]
+      properties:
+        version: { type: integer, minimum: 1 }
+        url: { type: string, maxLength: 2000 }
+        approval: { $ref: "#/components/schemas/Approval" }
+    AgentChanged:
+      type: object
+      required: [agent, given_up]
+      properties:
+        agent: { $ref: "#/components/schemas/Agent" }
+        given_up: { type: integer, minimum: 0 }
+    AgentRemoved:
+      type: object
+      required: [given_up]
+      properties:
+        given_up: { type: integer, minimum: 0 }
+    AgentCheck:
+      type: object
+      required: [usable, reason, message, checked_at, recorded]
+      properties:
+        usable: { type: boolean }
+        reason:
+          type: [string, "null"]
+          enum: [no_answer, timeout, no_card, unreadable, redirect, too_large, auth_required, no_text, no_interface, null]
+        message: { type: [string, "null"], description: The service's own sentence for `reason`. }
+        checked_at: { type: string, format: date-time }
+        recorded:
+          type: boolean
+          description: False when the agent was moved or removed while the check ran, so the result was not kept.
+    UnusableError:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, reason, message]
+          properties:
+            code: { type: string, const: agent_unusable }
+            reason:
+              type: string
+              enum: [no_answer, timeout, no_card, unreadable, redirect, too_large, auth_required, no_text, no_interface]
+            message: { type: string }
+    ValidationErrors:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            required: [type, loc, msg]
+            properties:
+              type: { type: string }
+              loc: { type: array, items: { type: [string, integer] } }
+              msg: { type: string }
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [agent_not_found, agent_read_only, agent_changed, name_taken, address_taken, agent_limit, check_busy, other_origin, internal]
+            message: { type: string }
