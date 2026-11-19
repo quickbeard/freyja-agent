@@ -38,6 +38,7 @@ dev = [
     "pre-commit>=4.7.0",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.1",
+    "pytest-cov>=7.1.0",
     "pyyaml>=6.0",
     "ruff>=0.17.3",
 ]
@@ -45,6 +46,24 @@ dev = [
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+
+# Coverage is measured when pytest is given --cov, as the commit hook and CI give it. A run
+# of one file is not measured, so it is not held to the whole suite's number.
+[tool.coverage.run]
+source = ["freyja_agent"]
+# Python 3.12's own monitoring: it adds about a second to the suite, where the default way of
+# measuring adds half the suite's time again. On 3.12 it counts lines, not branches.
+core = "sysmon"
+
+[tool.coverage.report]
+# The share of the service's lines the suite must run, as CI runs it: without the opt-in
+# Postgres tests, which leaves the Postgres stores unmeasured. Measured at 89.97 on
+# 2026-11-19 (96.62 with the Postgres tests). Raise it as the number rises; lower it only
+# with the reason written here.
+fail_under = 88
+precision = 2
+show_missing = true
+skip_covered = true
 
 [tool.ruff]
 line-length = 100
