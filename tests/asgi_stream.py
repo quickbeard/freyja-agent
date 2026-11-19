@@ -5,14 +5,14 @@ streamed A2A reply arrives in one piece after the agent has finished, and a task
 working at the call time limit would look unacknowledged (003 research R16). This transport hands
 each body chunk to the client as the app sends it.
 
-It also records every request's method, host, port, and path, so a test can show where Freyja
-sent its requests (003 FR-002), and it can play an agent that is not running (``down``) or one
-that never answers (``hang``).
+It also records every request's method, host, port, path, and headers, so a test can show
+where Freyja sent its requests (003 FR-002), and it can play an agent that is not running
+(``down``) or one that never answers (``hang``).
 """
 
 import asyncio
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -24,6 +24,8 @@ class SeenRequest:
     host: str
     port: int | None
     path: str
+    # The request's headers, by lowercase name. Not part of what makes two requests equal.
+    headers: dict[str, str] = field(default_factory=dict, compare=False, repr=False)
 
 
 class _StreamedBody(httpx.AsyncByteStream):
@@ -55,7 +57,13 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(
-            SeenRequest(request.method, request.url.host, request.url.port, request.url.path)
+            SeenRequest(
+                request.method,
+                request.url.host,
+                request.url.port,
+                request.url.path,
+                {name.lower(): value for name, value in request.headers.items()},
+            )
         )
         if self.down:
             raise httpx.ConnectError("All connection attempts failed", request=request)

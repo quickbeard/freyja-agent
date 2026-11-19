@@ -383,3 +383,62 @@ What the implementation settled differently from the plan, or found out, phase b
 - **Two test files were added that the plan's tree does not list**: `tests/test_guards.py`,
   which pins the refusal's words for the two routers, and `tests/test_a2a_stub_cards.py`,
   which tests the stand-in's card options before Phase 2 relies on them.
+
+### Phase 2
+
+- **The column check and the lock timeout were seen on Postgres 17.11**, the server of
+  `docker-compose.yml` (T015, research "Not verified"). On a table shaped as feature 003
+  created it, `setup()` adds `agent_ref` and earlier rows read back with no ref. With the
+  column present, `setup()` completes while another session holds the table in an open
+  transaction. Without the column and with that session open, `setup()` gives up at the lock
+  timeout with an error that names the table, changes nothing, and the next start adds the
+  column.
+- **A card problem is a value, and `read_card` raises `CardError`, which carries it.** The plan
+  and the data model name the exception `CardProblem`. Ruff's naming rule wants an exception's
+  name to end in `Error`, and no suppression is added in this feature, so `CardProblem` is
+  the code with its sentence and `CardError` is what is raised.
+- **The address rule refuses more than research R11 lists**: a space or a control character
+  anywhere in the address, which the parser would drop without saying so; port 0; and, in the
+  path, every character httpx would send encoded. A path holds letters, digits, slashes, and
+  `- . _ ~ ! $ & ' ( ) * + , ; = : @`, so the kept form is the form that is requested. The
+  limit of 2,000 characters is checked on the kept form as well, since writing the port out
+  can make it longer than what was entered.
+- **The scrubber finds what has the shape of an address and looks it up**, where research R12
+  describes removing each known address in each of its forms. The first version did that, and
+  the independent review measured its cost: it grew with the number of known addresses, to
+  ten seconds for one large card text at capacity. Cleaning now costs the same however many
+  addresses are known (about 1 ms for 12 KB of text at capacity). It also covers forms R12
+  does not list: an address on a default port as a client requests it, without the port;
+  `('::1', 9998, 0, 0)`, as a refused IPv6 connection is worded; any other way of writing
+  this machine with the agent's port; and a path a library wrote encoded. The host alone is
+  never removed.
+- **The scrubber removes an address when in doubt.** An address is not found inside a longer
+  number or a longer name (`9998` in `99980`, `localhost` in `mylocalhost`), and is found
+  after a hyphen or after a letter before an IP address. Where a library logs the port apart,
+  the port becomes `<port>`. An agent on a port that is also a common number, such as 200,
+  has that number removed from the HTTP libraries' lines.
+- **The log record factory never raises into the code that logged.** A record it cannot clean
+  is handed on as it was made. Not cleaned: the keys of a mapping of arguments, and attributes
+  added to a record with `extra`.
+- **No error of this phase keeps a library's error behind it**, as its cause or as its
+  context: the address rule's, the card read's, and the stores'. Such an error holds the
+  address or the value that was refused.
+- **`read_card` labels**: a redirect is one of the five answers that send a client elsewhere;
+  any other answer that is not 200 is "no card". A certificate that is not accepted reads as
+  "nothing answered", since the client reports both as a failed connection; feature 006 gives
+  it a reason of its own.
+- **Card details lose a NUL character**, which the database cannot store, and only the first
+  4,100 characters of a text are cleaned before it is cut to 2,000.
+- **The store keeps card details as a plain mapping**, in the form they read back from
+  storage, so the same details compare equal in both stores; `AgentCardSummary.to_dict` and `from_dict` convert. `SavedAgentStore.change` is one
+  method for the approval choice, a move, or both, and `replace_card` answers with whether
+  the details were recorded and whether they changed, which the check of Phase 6 reports.
+- **A task's `agent_ref` cannot be updated**, like its key and its thread.
+- **`tests/asgi_stream.py` also records each request's headers**, so that the card test can
+  see what the request asked for. Two requests are still equal by method, host, port, and
+  path.
+- **Known and left as it is**: two instances that start at the same moment on an empty
+  database can fail in `CREATE TABLE IF NOT EXISTS`, which every store of the service uses;
+  the one that failed starts on its next try. And `setup()` still creates the task table's
+  index at every start, as since feature 003, which waits behind a session that is writing
+  to the table. Neither is new, and neither is changed here.

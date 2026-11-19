@@ -1,6 +1,6 @@
 import ipaddress
 from typing import Annotated, Self
-from urllib.parse import urlsplit
+from urllib.parse import SplitResult, urlsplit
 
 from cryptography.fernet import Fernet
 from pydantic import (
@@ -75,6 +75,107 @@ class McpServerConfig(BaseModel):
                     "'url' must be an address on this machine: localhost or a loopback IP address"
                 )
         return self
+
+
+# The most characters an agent's address may have (feature 005, FR-006).
+ADDRESS_LIMIT = 2000
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+# What a path may hold: what httpx sends as it is written, so the kept form is the form that
+# is requested (RFC 3986 unreserved characters and sub-delimiters, ``:``, ``@``, and ``/``).
+_PATH_CHARACTERS = frozenset(
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~!$&'()*+,;=:@/"
+)
+
+
+def _split(url: str) -> SplitResult | None:
+    """``url`` in its parts, or None when it cannot be parsed or its port is not a number."""
+    try:
+        parts = urlsplit(url)
+        _ = parts.port, parts.hostname
+    except ValueError:
+        return None
+    return parts
+
+
+class AddressError(ValueError):
+    """An agent's address that breaks a rule (feature 005, FR-006).
+
+    The message is a sentence of the service's own. It names the rule and never repeats what
+    was entered, so it can be shown, returned, and logged.
+    """
+
+
+def canonical_address(url: str) -> str:
+    """The one form a saved agent's address is kept, shown, and compared in (005 research R11).
+
+    Scheme and host in lowercase, the port always written, an IP address in its usual
+    compressed writing, and no trailing slash. Whether two addresses are the same decides
+    whether a card is read and pending tasks are given up, so every spelling of one address
+    has to come to one string. httpx rewrites what it is given (lowercase host, default port
+    dropped, dot segments resolved, unsafe characters encoded), so what it would rewrite is
+    refused here: a query and a fragment as well, because the card's address is this address
+    with a path added to it, and in the path every character httpx would encode.
+
+    Raises ``AddressError``, with no error of the parser behind it: those repeat the input.
+    """
+    if len(url) > ADDRESS_LIMIT:
+        raise AddressError("The address is longer than 2,000 characters.")
+    if any(ord(char) <= 32 or ord(char) == 127 for char in url):
+        # urlsplit drops tabs and newlines and trims spaces without saying so.
+        raise AddressError("The address must not contain spaces or control characters.")
+    if "\\" in url:
+        raise AddressError("The address must not contain a backslash.")
+    if "%" in url:
+        raise AddressError("The address must not contain a percent sign.")
+    parts = _split(url)
+    if parts is None:
+        raise AddressError("The address is not a web address.")
+    port, host = parts.port, parts.hostname
+    scheme = parts.scheme.lower()
+    if scheme not in _DEFAULT_PORTS:
+        raise AddressError("The address must start with http:// or https://.")
+    if parts.username is not None or parts.password is not None:
+        raise AddressError("The address must not carry a user name or a password.")
+    if "?" in url:
+        raise AddressError("The address must not carry a query.")
+    if "#" in url:
+        raise AddressError("The address must not carry a fragment.")
+    if not is_local_host(host):
+        raise AddressError(
+            "The address must be on this machine: localhost or a loopback IP address."
+        )
+    if port == 0:
+        raise AddressError("The address's port must be between 1 and 65535.")
+    path = parts.path.removesuffix("/")
+    if any(segment in ("", ".", "..") for segment in path.split("/")[1:]):
+        raise AddressError("The address's path must not have an empty, '.', or '..' segment.")
+    if not set(path) <= _PATH_CHARACTERS:
+        raise AddressError(
+            "The address's path may hold only letters, digits, slashes, and the characters "
+            "- . _ ~ ! $ & ' ( ) * + , ; = : @"
+        )
+    if host != "localhost":
+        address = ipaddress.ip_address(host)  # is_local_host accepted it, so it parses
+        host = f"[{address.compressed}]" if address.version == 6 else address.compressed
+    kept = f"{scheme}://{host}:{port or _DEFAULT_PORTS[scheme]}{path}"
+    if len(kept) > ADDRESS_LIMIT:
+        # Writing the port out made it longer than what was entered.
+        raise AddressError("The address is longer than 2,000 characters.")
+    return kept
+
+
+def destination(url: str) -> str:
+    """Where an address on this machine leads, however the machine is written (005 FR-006).
+
+    The port and the path. ``localhost``, ``127.0.0.1``, and ``[::1]`` are one machine, and
+    the scheme does not choose another listener, so two saved agents whose addresses give the
+    same value here are two names for one place. Raises ``AddressError`` as
+    ``canonical_address`` does.
+    """
+    parts = urlsplit(canonical_address(url))
+    return f"{parts.port}{parts.path}"
 
 
 class A2aAgentConfig(BaseModel):

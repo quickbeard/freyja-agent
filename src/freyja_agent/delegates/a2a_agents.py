@@ -39,12 +39,18 @@ from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, VERSION_HEADER
 
 from freyja_agent.config import A2aAgentConfig
 
+# The card classes and checks live in ``agent_cards`` since feature 005 and are imported back
+# so that everything that took them from here still finds them.
+from freyja_agent.delegates.agent_cards import JSONRPC as JSONRPC
+from freyja_agent.delegates.agent_cards import AgentCardSummary as AgentCardSummary
+from freyja_agent.delegates.agent_cards import SkillSummary as SkillSummary
+from freyja_agent.delegates.agent_cards import card_problem as card_problem
+
 logger = logging.getLogger(__name__)
 
 ERROR_TEXT_LIMIT = 500
 # Stands in for an agent's address in any text that may be shown or logged (FR-009).
 ADDRESS = "<address>"
-JSONRPC = "JSONRPC"
 
 # Returns the httpx transport a link uses for one agent: the network in production, the
 # streaming in-process transport in the suite (research R15, R16).
@@ -65,48 +71,6 @@ def handoff_tool_name(agent: str) -> str:
 
 def cancel_tool_name(agent: str) -> str:
     return f"cancel_{agent}_task"
-
-
-@dataclass(frozen=True)
-class SkillSummary:
-    id: str
-    name: str
-    description: str
-    tags: tuple[str, ...]
-
-
-@dataclass(frozen=True)
-class AgentCardSummary:
-    """What the catalog and the tool description show from a card: the agent's own claims."""
-
-    name: str
-    description: str
-    version: str
-    skills: tuple[SkillSummary, ...]
-
-    @classmethod
-    def from_card(cls, card: AgentCard) -> "AgentCardSummary":
-        return cls(
-            name=card.name,
-            description=card.description,
-            version=card.version,
-            skills=tuple(
-                SkillSummary(skill.id, skill.name, skill.description, tuple(skill.tags))
-                for skill in card.skills
-            ),
-        )
-
-
-def card_problem(card: AgentCard) -> str | None:
-    """Why a card cannot be used, or None (FR-003, research R3)."""
-    if card.security_requirements or card.security_schemes:
-        return "its card requires authentication, which is out of scope"
-    modes = list(card.default_input_modes)
-    if modes and not any(mode.startswith("text/") for mode in modes):
-        return "its card does not accept text messages"
-    if not any(interface.protocol_binding == JSONRPC for interface in card.supported_interfaces):
-        return "its card offers no JSON-RPC interface"
-    return None
 
 
 def pinned_card(card: AgentCard, configured_url: str) -> AgentCard:
