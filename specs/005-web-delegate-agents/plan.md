@@ -710,3 +710,119 @@ What the implementation settled differently from the plan, or found out, phase b
 - **Coverage of the service's lines went from 90.24% to 90.40%** as CI measures it,
   without the Postgres tests. The Postgres half of the proposed calls, five methods, is
   among the lines CI does not run; the floor of 88% is unchanged.
+
+### Phase 6
+
+- **A check finds its agent in the set of the context it takes**, by `env.<name>` or by a
+  saved agent's id, and reads no saved agent from the store for that. The set was brought
+  up to date when the context was taken, and it already says which saved agents are in
+  use and which are not. An id no agent of the set has is `agent_not_found`, also the id
+  of an agent of the other kind under the same name.
+- **A link remembers the details of the card it last read** (`AgentLink.last_read`). A
+  saved agent's link shows the kept details, not what it reads, so a check had no way to
+  learn what the card says now. It also serves a check that waited for another caller's
+  reading of the same card and so requested nothing itself: it records that reading.
+- **Whether a check that found the card unusable was recorded** is answered by one read of
+  the saved agent: it is recorded when the agent is still there with the same address.
+  For a card that can be used, `replace_card` answers it, as T074 says.
+- **A check whose result cannot be written is answered with 500 `internal`**, "The check's
+  result could not be recorded.", and so is one that cannot learn the current set, with
+  the list's sentence. Each is logged by its kind only. The link's state on this instance
+  follows the read in either case.
+- **The log line of a check** reads "Agent checked: <name> (<id>): it can be used; its card
+  details were not replaced", with "it cannot be used: <the sentence>" and "were replaced"
+  where they apply, and "the agent was moved or removed meanwhile, so nothing was
+  recorded" when the result was not kept.
+- **A hand-off after a failed check reads the card within the hand-off's own time limit**,
+  not the check's: its sentence for an agent that never answers names that limit.
+- **Known: a request's path is logged as it was sent.** An id is refused unless it is in
+  one of the two forms, and what a client puts where an id belongs is in the access log
+  of the server that received it, like any path. The console sends ids only.
+- **The sidebar and the list share one reading** (T079, research "Not verified"). Under the
+  built app, with Cache Components, the sidebar, which is outside the page, and the list
+  inside it read one SWR entry. Opening the Agents section directly makes one request for
+  the list, and the number on the sidebar, the warning above the cards, and the cards all
+  show it. Opening the LLM section makes one request too, and the number shows without the
+  Agents section having been opened. Going from the LLM section to Agents shows the cards
+  from the reading already held; the section may read once more as it opens, which SWR's
+  two-second window decides, and never more than once. A check makes one request to check
+  and one to read the list again. With the sidebar given a reading of its own, nine
+  end-to-end tests fail in Chromium.
+- **No existing spec needed an answer for the list.** T079 asks for one wherever a spec
+  counts requests. The specs of the LLM section count the requests to `/api/llm` only, so
+  their pages get no answer for `/api/agents`, the sidebar shows nothing, and they pass as
+  they are. The sidebar's unit tests are given a list, as T073 says.
+- **Check sits in a card's footer**, on every agent that is in use, an agent not tried yet
+  included. While it runs the button reads "Checking…" and takes no press. The result is
+  shown in the card, under what the agent says of itself, as a status: that the check found the agent can or cannot be used, with the service's time, the
+  service's sentence when it cannot, a sentence when the card changed, and one when the
+  result was not recorded. It stays until the next check from that card starts or the
+  card goes, and is not compared with the time the list shows.
+- **After a check the list is read again**: after any result, after `agent_not_found`,
+  after `agent_read_only`, which says the agent is not in use where the card did not show
+  it, and after a check that got no answer. Not after `check_busy`, which changed nothing.
+  An answer that arrives after its card is gone still has the list read again.
+- **The warning above the cards is a note, not an alert**, named "Agents that cannot be
+  used": "Warning: 1 agent cannot be used: stub. Its card says why." It stands above the
+  Refresh and Add row and shows only when the list was read.
+- **The sidebar's number is said in words for assistive technology**: "1 agent cannot be
+  used". The entry keeps the name "Agents" and is described by that sentence. There is no
+  number while the list could not be read, and a failed reading is not tried again, as in
+  the section.
+- **`isGone` in `web/lib/api.ts` knows `agent_not_found`**, as research R17 says for a
+  later phase; the check is the first request that can meet it.
+- **The first version of the test of a second press could not fail**: the disabled button
+  took the second click. It now presses twice before the page is drawn again.
+- **A check is the first card read made on a link that something else may be using**, and
+  the independent review found what that broke. Before this phase a card was only read on
+  a link that was not connected. Four things were settled for it:
+  - **A call that is under way keeps the client it was sent with.** A check that finds the
+    card unusable takes the link's client away; a hand-off in flight read the link's client
+    again at every poll and failed with an error of the language, which then stood as the
+    agent's reason in the list. It now ends on the connection it began with.
+  - **While a link holds no usable card, only a card read changes what is known of it.** A
+    hand-off that ended well after a failed check marked the agent reachable, and all
+    three warnings went, although nothing can be sent over the link until a card is read.
+    `AgentLink.mark` now records nothing on a link that is not connected.
+  - **A reading has one time limit, for waiting and reading together.** A check that waited
+    for another caller's reading, which then ended without a result, read for a full limit
+    of its own: twice its limit in all, past what the console's server waits. The sentence
+    for an agent that never answered still names the caller's whole limit.
+  - **A check that could not wait any longer for another caller's reading** answers that
+    the agent did not answer in time, at its own time, and the list says the same until
+    that other reading ends. It asked the agent for nothing itself.
+- **Whether a card changed is asked of the details as they read now.** Kept details were
+  cleaned of the addresses known when they were read; the details a check reads are
+  cleaned of those known now. After another agent was saved at an address the card names,
+  an unchanged card compared as changed: the console said so, and every instance rebuilt.
+  The details from before are now cleaned again before they are compared, and details
+  that are the same are not written. Found by the review.
+- **A check that finds the card unusable logs the warning startup logs**, "Agent <name>
+  cannot be used: <the sentence>", beside its own line. FR-030 asks for that warning
+  whenever a card read for an agent fails; the first version logged the check's line only.
+- **Known: a check's result may not be read out by every screen reader.** It is a status
+  that appears together with its text, as a profile's test result does in the LLM section.
+  Putting it in a region that is on the page beforehand was tried: the dialog that adds an
+  agent leaves a region marked `aria-live`, and what is around it, reachable behind
+  itself, which is worse. Left for a change of both sections.
+- **Known: the sidebar's number is hidden when the sidebar is.** In a window narrower than
+  768 pixels, or with the sidebar closed, an operator on the LLM section sees no warning
+  until the sidebar is opened. The spec assumes a desktop browser.
+- **Two tests could not fail for what they were named after**, the review found: the
+  sidebar's test that a failed reading is not tried again waited less long than a retry
+  takes, and the card's test of an answer after the card is gone tested a guard that does
+  nothing, since setting state on a card that is gone is ignored. The first now makes a
+  retry come within its wait; the guard was removed and the test renamed for what it
+  shows.
+- **Seen by hand, with the real service, the console in a browser, and a real model**
+  (quickstart section 3). With the stand-in stopped, the service started, logged the
+  warning naming the agent and the reason, answered the health check, and listed the
+  agent as unreachable with its kept details. Check said it cannot be used and why; with
+  the stand-in started, Check said it can be used, and the list showed it reachable. In
+  the console the number 1 stood on the sidebar's Agents entry on the LLM section, the
+  warning above the cards named the agent, and its card carried the warning; after a
+  Check that found it usable all three were gone. With the stand-in stopped and started
+  again and no check, a run paused for the agent and, once approved, reached it. No line
+  of the service's log held the stand-in's port.
+- **Coverage of the service's lines is 90.79%** as CI measures it; the web app's is
+  96.52% of statements, 95.01% of branches, 96.59% of functions, and 97.74% of lines.

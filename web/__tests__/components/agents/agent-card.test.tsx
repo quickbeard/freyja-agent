@@ -1,7 +1,15 @@
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+import { type Reply, stubFetch } from "@/__tests__/testing";
 import { AgentCard } from "@/components/agents/agent-card";
-import type { Agent } from "@/lib/agents";
+import type { Agent, AgentCheck } from "@/lib/agents";
 
 const HELLO: Agent = {
   id: "env.hello",
@@ -233,13 +241,329 @@ describe("AgentCard", () => {
     ).toBeNull();
   });
 
-  it("offers nothing to change or remove the agent", () => {
+  it("offers Check and nothing to change or remove the agent", () => {
     for (const shown of [HELLO, STUB]) {
       const { unmount } = render(<AgentCard agent={shown} />);
-      for (const role of ["button", "link", "textbox", "switch", "combobox"]) {
+      expect(
+        screen.getAllByRole("button").map((button) => button.textContent),
+      ).toEqual(["Check"]);
+      for (const role of ["link", "textbox", "switch", "combobox"]) {
         expect(screen.queryAllByRole(role)).toEqual([]);
       }
       unmount();
     }
+  });
+});
+
+// Part 2 (T071): checking an agent from its card.
+
+const USABLE: AgentCheck = {
+  usable: true,
+  reason: null,
+  message: null,
+  checked_at: "2026-11-19T10:00:00Z",
+  recorded: true,
+  card_changed: false,
+};
+const UNUSABLE: AgentCheck = {
+  ...USABLE,
+  usable: false,
+  reason: "no_answer",
+  message: "Nothing answered at the address.",
+};
+const BUSY = "This agent is already being checked. Wait for that check to end.";
+
+function result(check: AgentCheck = USABLE): Reply {
+  return { json: check };
+}
+
+function refusal(status: number, code: string, message: string): Reply {
+  return { status, json: { detail: { code, message } } };
+}
+
+const check = () =>
+  fireEvent.click(screen.getByRole("button", { name: "Check" }));
+
+// An answer that waits until the test lets it go: the card is still being read.
+function held() {
+  let answer: (response: Response) => void = () => {};
+  const fetchStub = vi.fn(
+    (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Promise<Response>((resolve) => {
+        answer = resolve;
+      }),
+  );
+  vi.stubGlobal("fetch", fetchStub);
+  return {
+    fetchStub,
+    answer: (json: unknown, status = 200) =>
+      answer(
+        new Response(JSON.stringify(json), {
+          status,
+          headers: { "content-type": "application/json" },
+        }),
+      ),
+  };
+}
+
+describe("AgentCard, checking", () => {
+  it("has Check on every card of an agent that is in use, saved or from the environment", () => {
+    const inUse = [
+      HELLO,
+      STUB,
+      agent({ state: "unreachable", reason: "Nothing answered." }),
+      agent({ state: "not_tried", checked_at: null }),
+      { ...HELLO, state: "unreachable" as const, card: null },
+    ];
+    for (const shown of inUse) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.getByRole("button", { name: "Check" })).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("has no Check on a card of a saved agent that is not in use", () => {
+    render(
+      <AgentCard
+        agent={agent({
+          state: "not_in_use",
+          checked_at: null,
+          reason: "An agent named in the environment has this name.",
+        })}
+      />,
+    );
+    expect(screen.queryAllByRole("button")).toEqual([]);
+  });
+
+  it("asks the service to check this agent, by its id and with nothing else", async () => {
+    for (const shown of [STUB, HELLO]) {
+      const fetchStub = stubFetch(result());
+      const { unmount } = render(<AgentCard agent={shown} />);
+      check();
+      await screen.findByRole("status");
+      expect(fetchStub).toHaveBeenCalledTimes(1);
+      const [path, init] = fetchStub.mock.calls[0];
+      expect(path).toBe(`/api/agents/${shown.id}/check`);
+      expect(init?.method).toBe("POST");
+      expect(init?.body).toBeUndefined();
+      unmount();
+    }
+  });
+
+  it("says that it is checking, and takes no second press while it does", async () => {
+    const request = held();
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    const button = screen.getByRole("button", { name: "Check" });
+
+    // Two presses before the card has shown that it is checking: a double click.
+    act(() => {
+      button.click();
+      button.click();
+    });
+    const busy = await screen.findByRole("button", { name: "Checking…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    fireEvent.click(busy);
+    expect(request.fetchStub).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).toBeNull();
+
+    request.answer(USABLE);
+    await screen.findByRole("status");
+    const again = screen.getByRole("button", { name: "Check" });
+    expect((again as HTMLButtonElement).disabled).toBe(false);
+    expect(request.fetchStub).toHaveBeenCalledTimes(1);
+    expect(onChecked).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the agent can be used, and has the list read again", async () => {
+    stubFetch(result());
+    const onChecked = vi.fn();
+    const onGone = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} onGone={onGone} />);
+    check();
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain(
+      "The check found that this agent can be used",
+    );
+    expect(said.textContent).toContain(when("2026-11-19T10:00:00Z"));
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(onChecked).toHaveBeenCalledTimes(1);
+    expect(onGone).not.toHaveBeenCalled();
+  });
+
+  it("says why the agent cannot be used, in the service's sentence, and has the list read again", async () => {
+    stubFetch(result(UNUSABLE));
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    check();
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain(
+      "The check found that this agent cannot be used",
+    );
+    expect(
+      within(said).getByText("Nothing answered at the address."),
+    ).toBeTruthy();
+    expect(onChecked).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the service's sentence as text, whatever it holds", async () => {
+    const message = '<img src="x" onerror="alert(1)">';
+    stubFetch(result({ ...UNUSABLE, message }));
+    render(<AgentCard agent={STUB} />);
+    check();
+    const said = await screen.findByRole("status");
+    expect(within(said).getByText(message)).toBeTruthy();
+    expect(document.querySelector("img")).toBeNull();
+  });
+
+  it("says a result was not recorded, and has the list read again all the same", async () => {
+    stubFetch(result({ ...USABLE, recorded: false }));
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    check();
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain("This result was not recorded");
+    expect(onChecked).toHaveBeenCalledTimes(1);
+  });
+
+  it("says the agent's card changed, and that its tools follow from the next run", async () => {
+    stubFetch(result({ ...USABLE, card_changed: true }));
+    render(<AgentCard agent={STUB} />);
+    check();
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain("The agent's card changed.");
+    expect(said.textContent).toContain(
+      "Its tools are described from the new details from the next run.",
+    );
+  });
+
+  it("shows a busy refusal as the service words it, and leaves the list alone", async () => {
+    stubFetch(refusal(409, "check_busy", BUSY));
+    const onChecked = vi.fn();
+    const onGone = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} onGone={onGone} />);
+    check();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(BUSY);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(onChecked).not.toHaveBeenCalled();
+    expect(onGone).not.toHaveBeenCalled();
+    // The card can be checked again once that check has ended.
+    expect(
+      (screen.getByRole("button", { name: "Check" }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  });
+
+  it("shows that the agent is gone as the service words it, and has the list read again", async () => {
+    stubFetch(
+      refusal(404, "agent_not_found", "There is no agent with this id."),
+    );
+    const onChecked = vi.fn();
+    const onGone = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} onGone={onGone} />);
+    check();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("There is no agent with this id.");
+    expect(onGone).toHaveBeenCalledTimes(1);
+    expect(onChecked).not.toHaveBeenCalled();
+  });
+
+  it("says the service cannot be reached when a check got no answer, and has the list read again", async () => {
+    stubFetch({ fails: "Failed to fetch" });
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    check();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain(
+      "The Freyja service cannot be reached.",
+    );
+    // Whether the check was carried out is not known: the list says what is so.
+    expect(onChecked).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("status")).toBeNull();
+  });
+
+  it("takes back what the last check said when the next one starts", async () => {
+    const fetchStub = stubFetch(
+      result(UNUSABLE),
+      refusal(409, "check_busy", BUSY),
+      result(),
+    );
+    render(<AgentCard agent={STUB} />);
+    check();
+    await screen.findByText("Nothing answered at the address.");
+
+    check();
+    await screen.findByRole("alert");
+    expect(screen.queryByText("Nothing answered at the address.")).toBeNull();
+    expect(screen.queryByRole("status")).toBeNull();
+
+    check();
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain("can be used");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps what the check said when the list hands the card its agent anew", async () => {
+    stubFetch(result({ ...USABLE, card_changed: true }));
+    const { rerender } = render(
+      <AgentCard agent={agent({ state: "unreachable", reason: "Down." })} />,
+    );
+    check();
+    await screen.findByRole("status");
+
+    // The list was read again, and says what the check found.
+    rerender(
+      <AgentCard
+        agent={agent({ state: "reachable", checked_at: USABLE.checked_at })}
+      />,
+    );
+    expect(screen.queryByRole("note", { name: "Warning" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toContain(
+      "The agent's card changed.",
+    );
+  });
+
+  it("has the list read again when the answer comes after the card is gone, and nothing breaks", async () => {
+    const request = held();
+    const onChecked = vi.fn();
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { unmount } = render(
+      <AgentCard agent={STUB} onChecked={onChecked} />,
+    );
+    check();
+    await screen.findByRole("button", { name: "Checking…" });
+    unmount();
+
+    request.answer(UNUSABLE);
+    await waitFor(() => expect(onChecked).toHaveBeenCalledTimes(1));
+    expect(document.body.textContent).toBe("");
+    expect(errors).not.toHaveBeenCalled();
+    errors.mockRestore();
+  });
+
+  it("has the list read again when the service says the agent is not in use", async () => {
+    // Another instance's environment took the agent's name: this card does not show it yet.
+    stubFetch({
+      status: 409,
+      json: {
+        detail: {
+          code: "agent_read_only",
+          message: "This saved agent is not in use, so it cannot be checked.",
+        },
+      },
+    });
+    const onChecked = vi.fn();
+    const onGone = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} onGone={onGone} />);
+    check();
+    const said = await screen.findByRole("alert");
+    expect(said.textContent).toBe(
+      "This saved agent is not in use, so it cannot be checked.",
+    );
+    expect(onChecked).toHaveBeenCalledTimes(1);
+    expect(onGone).not.toHaveBeenCalled();
   });
 });

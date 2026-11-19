@@ -3,7 +3,7 @@
 // service itself.
 
 import type { Page, Route } from "@playwright/test";
-import type { Agent, AgentList } from "../lib/agents";
+import type { Agent, AgentCard, AgentCheck, AgentList } from "../lib/agents";
 import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/llm";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
@@ -525,6 +525,11 @@ export const ENVIRONMENT_NAME_TAKEN =
 export const AGENT_ADDRESS_TAKEN = "Another saved agent is at this address.";
 export const NOT_THIS_MACHINE =
   "The address must be on this machine: localhost or a loopback IP address.";
+export const NO_SUCH_AGENT = "There is no agent with this id.";
+export const NOT_IN_USE_NOT_CHECKED =
+  "This saved agent is not in use, so it cannot be checked.";
+export const ALREADY_CHECKED =
+  "This agent is already being checked. Wait for that check to end.";
 
 const THIS_MACHINE = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
 
@@ -565,6 +570,16 @@ export class AgentService {
   readonly asked: Asked[] = [];
   /** The ports at which no agent answers: adding one there is refused. */
   private readonly silent = new Set<string>();
+  /** The agents, by name, whose card cannot be read now: a check finds them unusable. */
+  private readonly down = new Set<string>();
+  /** The agents, by name, that are being checked by someone else. */
+  private readonly busy = new Set<string>();
+  /** What an agent's card says from now on, by name, until a check has read it. */
+  private readonly rewritten = new Map<string, Partial<AgentCard>>();
+  /** The checks that wait for the test to let them be answered. */
+  private waiting: (() => void)[] = [];
+  private holding = false;
+  private checks = 0;
   private saved = 0;
   private losing = 0;
   private stopped = false;
@@ -599,6 +614,62 @@ export class AgentService {
     } else {
       this.silent.add(String(port));
     }
+    return this;
+  }
+
+  /** Whether the agent of this name answers when its card is read again. */
+  answers(name: string, answers: boolean): this {
+    if (answers) {
+      this.down.delete(name);
+    } else {
+      this.down.add(name);
+    }
+    return this;
+  }
+
+  /** The agent's card says something else from now on: the next check finds other details. */
+  rewritesCard(name: string, card: Partial<AgentCard>): this {
+    this.rewritten.set(name, card);
+    return this;
+  }
+
+  /** Someone else is checking the agent of this name, or has stopped. */
+  checkedElsewhere(name: string, checking: boolean): this {
+    if (checking) {
+      this.busy.add(name);
+    } else {
+      this.busy.delete(name);
+    }
+    return this;
+  }
+
+  /** From now on a check is not answered until `answerChecks` is called. */
+  holdChecks(): this {
+    this.holding = true;
+    return this;
+  }
+
+  /** Let every check that waits be answered, and answer later ones at once. */
+  answerChecks(): this {
+    this.holding = false;
+    for (const answer of this.waiting) {
+      answer();
+    }
+    this.waiting = [];
+    return this;
+  }
+
+  /** What another operator does meanwhile: remove an agent this page still shows. */
+  removeElsewhere(name: string): this {
+    this.agents = this.agents.filter((agent) => agent.name !== name);
+    return this;
+  }
+
+  /** What happens elsewhere: a run, or another console, finds the agent as it is now. */
+  found(name: string, values: Partial<Agent>): this {
+    this.agents = this.agents.map((agent) =>
+      agent.name === name ? { ...agent, ...values } : agent,
+    );
     return this;
   }
 
@@ -688,6 +759,73 @@ export class AgentService {
     return route.fulfill({ status: 201, json: agent });
   }
 
+  /**
+   * Read an agent's card again, as the service does: the agent's state, its time, and its
+   * card's details follow what was found, and nothing else of the agent changes.
+   */
+  private async check(route: Route, id: string) {
+    const agent = this.agents.find((found) => found.id === id);
+    if (agent === undefined) {
+      return route.fulfill({
+        status: 404,
+        json: { detail: { code: "agent_not_found", message: NO_SUCH_AGENT } },
+      });
+    }
+    if (agent.state === "not_in_use") {
+      return this.refuse(route, "agent_read_only", NOT_IN_USE_NOT_CHECKED);
+    }
+    if (this.busy.has(agent.name)) {
+      return this.refuse(route, "check_busy", ALREADY_CHECKED);
+    }
+    if (this.holding) {
+      await new Promise<void>((resolve) => this.waiting.push(resolve));
+    }
+    this.checks += 1;
+    // Each check a minute after the one before it, from ten o'clock.
+    const checked_at = new Date(
+      Date.UTC(2026, 10, 19, 10, this.checks),
+    ).toISOString();
+    let result: AgentCheck;
+    if (this.down.has(agent.name)) {
+      this.found(agent.name, {
+        state: "unreachable",
+        reason: NOTHING_ANSWERED,
+        checked_at,
+      });
+      result = {
+        usable: false,
+        reason: "no_answer",
+        message: NOTHING_ANSWERED,
+        checked_at,
+        recorded: true,
+        card_changed: false,
+      };
+    } else {
+      const rewritten = this.rewritten.get(agent.name);
+      this.rewritten.delete(agent.name);
+      // Details are replaced by different ones only where some were kept or shown before.
+      const changed = rewritten !== undefined && agent.card !== null;
+      this.found(agent.name, {
+        state: "reachable",
+        reason: null,
+        checked_at,
+        card:
+          rewritten === undefined || agent.card === null
+            ? agent.card
+            : { ...agent.card, ...rewritten },
+      });
+      result = {
+        usable: true,
+        reason: null,
+        message: null,
+        checked_at,
+        recorded: true,
+        card_changed: changed,
+      };
+    }
+    return route.fulfill({ json: result });
+  }
+
   /** Answer this page's requests to the Agents routes, in the browser. */
   async serve(page: Page): Promise<this> {
     await page.route(
@@ -708,6 +846,10 @@ export class AgentService {
         if (method === "POST" && path === "/agents") {
           return this.add(route, body as Record<string, unknown>);
         }
+        const checked = path.match(/^\/agents\/([^/]+)\/check$/);
+        if (method === "POST" && checked) {
+          return this.check(route, decodeURIComponent(checked[1]));
+        }
         return route.fulfill({ status: 404, json: { detail: "Not Found" } });
       },
     );
@@ -720,6 +862,25 @@ export function card(page: Page, name: string) {
   return page
     .locator('[data-slot="card"]')
     .filter({ has: page.getByRole("heading", { name, exact: true }) });
+}
+
+/** The sidebar's entry for a section, by the section's name. */
+export function section(page: Page, name: string) {
+  return page
+    .getByRole("navigation", { name: "Sections" })
+    .getByRole("link", { name, exact: true });
+}
+
+/** The number on the sidebar's Agents entry, as the eye sees it; absent with no warning. */
+export function agentsBadge(page: Page) {
+  return page
+    .getByRole("navigation", { name: "Sections" })
+    .locator('[data-slot="sidebar-menu-badge"] [aria-hidden="true"]');
+}
+
+/** The warning above the cards of the Agents section. */
+export function agentsWarning(page: Page) {
+  return page.getByRole("note", { name: "Agents that cannot be used" });
 }
 
 /** Every card on the page: profiles in the LLM section, agents in the Agents section. */

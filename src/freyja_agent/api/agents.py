@@ -6,17 +6,28 @@ address is in the body of an answer of these routes and in no other answer of th
 an environment agent's address is in none. The router refuses a request that changes
 something when a page of another origin made it, by the rule the LLM routes apply.
 
-Adding an agent reads its card and nothing more: the agent receives no message and no task
-(FR-027). An agent added here always requires approval; the choice to run without it comes
-with the routes that can take it back.
+Adding an agent and checking one read its card and nothing more: the agent receives no
+message and no task (FR-027). An agent added here always requires approval; the choice to
+run without it comes with the routes that can take it back.
 """
 
 import logging
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Request
 
 from freyja_agent.api.guards import NoInputRoute, refuse_other_origins
-from freyja_agent.api.schemas import Agent, AgentCard, AgentCreate, AgentList, AgentSkillClaim
+from freyja_agent.api.schemas import (
+    AGENT_ID_PATTERN,
+    Agent,
+    AgentCard,
+    AgentCheck,
+    AgentCreate,
+    AgentList,
+    AgentSkillClaim,
+)
 from freyja_agent.config import destination
 from freyja_agent.delegates.a2a_agents import AgentCardSummary, AgentLink
 from freyja_agent.delegates.addresses import SCRUBBER
@@ -26,7 +37,7 @@ from freyja_agent.delegates.agent_registry import (
     AgentRegistry,
     AgentSet,
 )
-from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.saved_agents import (
     AGENT_LIMIT,
     AddressTakenError,
@@ -56,6 +67,11 @@ CARD_READ_SECONDS = 20.0
 SAVED_NAME_TAKEN = "Another saved agent has this name."
 SAVED_ADDRESS_TAKEN = "Another saved agent is at this address."
 LIMIT_REACHED = f"{AGENT_LIMIT} agents are saved, which is the most there can be."
+NOT_FOUND = "There is no agent with this id."
+NOT_IN_USE = "This saved agent is not in use, so it cannot be checked."
+UNREADABLE = "The saved agents could not be read."
+
+AgentIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=AGENT_ID_PATTERN)]
 
 
 def _error(status: int, code: str, message: str) -> HTTPException:
@@ -169,14 +185,14 @@ async def agent_list(runtime: Runtime) -> AgentList:
         context = await runtime.begin_run()
     except Exception as exc:
         logger.warning("The agents could not be listed: %s", type(exc).__name__)
-        raise _error(500, "internal", "The saved agents could not be read.") from None
+        raise _error(500, "internal", UNREADABLE) from None
     try:
         try:
             records = await runtime.saved_agents.list_agents()
             counts = await runtime.agent_tasks.pending_counts()
         except Exception as exc:
             logger.warning("The agents could not be listed: %s", type(exc).__name__)
-            raise _error(500, "internal", "The saved agents could not be read.") from None
+            raise _error(500, "internal", UNREADABLE) from None
         listed = [
             _from_the_environment(link, counts.get((link.name, None), 0))
             for link in context.links
@@ -228,7 +244,7 @@ async def _free(runtime: Runtime, registry: AgentRegistry, name: str, leads_to: 
         records = await runtime.saved_agents.list_agents()
     except Exception as exc:
         logger.warning("Agent %s was not added: %s", name, type(exc).__name__)
-        raise _error(500, "internal", "The saved agents could not be read.") from None
+        raise _error(500, "internal", UNREADABLE) from None
     if len(records) >= AGENT_LIMIT:
         raise _error(409, "agent_limit", LIMIT_REACHED)
     if any(record.name == name for record in records):
@@ -310,3 +326,145 @@ async def add_agent(body: AgentCreate, request: Request) -> Agent:
         "none" if record.read_only else "required",
     )
     return _saved(record, agents, 0)
+
+
+@dataclass(frozen=True)
+class _InUse:
+    """An agent in use as a check needs it: its link, and its record when it is a saved one."""
+
+    link: AgentLink
+    record: SavedAgentRecord | None
+
+
+def _in_use(context: RunContext, agent_id: str) -> _InUse:
+    """The agent ``agent_id`` names in this context's set, or the refusal (FR-013).
+
+    ``env.<name>`` names an environment agent, and anything else a saved agent's id. Only an
+    agent in use can be checked: a saved agent the environment overrides has no link.
+    """
+    agents = context.agents
+    if agents is None:
+        raise _error(404, "agent_not_found", NOT_FOUND)
+    if agent_id.startswith("env."):
+        link = agents.link(agent_id.removeprefix("env."))
+        if link is None or link.source != "environment":
+            raise _error(404, "agent_not_found", NOT_FOUND)
+        return _InUse(link, None)
+    if any(unused.record.id == agent_id for unused in agents.not_in_use):
+        raise _error(409, "agent_read_only", NOT_IN_USE)
+    record = next((found for found in agents.records.values() if found.id == agent_id), None)
+    link = agents.link(record.name) if record is not None else None
+    if record is None or link is None:
+        raise _error(404, "agent_not_found", NOT_FOUND)
+    return _InUse(link, record)
+
+
+def _differs(before: AgentCardSummary | None, read: AgentCardSummary | None) -> bool:
+    """Whether the details a check read are other than those kept or shown before it.
+
+    Both as they read now: details are cleaned of the addresses known when they were read,
+    so the ones from before are cleaned again first. An address that became an agent's
+    since is then gone from both, and its going is not a change of the card (FR-013).
+    Details read where none were kept or shown replace none.
+    """
+    if before is None or read is None:
+        return False
+    return cleaned(before, SCRUBBER.scrub) != read
+
+
+async def _still_there(runtime: Runtime, record: SavedAgentRecord) -> bool:
+    """Whether the saved agent is still the one that was checked: not moved, not removed."""
+    now = await runtime.saved_agents.get_agent(record.id)
+    return now is not None and now.ref == record.ref
+
+
+@router.post("/{agent_id}/check", response_model=AgentCheck)
+async def check_agent(agent_id: AgentIdPath, request: Request) -> AgentCheck:
+    """Read an agent's card again and say whether the agent can be used (FR-013).
+
+    For a saved agent and for an environment agent, and for nothing but an agent in use. The
+    card is read through the agent's link, so a read that succeeds connects the link and one
+    that fails leaves it not connected: hand-offs then fail with the reason until a later
+    read succeeds. A saved agent's kept details are replaced when the card can be used and
+    differs, which every instance takes up at its next context; an environment agent's are
+    this instance's own. Nothing else changes: no address, no approval choice, no thread,
+    and no task.
+    """
+    runtime = _runtime(request)
+    try:
+        context = await runtime.begin_run()
+    except Exception as exc:
+        logger.warning("Agent %s was not checked: %s", agent_id, type(exc).__name__)
+        raise _error(500, "internal", UNREADABLE) from None
+    slots = runtime.card_reads
+    taken = False
+    try:
+        # The context is held for as long as the link is used: its set keeps the link open.
+        agent = _in_use(context, agent_id)
+        link, record = agent.link, agent.record
+        busy = slots.refusal(agent_id)
+        if busy is not None:
+            raise _error(409, "check_busy", busy)
+        slots.take(agent_id)
+        taken = True
+        limit = min(runtime.settings.a2a_startup_timeout_seconds, CARD_READ_SECONDS)
+        shown = link.card
+        problem: CardProblem | None = None
+        try:
+            await link.connect(limit=limit)
+        except CardError as error:
+            problem = error.problem
+        checked_at = link.checked_at if link.tried else datetime.now(UTC)
+        if problem is not None:
+            # The warning of startup, since a card read for the agent failed (FR-030).
+            logger.warning("Agent %s cannot be used: %s", link.name, problem.message)
+        recorded, card_changed = True, False
+        if record is None:
+            # An environment agent's details are the ones this instance last read; the link
+            # took them, and had the tools built again when they differ. The first details
+            # an agent ever showed replace none.
+            card_changed = problem is None and _differs(shown, link.card)
+        else:
+            failure: HTTPException | None = None
+            try:
+                kept_details = AgentCardSummary.from_dict(record.card)
+                if problem is None and _differs(kept_details, link.last_read):
+                    kept = await runtime.saved_agents.replace_card(
+                        record.id, record.ref, link.last_read.to_dict()
+                    )
+                    recorded, card_changed = kept.recorded, kept.changed
+                else:
+                    recorded = await _still_there(runtime, record)
+            except Exception as exc:
+                logger.warning("Agent %s was checked: %s", link.name, type(exc).__name__)
+                failure = _error(500, "internal", "The check's result could not be recorded.")
+            if failure is not None:
+                raise failure
+    finally:
+        if taken:
+            slots.release(agent_id)
+        await context.release()
+    logger.info(
+        "Agent checked: %s (%s): %s; %s",
+        link.name,
+        agent_id,
+        # The sentence without its full stop: another clause follows it in this line.
+        (
+            "it can be used"
+            if problem is None
+            else f"it cannot be used: {problem.message.rstrip('.')}"
+        ),
+        (
+            f"its card details were {'replaced' if card_changed else 'not replaced'}"
+            if recorded
+            else "the agent was moved or removed meanwhile, so nothing was recorded"
+        ),
+    )
+    return AgentCheck(
+        usable=problem is None,
+        reason=problem.code if problem is not None else None,
+        message=problem.message if problem is not None else None,
+        checked_at=checked_at,
+        recorded=recorded,
+        card_changed=card_changed,
+    )

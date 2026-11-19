@@ -3,12 +3,14 @@ import { stubFetch } from "@/__tests__/testing";
 import {
   AGENTS_KEY,
   type Agent,
+  type AgentCheck,
   type AgentList,
   addAgent,
+  checkAgent,
   downAgents,
   listAgents,
 } from "@/lib/agents";
-import { ApiError } from "@/lib/api";
+import { ApiError, isGone } from "@/lib/api";
 
 const HELLO: Agent = {
   id: "env.hello",
@@ -179,5 +181,86 @@ describe("addAgent", () => {
       (error: unknown) => error,
     );
     expect((failed as ApiError).code).toBe("unreachable");
+  });
+});
+
+describe("checkAgent", () => {
+  const SAVED = "7c9e6679f0a54b3e8d2a1f4b6c8e0a2d";
+  const USABLE: AgentCheck = {
+    usable: true,
+    reason: null,
+    message: null,
+    checked_at: "2026-11-19T10:00:00Z",
+    recorded: true,
+    card_changed: false,
+  };
+
+  it("posts to the agent's check with no body and returns the result", async () => {
+    const fetchStub = stubFetch({ json: USABLE });
+    expect(await checkAgent(SAVED)).toEqual(USABLE);
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/agents/${SAVED}/check`);
+    expect(init?.method).toBe("POST");
+    // Nothing is sent with it: the agent is named by the path alone.
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).toBeUndefined();
+  });
+
+  it("names an environment agent by its id in the path", async () => {
+    const fetchStub = stubFetch({ json: USABLE });
+    await checkAgent("env.hello");
+    expect(fetchStub.mock.calls[0][0]).toBe("/api/agents/env.hello/check");
+  });
+
+  it("keeps an id that is no id inside its one place in the path", async () => {
+    const fetchStub = stubFetch({ json: USABLE });
+    await checkAgent("../llm/test?x=1");
+    expect(fetchStub.mock.calls[0][0]).toBe(
+      "/api/agents/..%2Fllm%2Ftest%3Fx%3D1/check",
+    );
+  });
+
+  it("returns a result that says why the agent cannot be used", async () => {
+    const unusable: AgentCheck = {
+      ...USABLE,
+      usable: false,
+      reason: "no_answer",
+      message: "Nothing answered at the address.",
+    };
+    stubFetch({ json: unusable });
+    expect(await checkAgent(SAVED)).toEqual(unusable);
+  });
+
+  it("surfaces a refusal with the service's code and sentence", async () => {
+    const message =
+      "This agent is already being checked. Wait for that check to end.";
+    stubFetch({
+      status: 409,
+      json: { detail: { code: "check_busy", message } },
+    });
+    const refused = await checkAgent(SAVED).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect((refused as ApiError).code).toBe("check_busy");
+    expect((refused as ApiError).message).toBe(message);
+    expect(isGone(refused)).toBe(false);
+  });
+
+  it("says an agent is gone when the service knows no agent with the id", async () => {
+    stubFetch({
+      status: 404,
+      json: {
+        detail: {
+          code: "agent_not_found",
+          message: "There is no agent with this id.",
+        },
+      },
+    });
+    const refused = await checkAgent(SAVED).catch((error: unknown) => error);
+    expect((refused as ApiError).message).toBe(
+      "There is no agent with this id.",
+    );
+    expect(isGone(refused)).toBe(true);
   });
 });

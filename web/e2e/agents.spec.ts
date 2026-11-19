@@ -1,12 +1,19 @@
 import { expect, test } from "@playwright/test";
 import {
+  AgentService,
   agentList,
+  agentsBadge,
+  agentsWarning,
   alerts,
   answerAgents,
+  answerProfiles,
   card,
   cards,
   environmentAgent,
+  environmentProfile,
+  profileList,
   savedAgent,
+  section,
 } from "./api";
 
 // 005, User Story 1: the Agents section shows which agents Freyja can hand work to.
@@ -49,9 +56,10 @@ test("two agents from the environment show as two cards, with nothing to change 
   await expect(stub.getByText("From the environment")).toBeVisible();
   await expect(stub.getByText("Requires approval")).toBeVisible();
 
-  // Nothing on a card changes or removes an agent, and no address is on the page.
+  // Nothing on a card changes or removes an agent, and no address is on the page. A card's
+  // one control has the service read the agent's card again.
   for (const shown of [hello, stub]) {
-    await expect(shown.getByRole("button")).toHaveCount(0);
+    await expect(shown.getByRole("button")).toHaveText(["Check"]);
     await expect(shown.getByRole("link")).toHaveCount(0);
     await expect(shown.getByText("Address")).toHaveCount(0);
   }
@@ -61,6 +69,8 @@ test("two agents from the environment show as two cards, with nothing to change 
     /sidebar/i,
     "Refresh",
     "Add",
+    "Check",
+    "Check",
   ]);
   await expect(alerts(page)).toHaveCount(0);
 });
@@ -255,6 +265,194 @@ test("card text with markup is shown as text, and the page asks for nothing beca
   // And nothing was asked of the address the text names.
   await page.waitForLoadState("networkidle");
   expect(asked.filter((url) => url.includes("elsewhere.example"))).toEqual([]);
+});
+
+// 005, User Story 3: the console warns about every agent that cannot be used, on its card,
+// above the cards, and on the sidebar from every section, all from one reading of the list.
+
+const DOWN = {
+  state: "unreachable",
+  checked_at: "2026-11-19T09:04:10Z",
+  reason: "Nothing answered at the address.",
+} as const;
+
+test("an agent that cannot be used shows on the sidebar from the LLM section, before the Agents section is opened", async ({
+  page,
+}) => {
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", DOWN),
+  ).serve(page);
+  await page.goto("/llm");
+
+  await expect(card(page, "Environment")).toBeVisible();
+  // The number, and in words what it means, on the entry that leads to the agents.
+  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(section(page, "Agents")).toHaveAccessibleDescription(
+    "1 agent cannot be used",
+  );
+  await expect(section(page, "LLM")).toHaveAccessibleDescription("");
+  // The LLM section itself says nothing of agents.
+  await expect(agentsWarning(page)).toHaveCount(0);
+  await expect(alerts(page)).toHaveCount(0);
+
+  // The console asked for the list once when it opened, and for nothing else of agents.
+  await page.waitForLoadState("networkidle");
+  expect(page.url()).toContain("/llm");
+  expect(service.asked).toEqual([
+    { method: "GET", path: "/agents", body: undefined },
+  ]);
+});
+
+test("in the Agents section the warning above the cards names the agent, and all three warnings go once a reading finds it reachable", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", DOWN),
+  ).serve(page);
+  await page.goto("/agents");
+
+  // Above the cards, naming the agent and saying in words that it cannot be used.
+  const above = agentsWarning(page);
+  await expect(above).toHaveText(
+    "Warning: 1 agent cannot be used: stub. Its card says why.",
+  );
+  const [warningBox, firstCard] = [
+    await above.boundingBox(),
+    await cards(page).first().boundingBox(),
+  ];
+  if (warningBox === null || firstCard === null) throw new Error("no box");
+  expect(warningBox.y + warningBox.height).toBeLessThanOrEqual(firstCard.y);
+  // On the agent's own card, with the reason.
+  const onCard = card(page, "stub").getByRole("note", { name: "Warning" });
+  await expect(onCard).toContainText("Nothing answered at the address.");
+  await expect(
+    card(page, "hello").getByRole("note", { name: "Warning" }),
+  ).toHaveCount(0);
+  // And on the sidebar.
+  await expect(agentsBadge(page)).toHaveText("1");
+
+  // Something else found the agent since: a run handed it work. The next reading says so.
+  service.found("stub", {
+    state: "reachable",
+    checked_at: "2026-11-19T09:30:00Z",
+    reason: null,
+  });
+  await page.getByRole("button", { name: "Refresh" }).click();
+
+  await expect(above).toHaveCount(0);
+  await expect(onCard).toHaveCount(0);
+  await expect(agentsBadge(page)).toHaveCount(0);
+  await expect(section(page, "Agents")).toHaveAccessibleDescription("");
+  await expect(card(page, "stub").getByText(/^Reachable/)).toBeVisible();
+});
+
+test("the warnings name every agent that cannot be used, unreachable or not in use, and no other", async ({
+  page,
+}) => {
+  await new AgentService(
+    environmentAgent("hello", DOWN),
+    savedAgent("later", {
+      id: "1".repeat(32),
+      state: "not_tried",
+      checked_at: null,
+    }),
+    savedAgent("shadowed", {
+      id: "2".repeat(32),
+      state: "not_in_use",
+      checked_at: null,
+      reason: "An agent named in the environment has this name.",
+    }),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+
+  await expect(agentsWarning(page)).toHaveText(
+    "Warning: 2 agents cannot be used: hello, shadowed. Each one's card says why.",
+  );
+  await expect(agentsBadge(page)).toHaveText("2");
+  await expect(section(page, "Agents")).toHaveAccessibleDescription(
+    "2 agents cannot be used",
+  );
+  // An agent that is not in use cannot be checked; every other can.
+  await expect(card(page, "shadowed").getByRole("button")).toHaveCount(0);
+  for (const name of ["hello", "later", "stub"]) {
+    await expect(card(page, name).getByRole("button")).toHaveText(["Check"]);
+  }
+});
+
+test("with no answer for the list the sidebar shows no number, and a number shown before is not left as current", async ({
+  page,
+}) => {
+  // The LLM section with a service that answers for profiles only: the request for the
+  // agents reaches the web app's server, which finds nothing at the service's address.
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  await page.goto("/llm");
+  await expect(card(page, "Environment")).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  await expect(agentsBadge(page)).toHaveCount(0);
+  await expect(section(page, "Agents")).toHaveAccessibleDescription("");
+  // The section the operator is on says nothing about it either.
+  await expect(alerts(page)).toHaveCount(0);
+
+  // A service that answered, and then stops.
+  const service = await new AgentService(savedAgent("stub", DOWN)).serve(page);
+  await page.goto("/agents");
+  await expect(agentsBadge(page)).toHaveText("1");
+  service.stop();
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(alerts(page)).toContainText(UNREACHABLE);
+  await expect(agentsBadge(page)).toHaveCount(0);
+  await expect(agentsWarning(page)).toHaveCount(0);
+});
+
+test("opening the Agents section asks for the list once: the sidebar and the list are one reading", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", DOWN),
+  ).serve(page);
+  await page.goto("/agents");
+
+  // Both show what the list says, the sidebar outside the page and the cards inside it.
+  await expect(card(page, "stub")).toBeVisible();
+  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsWarning(page)).toBeVisible();
+  await page.waitForLoadState("networkidle");
+  expect(service.reads).toBe(1);
+
+  // Reading the list again is one request too, and both follow it.
+  service.found("hello", DOWN);
+  await page.getByRole("button", { name: "Refresh" }).click();
+  await expect(agentsBadge(page)).toHaveText("2");
+  await expect(agentsWarning(page)).toContainText("hello, stub");
+  await page.waitForLoadState("networkidle");
+  expect(service.reads).toBe(2);
+  expect(service.changes).toEqual([]);
+});
+
+test("the list read on the LLM section is the one the Agents section starts from", async ({
+  page,
+}) => {
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  const service = await new AgentService(savedAgent("stub", DOWN)).serve(page);
+  await page.goto("/llm");
+  await expect(agentsBadge(page)).toHaveText("1");
+  await page.waitForLoadState("networkidle");
+  expect(service.reads).toBe(1);
+
+  await section(page, "Agents").click();
+  await expect(page).toHaveURL("/agents");
+  // The card is there from the reading the sidebar already had; the section may read the
+  // list again as it opens, and never more than once.
+  await expect(card(page, "stub")).toBeVisible();
+  await expect(agentsWarning(page)).toContainText("stub");
+  await page.waitForLoadState("networkidle");
+  expect(service.reads).toBeLessThanOrEqual(2);
+  await expect(agentsBadge(page)).toHaveText("1");
 });
 
 test.describe("in a narrow window", () => {

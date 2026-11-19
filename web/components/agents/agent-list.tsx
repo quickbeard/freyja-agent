@@ -4,10 +4,16 @@ import { useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
-import { AGENTS_KEY, type AgentList as Agents, listAgents } from "@/lib/agents";
+import {
+  AGENTS_KEY,
+  type AgentList as Agents,
+  downAgents,
+  listAgents,
+} from "@/lib/agents";
 import { ApiError } from "@/lib/api";
 import { AgentCard } from "./agent-card";
 import { AgentForm } from "./agent-form";
+import { AgentsWarning } from "./agents-warning";
 
 function reason(error: unknown): string {
   return error instanceof ApiError
@@ -15,7 +21,11 @@ function reason(error: unknown): string {
     : "The agents could not be loaded.";
 }
 
-/** The Agents section: every agent as a card, read from the service in the browser. */
+/**
+ * The Agents section: every agent as a card, read from the service in the browser. The
+ * sidebar reads the same list under the same key, so the cards, the warning above them, and
+ * the number on the sidebar are one reading (FR-001a).
+ */
 export function AgentList() {
   const { data, error, isLoading, isValidating, mutate } = useSWR<
     Agents,
@@ -56,6 +66,9 @@ export function AgentList() {
   } else {
     list = (
       <div className="flex flex-col gap-4">
+        {/* Only of a list that was read: while the service cannot be reached, no agent is
+            warned about as if what was read before were so now. */}
+        <AgentsWarning agents={downAgents(data)} />
         <div className="flex justify-end gap-2">
           <Button
             variant="outline"
@@ -75,8 +88,15 @@ export function AgentList() {
           </p>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {/* After a check the list is read again: the card's state, the warning above,
+                and the sidebar's number all follow from that one reading. */}
             {data.agents.map((agent) => (
-              <AgentCard key={agent.id} agent={agent} />
+              <AgentCard
+                key={agent.id}
+                agent={agent}
+                onChecked={() => mutate()}
+                onGone={() => mutate()}
+              />
             ))}
           </div>
         )}

@@ -264,6 +264,24 @@ A name is in the form the environment's agents use, and an address is `http` or 
 
 A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
 
+### Check an agent
+
+Whether an agent can be used is checked on request, from its card in the Agents section of the [web console](#web-console) or with:
+
+```bash
+curl -s -X POST localhost:8000/agents/env.hello/check        # an agent named in the environment
+curl -s -X POST localhost:8000/agents/<id>/check             # a saved agent, by its id from GET /agents
+```
+
+A check reads the agent's card again, within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` and at most twenty seconds, and sends the agent nothing else. The answer says whether the agent can be used (`usable`), and when it cannot, which check failed (`reason`) and the service's own sentence for it (`message`), the same nine as for an add. It changes no address, no approval choice, no thread, and no task.
+
+- An agent that can be used is listed as reachable from then on, and a hand-off reaches it.
+- An agent that cannot be used is listed as not reachable with the reason. It keeps both of its tools, and a hand-off to it becomes an error result with that reason until a later read of its card succeeds, at the next check or the next hand-off.
+- `card_changed` is true when the card differs from the details kept or shown before. From the next run the agent's tools are described from the new details: on every instance for a saved agent, whose details are kept in the database, and on the answering instance for an agent named in the environment.
+- `recorded` is false when a saved agent was moved or removed while the check ran. Nothing was kept then.
+
+A check is refused, and the agent is not contacted, with 409 `check_busy` while the same agent is being checked or four card reads are under way on the instance, 404 `agent_not_found` for an id no agent has, 409 `agent_read_only` for a saved agent that is not in use, and 403 `other_origin` for a request a browser marks as made by a page of another origin.
+
 ### When an agent fails
 
 At startup, an entry that is invalid in itself stops the service with an error that names the agent, and nothing listens: an address not on this machine, a name shared with a tool server, or a tool name already taken.
@@ -382,7 +400,7 @@ pnpm dev                       # http://localhost:3000
 Open <http://localhost:3000>, by that name: in development Next.js serves its dev-only assets to `localhost` only, so the page does not load fully when opened as `127.0.0.1`. The address changes to `/llm`. A sidebar on the left lists the sections, LLM and Agents; on a screen narrower than 768 pixels it opens from a button. Like the API, the console has no authentication.
 
 - **LLM** shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
-- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. **Add** saves a new agent by its name and address: the service reads the agent's card first and refuses an agent it cannot use, with the reason shown in the form. An agent added here always requires approval, and the form says so. A saved agent's card shows its address; a card has nothing to change or remove an agent with yet. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
+- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. **Add** saves a new agent by its name and address: the service reads the agent's card first and refuses an agent it cannot use, with the reason shown in the form. An agent added here always requires approval, and the form says so. A saved agent's card shows its address. **Check** on a card has the service read the agent's card again and says whether the agent can be used, with the reason when it cannot, and whether the agent's card changed. Every agent that cannot be used is warned about three times from one reading of the list: on its card, in a warning above the cards that names it, and as a number on the sidebar's Agents entry, which shows on every section. A card has nothing to change or remove an agent with yet. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
 
 When the service cannot be reached, a section says so and offers to try again.
 

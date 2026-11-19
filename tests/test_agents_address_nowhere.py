@@ -1,4 +1,5 @@
-"""005 FR-028, SC-008: an agent's address appears nowhere outside the Agents routes (part 1).
+"""005 FR-028, SC-008: an agent's address appears nowhere outside the Agents routes (parts 1
+and 2).
 
 Built like ``tests/test_llm_secrets_nowhere.py`` and grown in every phase that adds a route.
 One agent is saved on a recognizable port, one is named in the environment on another, and
@@ -12,6 +13,10 @@ else. An environment agent's, and the address of an add that was refused, are fo
 
 The stand-ins fail the way the real libraries word a failed connection: the error names the
 address that was asked. Their cards name addresses too.
+
+Part 2 does the same for a check: one that succeeds, one that fails for each card problem,
+one refused as busy, and one that finds another card, which names its own address and
+another agent's.
 """
 
 import json
@@ -25,6 +30,7 @@ from fastapi.testclient import TestClient
 
 from freyja_agent.api import agents as agents_api
 from freyja_agent.config import canonical_address, destination
+from freyja_agent.delegates.agent_cards import SENTENCES
 from tests.a2a_stub import StubAgent, make_stub, stub_card
 from tests.asgi_stream import StreamingASGITransport
 from tests.conftest import A2aApp, holds_port
@@ -320,3 +326,139 @@ def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
         for record, line in zip(caplog.records, logged, strict=False)
     )
     nowhere(logged, *PORTS)
+
+
+# Part 2 (T069): checks.
+
+CHECKED_PORT = 9741
+DESK_PORT = 9742
+CHECK_PORTS = (CHECKED_PORT, DESK_PORT)
+CHECKED_URL = f"http://127.0.0.1:{CHECKED_PORT}"
+DESK_URL = f"http://127.0.0.1:{DESK_PORT}"
+
+
+def saying(more: str = "") -> str:
+    """What a card says of its own address and of the other agent's, several ways."""
+    return (
+        f"{more}Reach me at http://127.0.0.1:{CHECKED_PORT}/a2a or localhost:{CHECKED_PORT}. "
+        f"My neighbour is at http://localhost:{DESK_PORT}, [::1]:{DESK_PORT}, and "
+        f"('127.0.0.1', {DESK_PORT})."
+    )
+
+
+def broken(code: str) -> StubAgent:
+    """A stand-in whose card is refused as ``code``, for the codes the card decides."""
+    return {
+        "no_card": lambda: make_stub("helper", card_status=404, card_body=saying().encode()),
+        "unreadable": lambda: make_stub("helper", card_body=saying().encode()),
+        # A redirect to the other agent's address: neither is to appear.
+        "redirect": lambda: make_stub("helper", redirect_card_to=f"{DESK_URL}/elsewhere"),
+        "too_large": lambda: make_stub("helper", card_body=saying().encode() * 20000),
+        "auth_required": lambda: make_stub(
+            "helper", card=stub_card("helper", security=True, description=saying())
+        ),
+        "no_text": lambda: make_stub(
+            "helper",
+            card=stub_card("helper", input_modes=("image/png",), description=saying()),
+        ),
+        "no_interface": lambda: make_stub(
+            "helper", card=stub_card("helper", binding="GRPC", description=saying())
+        ),
+    }.get(code, lambda: make_stub("helper"))()
+
+
+def test_an_address_is_in_nothing_a_check_returns_or_logs(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    desk = make_stub("desk", card=stub_card("desk", description=saying()))
+    helper = make_stub("helper", card=stub_card("helper", description=saying()))
+    made = make_a2a_app(
+        ScriptedChatModel(),
+        {"desk": {"url": DESK_URL, "read_only": True}},
+        stubs={"desk": desk},
+        a2a_startup_timeout_seconds=0.4,
+    )
+    desk_transport = put(made, DESK_URL, desk)
+    helper_transport = put(made, CHECKED_URL, helper)
+    results: list[str] = []
+    refusals: list[str] = []
+    answers: list[Any] = []
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = Seen(client, sse_events)
+        added = client.post("/agents", json={"name": "helper", "url": CHECKED_URL})
+        assert added.status_code == 201, added.text
+        saved_id = added.json()["id"]
+
+        def check(agent_id: str, **kwargs: Any) -> Any:
+            response = client.post(f"/agents/{agent_id}/check", **kwargs)
+            text = f"POST /agents/{agent_id}/check -> {response.status_code} {response.text}"
+            (results if response.is_success else refusals).append(text)
+            return response
+
+        # A check that succeeds, of each kind of agent.
+        assert check(saved_id).json()["usable"] is True
+        assert check("env.desk").json()["usable"] is True
+
+        # One that fails, for each card problem, with what the stand-in serves naming both
+        # addresses; then the same agent answering again.
+        for code in SENTENCES:
+            helper_transport.down = code == "no_answer"
+            helper_transport.hang = code == "timeout"
+            helper_transport.app = broken(code).app
+            assert check(saved_id).json()["reason"] == code, code
+        helper_transport.down = helper_transport.hang = False
+        helper_transport.app = helper.app
+        desk_transport.down = True
+        assert check("env.desk").json()["reason"] == "no_answer"
+        desk_transport.down = False
+
+        # One that finds another card, which names its own address and the other agent's:
+        # the details that are kept, and shown, are cleaned of both.
+        other_card = stub_card("helper", description=saying("Now with reports. "))
+        helper_transport.app = make_stub("helper", card=other_card).app
+        assert check(saved_id).json()["card_changed"] is True
+        desk_transport.app = make_stub(
+            "desk", card=stub_card("desk", description=saying("Now with reports. "))
+        ).app
+        assert check("env.desk").json()["card_changed"] is True
+
+        # Refused: busy, an agent that does not exist, an id in no form, another origin.
+        slots = made.runtime.card_reads
+        slots.take(saved_id)
+        assert check(saved_id).json()["detail"]["code"] == "check_busy"
+        slots.release(saved_id)
+        for _ in range(4):
+            slots.take(None)
+        assert check("env.desk").json()["detail"]["code"] == "check_busy"
+        for _ in range(4):
+            slots.release(None)
+        assert check("0" * 32).status_code == 404
+        assert check("Not-An-Id").status_code == 422
+        assert check(saved_id, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+
+        # What the service says of both agents afterwards.
+        seen.call("GET", "/tools")
+        listed = client.get("/agents")
+        answers.append(listed.json())
+
+    assert len(results) == 14 and len(refusals) == 5
+    # A check's answer holds no address at all, and neither does a refusal.
+    nowhere(results, *CHECK_PORTS)
+    nowhere(refusals, *CHECK_PORTS)
+    # The catalog describes both agents from the new details, with every address taken out.
+    assert any("Now with reports. Reach me at <address>/a2a" in text for text in seen.texts)
+    nowhere(seen.texts, *CHECK_PORTS)
+    # The list holds the saved agent's address in `url` and in nothing else.
+    for answer in answers:
+        assert addresses(answer) == [CHECKED_URL]
+        nowhere(strings(answer, but="url"), *CHECK_PORTS)
+        cards = [agent["card"]["description"] for agent in answer["agents"]]
+        assert len(cards) == 2
+        assert all(text.startswith("Now with reports. Reach me at <address>") for text in cards)
+    # Every log record at every level, with its arguments and its traceback.
+    logged = [record.getMessage() for record in caplog.records]
+    logged += [caplog.handler.format(record) for record in caplog.records]
+    assert sum("Agent checked: helper" in line for line in logged) == 2 * 11
+    assert sum("Agent checked: desk" in line for line in logged) == 2 * 3
+    nowhere(logged, *CHECK_PORTS)

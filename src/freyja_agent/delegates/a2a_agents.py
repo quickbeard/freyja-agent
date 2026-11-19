@@ -171,6 +171,10 @@ class AgentLink:
         self.address_version = address_version
         # The card details the tools are described from.
         self.card = card
+        # The details of the card this link last read, whoever asked for the reading. For a
+        # saved agent they are not the ones shown: those are the kept ones, which only an
+        # operator's move or check replaces (005 FR-015). A check takes them from here.
+        self.last_read: AgentCardSummary | None = None
         self.streaming = False
         # True while this instance holds a usable card from the address and a client built
         # from it. Nothing is sent over a link that is not connected.
@@ -213,7 +217,18 @@ class AgentLink:
         return SCRUBBER.scrub(text)[:ERROR_TEXT_LIMIT]
 
     def mark(self, reachable: bool, error: str | None = None) -> None:
-        """Record the outcome of the most recent attempt to use the agent."""
+        """Record the outcome of the most recent attempt to use the agent.
+
+        While the link holds no usable card, what is known of the agent is what its last
+        card read found, and nothing is sent over the link. A call that was under way when
+        the card stopped being usable can still end, well or badly: its ending says nothing
+        of whether the agent can be used now, and is not recorded (005 FR-021).
+        """
+        if not self.connected:
+            return
+        self._note(reachable, error)
+
+    def _note(self, reachable: bool, error: str | None = None) -> None:
         self.tried = True
         self.reachable = reachable
         self.checked_at = datetime.now(UTC)
@@ -228,45 +243,61 @@ class AgentLink:
         connected, with the card problem's sentence as its error, and raises ``CardError``.
         """
         seen = self._readings
+        # One limit for the wait and the read together: a caller that waited for another's
+        # reading, which then ended with no result, reads in what is left of its own time.
+        clock = asyncio.get_running_loop().time
+        deadline = clock() + limit
+        waited_too_long = False
         try:
             async with asyncio.timeout(limit):
                 await self._connecting.acquire()
         except TimeoutError:
-            raise CardError("timeout", seconds=limit) from None
+            waited_too_long = True
+        if waited_too_long:
+            # Another caller's reading has gone on for longer than this one may wait. Only a
+            # link that is not connected is read by two callers at once, and what this one
+            # found is the most recent thing known of it: no answer in its time.
+            problem = CardProblem.of("timeout", seconds=limit)
+            if not self.connected:
+                self._note(False, problem.message)
+            raise CardError.of(problem)
         try:
             if card is None and self._readings != seen:
                 # Another caller read while this one waited.
                 if self._problem is not None:
                     raise CardError.of(self._problem)
                 return
+            failed: CardProblem | None = None
             try:
                 if card is None:
-                    card = await read_card(self._http, self.config.url, limit=limit)
+                    left = max(deadline - clock(), 0.0)
+                    card = await read_card(self._http, self.config.url, limit=left)
                 config = ClientConfig(
                     httpx_client=self._http, streaming=card.capabilities.streaming
                 )
                 client = ClientFactory(config).create(pinned_card(card, self.config.url))
             except CardError as error:
-                self._failed(error.problem)
-                raise
+                failed = error.problem
             except Exception:
                 # A card the SDK cannot build a client from; its error may name the address.
-                failure = CardError("unreadable")
-            else:
-                failure = None
-            if failure is not None:
-                self._failed(failure.problem)
-                raise failure
+                failed = CardProblem.of("unreadable")
+            if failed is not None:
+                if failed.code == "timeout":
+                    # In the caller's limit, whatever part of it the read itself was given.
+                    failed = CardProblem.of("timeout", seconds=limit)
+                self._failed(failed)
+                raise CardError.of(failed)
             self._readings += 1
             self._problem = None
             self.client = client
             self.streaming = card.capabilities.streaming
             self.connected = True
-            self.mark(True)
+            self._note(True)
+            details = card_details(card, SCRUBBER.scrub)
+            self.last_read = details
             if self.source == "environment":
                 # A saved agent's details are the kept ones, and change only by an operator's
                 # move or check (005 FR-015).
-                details = card_details(card, SCRUBBER.scrub)
                 changed, self.card = details != self.card, details
                 if changed and self.on_card_changed is not None:
                     self.on_card_changed(self)
@@ -278,7 +309,7 @@ class AgentLink:
         self._problem = problem
         self.client = None
         self.connected = False
-        self.mark(False, problem.message)
+        self._note(False, problem.message)
 
     async def get_task(self, task_id: str) -> Task:
         """Read a task's status within the call time limit; raises what the agent raised.
@@ -409,12 +440,18 @@ async def _send(
     outcome: SendOutcome,
     clock: Clock | None,
 ) -> None:
-    """Send one message and follow it until it stops, updating ``outcome`` as events arrive."""
-    if link.client is None:
+    """Send one message and follow it until it stops, updating ``outcome`` as events arrive.
+
+    The call keeps the client, and the way of following a task, that the link had when it
+    began. A card read meanwhile may leave the link with another client or with none; a
+    call that is under way ends on the connection it was sent over (005 research R6).
+    """
+    client, streaming = link.client, link.streaming
+    if client is None:
         raise NotConnectedError(f"Agent '{link.name}' is not connected.")
-    configuration = None if link.streaming else SendMessageConfiguration(return_immediately=True)
+    configuration = None if streaming else SendMessageConfiguration(return_immediately=True)
     request = SendMessageRequest(message=message, configuration=configuration)
-    async for event in link.client.send_message(request):
+    async for event in client.send_message(request):
         kind = event.WhichOneof("payload")
         if kind == "message":
             outcome.reply = event.message
@@ -440,8 +477,8 @@ async def _send(
         await _note_acknowledgment(outcome, clock)
         if outcome.state in _STOP:
             return
-    if not link.streaming and outcome.task is not None:
-        await _poll(link, outcome, on_progress)
+    if not streaming and outcome.task is not None:
+        await _poll(client, outcome, on_progress)
 
 
 def _acknowledged(
@@ -485,15 +522,18 @@ def _merge_artifact(task: Task, update: TaskArtifactUpdateEvent) -> None:
         held.CopyFrom(artifact)
 
 
-async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress) -> None:
-    """Check a task of an agent that does not stream until it stops; report each change."""
-    if link.client is None or outcome.task is None:
-        raise RuntimeError(f"Agent '{link.name}' has no task to check.")
+async def _poll(client: Client, outcome: SendOutcome, on_progress: OnProgress) -> None:
+    """Check a task of an agent that does not stream until it stops; report each change.
+
+    ``client`` is the one the message was sent with.
+    """
+    if outcome.task is None:
+        raise RuntimeError("There is no task to check.")
     # The protocol's own states, so submitted to working counts as a change.
     seen = outcome.task.status.state
     while outcome.state not in _STOP:
         await asyncio.sleep(POLL_SECONDS)
-        task = await link.client.get_task(GetTaskRequest(id=outcome.task.id))
+        task = await client.get_task(GetTaskRequest(id=outcome.task.id))
         outcome.task = task
         if task.status.state != seen:
             seen = task.status.state

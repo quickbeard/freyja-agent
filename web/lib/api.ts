@@ -95,7 +95,10 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
   );
 }
 
-/** Whether a request was refused because the profile it names no longer exists. */
+/** Whether a request was refused because the profile or the agent it names no longer exists. */
 export function isGone(error: unknown): boolean {
-  return error instanceof ApiError && error.code === "profile_not_found";
+  return (
+    error instanceof ApiError &&
+    (error.code === "profile_not_found" || error.code === "agent_not_found")
+  );
 }
