@@ -28,7 +28,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`), and the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`) if they are missing. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](#no-usable-model)).
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), and the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`) if they are missing. A task table created by an earlier version gains its `agent_ref` column. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](#no-usable-model)).
 
 Check it is up:
 
@@ -147,7 +147,7 @@ During a run, a failing call becomes an error result for the orchestrator and th
 
 ### Read the catalog
 
-`GET /tools` lists every tool the orchestrator was given at startup and the status of every server. It answers from memory and never contacts a server.
+`GET /tools` lists every tool the orchestrator has and the status of every server. It never contacts a server. Before it answers it reads two rows of the database, to learn whether the agents or the active LLM profile changed (see [Agents in the catalog](#agents-in-the-catalog)); the tool servers' tools are the ones listed at startup.
 
 ```bash
 curl -s localhost:8000/tools | jq
@@ -159,7 +159,7 @@ A proposal for a server tool names its server: each entry of `action_requests` i
 
 ## Agents
 
-The orchestrator can also hand work to agents that do their own reasoning, over the [A2A protocol](https://a2a-protocol.org). At startup the service reads the card of every agent listed in `FREYJA_A2A_AGENTS` and gives the orchestrator two tools per agent: one to hand it a task and one to cancel a task. The full contract is in `specs/003-a2a-agent-delegation/contracts/agent-config.md`.
+The orchestrator can also hand work to agents that do their own reasoning, over the [A2A protocol](https://a2a-protocol.org). The service gives the orchestrator two tools for every agent listed in `FREYJA_A2A_AGENTS`, one to hand it a task and one to cancel a task, and reads each agent's card at startup. The full contract is in `specs/003-a2a-agent-delegation/contracts/agent-config.md`.
 
 ### Try it with the reference hello agent
 
@@ -236,13 +236,15 @@ A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its s
 
 ### When an agent fails
 
-At startup, an agent the service cannot use stops it with an error that names the agent, and nothing listens: a card that cannot be read within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` or is redirected, a card that requires authentication, accepts no text, or offers no JSON-RPC interface, an address not on this machine, a name shared with a tool server, or a tool name already taken.
+At startup, an entry that is invalid in itself stops the service with an error that names the agent, and nothing listens: an address not on this machine, a name shared with a tool server, or a tool name already taken.
+
+An agent whose card cannot be used does not stop startup: a card that cannot be read within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` or is redirected, or one that requires authentication, accepts no text, or offers no JSON-RPC interface. The service starts, logs a warning that names the agent and the reason, and lists the agent as not reachable with that reason. The agent keeps both of its tools, and a hand-off to it becomes an error result naming it. Nothing is sent to an agent the service has read no usable card from. All agents are tried at once, so any number of agents that are down delay startup by one time limit. An agent that answers later is used without a restart: the next hand-off to it reads its card first, inside the hand-off's own time limit, and while it has a pending task the service asks for its card once in each round of watching.
 
 During a run, a hand-off to an agent that cannot be reached, does not acknowledge within the call limit, fails or rejects the task, asks for authentication, or replies with something malformed becomes an error result naming the agent; the run goes on, and a warning names the agent. An unacknowledged hand-off's result says the agent may or may not have received it. Nothing is ever sent twice: an approval authorizes one attempt. If the service stops while a message to an agent is under way, the next run on that thread records that the agent may or may not have received it, and the message is not sent again. An agent that answers again is usable without a restart. No error result, log line, thread message, or catalog entry contains an agent's address.
 
 ### Agents in the catalog
 
-`GET /tools` lists each configured agent under `agents`: its `name`, `reachable`, `checked_at`, and `error` from the most recent attempt to use it (at startup, in a hand-off or cancel, or while checking a task), and its `card`: the card's name, description, version, and skills. The card is the agent's own claim and never changes the classification. Each agent's two tools are in `tools` with `agent` set to its name; every other tool has `agent: null`. The catalog answers from memory, never contacts an agent, and never shows its address. With no agents configured, `agents` is empty and the tools are as before.
+`GET /tools` lists each configured agent under `agents`: its `name`, `reachable`, `checked_at`, and `error` from the most recent attempt to use it (at startup, in a hand-off or cancel, or while checking a task), and its `card`: the card's name, description, version, and skills. The card is the agent's own claim and never changes the classification. Each agent's two tools are in `tools` with `agent` set to its name; every other tool has `agent: null`. The catalog never contacts an agent and never shows its address. An agent the service has not tried yet is listed as not reachable, with a reason that says so; one whose card it has not read has an empty `card`, and its hand-off tool is described by its name alone until the card is read. Before it answers, the catalog reads two rows of the database, to learn whether the agents or the active LLM profile changed; when a read fails it answers from what it last built. With no agents configured, `agents` is empty and the tools are as before.
 
 A proposal for an agent's tool names its agent: each entry of `action_requests` has `agent` set, and `null` for every other tool.
 

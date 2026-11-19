@@ -444,3 +444,87 @@ What the implementation settled differently from the plan, or found out, phase b
   the one that failed starts on its next try. And `setup()` still creates the task table's
   index at every start, as since feature 003, which waits behind a session that is writing
   to the table. Neither is new, and neither is changed here.
+
+### Phase 3
+
+- **An eighth existing case expected startup to fail for a card problem.** Research R22 and
+  T016 list seven, all in `tests/test_a2a_startup.py`. The redirect test of
+  `tests/test_a2a_transport.py`, which serves a stand-in on loopback, expected the same and
+  was changed the same way: the service starts, the agent is listed as not reachable with
+  the redirect's sentence, and the target of the redirect still receives nothing. One other
+  test file gained setup and no check changed: the fixture of `tests/test_addresses.py`
+  starts from a plain record factory, because the app now installs the process's own when
+  it is created and a factory installs once.
+- **A hand-off that has to read the card first sends within what is left of its time
+  limit.** FR-021 asks for the read inside the hand-off's own limit. The read is given the
+  call's limit, and the send, or the cancel, the remainder, so the two together take one
+  limit and not two.
+- **A caller that waited for another's card read takes its result**, the failure included,
+  and requests nothing itself; a read that was cancelled leaves no result, and the next
+  caller reads.
+- **An environment agent's tools are built again whenever its card details change**, not
+  only the first time they are read: an agent that was down, came back with another card,
+  and was connected again is described from the card it has now.
+- **A warning that a saved agent is not in use is logged when an instance finds it out**, at
+  startup and at the refresh that first sees it, and not again at every later refresh while
+  it stays so (FR-030: "when it finds either out").
+- **The model is not built again when only the agents changed.** The manager keeps the model
+  it built for the active profile and assembles the orchestrator around it for the new set,
+  so no key is read and no client is made; it logs one line, "The orchestrator was rebuilt
+  for a changed set of agents".
+- **The run and resume routes take their context before they read the thread.** When the
+  agents or the active profile cannot be read, a request therefore gets the stream with
+  `start` and the `internal` error also for a thread that is paused or has no pending
+  decision, where it used to be refused with 409 first and fail in the stream otherwise.
+- **A delivery that can take no context under the lease gives the lease back and is tried
+  again in the next round**, and uses up none of the outcome's attempts. Before, a profile
+  that could not be read ended the background run with `internal`, which counted as one.
+- **The worker words a task given up after a move as moved** when the link in use under the
+  name is the same saved agent at a later address, and as no longer configured otherwise.
+- **A round of watching that cannot learn the current set claims nothing**, and the worker
+  logs the round as failed and tries again at the next interval, as it does for any failed
+  round.
+- **`Runtime.agents` is now read from the registry**, and `Runtime` gained `begin_read`, the
+  context of a route that only reads, which falls back to what the instance last built: its
+  graph, its catalog, and the agent set those were built for.
+- **Taking a context is two single-row reads, not one.** Research R3 and R22 count the
+  agents' revision. The model manager reads the active profile's revision as well, as it has
+  since feature 004 at the start of every run, so the catalog and the thread state now read
+  both before they answer.
+- **An environment agent's card is now held to the limits of FR-007**, which FR-031 does not
+  list among its exceptions. Its card is read by `read_card`, like a saved agent's: a card
+  larger than one megabyte, or one served compressed although the request asked for it
+  plain, was accepted at startup before and now leaves the agent listed as one that cannot
+  be used, with the reason.
+- **A cancellation while a context is being taken gives the thread's lease back.** The
+  context is taken right after the lease, before the code that releases the lease on a
+  refusal; a service that stops at that moment would otherwise leave the thread busy until
+  the lease expires (found by the independent review).
+- **Known and left as it is: a context taken for a stream that never starts is not
+  released.** A client that disconnects after the route answered and before the stream's
+  first event leaves the run's hold on its agent set in place, as it leaves the thread's
+  lease until it expires. The cost is a link of an earlier set that stays open until the
+  service stops.
+- **Seen by hand (T036, research "Not verified").** Started through uvicorn with the stand-in
+  agent configured and not running, the service logs the warning and uvicorn's access lines
+  as before, with the record factory installed and an address registered. A traceback is
+  logged as before: uvicorn's "Exception in ASGI application" and the worker's failed round,
+  with the database stopped. Once the stand-in was started and given a pending task, the
+  next round read its card, checked the task, and the catalog listed the agent as reachable
+  with its tool described from the card; no line of the log held the agent's port.
+  `uv run pytest` passes with the factory installed beside pytest's log capture: every
+  test of the suite, among them every test that reads captured records. A rebuild with twenty saved
+  agents, forty agent tools of fifty in all, took 73 ms at the median over ten rebuilds (71
+  to 172 ms); taking a context with nothing changed took under 0.01 ms beside its one read.
+- **With the database stopped, the catalog answers from the last set after thirty
+  seconds**, which is how long the connection pool waits before the read of the revision
+  fails. Before this phase the catalog read nothing and answered at once. The thread state
+  needs the database in any case.
+- **`frame-ancestors` was seen in Chromium and in Firefox against the built app** (T035).
+  Without the two headers the end-to-end test fails in both: the frame shows the console.
+  Chromium refuses a page's request to an address on this machine unasked, which kept the
+  frame empty whatever the headers said, so the test gives Chromium that permission first.
+  `headers()` applies beside the `/api` rewrite: `/llm` and `/agents` are answered with both
+  headers. The redirect at `/` carries neither, and neither does the answer to a forwarded
+  `/api` path when nothing answers at the service, which is Next.js's own error; a
+  forwarded answer of a running service was not looked at.

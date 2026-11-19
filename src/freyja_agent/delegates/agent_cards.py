@@ -81,6 +81,14 @@ class CardError(Exception):
         self.problem = CardProblem.of(code, seconds=seconds)
         super().__init__(self.problem.message)
 
+    @classmethod
+    def of(cls, problem: CardProblem) -> "CardError":
+        """The error for a problem already found, for a caller that waited for its reading."""
+        error = cls.__new__(cls)
+        error.problem = problem
+        Exception.__init__(error, problem.message)
+        return error
+
     @property
     def code(self) -> CardCode:
         return self.problem.code

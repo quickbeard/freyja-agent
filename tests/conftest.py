@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 import shutil
@@ -22,13 +23,16 @@ from langgraph.store.memory import InMemoryStore
 
 from freyja_agent.agent.factory import build_agent
 from freyja_agent.api.app import create_app
-from freyja_agent.config import Settings
+from freyja_agent.config import Settings, canonical_address, destination
 from freyja_agent.delegates.a2a_agents import default_transport
+from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.delegates.agent_cards import card_details
 from freyja_agent.llm.providers import ModelFactory
 from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileStore
 from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore, SavedAgentRecord
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
 from tests.asgi_stream import StreamingASGITransport
@@ -211,10 +215,34 @@ class A2aApp:
     # instance beside it (``TestClient.portal.wrap_async_context_manager``).
     open_runtime: Callable[[Settings], Any] = lambda _settings: nullcontext()
     runtimes: list[Runtime] = field(default_factory=list)
+    # The agents an operator saved (feature 005); shared between apps as ``store`` is.
+    saved_agents: InMemorySavedAgentStore = field(default_factory=InMemorySavedAgentStore)
+    # The agents the store was seeded with before the app started, by name.
+    saved: dict[str, SavedAgentRecord] = field(default_factory=dict)
+    # Stand-ins found by where an address leads: every saved agent's, and any added with
+    # ``add_stub``. Shared between apps, like the stores.
+    at: dict[str, tuple[StubAgent, StreamingASGITransport]] = field(default_factory=dict)
 
     @property
     def runtime(self) -> Runtime:
         return self.runtimes[-1]
+
+    def add_stub(self, url: str, stub: StubAgent) -> StreamingASGITransport:
+        """Put ``stub`` at ``url``: whatever is asked for at that address reaches it."""
+        transport = StreamingASGITransport(stub.app)
+        self.at[destination(canonical_address(url))] = (stub, transport)
+        return transport
+
+    def stub_at(self, url: str) -> StubAgent:
+        return self.at[destination(canonical_address(url))][0]
+
+    def transport_at(self, url: str) -> StreamingASGITransport:
+        return self.at[destination(canonical_address(url))][1]
+
+
+def saved_card(stub: StubAgent) -> dict[str, Any]:
+    """The card details the service would keep for ``stub``: cut and cleaned (005 FR-002)."""
+    return card_details(stub.card, SCRUBBER.scrub).to_dict()
 
 
 @pytest.fixture
@@ -229,6 +257,15 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
     ``locks`` from an earlier app to simulate a restart or a second instance. The delegation
     worker is built but its loop is not started unless ``run_worker`` is true: tests call
     ``runtime.worker.tick()`` themselves.
+
+    Feature 005 adds saved agents (005 research R20). ``saved`` seeds the saved-agent store
+    before the app starts: each entry is an agent's name with ``url``, and optionally
+    ``read_only`` and ``stub``, and is saved with the card details of its stand-in.
+    ``saved_agents`` is the store, and ``at`` the stand-ins by address, to pass on from an
+    earlier app for a second instance or a restart. A stand-in given through ``saved`` or
+    through ``A2aApp.add_stub`` is found by where the address asked for leads; any other by
+    its agent's name, as before, since every environment agent of the fixture has one
+    address.
     """
 
     def _make(
@@ -246,6 +283,9 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         network: bool = False,
         llm_profiles: LlmProfileStore | None = None,
         model_factory: ModelFactory | None = None,
+        saved_agents: InMemorySavedAgentStore | None = None,
+        saved: dict[str, dict[str, Any]] | None = None,
+        at: dict[str, tuple[StubAgent, StreamingASGITransport]] | None = None,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -272,7 +312,32 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
             stubs=stand_ins,
             transports=transports,
             store=task_store,
+            saved_agents=saved_agents or InMemorySavedAgentStore(task_store, clock=clock.now),
+            at=at if at is not None else {},
         )
+        for name, entry in (saved or {}).items():
+            stub = entry.get("stub") or make_a2a_stub(name)
+            made.add_stub(entry["url"], stub)
+            # The store keeps nothing that belongs to an event loop, so it can be filled here.
+            made.saved[name] = asyncio.run(
+                made.saved_agents.add(
+                    name=name,
+                    url=entry["url"],
+                    card=saved_card(stub),
+                    read_only=entry.get("read_only", False),
+                )
+            )
+
+        def transport_for(name: str, url: str) -> Any:
+            if network:
+                # The production transport, to agents served on loopback
+                # (tests/test_a2a_transport.py only).
+                return default_transport(name, url)
+            try:
+                found = made.at.get(destination(canonical_address(url)))
+            except ValueError:  # an environment entry in a spelling the saved form refuses
+                found = None
+            return found[1] if found is not None else transports[name]
 
         @asynccontextmanager
         async def open_runtime(_settings: Settings) -> AsyncIterator[Runtime]:
@@ -285,15 +350,12 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 instance_id=instance_id,
                 connect=lambda name, _config, _on_error_output: server_links[name].target(),
                 agent_tasks=task_store,
-                # ``network``: the production transport, to agents served on loopback
-                # (tests/test_a2a_transport.py only).
-                agent_transport=(
-                    default_transport if network else lambda name, _url: transports[name]
-                ),
+                agent_transport=transport_for,
                 run_worker=run_worker,
                 # Feature 004: a test may give stand-in agents and LLM profiles together.
                 llm_profiles=llm_profiles,
                 model_factory=model_factory,
+                saved_agents=made.saved_agents,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime

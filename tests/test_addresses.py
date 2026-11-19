@@ -287,8 +287,13 @@ def test_registering_again_changes_nothing_and_saving_keeps_a_registered_address
 
 @pytest.fixture
 def factory(scrubber: AddressScrubber) -> Iterator[None]:
-    """The log record factory, installed for one test and taken out again."""
+    """The log record factory, installed for one test and taken out again.
+
+    The app installs the process's own when it is created, and a factory installs once, so
+    the test starts from a plain one to get its own scrubber.
+    """
     before = logging.getLogRecordFactory()
+    logging.setLogRecordFactory(logging.LogRecord)
     install_log_scrubber(scrubber)
     yield
     logging.setLogRecordFactory(before)

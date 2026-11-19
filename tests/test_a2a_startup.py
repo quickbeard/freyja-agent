@@ -1,8 +1,12 @@
-"""003 FR-002, FR-003, FR-009, SC-005: agents are read at startup or startup fails naming them.
+"""003 FR-002, FR-003, FR-009, SC-005: agents are read at startup; an invalid entry stops it.
 
 Every case runs against the stand-in agent inside the test process, through the streaming
-transport. A failure is raised before the app serves anything, names the agent, and never
-contains the configured address.
+transport. An entry that is invalid in itself is refused before the app serves anything, in
+an error that names the agent and never contains the configured address.
+
+Since feature 005 an agent whose card cannot be read or used no longer stops startup (005
+FR-020, research R22): the service starts, warns naming the agent and the reason, and lists
+the agent as not reachable with that reason, still with both of its tools.
 """
 
 import logging
@@ -21,6 +25,7 @@ from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import make_stub as make_mcp_stub
 
 AGENTS_LOGGER = "freyja_agent.delegates.a2a_agents"
+REGISTRY_LOGGER = "freyja_agent.delegates.agent_registry"
 URL = "http://127.0.0.1:9999"
 
 
@@ -35,6 +40,42 @@ def refused(made: A2aApp) -> str:
     text = str(raised.value)
     assert "127.0.0.1:9999" not in text
     return text
+
+
+def started_without(
+    made: A2aApp,
+    caplog: pytest.LogCaptureFixture,
+    sentences: dict[str, str],
+    classification: Classification = Classification.GATED,
+) -> None:
+    """The service starts; each agent in ``sentences`` is warned about and listed with it.
+
+    ``sentences`` gives, per agent, the card problem's sentence (005 FR-020, FR-021).
+    """
+    caplog.set_level(logging.WARNING)
+    with TestClient(made.app) as client:
+        assert client.get("/healthz").json() == {"status": "ok"}
+        catalog = client.get("/tools")
+    listed = {agent["name"]: agent for agent in catalog.json()["agents"]}
+    tools = {tool["name"]: tool["classification"] for tool in catalog.json()["tools"]}
+    warnings = [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == REGISTRY_LOGGER and r.levelno == logging.WARNING
+    ]
+    for name, sentence in sentences.items():
+        # One warning for the agent, naming it and giving the reason.
+        assert [line for line in warnings if f"Agent {name} " in line] == [
+            f"Agent {name} cannot be used: {sentence}"
+        ]
+        assert listed[name]["reachable"] is False
+        assert listed[name]["error"] == sentence
+        # Which tools an agent has, and their gate, never depend on whether it answers.
+        assert tools[f"handoff_to_{name}"] == classification.value
+        assert tools[f"cancel_{name}_task"] == classification.value
+    assert len(warnings) == len(sentences)
+    said = "\n".join([catalog.text, *(r.getMessage() for r in caplog.records)])
+    assert "127.0.0.1:9999" not in said
 
 
 def test_cards_are_read_and_both_tools_reach_the_model(
@@ -86,51 +127,67 @@ def test_an_agent_with_no_skills_starts(
     assert "Agent bare: gated, 0 skills" in [r.getMessage() for r in caplog.records]
 
 
-def test_an_agent_that_is_not_running_stops_startup(make_a2a_app: Callable[..., A2aApp]) -> None:
+def test_an_agent_that_is_not_running_does_not_stop_startup(
+    make_a2a_app: Callable[..., A2aApp], caplog: pytest.LogCaptureFixture
+) -> None:
     made = make_a2a_app(ScriptedChatModel(), {"hello": {}})
     made.transports["hello"].down = True
-    text = refused(made)
-    assert text.startswith("Agent 'hello': its card could not be read")
+    started_without(made, caplog, {"hello": "Nothing answered at the address."})
 
 
-def test_an_agent_that_never_answers_stops_startup_within_the_limit(
-    make_a2a_app: Callable[..., A2aApp],
+def test_an_agent_that_never_answers_delays_startup_by_the_limit_and_no_more(
+    make_a2a_app: Callable[..., A2aApp], caplog: pytest.LogCaptureFixture
 ) -> None:
     made = make_a2a_app(ScriptedChatModel(), {"hello": {}}, a2a_startup_timeout_seconds=0.3)
     made.transports["hello"].hang = True
     began = time.monotonic()
-    text = refused(made)
+    started_without(made, caplog, {"hello": "The agent did not answer within 0.3 seconds."})
     assert time.monotonic() - began < 5
-    assert text == "Agent 'hello': its card was not read within 0.3 seconds."
 
 
-def test_a_redirected_card_is_not_followed(make_a2a_app: Callable[..., A2aApp]) -> None:
+def test_a_redirected_card_is_not_followed(
+    make_a2a_app: Callable[..., A2aApp], caplog: pytest.LogCaptureFixture
+) -> None:
     stub = make_stub(
         "hello", redirect_card_to="http://elsewhere.example/.well-known/agent-card.json"
     )
     made = make_a2a_app(ScriptedChatModel(), {"hello": {}}, stubs={"hello": stub})
-    text = refused(made)
-    assert text.startswith("Agent 'hello': its card could not be read")
-    assert "307" in text
+    started_without(
+        made, caplog, {"hello": "The address answered with a redirect, which is not followed."}
+    )
     assert [r.host for r in made.transports["hello"].requests] == ["127.0.0.1"]
 
 
 @pytest.mark.parametrize(
-    ("card", "reason"),
+    ("card", "sentence"),
     [
-        (stub_card("hello", security=True), "its card requires authentication"),
-        (stub_card("hello", input_modes=("image/png",)), "its card does not accept text messages"),
-        (stub_card("hello", binding="HTTP+JSON"), "its card offers no JSON-RPC interface"),
+        (
+            stub_card("hello", security=True),
+            "The agent's card requires authentication, which is out of scope.",
+        ),
+        (
+            stub_card("hello", input_modes=("image/png",)),
+            "The agent's card does not accept text messages.",
+        ),
+        (
+            stub_card("hello", binding="HTTP+JSON"),
+            "The agent's card offers no JSON-RPC interface.",
+        ),
     ],
     ids=["authentication", "no-text", "no-json-rpc"],
 )
-def test_a_card_freyja_cannot_use_stops_startup(
-    make_a2a_app: Callable[..., A2aApp], card: Any, reason: str
+def test_a_card_freyja_cannot_use_does_not_stop_startup(
+    make_a2a_app: Callable[..., A2aApp],
+    caplog: pytest.LogCaptureFixture,
+    card: Any,
+    sentence: str,
 ) -> None:
     made = make_a2a_app(
-        ScriptedChatModel(), {"hello": {}}, stubs={"hello": make_stub("hello", card=card)}
+        ScriptedChatModel(),
+        {"hello": {"read_only": True}},
+        stubs={"hello": make_stub("hello", card=card)},
     )
-    assert refused(made).startswith(f"Agent 'hello': {reason}")
+    started_without(made, caplog, {"hello": sentence}, Classification.READ_ONLY)
 
 
 def test_an_agent_named_like_a_tool_server_stops_startup(
@@ -160,16 +217,23 @@ def test_an_agent_tool_name_already_taken_stops_startup(
     )
 
 
-def test_every_failing_agent_is_named(make_a2a_app: Callable[..., A2aApp]) -> None:
+def test_every_agent_that_cannot_be_used_is_named(
+    make_a2a_app: Callable[..., A2aApp], caplog: pytest.LogCaptureFixture
+) -> None:
     made = make_a2a_app(
         ScriptedChatModel(),
         {"one": {}, "two": {}},
         stubs={"two": make_stub("two", card=stub_card("two", security=True))},
     )
     made.transports["one"].down = True
-    text = refused(made)
-    assert "Agent 'one': its card could not be read" in text
-    assert "Agent 'two': its card requires authentication" in text
+    started_without(
+        made,
+        caplog,
+        {
+            "one": "Nothing answered at the address.",
+            "two": "The agent's card requires authentication, which is out of scope.",
+        },
+    )
 
 
 def test_the_card_address_is_replaced_by_the_configured_one(

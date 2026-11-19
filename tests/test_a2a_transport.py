@@ -5,6 +5,8 @@ stand-in runs in a uvicorn server on a free port, in a thread of its own, and Fr
 through ``default_transport`` as it would reach a real agent.
 """
 
+import logging
+import re
 import socket
 import threading
 import time
@@ -141,9 +143,12 @@ def test_a_slow_task_becomes_pending_and_a_tick_delivers_it(
     assert after["agent_tasks"][0]["outcome_delivered"] is True
 
 
-def test_a_redirected_card_fails_startup_and_the_target_receives_nothing(
+def test_a_redirected_card_is_not_followed_and_the_target_receives_nothing(
     make_a2a_app: Callable[..., A2aApp],
 ) -> None:
+    # Since feature 005 a card that cannot be read no longer stops startup (005 FR-020): the
+    # service starts and lists the agent as not reachable. What this test is about is
+    # unchanged: the redirect is not followed.
     received: list[str] = []
 
     async def anything(request: Request) -> PlainTextResponse:
@@ -157,8 +162,11 @@ def test_a_redirected_card_fails_startup_and_the_target_receives_nothing(
         )
         with serving(redirecting.app) as agent:
             made = over_loopback(make_a2a_app, agent.url, [])
-            with pytest.raises(Exception, match="Agent 'hello'"), TestClient(made.app):
-                pass
+            with TestClient(made.app) as client:
+                (listed,) = client.get("/tools").json()["agents"]
+    assert listed["name"] == "hello"
+    assert listed["reachable"] is False
+    assert listed["error"] == "The address answered with a redirect, which is not followed."
     assert received == []
 
 
@@ -198,3 +206,45 @@ def test_an_agent_stopped_and_started_again_is_usable_without_a_restart(
     assert up["reachable"] is True
     assert [m.text for m in first.record.messages] == ["first"]
     assert [m.text for m in again.record.messages] == ["third"]
+
+
+def test_nothing_logged_at_debug_holds_the_agents_port(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """005 FR-028, research R12: no line of the process, at any level, from any library.
+
+    The suite's in-process transport never reaches httpcore, which logs the host and the port
+    of every connection apart from each other. Here the requests go over real sockets, with
+    every logger at DEBUG, the HTTP and agent libraries' included.
+    """
+    caplog.set_level(logging.DEBUG)
+    for library in ("httpx", "httpcore", "a2a"):
+        caplog.set_level(logging.DEBUG, logger=library)
+    with serving(make_stub("hello").app) as agent:
+        port = str(agent.port)
+        made = over_loopback(make_a2a_app, agent.url, [handoff("first")])
+        with TestClient(made.app) as client:
+            events = run(client, "net-5", sse_events)
+            catalog = client.get("/tools").text
+
+    (result,) = tool_results(events, "handoff_to_hello")
+    assert result["content"].startswith("Agent 'hello' completed task ")
+    logged = [
+        "\n".join(filter(None, [record.getMessage(), record.exc_text, record.stack_info]))
+        for record in caplog.records
+    ]
+    # The libraries did log the card read and the hand-off: the search is not of nothing.
+    by_library = {
+        library: [
+            record
+            for record in caplog.records
+            if record.name == library or record.name.startswith(f"{library}.")
+        ]
+        for library in ("httpx", "httpcore")
+    }
+    assert all(by_library.values()), {name: len(found) for name, found in by_library.items()}
+    assert any("<address>" in line or "<port>" in line for line in logged)
+    # The port as a number of its own; a run's id is hexadecimal and may hold its digits.
+    alone = re.compile(rf"(?<![0-9A-Fa-f]){port}(?![0-9A-Fa-f])")
+    assert [line for line in logged if alone.search(line)] == []
+    assert not alone.search(catalog)

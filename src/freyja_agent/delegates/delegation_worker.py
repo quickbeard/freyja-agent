@@ -5,11 +5,14 @@ One ``DelegationWorker`` runs per service instance. Each round, at the poll inte
 1. it claims the pending tasks no other instance holds (``watch_until = now + 3 * interval``),
    so each task is watched by exactly one instance, and another instance takes it over once a
    claim lapses (FR-019);
-2. it gives up each claimed task past the maximum age, or whose agent is no longer configured,
-   without sending the agent anything (FR-021, FR-023), and checks each other one with the
-   agent, recording a change with its outcome ready to deliver. A task waiting for input is
-   checked too, because the agent can end it before the person answers; while it still waits,
-   nothing about it is recorded. Watching only reads; it never sends the agent new work;
+2. it gives up each claimed task past the maximum age, or whose agent is no longer the one
+   in use under its name, without sending the agent anything (FR-021, FR-023; 005 FR-025),
+   and checks each other one with the agent, recording a change with its outcome ready to
+   deliver. A task waiting for input is checked too, because the agent can end it before the
+   person answers; while it still waits, nothing about it is recorded. Watching only reads;
+   it never sends the agent new work. An agent this instance holds no usable card from is
+   asked for its card once in the round; while that fails, its tasks stay pending and
+   unchecked (005 FR-026);
 3. for each thread with an outcome waiting, it leaves a thread paused on a proposal alone,
    without taking its lease, and otherwise takes the thread's run lease and runs a background
    run whose input is the outcome messages.
@@ -27,6 +30,11 @@ a thread this instance is already delivering to is not started again.
 The service runs ``start()``'s loop, which never waits for a delivery. The suite calls
 ``tick()``, which is one round that also waits for the deliveries, so a test reads the result
 right after it.
+
+Since feature 005 the agents can change while the service runs. A round of watching takes one
+context before it claims, so that it never gives up the task of an agent another instance
+has just added, and a delivery takes the context its run uses under the thread's lease (005
+research R3).
 """
 
 import asyncio
@@ -44,11 +52,14 @@ from freyja_agent.api.outcomes import (
     record_answers,
     take_undelivered,
 )
-from freyja_agent.api.streaming import lease_owner, run_stream
-from freyja_agent.delegates.a2a_agents import AgentLink, state_name
+from freyja_agent.api.streaming import lease_owner, run_stream, take_context
+from freyja_agent.delegates.a2a_agents import ERROR_TEXT_LIMIT, AgentLink, state_name
 from freyja_agent.delegates.a2a_tools import a2a_result_text, record_outcome
+from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.delegates.agent_cards import SENTENCES, CardError
 from freyja_agent.runtime.agent_tasks import (
     GIVEN_UP_AGED,
+    GIVEN_UP_MOVED,
     GIVEN_UP_REMOVED,
     PENDING_STATES,
     AgentTaskRecord,
@@ -56,7 +67,7 @@ from freyja_agent.runtime.agent_tasks import (
 )
 
 if TYPE_CHECKING:  # the runtime builds the worker
-    from freyja_agent.runtime.runtime import Runtime
+    from freyja_agent.runtime.runtime import RunContext, Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -65,6 +76,12 @@ CLAIM_INTERVALS = 3
 NOT_FOUND = "The agent no longer knows this task."
 # A background run that ends with one of these is tried again (FR-027); the step limit is not.
 RETRIED = frozenset({"model_error", "internal"})
+# Why a task is given up, as the log says it.
+_WHY = {
+    GIVEN_UP_AGED: "it reached the maximum age",
+    GIVEN_UP_REMOVED: "the agent is no longer configured",
+    GIVEN_UP_MOVED: "the agent was moved",
+}
 
 
 class DelegationWorker:
@@ -79,10 +96,6 @@ class DelegationWorker:
         self._slots = asyncio.Semaphore(runtime.settings.background_run_concurrency)
         # Whether deliveries are held back for want of a usable model, to say so once.
         self._held = False
-
-    @property
-    def _links(self) -> dict[str, AgentLink]:
-        return {link.name: link for link in self.runtime.agents}
 
     def start(self) -> None:
         """Watch and start deliveries now and then at every poll interval, until ``stop``."""
@@ -114,21 +127,72 @@ class DelegationWorker:
         await asyncio.gather(*self._deliveries.values())
 
     async def watch(self) -> None:
-        """Claim this instance's share of pending tasks, and check or give up each (R9)."""
+        """Claim this instance's share of pending tasks, and check or give up each (R9).
+
+        The round takes one context before it claims and releases it when its checks are
+        done. Without the current set it would give up the task of an agent another instance
+        has just added, so a round that cannot take one claims nothing (005 research R3).
+        """
+        context = await self.runtime.begin_run()
+        try:
+            await self._watch(context)
+        finally:
+            await context.release()
+
+    async def _watch(self, context: "RunContext") -> None:
         store = self.runtime.agent_tasks
         claimed = await store.claim_due(self.runtime.instance_id, CLAIM_INTERVALS * self.interval)
         now = await store.now()
         max_age = self.runtime.settings.a2a_task_max_age_seconds
-        links = self._links
-        watching = []
+        links = {link.name: link for link in context.links}
+        giving_up = []
+        to_check: dict[AgentLink, list[AgentTaskRecord]] = {}
         for task in claimed:
-            if task.agent not in links:
-                watching.append(self._give_up(task, removed=True))
+            link = links.get(task.agent)
+            if link is None or task.agent_ref != link.ref:
+                # The task belongs to the agent it was started with: one that left, one that
+                # was moved, or one whose name another agent now has (005 FR-025). For an
+                # environment agent both refs are null, which keeps the rule of feature 003.
+                moved = (
+                    link is not None
+                    and link.agent_id is not None
+                    and (task.agent_ref or "").startswith(f"{link.agent_id}:")
+                )
+                giving_up.append(self._give_up(task, GIVEN_UP_MOVED if moved else GIVEN_UP_REMOVED))
             elif (now - task.started_at).total_seconds() >= max_age:
-                watching.append(self._give_up(task, removed=False))
+                giving_up.append(self._give_up(task, GIVEN_UP_AGED))
             else:
-                watching.append(self._check(task))
-        await asyncio.gather(*watching)
+                to_check.setdefault(link, []).append(task)
+        await asyncio.gather(
+            *giving_up, *(self._check_all(link, tasks) for link, tasks in to_check.items())
+        )
+
+    async def _check_all(self, link: AgentLink, tasks: list[AgentTaskRecord]) -> None:
+        """Check one agent's claimed tasks, first reading its card if the link needs it.
+
+        A link that is not connected is asked for its card once in the round. When that
+        fails, none of its tasks is checked this round and they stay pending; one line says
+        so for the agent, not one per task (005 FR-026, research R6).
+        """
+        if not link.connected:
+            try:
+                await link.connect(limit=link.call_timeout)
+            except CardError as error:
+                sentence = error.message
+            except Exception:  # anything else is a card that could not be read
+                sentence = SENTENCES["unreadable"]
+            else:
+                sentence = None
+            if sentence is not None:
+                logger.warning(
+                    "Agent %s cannot be used: %s %d pending task(s) stay pending and are "
+                    "checked once it answers",
+                    link.name,
+                    sentence,
+                    len(tasks),
+                )
+                return
+        await asyncio.gather(*(self._check(task, link) for task in tasks))
 
     async def start_deliveries(self) -> None:
         """Start a delivery for each thread with an outcome waiting or a retry due (R10).
@@ -171,13 +235,12 @@ class DelegationWorker:
         finally:
             self._deliveries.pop(thread_id, None)
 
-    async def _give_up(self, task: AgentTaskRecord, *, removed: bool) -> None:
+    async def _give_up(self, task: AgentTaskRecord, template: str) -> None:
         """Stop watching a task: past the maximum age, or its agent is gone (FR-021, FR-023).
 
-        No cancel is sent: the agent may still be working, and the report says the person can
-        ask for one, which goes through the gate like any message to the agent (FR-022).
+        No cancel is sent: the agent may still be working. ``template`` is the report for
+        the thread, which says what the person can still do about it.
         """
-        template = GIVEN_UP_REMOVED if removed else GIVEN_UP_AGED
         outcome = given_up_text(template, task.agent, task.task_id)
         store = self.runtime.agent_tasks
         now = await store.now()
@@ -192,21 +255,22 @@ class DelegationWorker:
             outcome_ready=True,
             delivered_at=None,
         ):
-            reason = (
-                "the agent is no longer configured" if removed else "it reached the maximum age"
-            )
             logger.warning(
                 "%s",
                 self._describe(
-                    task.agent,
                     f"Agent {task.agent}: gave up task {task.task_id} on thread "
-                    f"{task.thread_id}: {reason}; no cancel was sent",
+                    f"{task.thread_id}: {_WHY[template]}; no cancel was sent"
                 ),
             )
 
-    async def _check(self, task: AgentTaskRecord) -> None:
-        """Ask the agent about one pending task and record what changed (FR-019)."""
-        link = self._links[task.agent]
+    async def _check(self, task: AgentTaskRecord, link: AgentLink | None = None) -> None:
+        """Ask the agent about one pending task and record what changed (FR-019).
+
+        ``link`` is the link of the round's context; given none, the one in use under the
+        task's agent's name now.
+        """
+        if link is None:
+            link = next(found for found in self.runtime.agents if found.name == task.agent)
         try:
             found = await link.get_task(task.task_id)
         except TaskNotFoundError:
@@ -239,10 +303,10 @@ class DelegationWorker:
         # keeps its state, and its late outcome is ignored (FR-022).
         await record_outcome(store, task, state, text, ready=True)
 
-    def _describe(self, agent: str, text: str) -> str:
-        """Text about an agent that is safe to log: its address removed (FR-009, research R14)."""
-        link = self._links.get(agent)
-        return link.describe(text) if link is not None else text
+    @staticmethod
+    def _describe(text: str) -> str:
+        """Text about an agent that is safe to log: every known address removed (005 FR-028)."""
+        return SCRUBBER.scrub(text)[:ERROR_TEXT_LIMIT]
 
     @staticmethod
     def _unchecked(link: AgentLink, task: AgentTaskRecord, why: str) -> None:
@@ -273,8 +337,12 @@ class DelegationWorker:
         # find that out would refuse a resume arriving meanwhile as "run_active", every poll
         # interval for as long as the pause lasts. The check under the lease below still
         # decides: this one only keeps the worker off threads it cannot deliver to.
-        if (await runtime.agent.aget_state(config)).interrupts:
-            return
+        looking = await runtime.begin_run()
+        try:
+            if (await looking.agent.aget_state(config)).interrupts:
+                return
+        finally:
+            await looking.release()
         run_id = uuid.uuid4().hex
         owner = lease_owner(runtime, run_id)
         try:
@@ -284,8 +352,13 @@ class DelegationWorker:
             logger.exception("Delegation worker: no lease for thread %s", thread_id)
             return
         streaming = False
+        # The context the run uses, taken under the lease: the thread's state is read on the
+        # orchestrator the run then runs on (005 research R3).
+        context = await take_context(runtime, thread_id, run_id)
         try:
-            snapshot = await runtime.agent.aget_state(config)
+            if context is None:
+                return  # logged; the next round tries again
+            snapshot = await context.agent.aget_state(config)
             if snapshot.interrupts:
                 return  # paused since the check above: delivered once it is decided
             messages, delivering = await take_undelivered(store, thread_id, snapshot)
@@ -316,6 +389,7 @@ class DelegationWorker:
             stream = run_stream(
                 runtime,
                 thread_id,
+                context=context,
                 # A retry continues from the last checkpoint (input None), with any outcome the
                 # failed attempt had not recorded yet.
                 input={"messages": messages} if messages else None,
@@ -325,7 +399,8 @@ class DelegationWorker:
                 on_end=ended,
                 on_recorded=delivered if delivering or cut_off else None,
             )
-            # From here the stream owns the lease and releases it however the run ends.
+            # From here the stream owns the lease and the context, and releases both however
+            # the run ends.
             streaming = True
             async for _event in stream:
                 pass
@@ -333,6 +408,8 @@ class DelegationWorker:
             logger.exception("Delegation worker: delivery on thread %s failed", thread_id)
         finally:
             if not streaming:
+                if context is not None:
+                    await context.release()
                 await runtime.locks.release(thread_id, owner)
 
     async def _ended(

@@ -29,6 +29,20 @@ const nextConfig: NextConfig = {
   async redirects() {
     return [{ source: "/", destination: "/llm", permanent: false }];
   },
+  // No page of another origin may show the console in a frame: a frame is how such a page
+  // would get a person to click a confirmation they cannot see. frame-ancestors is the
+  // current rule and X-Frame-Options what an older browser reads; both go on every path.
+  async headers() {
+    return [
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+    ];
+  },
   cacheComponents: true,
   partialPrefetching: true,
   turbopack: {

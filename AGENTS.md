@@ -105,14 +105,21 @@ startup and exits with an error naming the connection when it is unreachable.
   applies the call time limit, records each server's status, and redacts `pass_env` values from
   everything a server link emits. `mcp_tools.py` turns each listed tool into a `DelegateTool`,
   classifies it from the `read_only` list (`classify`), and turns a result into text.
-  `a2a_agents.py` reads and checks each agent's card at startup (`open_agents`, `AgentLink`),
-  pins every request to the configured address, sends messages and reads and cancels tasks under
-  the call time limit, records each agent's status, and removes the address from everything it
-  emits (`describe`). `a2a_tools.py` builds each agent's `handoff_to_<agent>` and
-  `cancel_<agent>_task` tools over the send ledger, so a step that runs again never sends twice,
-  and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
-  claims pending tasks, checks or gives them up, and starts a delivery for each ready outcome: a
-  background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
+  `a2a_agents.py` is the link to one agent (`AgentLink`): making one contacts nothing, and
+  `connect` reads the agent's card and builds the client, so nothing is sent over a link that
+  holds no usable card. It pins every request to the configured address, sends messages and
+  reads and cancels tasks under the call time limit, records each agent's status, and removes
+  every known address from everything it emits (`describe`). `agent_registry.py` is the
+  `AgentRegistry`, which holds the instance's `AgentSet`: the links in use, of environment
+  agents and of saved ones, each agent's approval choice, and the saved agents that are not in
+  use. It refuses an entry that is invalid in itself at startup, tries every agent at once,
+  warns about one it cannot use, makes a new set when the saved agents' revision moved, and
+  closes a link once no set that is held has it. `a2a_tools.py` builds each agent's
+  `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step that
+  runs again never sends twice, checks that a task belongs to the agent the tool was built
+  for and that the link is connected before it sends, and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
+  takes a context, claims pending tasks, checks or gives them up, and starts a delivery for
+  each ready outcome: a background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
   `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
   is ready waits.
 - `src/freyja_agent/llm/`: LLM profiles (feature 004), the ways to reach a model that an
@@ -132,6 +139,7 @@ startup and exits with an error naming the connection when it is unreachable.
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
   `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
   rebuilds the orchestrator through `build_agent` when the active profile's revision moved,
+  or when the agent set it is handed is not the one it built for,
   around a placeholder model when the active profile is not usable, so that the service
   starts and runs end with `no_usable_model`, and which guards every model it builds;
   `check.py` is a profile's test (`check_model`: two requests under one time limit, the
@@ -141,21 +149,28 @@ startup and exits with an error naming the connection when it is unreachable.
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, and agent
   tasks (`PostgresAgentTaskStore` with its three `freyja_agent_*` tables, and
-  `InMemoryAgentTaskStore`); `runtime.py` is the `Runtime` dataclass with the catalog, the tool
-  servers, the agent links, the task store, and the delegation worker. `Runtime.assemble` opens
-  the tool servers and the agents, builds the agent, and runs the worker; `Runtime.open` adds
+  `InMemoryAgentTaskStore`); `saved_agents.py` is the `SavedAgentStore` for the agents an operator
+  saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
+  `InMemorySavedAgentStore`); `runtime.py` is the `Runtime` dataclass with the catalog, the tool
+  servers, the agent registry, the task store, the saved-agent store, and the delegation
+  worker. `Runtime.assemble` opens the tool servers, starts the registry, builds the agent, and
+  runs the worker; `Runtime.open` adds
   Postgres and is what the FastAPI lifespan enters. Both take `connect`, the seam the tests swap
   to reach stub servers, and `agent_transport`, the httpx transport each agent link uses, which
   the tests swap to reach stand-in agents. `assemble` also takes `model_factory`, which turns
-  an LLM profile into a chat model and is the seam the profile tests swap. Every run calls
-  `Runtime.model_for_run()` first, which brings `agent` and `catalog` in step with the active
-  profile. `Runtime.environment` is the environment's profile as the list shows it, described
+  an LLM profile into a chat model and is the seam the profile tests swap. Every run, and every route and round of the worker that reads the graph or the catalog, first
+  takes a `RunContext` from `Runtime.begin_run()`: the graph, the catalog, the active model,
+  and the agent set of one build, in step with the active profile and the saved agents, held
+  until it is released. `Runtime.agent` and `Runtime.catalog` are what the instance last
+  built. `Runtime.environment` is the environment's profile as the list shows it, described
   once at startup. `Runtime.model_to_check` builds the model a profile's test asks, and
   `Runtime.checks` and `Runtime.environment_test` hold the tests in progress and the
   environment's last result, in memory.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
-  `tools.py` the catalog route `GET /tools`, which reads memory only and lists the agents;
+  `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
+  learn whether the agents or the active profile changed, contacts nothing, and lists the
+  agents;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
