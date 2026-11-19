@@ -81,25 +81,26 @@ layout of the code it covers. End-to-end tests are `*.spec.ts` files under `web/
 
 **Purpose**: Three small changes the later phases build on. None changes what the service does.
 
-- [ ] T001 Create `src/freyja_agent/api/guards.py` and move `NoInputRoute`, `READS`,
+- [X] T001 Create `src/freyja_agent/api/guards.py` and move `NoInputRoute`, `READS`,
       `OWN_SITE`, and `refuse_other_origins` into it from `src/freyja_agent/api/llm.py`. The
       last sentence of the refusal names what is being changed, so make it
       `refuse_other_origins(what: str)`, which returns the dependency: `"Profiles"` gives
       today's message word for word. `api/llm.py` imports both names and builds its router with
       `refuse_other_origins("Profiles")`; `NoInputRoute` stays importable from `api/llm.py`.
       `uv run pytest tests/test_llm_profiles_api.py` passes with no test changed (R16)
-- [ ] T002 [P] Give `CheckSlots` in `src/freyja_agent/llm/check.py` the words of its two
+- [X] T002 [P] Give `CheckSlots` in `src/freyja_agent/llm/check.py` the words of its two
       refusals when it is made: `CheckSlots(busy=..., full=..., at_once=TESTS_AT_ONCE)`, with
       today's sentences as the defaults so `Runtime.checks` is unchanged. Add one test to
       `tests/test_llm_check.py`: slots made with other words refuse in those words, and the
       existing tests pass unchanged (R15)
-- [ ] T003 [P] Extend `tests/a2a_stub.py` with what the card tests need, leaving every existing
-      behavior and default as it is: `stub_card(..., skill_count=..., text_length=...)` for a
-      card with many skills or long texts; `make_stub(..., card_body=bytes, card_status=int)`
-      to serve any bytes with any status in place of the card, so a test can serve a document
-      larger than one megabyte, a body that is not a card, and a 404; and `make_stub(...,
-      card_encoding="gzip")` to serve the card compressed. `uv run pytest tests/test_a2a_*.py`
-      passes unchanged (plan.md, tests tree)
+- [X] T003 [P] Extend `tests/a2a_stub.py` with what the card tests need, leaving every existing
+      behavior and default as it is: `stub_card(..., skill_count=..., tag_count=...,
+      text_length=...)` for a card with many skills, many tags, or long texts; `make_stub(...,
+      card_body=bytes, card_status=int)` to serve any bytes with any status in place of the
+      card, so a test can serve a document larger than one megabyte, a body that is not a card,
+      and a 404; `make_stub(..., card_encoding="gzip")` to serve the card compressed; and
+      `make_stub(..., card_chunked=True)` to send the body with no length announced. `uv run
+      pytest tests/test_a2a_*.py` passes unchanged (plan.md, tests tree)
 
 **Checkpoint**: `uv run pytest` passes with every earlier test unchanged.
 
@@ -1390,7 +1391,7 @@ and 7 can proceed at the same time once Phase 5 is merged.
     each phase, where feature 004 wrote its proof last and it then found two leaks.
   - Documentation is corrected in the phase that makes a sentence false (T032, T049, T067),
     and completed in Phase 10.
-    - The frame rule (FR-029) is built in Phase 3, not with User Story 6: the confirmations it
+  - The frame rule (FR-029) is built in Phase 3, not with User Story 6: the confirmations it
     protects arrive in Phases 5 to 8, and the LLM section has some already.
   - The Add button arrives with User Story 2, not User Story 1, so the console never offers
     something the service cannot do yet.

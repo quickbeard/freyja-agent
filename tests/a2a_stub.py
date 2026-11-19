@@ -27,10 +27,18 @@ input modes without text, no JSON-RPC interface, another advertised address, no 
 description that claims to be read-only. ``task_ids`` replaces the server's task id generator,
 for replies with malformed ids (the SDK picks the id before the agent sees the message, so this
 is an option rather than a keyword).
+
+Feature 005 reads a card under limits, so the card can also be made large (``skill_count``,
+``tag_count``, ``text_length``), and the stand-in can serve something else where its card
+would be: any bytes with any status (``card_body``, ``card_status``), the body compressed
+whatever the request asked for (``card_encoding``), or sent with no length announced
+(``card_chunked``).
 """
 
 import argparse
 import asyncio
+import gzip
+import json
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
@@ -52,6 +60,7 @@ from a2a.server.agent_execution.simple_request_context_builder import (
 from a2a.server.events import EventQueue
 from a2a.server.id_generator import IDGenerator, IDGeneratorContext
 from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import create_agent_card_routes, create_jsonrpc_routes
 from a2a.server.tasks import InMemoryTaskStore, TaskUpdater
 from a2a.types import (
@@ -67,12 +76,15 @@ from a2a.types import (
 )
 from google.protobuf.json_format import MessageToDict
 from starlette.applications import Starlette
-from starlette.responses import RedirectResponse
+from starlette.responses import RedirectResponse, Response, StreamingResponse
 from starlette.routing import Route
 
 CARD_PATH = "/.well-known/agent-card.json"
 DEFAULT_URL = "http://127.0.0.1:9999/"
 ELSEWHERE = "http://elsewhere.example:1234/a2a"
+# How a replaced card body is typed, and the size of the pieces a chunked one is sent in.
+JSON = "application/json"
+CHUNK = 64 * 1024
 
 
 @dataclass
@@ -246,11 +258,31 @@ def stub_card(
     binding: str = "JSONRPC",
     skills: bool = True,
     description: str = "A stand-in agent for Freyja's tests.",
+    skill_count: int | None = None,
+    tag_count: int | None = None,
+    text_length: int | None = None,
 ) -> AgentCard:
+    """The stand-in's card.
+
+    ``skill_count`` gives it that many skills in place of the usual two, ``tag_count`` that
+    many tags on each skill, and ``text_length`` makes its name, description, and version, and
+    each skill's name and description, exactly that many characters long: padded when
+    shorter, cut when longer. ``skills=False`` gives no skill whatever ``skill_count`` says.
+    """
+    for option, value in (("skill_count", skill_count), ("tag_count", tag_count)):
+        if value is not None and value < 0:
+            raise ValueError(f"{option} cannot be negative")
+    if text_length is not None and text_length < 0:
+        raise ValueError("text_length cannot be negative")
+
+    def text(value: str) -> str:
+        return value if text_length is None else value.ljust(text_length, "x")[:text_length]
+
+    tags = ["test"] if tag_count is None else [f"tag-{n}" for n in range(tag_count)]
     card = AgentCard(
-        name=f"Stub Agent {name}",
-        description=description,
-        version="1.0.0",
+        name=text(f"Stub Agent {name}"),
+        description=text(description),
+        version=text("1.0.0"),
         default_input_modes=list(input_modes),
         default_output_modes=["text/plain"],
         capabilities=AgentCapabilities(streaming=streaming),
@@ -261,14 +293,26 @@ def stub_card(
             [
                 AgentSkill(
                     id="echo",
-                    name="Echo",
-                    description="Answers with what it was sent.",
-                    tags=["test"],
+                    name=text("Echo"),
+                    description=text("Answers with what it was sent."),
+                    tags=tags,
                 ),
                 AgentSkill(
-                    id="report", name="Report", description="Writes a short report.", tags=["test"]
+                    id="report",
+                    name=text("Report"),
+                    description=text("Writes a short report."),
+                    tags=tags,
                 ),
-            ]
+                *(
+                    AgentSkill(
+                        id=f"skill-{n}",
+                        name=text(f"Skill {n}"),
+                        description=text(f"Does thing {n}."),
+                        tags=tags,
+                    )
+                    for n in range(2, skill_count or 0)
+                ),
+            ][: 2 if skill_count is None else skill_count]
             if skills
             else []
         ),
@@ -305,8 +349,26 @@ def make_stub(
     card: AgentCard | None = None,
     redirect_card_to: str | None = None,
     task_ids: Callable[[], str] | None = None,
+    card_body: bytes | None = None,
+    card_status: int = 200,
+    card_encoding: str | None = None,
+    card_chunked: bool = False,
 ) -> StubAgent:
-    """Build a stand-in agent. Its JSON-RPC endpoint is at the path its card advertises."""
+    """Build a stand-in agent. Its JSON-RPC endpoint is at the path its card advertises.
+
+    ``card_body`` is served where the card would be, with ``card_status``: a document of any
+    size, a body that is no card, or nothing but a 404. ``card_encoding="gzip"`` serves the
+    body, the card's own unless ``card_body`` is given, compressed and marked as such, whether
+    or not the request accepts that. ``card_chunked`` sends the body in pieces with no length
+    announced. None of the four goes with ``redirect_card_to``, which serves no body.
+    """
+    if card_encoding not in (None, "gzip"):
+        raise ValueError(f"unknown card_encoding: {card_encoding}")
+    replaced = (
+        card_body is not None or card_status != 200 or card_encoding is not None or card_chunked
+    )
+    if replaced and redirect_card_to is not None:
+        raise ValueError("redirect_card_to serves no body: give it no card_* option")
     card = card or stub_card(name)
     record = StubRecord()
     stub = StubAgent(app=None, card=card, record=record)
@@ -325,6 +387,25 @@ def make_stub(
         card_routes = [
             Route(CARD_PATH, lambda _request: RedirectResponse(redirect_card_to, status_code=307))
         ]
+    elif replaced:
+        body = card_body if card_body is not None else json.dumps(agent_card_to_dict(card)).encode()
+        headers = {}
+        if card_encoding == "gzip":
+            body = gzip.compress(body)
+            headers["content-encoding"] = "gzip"
+
+        async def pieces() -> Any:
+            for start in range(0, len(body), CHUNK):
+                yield body[start : start + CHUNK]
+
+        def served(_request: Any) -> Response:
+            if card_chunked:
+                return StreamingResponse(
+                    pieces(), status_code=card_status, media_type=JSON, headers=headers
+                )
+            return Response(body, status_code=card_status, media_type=JSON, headers=headers)
+
+        card_routes = [Route(CARD_PATH, served)]
     else:
         card_routes = create_agent_card_routes(card)
     stub.app = Starlette(routes=[*card_routes, *create_jsonrpc_routes(handler, rpc_path)])

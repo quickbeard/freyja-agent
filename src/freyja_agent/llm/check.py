@@ -108,26 +108,35 @@ async def check_model(
     return CheckResult(ok=True)
 
 
+# What a test is told when its profile is being tested, and when no slot is free.
+BUSY = "This profile is already being tested. Wait for that test to end."
+FULL = "{at_once} tests are already running on this instance. Try again when one of them ends."
+
+
 class CheckSlots:
     """The tests in progress on this instance, counted in memory (FR-019b).
 
-    One per listed profile and ``TESTS_AT_ONCE`` in all. A test holds no database row, so the
+    One per listed profile and ``at_once`` in all. A test holds no database row, so the
     limits are this instance's own.
+
+    The two refusals are worded for LLM profiles unless other words are given, so that
+    something else counted the same way can refuse in its own (feature 005, research R15).
+    ``full`` may hold ``{at_once}``, which is replaced by the limit.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, busy: str = BUSY, full: str = FULL, at_once: int = TESTS_AT_ONCE) -> None:
+        self._busy = busy
+        self._full = full.replace("{at_once}", str(at_once))
+        self._at_once = at_once
         self._profiles: set[str] = set()
         self._running = 0
 
     def refusal(self, profile_id: str | None) -> str | None:
         """Why a test cannot start now, or None. ``profile_id`` is None for unsaved values."""
         if profile_id is not None and profile_id in self._profiles:
-            return "This profile is already being tested. Wait for that test to end."
-        if self._running >= TESTS_AT_ONCE:
-            return (
-                f"{TESTS_AT_ONCE} tests are already running on this instance. "
-                "Try again when one of them ends."
-            )
+            return self._busy
+        if self._running >= self._at_once:
+            return self._full
         return None
 
     def take(self, profile_id: str | None) -> None:

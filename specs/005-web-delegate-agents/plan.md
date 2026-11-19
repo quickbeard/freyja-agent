@@ -364,3 +364,22 @@ a third is general enough to stand:
 - **How many existing tests change** (FR-031 says "the tests that expect startup to fail").
   There are five test functions, seven cases, not three as the pull request for the spec
   said; the requirement's wording was already general and stays (R22).
+
+## Implementation Notes
+
+What the implementation settled differently from the plan, or found out, phase by phase.
+
+### Phase 1
+
+- **The refusal of another origin is logged by `freyja_agent.api.guards`.** The line "Refused
+  <method> <path>: the request was made by a page of another origin" was logged by
+  `freyja_agent.api.llm` and moved with the function (T001). Its text and level are unchanged;
+  the logger's name is part of each line the service prints, so a filter on that name sees the
+  difference. It is the one thing in Phase 1 that a deployment can observe.
+- **The stand-in agent gained two options beyond T003 as first written**: `tag_count`, for the
+  limit on a skill's tags that the checklist review added to FR-002, and `card_chunked`, for a
+  card sent with no length announced, which the test of the size limit needs (T006). T003 now
+  names both.
+- **Two test files were added that the plan's tree does not list**: `tests/test_guards.py`,
+  which pins the refusal's words for the two routers, and `tests/test_a2a_stub_cards.py`,
+  which tests the stand-in's card options before Phase 2 relies on them.
