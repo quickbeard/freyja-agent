@@ -95,7 +95,10 @@ had.
 
 When taking a context fails, a run streams the same `start` and `internal` error it does today
 when the active profile cannot be read, and nothing else runs (FR-019); a read falls back to
-the last set the instance had, as the profile list does.
+the last set the instance had, as the profile list does. The agents list is the exception: it
+is made of what the store holds, addresses and versions included, so it answers with an error
+when the store cannot be read and shows no earlier data as current (FR-004; corrected when the
+tasks were written).
 
 **Rationale**: found in review, and the most serious finding. Today the resume route validates
 decisions against `runtime.catalog` and the run then calls `model_for_run()`
@@ -211,7 +214,7 @@ tool, and SC-004 asks for zero messages of any kind after a removal is answered.
 primary-key read before a send that already writes to the send ledger twice is cheap. It reads
 the database, so it holds on every instance from the moment the change is committed, and it
 asks no model anything (principle VI). An environment agent cannot change while the service
-runs, so its tools read nothing.
+runs, so its tools read no saved agent; they do read the proposed call (R8).
 
 **Order inside a tool**: the send ledger first, so a step that runs again returns the result
 it recorded and is never refused after the fact. Then the task's ref, for an answer or a
@@ -239,9 +242,12 @@ which a thread with a paused step refuses, deletes whatever rows the thread stil
 
 Two rules read it:
 
-- **A proposal does not follow a re-added name** (FR-023). When a saved agent's tool runs and
-  finds a row whose `agent_id` is not the link's, a null included, the call is an error result
-  saying the agent the message was proposed for was removed. This covers every call of a
+- **A proposal does not follow a re-added name** (FR-023). When an agent's tool runs, a saved
+  agent's or an environment agent's, and finds a row whose `agent_id` is not the link's, a
+  null on either side included, the call is an error result saying the agent the message was
+  proposed for was removed. An environment agent's tool makes the same comparison because a
+  restart can give the environment a saved agent's name while a proposal for the saved agent
+  waits (corrected when the tasks were written). This covers every call of a
   paused step, the ones that needed a decision and the ones that did not. A call with no row,
   such as one proposed before this feature was installed, follows the name, as today.
 - **A blocked resume names its agent** (R9).
