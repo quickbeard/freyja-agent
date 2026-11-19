@@ -373,6 +373,9 @@ def _taken(exc: errors.UniqueViolation) -> SavedAgentError:
     return NameTakenError()
 
 
+# Semgrep's rule for SQLAlchemy takes a statement composed with psycopg's ``sql`` module for
+# one built from strings, so each such statement below is marked ``nosemgrep`` for that rule.
+# Their parts are constants and identifiers of this file, and every value is a parameter.
 class PostgresSavedAgentStore:
     """The service's store: two tables in the shared pool (research R1).
 
@@ -395,11 +398,13 @@ class PostgresSavedAgentStore:
 
     async def list_agents(self) -> list[SavedAgentRecord]:
         async with self._pool.connection() as conn:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(_SELECT + sql.SQL(" ORDER BY name"))
             return [_record(row) for row in await cursor.fetchall()]
 
     async def get_agent(self, agent_id: str) -> SavedAgentRecord | None:
         async with self._pool.connection() as conn:
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(_SELECT + sql.SQL(" WHERE id = %(id)s"), {"id": agent_id})
             row = await cursor.fetchone()
             return _record(row) if row else None
@@ -428,6 +433,7 @@ class PostgresSavedAgentStore:
                 cursor = await conn.execute("SELECT count(*) AS count FROM freyja_agents")
                 if (await cursor.fetchone())["count"] >= AGENT_LIMIT:
                     raise AgentLimitError
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(insert + _RETURNING, values)
                 record = _record(await cursor.fetchone())
                 await conn.execute(BUMP_REVISION)
@@ -440,6 +446,7 @@ class PostgresSavedAgentStore:
     @staticmethod
     async def _locked(conn: Any, agent_id: str, version: int) -> SavedAgentRecord:
         """The agent as it is, held for this transaction, when it is still at ``version``."""
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         cursor = await conn.execute(
             _SELECT + sql.SQL(" WHERE id = %(id)s FOR UPDATE"), {"id": agent_id}
         )
@@ -478,6 +485,7 @@ class PostgresSavedAgentStore:
                     sql.SQL("{} = {}").format(sql.Identifier(key), sql.Placeholder(key))
                     for key in changes
                 )
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(
                     sql.SQL(
                         "UPDATE freyja_agents SET {}{}, version = version + 1, updated_at = now()"
@@ -489,6 +497,7 @@ class PostgresSavedAgentStore:
                 changed = _record(await cursor.fetchone())
                 given_up = 0
                 if moved:
+                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                     cursor = await conn.execute(
                         GIVE_UP + _OF_AGENT, {"text": GIVEN_UP_MOVED, "id": agent_id}
                     )
@@ -506,6 +515,7 @@ class PostgresSavedAgentStore:
                 "DELETE FROM freyja_agents WHERE id = %(id)s AND version = %(version)s",
                 {"id": agent_id, "version": version},
             )
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(
                 GIVE_UP + _OF_AGENT, {"text": GIVEN_UP_REMOVED, "id": agent_id}
             )
@@ -515,6 +525,7 @@ class PostgresSavedAgentStore:
 
     async def replace_card(self, agent_id: str, ref: str, card: dict[str, Any]) -> CardRecorded:
         async with self._pool.connection() as conn, conn.transaction():
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             cursor = await conn.execute(
                 _SELECT + sql.SQL(" WHERE id = %(id)s FOR UPDATE"), {"id": agent_id}
             )

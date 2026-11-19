@@ -11,8 +11,17 @@ function apiUrl(): string {
   return (configured || DEFAULT_API_URL).replace(/\/+$/, "");
 }
 
+// The container image is built as a standalone server, which carries the few files of
+// node_modules it needs (web/Dockerfile). Only that build asks for it, with
+// FREYJA_WEB_STANDALONE=1: `pnpm start` is not meant to serve such a build, and warns.
+function output(): "standalone" | undefined {
+  return process.env.FREYJA_WEB_STANDALONE?.trim() === "1"
+    ? "standalone"
+    : undefined;
+}
+
 const nextConfig: NextConfig = {
-  /* config options here */
+  output: output(),
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl()}/:path*` }];
   },

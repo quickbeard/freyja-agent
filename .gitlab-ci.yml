@@ -107,3 +107,31 @@ playwright:
     paths:
       - web/playwright-report/
     expire_in: 30 days
+
+# Trivy over the source: known vulnerabilities in what uv.lock and web/pnpm-lock.yaml install,
+# and mistakes in the Dockerfiles. The same job runs on GitHub from scan.yml: change the
+# version in both. GitHub also builds, runs, and scans the two images; that job has no twin
+# here, because building an image needs a runner that allows it. The dev deploy pipeline
+# scans the images it builds.
+trivy:
+  extends: .every-change
+  image:
+    name: aquasec/trivy:0.76.2
+    # The image starts Trivy itself; the job needs a shell.
+    entrypoint: [""]
+  script:
+    - >-
+      trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1
+      --skip-dirs .venv --skip-dirs web/node_modules --skip-dirs web/.next .
+
+# Semgrep over the source. The same job runs on GitHub from scan.yml: change the version in
+# both. --error: any finding fails. --metrics=off: nothing about the repository is sent; the
+# rules are fetched, which is why they are named and `auto` is not used.
+semgrep:
+  extends: .every-change
+  image: semgrep/semgrep:1.178.0
+  script:
+    - >-
+      semgrep scan --metrics=off --error
+      --config p/default --config p/security-audit --config p/owasp-top-ten
+      --config p/dockerfile .
