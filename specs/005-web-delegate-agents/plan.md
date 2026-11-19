@@ -528,3 +528,41 @@ What the implementation settled differently from the plan, or found out, phase b
   headers. The redirect at `/` carries neither, and neither does the answer to a forwarded
   `/api` path when nothing answers at the service, which is Next.js's own error; a
   forwarded answer of a running service was not looked at.
+
+### Phase 4
+
+- **The section has one control, Refresh**, which reads the list again, as the LLM section
+  has. The tasks name no control for this phase; Add comes with Phase 5. A card has none.
+- **The warning on a card is a note named "Warning"**, with the word itself in its text, a
+  sentence that says what is wrong ("This agent cannot be reached.", "This agent is not in
+  use."), the reason, and the time where there is one. An agent that is not in use was
+  tried by nothing, so its warning gives no time.
+- **A saved agent the store has and the context's set does not yet** is listed as not tried:
+  it was saved, or moved, between the two reads, and nothing on this instance has tried it.
+- **Pending tasks are counted in one query for both kinds of agent**, by the agent's name
+  and the ref its tasks carry: null for an environment agent, the current ref for a saved
+  one. A task under the name with another ref, of an agent that had the name before, is
+  not counted for either.
+- **The list's failure is logged by its kind only.** What a database error says may name the
+  database's own address, which no response and no log line of this route repeats.
+- **`AGENTS.md` names the new route and the Agents section's files**, and the README's
+  sentence became a description of the section; T049 names the README alone.
+- **Seen by hand, with the real service and the console in a browser** (quickstart section 1
+  and section 6's first point, without Add and without Check). With nothing configured the
+  page says that no agent is configured, and the list is empty with `limit` 20. With the
+  service stopped the page says it cannot be reached and offers to try again, with no card.
+  With three stand-ins named in `FREYJA_A2A_AGENTS`, one of them not running, the page
+  shows three cards marked as coming from the environment, each with its approval choice,
+  the two that answer with their card's details, and the third with the warning and its
+  reason. Neither the list's answer nor the service's log held an address, and each
+  stand-in received one request, for its card.
+- **One Semgrep finding is marked as wrong, in a test.** The end-to-end test of card text
+  puts a script tag in a card and looks for it on the page as text; Semgrep takes the tag
+  for a value written into a page. The line is marked for that rule, with the reason.
+- **The independent review found no defect in the route or the console.** It found that
+  two tests of the list could not fail for what they were named after, that one branch and
+  one failing read were not tested, and that the docs' list of end-to-end files lacked the
+  new one. All four were acted on: the address test now gives an environment agent a card
+  that names addresses and a reason taken from a library's error, and the failure test
+  raises an error with a marker that is no address and looks for it in the answer and the
+  log.

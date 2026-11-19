@@ -497,7 +497,7 @@ or remove. Runs that hand work to each behave as before this feature.
 
 ### Tests for User Story 1
 
-- [ ] T037 [P] [US1] Write `tests/test_agents_api.py`, part 1, `GET /agents`: environment
+- [X] T037 [P] [US1] Write `tests/test_agents_api.py`, part 1, `GET /agents`: environment
       agents first, in configuration order, then saved agents by name; `limit` is 20 and
       `unusable` counts the agents that are `unreachable` or `not_in_use`; an environment agent
       has the id `env.<name>`, `source` `environment`, `approval` from its entry (`none` for
@@ -511,11 +511,11 @@ or remove. Runs that hand work to each behave as before this feature.
       response carries no cross-origin header; when the store cannot be read the list answers
       500 `internal` and shows no earlier data as current (FR-001, FR-003, FR-004, FR-017,
       FR-028, contracts/openapi.yaml)
-- [ ] T038 [P] [US1] Write `web/__tests__/lib/agents.test.ts`, part 1: `listAgents()` requests
+- [X] T038 [P] [US1] Write `web/__tests__/lib/agents.test.ts`, part 1: `listAgents()` requests
       `/api/agents` and returns the list; `downAgents(list)` gives the agents whose state is
       `unreachable` or `not_in_use`, and none whose state is `not_tried`; a refusal and an
       unreachable service surface as `ApiError` (FR-001a, FR-004)
-- [ ] T039 [P] [US1] Write `web/__tests__/components/agents/agent-card.test.tsx`, part 1: a
+- [X] T039 [P] [US1] Write `web/__tests__/components/agents/agent-card.test.tsx`, part 1: a
       card shows the name, the approval choice in words ("requires approval", "runs without
       approval"), and its state with the time; an environment agent is marked as coming from
       the environment and shows no address; a saved agent shows its address; an agent that is
@@ -526,37 +526,37 @@ or remove. Runs that hand work to each behave as before this feature.
       `<img src=x onerror=...>` and `[x](http://example.com)`, is on the page as that text,
       with no element and no link made from it; an environment agent whose `card` is null says
       its card has not been read (FR-001, FR-001a, FR-002)
-- [ ] T040 [P] [US1] Write `web/__tests__/components/agents/agent-list.test.tsx`, part 1: one
+- [X] T040 [P] [US1] Write `web/__tests__/components/agents/agent-list.test.tsx`, part 1: one
       card per agent in the order of the list; with no agent the page says that no agent is
       configured; while the list loads there is a placeholder and no card; when the service
       cannot be reached the page says so with the service's reason, offers to try again, shows
       no card, and trying again reads the list (FR-001, FR-004)
-- [ ] T041 [P] [US1] Replace `web/__tests__/app/agents/page.test.tsx`: the page renders the
+- [X] T041 [P] [US1] Replace `web/__tests__/app/agents/page.test.tsx`: the page renders the
       list of agents, and the placeholder's sentence is gone (FR-031)
 
 ### Implementation for User Story 1
 
-- [ ] T042 [US1] Add `Agent`, `AgentCard`, and `AgentList` to `src/freyja_agent/api/schemas.py`
+- [X] T042 [US1] Add `Agent`, `AgentCard`, and `AgentList` to `src/freyja_agent/api/schemas.py`
       as contracts/openapi.yaml gives them: `approval` one of `required` and `none`; `state`
       one of `reachable`, `unreachable`, `not_tried`, `not_in_use`; `reason` at most 500
       characters; `limit` 20
-- [ ] T043 [US1] Create `src/freyja_agent/api/agents.py` with the router under `/agents`, made
+- [X] T043 [US1] Create `src/freyja_agent/api/agents.py` with the router under `/agents`, made
       with `NoInputRoute` and `refuse_other_origins("Agents")`, and `GET /agents`, which takes
       a context, reads the saved agents and the pending counts, two queries, and builds the
       list from them and from the set's links, answering 500 `internal` when the store cannot
       be read; include the router in `src/freyja_agent/api/app.py` (FR-001, FR-003, FR-017,
       FR-029, R16)
-- [ ] T044 [P] [US1] Create `web/lib/agents.ts`: the types `Agent`, `AgentCard`, and
+- [X] T044 [P] [US1] Create `web/lib/agents.ts`: the types `Agent`, `AgentCard`, and
       `AgentList`; `AGENTS_KEY`, the one SWR key, `/agents`; `listAgents()`; and `downAgents()`
       (FR-004, R17)
-- [ ] T045 [US1] Create `web/components/agents/agent-card.tsx`, after
+- [X] T045 [US1] Create `web/components/agents/agent-card.tsx`, after
       `web/components/llm/profile-card.tsx`, with what T039 asks; times are formatted as the
       profile card formats them, with no clock read during render (FR-001, FR-001a, FR-002)
-- [ ] T046 [US1] Create `web/components/agents/agent-list.tsx`, a Client Component that reads
+- [X] T046 [US1] Create `web/components/agents/agent-list.tsx`, a Client Component that reads
       the list with SWR under `AGENTS_KEY`, after `web/components/llm/profile-list.tsx`, with
       the empty state, the placeholder, and the unreachable state of T040 (FR-001, FR-004)
-- [ ] T047 [US1] Replace the placeholder in `web/app/agents/page.tsx` with the list
-- [ ] T048 [US1] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
+- [X] T047 [US1] Replace the placeholder in `web/app/agents/page.tsx` with the list
+- [X] T048 [US1] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
       `environmentAgent()`, `savedAgent()`, `agentList()`, and `answerAgents(page,
       ...answers)`, after `answerProfiles`. `web/e2e/agents.spec.ts`: two environment agents
       show as two cards marked as coming from the environment, each with its approval choice,
@@ -567,7 +567,7 @@ or remove. Runs that hand work to each behave as before this feature.
       no request for it; in a narrow window every card is reachable. Change the test in
       `web/e2e/console.spec.ts` that expects the placeholder: the sidebar's Agents entry leads
       to the section, which lists the agents (FR-032, R21, R22)
-- [ ] T049 [P] [US1] Correct the sentence of `README.md` that calls the Agents section a
+- [X] T049 [P] [US1] Correct the sentence of `README.md` that calls the Agents section a
       placeholder: it lists the agents, and nothing is managed from it yet
 
 **Checkpoint**: quickstart section 1 works, without the Add button it mentions, and section

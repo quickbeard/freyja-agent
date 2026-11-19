@@ -205,6 +205,65 @@ class ToolCatalog(BaseModel):
     tools: list[CatalogTool]
 
 
+# Feature 005: the Agents section (specs/005-web-delegate-agents/contracts/openapi.yaml). A
+# saved agent's address is in ``Agent.url`` and in no other shape of the service; an
+# environment agent's is in none.
+AGENT_TEXT_LIMIT = 2000
+AGENT_LIST_LIMIT = 50
+
+
+class AgentCard(BaseModel):
+    """What an agent says of itself: its own claim, never an input to approval (005 FR-002).
+
+    Each text is cut to 2,000 characters, the skills to 50, and a skill's tags to 50, with
+    every agent address removed, before the service keeps or returns it.
+    """
+
+    name: Annotated[str, Field(max_length=AGENT_TEXT_LIMIT)]
+    description: Annotated[str, Field(max_length=AGENT_TEXT_LIMIT)]
+    version: Annotated[str, Field(max_length=AGENT_TEXT_LIMIT)]
+    skills: Annotated[list[AgentSkillClaim], Field(max_length=AGENT_LIST_LIMIT)]
+    # True when a text, the list of skills, or a skill's tags were cut.
+    cut: bool
+
+
+class Agent(BaseModel):
+    """One agent Freyja may hand work to, as the Agents section shows it (005 FR-001)."""
+
+    # A saved agent's id, 32 hex characters; ``env.<name>`` for an environment agent.
+    id: str
+    name: str
+    source: Literal["saved", "environment"]
+    # Whether a message to the agent waits for a person: ``none`` runs without approval.
+    approval: Literal["required", "none"]
+    # A saved agent's address in the form the service keeps it in; None from the environment.
+    url: Annotated[str | None, Field(max_length=AGENT_TEXT_LIMIT)]
+    # What a change or a removal sends back; None for an environment agent.
+    version: Annotated[int | None, Field(ge=1)]
+    # This instance's most recent attempt to use the agent; ``not_tried`` before any, and
+    # ``not_in_use`` for a saved agent the environment overrides.
+    state: Literal["reachable", "unreachable", "not_tried", "not_in_use"]
+    # None while ``not_tried`` or ``not_in_use``.
+    checked_at: datetime | None
+    # Why the agent is unreachable or not in use. Holds no address.
+    reason: Annotated[str | None, Field(max_length=500)]
+    # None for an environment agent whose card this instance has not read.
+    card: AgentCard | None
+    # The agent's pending tasks, on every thread.
+    pending_tasks: Annotated[int, Field(ge=0)]
+    created_at: datetime | None
+    updated_at: datetime | None
+
+
+class AgentList(BaseModel):
+    # Environment agents first, in configuration order, then saved agents by name.
+    agents: list[Agent]
+    # How many agents can be saved.
+    limit: int
+    # How many agents are ``unreachable`` or ``not_in_use``.
+    unusable: Annotated[int, Field(ge=0)]
+
+
 class ErrorDetail(BaseModel):
     code: Literal[
         "run_active",
