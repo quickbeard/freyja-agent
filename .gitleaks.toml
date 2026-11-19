@@ -1,0 +1,18 @@
+# What gitleaks looks for in this repository, in the commit hook and in CI.
+#
+# The rules are gitleaks' own. The only thing added is the list of made-up keys the tests
+# use: they are written to look like a provider's key, so that a test can search everything
+# the service gives back for them (tests/test_llm_secrets_nowhere.py). A value is let through
+# by what it is, never by where it stands, so a real key pasted into a test is still found.
+#
+# A test that needs a made-up key uses one of the shapes below. A new shape is added here,
+# with the test that needs it, and stays as plainly made up as these.
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Made-up keys the tests use"
+regexes = [
+  '''^sk-recognizable-(key|other)-\d{4}$''',
+  '''^sk-environment-(key|secret)-9f2c$''',
+]

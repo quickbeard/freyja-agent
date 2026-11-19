@@ -980,4 +980,3 @@ gaps remained (T110 to T116):
 - **Known and left**: a copy of an SDK client (`with_options`, `copy`) reads the environment
   again. Nothing installed makes one of a saved profile's client. If a later version of the
   agent libraries does, T104 opens again, and the test of T104 would not notice.
-

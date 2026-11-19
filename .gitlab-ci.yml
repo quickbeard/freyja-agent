@@ -1,6 +1,7 @@
 # GitLab CI: the linters (Ruff, Biome) and the unit tests (pytest, Vitest) of both projects,
 # and the web app's end-to-end tests (Playwright). The same jobs run on GitHub from lint.yml,
-# unit-tests.yml, and playwright.yml under .github/workflows/.
+# unit-tests.yml, and playwright.yml under .github/workflows/. A job added since says in its
+# own comment which workflow it has there.
 stages:
   - test
 
@@ -37,6 +38,22 @@ biome:
   script:
     # biome check: lint and formatting in one command.
     - pnpm lint
+
+# Secrets in any commit. The same job runs on GitHub from secrets.yml, and the commit hook
+# runs the same version over what is staged: change the three together.
+gitleaks:
+  extends: .every-change
+  image:
+    name: zricethezav/gitleaks:v8.30.1
+    # The image starts gitleaks itself; the job needs a shell.
+    entrypoint: [""]
+  variables:
+    # Every commit, not only the last: a secret stays in the history after it is removed.
+    GIT_DEPTH: 0
+  script:
+    # --redact: a finding is reported without the value, which a log would keep. The rules
+    # and the made-up keys of the tests that are let through are in .gitleaks.toml.
+    - gitleaks git --redact --no-banner .
 
 pytest:
   extends: .every-change
