@@ -195,6 +195,7 @@ src/freyja_agent/
 │   ├── a2a_agents.py          # AgentLink gains source, agent_id, ref, connected, connect();
 │   │                          #   open_agents gives way to the registry; describe() removes
 │   │                          #   every form (R6, R12)
+│   ├── mcp_tools.py           # DelegateTool gains agent_id, set for a saved agent's tools (R8)
 │   ├── a2a_tools.py           # before a send: the task's ref, connect inside the call's
 │   │                          #   time limit, the proposed call, then the saved agent as it
 │   │                          #   is now; agent_ref on a new task; a row is only updated
@@ -204,7 +205,9 @@ src/freyja_agent/
 │                              #   pending task, once per round; records a check only while
 │                              #   the task is pending (R3, R6, R10)
 ├── agent/
-│   └── agent_tasks.py         # AgentTasksMiddleware records the calls a model proposes (R8)
+│   ├── agent_tasks.py         # AgentTasksMiddleware records the calls a model proposes (R8)
+│   └── factory.py             # hands the middleware which tools are an agent's, from the
+│                              #   delegate tools it is given (R8)
 ├── llm/
 │   ├── active.py              # the manager rebuilds when the agent set moved as well (R3)
 │   └── check.py               # CheckSlots is given the words of its refusals (R15)
@@ -231,6 +234,9 @@ tests/
 ├── test_agent_cards.py                # read_card: each of the nine problems, the size limit,
 │                                      #   the cut, the cleaning
 ├── test_saved_agent_store.py          # store contract, in memory
+├── test_agent_task_store.py           # + agent_ref, giving up by ref, the pending counts, the
+│                                      #   proposed calls
+├── test_llm_check.py                  # + slots made with other words
 ├── test_agents_api.py                 # the routes, every refusal, other origins, a body that
 │                                      #   is not JSON, limits, stale versions, log lines
 ├── test_agents_apply.py               # next run, run in progress, pause and resume,
@@ -249,6 +255,7 @@ tests/
 ├── test_a2a_gate.py                   # CHANGED: one test expects approval_now_required
 ├── test_a2a_transport.py              # + the log at DEBUG holds no address, over loopback
 └── integration/
+    ├── test_a2a_tasks_postgres.py     # + the new contract tests, by name
     └── test_saved_agents_postgres.py  # the store contract, the limits under two pools, the
                                        #   move and removal transactions, the added column
 
@@ -266,14 +273,16 @@ web/
 ├── __tests__/
 │   ├── next.config.test.ts            # + the two headers
 │   ├── lib/agents.test.ts             # NEW
+│   ├── lib/api.test.ts                # + isGone for agent_not_found
 │   ├── components/app-sidebar.test.tsx  # + the badge, and no badge when the read fails
 │   ├── components/agents/*.test.tsx   # NEW: one file per component
 │   └── app/agents/page.test.tsx       # REPLACED
 └── e2e/
     ├── api.ts                 # + AgentService and answerAgents
-    ├── agents.spec.ts         # NEW: the section as it is read, the warnings, the frame rule
+    ├── agents.spec.ts         # NEW: the section as it is read, the warnings
     ├── agents-manage.spec.ts  # NEW: adding, checking, approval, moving, removing
-    └── console.spec.ts        # CHANGED: the Agents entry leads to the section
+    ├── console.spec.ts        # CHANGED: the Agents entry leads to the section; + the frame rule
+    └── llm.spec.ts, profiles.spec.ts  # + an answer for the list of agents in their setup
 ```
 
 Also edited: `README.md` (the Agents section, saved agents beside `FREYJA_A2A_AGENTS`, what

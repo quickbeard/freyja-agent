@@ -160,12 +160,13 @@ two agent tables and the one new column are in this phase.
       stopped once one megabyte of the body has arrived, also when no length was announced;
       `auth_required` "The agent's card requires authentication, which is out of scope.";
       `no_text` "The agent's card does not accept text messages."; `no_interface` "The agent's
-      card offers no JSON-RPC interface.". A card that names no input modes is usable. Anything
-      else the read meets is `unreadable`. No sentence holds text from the agent, from a
-      library, or an address. The card details: each text is cut to its first 2,000 characters,
-      `skills` to the first 50 and a skill's `tags` to the first 50, `cut` is true when
-      anything was cut and false otherwise, and every text has every address the scrubber knows
-      removed, another agent's included (FR-002, FR-007, FR-016, R5)
+      card offers no JSON-RPC interface.". A card that names no input modes is usable. A card
+      served compressed although the request asked for it unencoded is `unreadable`, and its
+      body is not decoded. Anything else the read meets is `unreadable`. No sentence holds text
+      from the agent, from a library, or an address. The card details: each text is cut to its
+      first 2,000 characters, `skills` to the first 50 and a skill's `tags` to the first 50,
+      `cut` is true when anything was cut and false otherwise, and every text has every address
+      the scrubber knows removed, another agent's included (FR-002, FR-007, FR-016, R5)
 - [ ] T007 [P] Write `tests/test_saved_agent_store.py` as contract tests any store can be
       given, exported in `__all__`. An added agent has an `id` of 32 hex characters, `version`
       1, `address_version` 1, `read_only` false unless given, its card details and
@@ -271,6 +272,10 @@ the seven existing cases that expected startup to fail (FR-020, FR-021, FR-031, 
 Saved agents written to the store are covered here as well. Phase 6 adds the check and the
 console's warnings.
 
+**One rule of the web app is here too**: no page of another origin may show the console in a
+frame (FR-029). It protects the confirmations the later phases add, and the ones the LLM section
+already has, so it is in place before the first of them and not with User Story 6.
+
 - [ ] T016 Change the seven cases in `tests/test_a2a_startup.py` that expect startup to fail
       for a card problem (the tests at lines 89, 96, 107, 118 with its three cases, and 163).
       Each now expects: the service starts and `/healthz` answers; the log has one warning per
@@ -327,27 +332,28 @@ console's warnings.
       result "Agent '<name>' task <id> was given up when the agent was moved or removed;
       nothing was sent."; then, on a link that is not connected, `connect()` inside the call's
       own time limit, and whatever that raises becomes the error result "Agent '<name>' cannot
-      be used: <the card problem's sentence>" and never escapes the tool; then the send. Each
-      message kept back is logged with the agent's name and the rule that kept it. A task the
-      tool records carries `agent_ref=link.ref`. `handoff_description` reads `link.card`, and
-      gives the name alone when there is none (FR-021, FR-025, R6, R7 "Order inside a tool",
-      R10)
+      be used: <the card problem's sentence>" and never escapes the tool, and is logged as a
+      warning with the agent's name and the sentence; then the send. Each message kept back is
+      logged with the agent's name and the rule that kept it. A task the tool records carries
+      `agent_ref=link.ref`. `handoff_description` reads `link.card`, and gives the name alone
+      when there is none (FR-021, FR-025, R6, R7 "Order inside a tool", R10)
 - [ ] T020 Change `ModelManager` in `src/freyja_agent/llm/active.py`: `current(agents)` and
       `load(agents)` are given the `AgentSet`, `build` becomes `build(model, agents)`, and the
       orchestrator is rebuilt when the LLM revision moved or the set is not the one it was
       built for. Two runs that start together still rebuild once. With no change of agents the
       manager does what it did (R3)
-- [ ] T021 Change `src/freyja_agent/runtime/runtime.py`: `Runtime` holds `saved_agents` and
-      `registry`; `RunContext` holds the graph, the catalog, the active model, and the set, and
-      `release()` gives it back; `begin_run()` refreshes the set, asks the manager, holds the
-      set, and returns the context. `assemble` takes `saved_agents`, starts the registry where
-      it opened the agents, and builds through the manager with `agent_tools` for the set's
-      links and `agent_tasks` given when the set has a link; `open` creates
-      `PostgresSavedAgentStore` and runs its `setup()`. `Runtime.agents` stays, as the links of
-      the current set; `Runtime.agent` and `Runtime.catalog` stay, as what this instance last
-      built, which is what a read falls back to; `model_for_run()` stays for its callers and
-      goes through the same refresh. A runtime put together by hand, with no registry, gets a
-      context from what it was given (FR-019, R3, R4)
+- [ ] T021 Change `src/freyja_agent/runtime/runtime.py`: `Runtime` holds `saved_agents`,
+      `registry`, and `card_reads`, a `CheckSlots` made with words about card reads and agents;
+      `RunContext` holds the graph, the catalog, the active model, and the set, and `release()`
+      gives it back; `begin_run()` refreshes the set, asks the manager, holds the set, and
+      returns the context. `assemble` takes `saved_agents`, starts the registry where it opened
+      the agents, and builds through the manager with `agent_tools` for the set's links and
+      `agent_tasks` given when the set has a link; `open` creates `PostgresSavedAgentStore` and
+      runs its `setup()`. `Runtime.agents` stays, as the links of the current set;
+      `Runtime.agent` and `Runtime.catalog` stay, as what this instance last built, which is
+      what a read falls back to; `model_for_run()` stays for its callers and goes through the
+      same refresh. A runtime put together by hand, with no registry, gets a context from what
+      it was given (FR-019, R3, R4)
 - [ ] T022 Change `src/freyja_agent/api/streaming.py`: `run_stream` is given the context, runs
       on its graph, words a pause with its catalog, no longer calls `model_for_run()` or reads
       `runtime.agent`, and releases the context in its `finally`, beside the lease. Add the
@@ -387,16 +393,18 @@ console's warnings.
 - [ ] T028 Write `tests/test_agents_startup.py`, part 1, environment agents. Three agents that
       never answer delay startup by one startup limit, not three (SC-006). A hand-off to an
       agent the instance holds no card from gives an error result with the agent's name and the
-      sentence, the run continues, nothing is tried again, and the step did not fail. Once the
-      agent answers, a hand-off connects inside its own time limit and succeeds with no
-      restart, and `/tools` shows it reachable. Two hand-offs at once read the card once. An
-      environment agent whose card was not read has its tool described by its name alone; after
-      the first read, the next run describes it from the card. With a pending task seeded for
-      an agent that is down, the task stays pending, each round requests the card once and logs
-      one line, and once the agent answers the next round checks the task. Starting a run
-      contacts no agent. With `HTTP_PROXY` and `ALL_PROXY` set, a link's client holds no proxy
-      and its card read reaches the stand-in (FR-019 to FR-021, FR-026, FR-027, SC-006, R4, R6,
-      R13)
+      sentence, the run continues, nothing is tried again, the step did not fail, and a warning
+      names the agent and gives the sentence. Once the agent answers, a hand-off connects
+      inside its own time limit and succeeds with no restart, and `/tools` shows it reachable.
+      Two hand-offs at once read the card once. An environment agent whose card was not read
+      has its tool described by its name alone; after the first read, the next run describes it
+      from the card. With a pending task seeded for an agent that is down, the task stays
+      pending, each round requests the card once and logs one line, and once the agent answers
+      the next round checks the task. Starting a run contacts no agent. An environment entry
+      whose name is a tool server's, or whose tool name is taken, still stops startup naming
+      the agent, also with a saved agent in the store. With `HTTP_PROXY` and `ALL_PROXY` set, a
+      link's client holds no proxy and its card read reaches the stand-in (FR-018 to FR-021,
+      FR-026, FR-027, SC-006, R4, R6, R13)
 - [ ] T029 Extend `tests/test_agents_startup.py`, part 2, saved agents seeded in the store.
       With a saved agent that does not answer, the service starts and serves requests; the log
       has a warning naming the agent and the sentence and no address; `/tools` lists it as not
@@ -451,7 +459,18 @@ console's warnings.
       `.env.example`; and `specs/003-a2a-agent-delegation/contracts/agent-config.md`, whose
       cases of a card that cannot be read or used now start the service with a warning (FR-020,
       AGENTS.md "The README documents only what exists")
-- [ ] T033 Check by hand what the plan could not: start the service through uvicorn and see
+- [ ] T033 [P] Extend `web/__tests__/next.config.test.ts`: `headers()` sets
+      `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on the
+      source `/:path*` (FR-029, R19)
+- [ ] T034 Add `headers()` to `web/next.config.ts` with the two headers of T033, on every path
+      (FR-029, R19)
+- [ ] T035 Extend `web/e2e/console.spec.ts`: the built app answers `/llm` and `/agents` with
+      both headers, and a page of another origin (the test server reached as `127.0.0.1`, where
+      the console runs on `localhost`) that puts the console in a frame is shown nothing of it,
+      in Chromium and in Firefox. Record in plan.md that `frame-ancestors` was seen in both
+      browsers and that `headers()` applies beside the `/api` rewrite (FR-029, FR-032, R19,
+      R21, research "Not verified")
+- [ ] T036 Check by hand what the plan could not: start the service through uvicorn and see
       that its access line and a traceback are logged as before with the factory installed; run
       `uv run pytest -x` and see that pytest's log capture works beside it; and time a rebuild
       with twenty saved agents, forty agent tools. Record all three in plan.md (research "Not
@@ -460,7 +479,8 @@ console's warnings.
 **Checkpoint**: `uv run pytest` passes, with no existing test changed but the seven cases of
 T016 (FR-031, SC-014). A service configured through the environment, with every agent
 answering, behaves as before. With an environment agent down, the service starts, warns, and
-hands work to it once it answers.
+hands work to it once it answers. In `web/`, `pnpm test` and `pnpm test:e2e` pass, and the
+console cannot be shown in a frame.
 
 ---
 
@@ -476,7 +496,7 @@ or remove. Runs that hand work to each behave as before this feature.
 
 ### Tests for User Story 1
 
-- [ ] T034 [P] [US1] Write `tests/test_agents_api.py`, part 1, `GET /agents`: environment
+- [ ] T037 [P] [US1] Write `tests/test_agents_api.py`, part 1, `GET /agents`: environment
       agents first, in configuration order, then saved agents by name; `limit` is 20 and
       `unusable` counts the agents that are `unreachable` or `not_in_use`; an environment agent
       has the id `env.<name>`, `source` `environment`, `approval` from its entry (`none` for
@@ -490,11 +510,11 @@ or remove. Runs that hand work to each behave as before this feature.
       response carries no cross-origin header; when the store cannot be read the list answers
       500 `internal` and shows no earlier data as current (FR-001, FR-003, FR-004, FR-017,
       FR-028, contracts/openapi.yaml)
-- [ ] T035 [P] [US1] Write `web/__tests__/lib/agents.test.ts`, part 1: `listAgents()` requests
+- [ ] T038 [P] [US1] Write `web/__tests__/lib/agents.test.ts`, part 1: `listAgents()` requests
       `/api/agents` and returns the list; `downAgents(list)` gives the agents whose state is
       `unreachable` or `not_in_use`, and none whose state is `not_tried`; a refusal and an
       unreachable service surface as `ApiError` (FR-001a, FR-004)
-- [ ] T036 [P] [US1] Write `web/__tests__/components/agents/agent-card.test.tsx`, part 1: a
+- [ ] T039 [P] [US1] Write `web/__tests__/components/agents/agent-card.test.tsx`, part 1: a
       card shows the name, the approval choice in words ("requires approval", "runs without
       approval"), and its state with the time; an environment agent is marked as coming from
       the environment and shows no address; a saved agent shows its address; an agent that is
@@ -505,37 +525,37 @@ or remove. Runs that hand work to each behave as before this feature.
       `<img src=x onerror=...>` and `[x](http://example.com)`, is on the page as that text,
       with no element and no link made from it; an environment agent whose `card` is null says
       its card has not been read (FR-001, FR-001a, FR-002)
-- [ ] T037 [P] [US1] Write `web/__tests__/components/agents/agent-list.test.tsx`, part 1: one
+- [ ] T040 [P] [US1] Write `web/__tests__/components/agents/agent-list.test.tsx`, part 1: one
       card per agent in the order of the list; with no agent the page says that no agent is
       configured; while the list loads there is a placeholder and no card; when the service
       cannot be reached the page says so with the service's reason, offers to try again, shows
       no card, and trying again reads the list (FR-001, FR-004)
-- [ ] T038 [P] [US1] Replace `web/__tests__/app/agents/page.test.tsx`: the page renders the
+- [ ] T041 [P] [US1] Replace `web/__tests__/app/agents/page.test.tsx`: the page renders the
       list of agents, and the placeholder's sentence is gone (FR-031)
 
 ### Implementation for User Story 1
 
-- [ ] T039 [US1] Add `Agent`, `AgentCard`, and `AgentList` to `src/freyja_agent/api/schemas.py`
+- [ ] T042 [US1] Add `Agent`, `AgentCard`, and `AgentList` to `src/freyja_agent/api/schemas.py`
       as contracts/openapi.yaml gives them: `approval` one of `required` and `none`; `state`
       one of `reachable`, `unreachable`, `not_tried`, `not_in_use`; `reason` at most 500
       characters; `limit` 20
-- [ ] T040 [US1] Create `src/freyja_agent/api/agents.py` with the router under `/agents`, made
+- [ ] T043 [US1] Create `src/freyja_agent/api/agents.py` with the router under `/agents`, made
       with `NoInputRoute` and `refuse_other_origins("Agents")`, and `GET /agents`, which takes
       a context, reads the saved agents and the pending counts, two queries, and builds the
       list from them and from the set's links, answering 500 `internal` when the store cannot
       be read; include the router in `src/freyja_agent/api/app.py` (FR-001, FR-003, FR-017,
       FR-029, R16)
-- [ ] T041 [P] [US1] Create `web/lib/agents.ts`: the types `Agent`, `AgentCard`, and
+- [ ] T044 [P] [US1] Create `web/lib/agents.ts`: the types `Agent`, `AgentCard`, and
       `AgentList`; `AGENTS_KEY`, the one SWR key, `/agents`; `listAgents()`; and `downAgents()`
       (FR-004, R17)
-- [ ] T042 [US1] Create `web/components/agents/agent-card.tsx`, after
-      `web/components/llm/profile-card.tsx`, with what T036 asks; times are formatted as the
+- [ ] T045 [US1] Create `web/components/agents/agent-card.tsx`, after
+      `web/components/llm/profile-card.tsx`, with what T039 asks; times are formatted as the
       profile card formats them, with no clock read during render (FR-001, FR-001a, FR-002)
-- [ ] T043 [US1] Create `web/components/agents/agent-list.tsx`, a Client Component that reads
+- [ ] T046 [US1] Create `web/components/agents/agent-list.tsx`, a Client Component that reads
       the list with SWR under `AGENTS_KEY`, after `web/components/llm/profile-list.tsx`, with
-      the empty state, the placeholder, and the unreachable state of T037 (FR-001, FR-004)
-- [ ] T044 [US1] Replace the placeholder in `web/app/agents/page.tsx` with the list
-- [ ] T045 [US1] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
+      the empty state, the placeholder, and the unreachable state of T040 (FR-001, FR-004)
+- [ ] T047 [US1] Replace the placeholder in `web/app/agents/page.tsx` with the list
+- [ ] T048 [US1] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
       `environmentAgent()`, `savedAgent()`, `agentList()`, and `answerAgents(page,
       ...answers)`, after `answerProfiles`. `web/e2e/agents.spec.ts`: two environment agents
       show as two cards marked as coming from the environment, each with its approval choice,
@@ -546,7 +566,7 @@ or remove. Runs that hand work to each behave as before this feature.
       no request for it; in a narrow window every card is reachable. Change the test in
       `web/e2e/console.spec.ts` that expects the placeholder: the sidebar's Agents entry leads
       to the section, which lists the agents (FR-032, R21, R22)
-- [ ] T046 [P] [US1] Correct the sentence of `README.md` that calls the Agents section a
+- [ ] T049 [P] [US1] Correct the sentence of `README.md` that calls the Agents section a
       placeholder: it lists the agents, and nothing is managed from it yet
 
 **Checkpoint**: quickstart section 1 works, without the Add button it mentions, and section
@@ -569,7 +589,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
 
 ### Tests for User Story 2
 
-- [ ] T047 [P] [US2] Extend `tests/test_agents_api.py`, part 2, `POST /agents`. A free name and
+- [ ] T050 [P] [US2] Extend `tests/test_agents_api.py`, part 2, `POST /agents`. A free name and
       a stand-in's address give 201 with the agent: the address in the kept form, `approval`
       `required`, sent or left out, `state` `reachable`, the card's details, `version` 1; a log
       line names the agent and the approval choice and holds no address. The stand-in's
@@ -589,7 +609,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       they were (SC-007). A stand-in that never answers is refused as `timeout` within the
       lesser of the startup limit and twenty seconds (SC-012). No refusal and no log line holds
       the address (FR-005 to FR-008, FR-014, FR-016, FR-027 to FR-030)
-- [ ] T048 [P] [US2] Extend `tests/test_agents_apply.py`, part 2, through the route. After an
+- [ ] T051 [P] [US2] Extend `tests/test_agents_apply.py`, part 2, through the route. After an
       add, with no restart: a hand-off to the agent pauses, and once approved the stand-in
       received exactly the proposed message, from the orchestrator, from its subagent, and in a
       background run; a run in progress finishes without the new agent and the next run on its
@@ -600,14 +620,14 @@ listens, and a name that is taken, are each refused with the reason and leave no
       the first has the agent. A service with no agent at all has, after its first add,
       `check_agent_tasks` and the list of pending tasks in the next run (FR-019, SC-001,
       SC-002, SC-013)
-- [ ] T049 [P] [US2] Extend the contract tests in `tests/test_agent_task_store.py` with the
+- [ ] T052 [P] [US2] Extend the contract tests in `tests/test_agent_task_store.py` with the
       proposed calls, and add them by name to `tests/integration/test_a2a_tasks_postgres.py`:
       `replace_calls(thread_id, namespace, calls)` replaces the rows of that thread and
       namespace and no other; `get_call(thread_id, namespace, tool_call_id)` reads one;
       `list_calls(thread_id)` lists a thread's; `delete_call` removes one;
       `clear_calls(thread_id)` removes a thread's; two calls with one `tool_call_id` in two
       namespaces of a thread are two rows (R8, data-model.md "Proposed call")
-- [ ] T050 [P] [US2] Write `tests/test_agents_approval.py`, part 1, a call belongs to the agent
+- [ ] T053 [P] [US2] Write `tests/test_agents_approval.py`, part 1, a call belongs to the agent
       it was proposed for. A proposed call has a row from the model's reply until its send is
       finished, on the orchestrator and on its subagent, written before the run pauses; a reply
       in the same namespace replaces the namespace's rows; a run that starts with input clears
@@ -623,7 +643,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       row that reaches a saved agent's tool, as one proposed for an environment agent before
       this feature was installed would, sends nothing and gives the same result. Each message
       kept back is in the log with the agent's name and the rule (FR-023, FR-030, R8)
-- [ ] T051 [P] [US2] Write `tests/test_agents_address_nowhere.py`, part 1, built like
+- [ ] T054 [P] [US2] Write `tests/test_agents_address_nowhere.py`, part 1, built like
       `tests/test_llm_secrets_nowhere.py` and grown in every later phase. One saved agent on a
       port chosen to be recognizable and one environment agent on another. Drive what exists:
       `GET` and `POST /agents` with each refusal, a run that completes, one left paused, and
@@ -633,10 +653,10 @@ listens, and a name that is taken, are each refused with the reason and leave no
       reason, the Agents routes' included; and every log record at DEBUG, with its formatted
       traceback. The saved address is found only in `url` of an Agents answer; the environment
       agent's is found nowhere (FR-028, SC-008, R20)
-- [ ] T052 [P] [US2] Extend `web/__tests__/lib/agents.test.ts`, part 2: `addAgent({name, url})`
+- [ ] T055 [P] [US2] Extend `web/__tests__/lib/agents.test.ts`, part 2: `addAgent({name, url})`
       posts the two values as JSON to `/api/agents` and returns the agent; the address is in
       the body and in no path or query
-- [ ] T053 [P] [US2] Write `web/__tests__/components/agents/agent-form.test.tsx`, part 1,
+- [ ] T056 [P] [US2] Write `web/__tests__/components/agents/agent-form.test.tsx`, part 1,
       adding. The form opens with an empty name and an empty address, says that messages to the
       new agent will require approval, and has nothing left from an earlier use. Saving sends
       one request, and no confirmation is asked; a second press while it is under way sends
@@ -645,34 +665,34 @@ listens, and a name that is taken, are each refused with the reason and leave no
       service's sentence. When the request ends with the code `unreachable` the form says that
       the outcome is not known, never that it failed, and the list is read again. Once sent
       successfully or closed, the form keeps nothing (FR-004, FR-008)
-- [ ] T054 [P] [US2] Extend `web/__tests__/components/agents/agent-list.test.tsx`, part 2: the
+- [ ] T057 [P] [US2] Extend `web/__tests__/components/agents/agent-list.test.tsx`, part 2: the
       Add button is there with agents and with none, opens the form, and after a successful add
       the list is read again and the new card is shown (FR-001)
 
 ### Implementation for User Story 2
 
-- [ ] T055 [US2] Add `AgentCreate` to `src/freyja_agent/api/schemas.py`: `name` in the form
+- [ ] T058 [US2] Add `AgentCreate` to `src/freyja_agent/api/schemas.py`: `name` in the form
       `^[a-z][a-z0-9_-]{0,31}$`; `url` at most 2,000 characters, validated with
       `canonical_address` and kept in its form, every message the function's own; `approval`
       `required` only, which is also the default, until Phase 7 opens `none`; no other field
       (FR-006)
-- [ ] T056 [US2] Implement `POST /agents` in `src/freyja_agent/api/agents.py`, in this order:
+- [ ] T059 [US2] Implement `POST /agents` in `src/freyja_agent/api/agents.py`, in this order:
       the name against the environment's agents, the tool servers, and the tool names that are
       taken; the destination against the environment's agents; the limit, the saved names, and
-      the saved destinations; a slot of the four, from `CheckSlots` made with words about card
-      reads; the address registered with the scrubber; the card read with a client made for it,
-      within the lesser of `a2a_startup_timeout_seconds` and twenty seconds; the agent saved,
-      the store deciding again on name, address, and limit; the address marked as saved; the
-      change taken up on this instance with `registry.adopt(record, card)`, a step whose
-      failure is logged and does not undo the add; the log line; 201 with the agent (FR-005 to
-      FR-008, FR-014, FR-016, FR-030, R15, R16)
-- [ ] T057 [US2] Add the proposed calls to `src/freyja_agent/runtime/agent_tasks.py`:
+      the saved destinations; a slot of the four, from `Runtime.card_reads`; the address
+      registered with the scrubber; the card read with a client made for it, within the lesser
+      of `a2a_startup_timeout_seconds` and twenty seconds; the agent saved, the store deciding
+      again on name, address, and limit; the address marked as saved; the change taken up on
+      this instance with `registry.adopt(record, card)`, a step whose failure is logged and
+      does not undo the add; the log line; 201 with the agent (FR-005 to FR-008, FR-014,
+      FR-016, FR-030, R15, R16)
+- [ ] T060 [US2] Add the proposed calls to `src/freyja_agent/runtime/agent_tasks.py`:
       `ProposedCall` with the fields of data-model.md (`thread_id`, `namespace`,
       `tool_call_id`, `agent`, `agent_id` "the saved agent's id when the call was proposed;
-      null for an environment agent", `gated`, `proposed_at`); the methods of T049 on the
+      null for an environment agent", `gated`, `proposed_at`); the methods of T052 on the
       protocol and on both stores; and the table `freyja_agent_calls` with the primary key
       `(thread_id, namespace, tool_call_id)`, created with `CREATE TABLE IF NOT EXISTS` (R8)
-- [ ] T058 [US2] Record proposed calls in `src/freyja_agent/agent/agent_tasks.py`:
+- [ ] T061 [US2] Record proposed calls in `src/freyja_agent/agent/agent_tasks.py`:
       `AgentTasksMiddleware` is given, per agent tool name, the agent's name, the saved agent's
       id or None, and whether the tool is gated, and after the model answered, in
       `awrap_model_call`, replaces the rows of this thread and namespace with one per call of
@@ -682,24 +702,24 @@ listens, and a name that is taken, are each refused with the reason and leave no
       link, and `build_agent` in `src/freyja_agent/agent/factory.py` builds the middleware's
       table from the delegate tools it is given, for the orchestrator and for its subagent
       (FR-023, R8)
-- [ ] T059 [US2] In every agent tool of `src/freyja_agent/delegates/a2a_tools.py`, an
+- [ ] T062 [US2] In every agent tool of `src/freyja_agent/delegates/a2a_tools.py`, an
       environment agent's included, after `connect()` and before the send: read the call's row,
       and when it names another agent than the link's, by `agent_id`, a null on either side
-      included, send nothing and give the error result of T050, logged with the agent's name. A
+      included, send nothing and give the error result of T053, logged with the agent's name. A
       call with no row follows the name when the tool is an environment agent's; a saved
       agent's tool that finds no row sends nothing and gives the same result. The tool deletes
       its row when its send is finished. In `src/freyja_agent/api/streaming.py`, a run that
       starts with input clears the thread's proposed calls before the graph runs. Record in
       plan.md what the build showed of the rows as a whole (FR-023, FR-030, R8, research "Not
       verified")
-- [ ] T060 [P] [US2] Add `addAgent` to `web/lib/agents.ts`
-- [ ] T061 [US2] Create `web/components/agents/agent-form.tsx`, after
+- [ ] T063 [P] [US2] Add `addAgent` to `web/lib/agents.ts`
+- [ ] T064 [US2] Create `web/components/agents/agent-form.tsx`, after
       `web/components/llm/profile-form.tsx`, for adding: the two fields, the sentence about
       approval, the errors at their fields, the outcome that is not known, and nothing kept
-      once sent or closed, as T053 asks (FR-004, R17)
-- [ ] T062 [US2] Add the Add button and the form to `web/components/agents/agent-list.tsx`; a
+      once sent or closed, as T056 asks (FR-004, R17)
+- [ ] T065 [US2] Add the Add button and the form to `web/components/agents/agent-list.tsx`; a
       successful add has the list read again
-- [ ] T063 [US2] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
+- [ ] T066 [US2] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
       `AgentService`, after `ProfileService`: a stand-in for the Agents routes that keeps what
       the page saved and records what it was asked. `web/e2e/agents-manage.spec.ts`, part 1:
       adding an agent shows its card with the address in the kept form and requiring approval;
@@ -707,12 +727,13 @@ listens, and a name that is taken, are each refused with the reason and leave no
       the sentence and what was typed stays; a taken name is refused at the name; a request
       that gets no answer says the outcome is not known and the list is read again; the address
       was sent in a request body and in no address the page asked for (FR-032, R21)
-- [ ] T064 [P] [US2] Update `README.md` with what now exists and matters before it is used: an
+- [ ] T067 [P] [US2] Update `README.md` with what now exists and matters before it is used: an
       agent can be added from the Agents section and always requires approval for now; the
       table `freyja_agent_calls`; and that every instance has to run this version before the
       first agent is saved (plan.md "Rollout")
 
-**Checkpoint**: quickstart section 2 works with the stand-in on loopback. An agent can be added
+**Checkpoint**: quickstart section 2 works with the stand-in on loopback, the form saying that
+approval is required where the quickstart speaks of the approval choice. An agent can be added
 and used with no restart, and every message to it requires approval. Nothing can be changed or
 removed yet, a saved agent that is not in use included: both arrive in Phases 7 and 8.
 
@@ -731,7 +752,7 @@ succeeds. The service was never restarted after the first time.
 
 ### Tests for User Story 3
 
-- [ ] T065 [P] [US3] Write `tests/test_agents_check.py`, `POST /agents/{agent_id}/check`. For a
+- [ ] T068 [P] [US3] Write `tests/test_agents_check.py`, `POST /agents/{agent_id}/check`. For a
       saved agent and for `env.<name>`: a usable card gives `usable` true, null `reason` and
       `message`, `checked_at`, and `recorded` true, and the list then shows the agent reachable
       at that time with the details just read; a card that cannot be used gives `usable` false
@@ -752,12 +773,12 @@ succeeds. The service was never restarted after the first time.
       `agent_read_only`; an id in neither form is 422; a page of another origin is refused with
       403; the log names the agent, the result, and whether the card details were replaced, and
       holds no address (FR-013 to FR-016, FR-026, FR-027, FR-029, FR-030, SC-011, SC-012, R15)
-- [ ] T066 [P] [US3] Extend `tests/test_agents_address_nowhere.py`, part 2: a check that
+- [ ] T069 [P] [US3] Extend `tests/test_agents_address_nowhere.py`, part 2: a check that
       succeeds, one that fails for each card problem, one refused as busy, and a card that
       mentions its own address and another agent's; the search of part 1 again (FR-028, SC-008)
-- [ ] T067 [P] [US3] Extend `web/__tests__/lib/agents.test.ts`, part 3: `checkAgent(id)` posts
+- [ ] T070 [P] [US3] Extend `web/__tests__/lib/agents.test.ts`, part 3: `checkAgent(id)` posts
       to `/api/agents/<id>/check` with no body and returns the result
-- [ ] T068 [P] [US3] Write `web/__tests__/components/agents/check-result.test.tsx` and extend
+- [ ] T071 [P] [US3] Write `web/__tests__/components/agents/check-result.test.tsx` and extend
       `agent-card.test.tsx`, part 2: every card of an agent that is in use has Check, saved or
       from the environment, and a card of an agent that is not in use has none; while a check
       runs the button says so and cannot be pressed again; a usable result says the agent can
@@ -766,12 +787,12 @@ succeeds. The service was never restarted after the first time.
       the agent's card changed and that its tools are described from the new details from the
       next run; `check_busy` and `agent_not_found` are shown as the service words them, and the
       second has the list read again; after any result the list is read again (FR-013, FR-014)
-- [ ] T069 [P] [US3] Write `web/__tests__/components/agents/agents-warning.test.tsx` and extend
+- [ ] T072 [P] [US3] Write `web/__tests__/components/agents/agents-warning.test.tsx` and extend
       `agent-list.test.tsx`, part 3: with one or more agents `unreachable` or `not_in_use`, a
       warning above the cards names each of them and says in words that they cannot be used;
       with every agent reachable, and with only `not_tried` agents, there is none; while the
       service cannot be reached there is none (FR-001a)
-- [ ] T070 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Agents entry
+- [ ] T073 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Agents entry
       carries a badge with the number of agents that cannot be used and a text for assistive
       technology that says what the number means; with none there is no badge; when the read
       fails there is no badge; the badge shows on the LLM section too. The file's existing
@@ -780,7 +801,7 @@ succeeds. The service was never restarted after the first time.
 
 ### Implementation for User Story 3
 
-- [ ] T071 [US3] Add `AgentCheck` to `src/freyja_agent/api/schemas.py` and implement `POST
+- [ ] T074 [US3] Add `AgentCheck` to `src/freyja_agent/api/schemas.py` and implement `POST
       /agents/{agent_id}/check` in `src/freyja_agent/api/agents.py`: the id's two forms; a
       context held for as long as the link is used; the agent's slot and one of the four; the
       card read through `link.connect` within the lesser of the startup limit and twenty
@@ -788,16 +809,16 @@ succeeds. The service was never restarted after the first time.
       `card_changed` from its answer; for an environment agent the link's details replaced and
       `registry.mark_changed()`; a read that fails leaves the link not connected; the log line,
       which says whether the card details were replaced (FR-013 to FR-015, FR-030, R6, R15)
-- [ ] T072 [P] [US3] Add `checkAgent` and the `AgentCheck` type to `web/lib/agents.ts`
-- [ ] T073 [US3] Create `web/components/agents/check-result.tsx`, after
+- [ ] T075 [P] [US3] Add `checkAgent` and the `AgentCheck` type to `web/lib/agents.ts`
+- [ ] T076 [US3] Create `web/components/agents/check-result.tsx`, after
       `web/components/llm/test-result.tsx`, and add Check to
-      `web/components/agents/agent-card.tsx` as T068 asks
-- [ ] T074 [US3] Create `web/components/agents/agents-warning.tsx` and show it above the cards
+      `web/components/agents/agent-card.tsx` as T071 asks
+- [ ] T077 [US3] Create `web/components/agents/agents-warning.tsx` and show it above the cards
       in `web/components/agents/agent-list.tsx` (FR-001a, R18)
-- [ ] T075 [US3] Add the badge to the Agents entry in `web/components/app-sidebar.tsx` with
+- [ ] T078 [US3] Add the badge to the Agents entry in `web/components/app-sidebar.tsx` with
       `SidebarMenuBadge`, reading the list with SWR under `AGENTS_KEY`, the key the list uses
       (FR-001a, R18)
-- [ ] T076 [US3] Write the end-to-end tests of this story. Extend `web/e2e/agents.spec.ts`:
+- [ ] T079 [US3] Write the end-to-end tests of this story. Extend `web/e2e/agents.spec.ts`:
       with an agent that cannot be used, the sidebar's Agents entry carries the number on the
       LLM section, without the Agents section having been opened; in the Agents section the
       warning above the cards names the agent and its card carries the warning; after a reading
@@ -828,8 +849,8 @@ a wait between, switch back during the wait: the second hand-off is not sent.
 
 ### Tests for User Story 4
 
-- [ ] T077 [P] [US4] Extend `tests/test_agents_api.py`, part 3. `POST /agents` now accepts
-      `approval` `none`, and the test of T047 that refused it is changed to say so. `PATCH
+- [ ] T080 [P] [US4] Extend `tests/test_agents_api.py`, part 3. `POST /agents` now accepts
+      `approval` `none`, and the test of T050 that refused it is changed to say so. `PATCH
       /agents/{agent_id}` with `approval`: a change gives 200 with the agent, `version` one
       higher, and `given_up` 0; the stand-in saw no request, also when it is down, in both
       directions; a log line names the agent and says its approval choice changed. A request
@@ -842,7 +863,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       is refused with 403. Pending tasks are as they were. `/tools` then lists the agent's
       tools with the classification the new choice implies (FR-009, FR-012, FR-017, FR-026,
       FR-029, FR-030)
-- [ ] T078 [P] [US4] Extend `tests/test_agents_approval.py`, part 2. For a saved agent that
+- [ ] T081 [P] [US4] Extend `tests/test_agents_approval.py`, part 2. For a saved agent that
       requires approval, a hand-off, a follow-up, an answer, and a cancel each pause before
       anything is sent, on the orchestrator, on its subagent, and in a background run (SC-004).
       After a switch to running without approval, the next run sends with no pause in all
@@ -865,7 +886,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       the same for a subagent's step; once the agent is switched back the resume goes through.
       A card that calls its agent read-only changes nothing: the agent still pauses (FR-019,
       FR-022, FR-023, FR-030, SC-004, R7, R9)
-- [ ] T079 [P] [US4] Change the test at line 394 of `tests/test_a2a_gate.py`
+- [ ] T082 [P] [US4] Change the test at line 394 of `tests/test_a2a_gate.py`
       (`test_a_hand_off_that_became_gated_blocks_the_resume_and_the_proposal_stays`): the
       resume now ends with `approval_now_required` and a message naming `hello`. Add beside it
       a test that fails the day the approval middleware words its error differently: the
@@ -873,18 +894,18 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       `langchain.agents.middleware.human_in_the_loop` raises. The matching test for a tool
       server's tool in `tests/test_mcp_gate.py` keeps `internal` and is not touched (FR-023,
       FR-031, R9, R22)
-- [ ] T080 [P] [US4] Extend `tests/test_agents_apply.py`, part 3, two apps on one set of
+- [ ] T083 [P] [US4] Extend `tests/test_agents_apply.py`, part 3, two apps on one set of
       stores, the change made through the route on the first and each decision sent to the
       second: after a switch to running without approval, approve sends the message as
       proposed, and reject and edit are refused with the proposal left in place; after a switch
       to requiring approval of an agent whose call in the paused step needed no decision, each
       of approve, edit, and reject ends with `approval_now_required` and nothing is sent to any
       agent (FR-019, FR-023, R3, R20)
-- [ ] T081 [P] [US4] Extend `web/__tests__/lib/agents.test.ts`, part 4, and
+- [ ] T084 [P] [US4] Extend `web/__tests__/lib/agents.test.ts`, part 4, and
       `web/__tests__/lib/api.test.ts`: `changeAgent(id, {version, approval})` sends a `PATCH`
       with exactly the values it was given; `isGone` is true for `agent_not_found` as for
       `profile_not_found`
-- [ ] T082 [P] [US4] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 2, the
+- [ ] T085 [P] [US4] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 2, the
       approval choice. Adding: the form now offers the choice, set to requiring approval; with
       "runs without approval" chosen, Save sends nothing and shows a confirmation that names
       the agent and says that nothing sent to it will be seen by a person first; Cancel sends
@@ -903,17 +924,17 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       the form takes its confirmation back and says the agent was changed elsewhere.
       `agent_changed` and `agent_not_found` say so and have the list read again. No answer says
       the outcome is not known (FR-004, FR-009, FR-011, FR-012, SC-005, R14, R17)
-- [ ] T083 [P] [US4] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 3: a
+- [ ] T086 [P] [US4] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 3: a
       saved agent that is in use has Edit; an environment agent has none; a saved agent that is
       not in use has none (FR-017)
-- [ ] T084 [P] [US4] Extend `tests/test_agents_address_nowhere.py`, part 3: an add with
+- [ ] T087 [P] [US4] Extend `tests/test_agents_address_nowhere.py`, part 3: an add with
       `approval` `none`, a change of the approval choice with each refusal, a run refused by
       the check before a send, and a resume that ends with `approval_now_required`; the search
       of part 1 again (FR-028, SC-008)
 
 ### Implementation for User Story 4
 
-- [ ] T085 [US4] Add the check before a send to `src/freyja_agent/delegates/a2a_tools.py`, for
+- [ ] T088 [US4] Add the check before a send to `src/freyja_agent/delegates/a2a_tools.py`, for
       the tools of a saved agent only. `agent_tools` is given the saved-agent store, which
       `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py` passes. The order inside a
       tool is R7's: the send ledger; the task's ref; `connect()`; the proposed call; then the
@@ -922,30 +943,30 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       that read and the send's first write but the write itself. When the read finds no row,
       also when another agent now has the name, nothing is sent: "Agent '<name>' was removed;
       nothing was sent.". When the tool needed no decision when it was built and the agent now
-      requires approval, nothing is sent: the error result of T078. Each is logged with the
+      requires approval, nothing is sent: the error result of T081. Each is logged with the
       agent's name and the reason (FR-022, FR-030, R7)
-- [ ] T086 [US4] Change `src/freyja_agent/api/streaming.py`: a resume that fails with the
+- [ ] T089 [US4] Change `src/freyja_agent/api/streaming.py`: a resume that fails with the
       approval middleware's sentence about the number of decisions ends with
       `approval_now_required` and the message of contracts/sse-events.md, naming each agent of
       the thread's proposed calls that needed no decision when proposed and whose tool is gated
       in the run's catalog, and with `internal`, as today, when it finds none. The refusal is
       logged with the thread and the agents it named. The code is not one a background run is
       tried again for (FR-023, R9)
-- [ ] T087 [US4] In `src/freyja_agent/api/schemas.py`, let `AgentCreate` accept `approval`
+- [ ] T090 [US4] In `src/freyja_agent/api/schemas.py`, let `AgentCreate` accept `approval`
       `none`, and add `AgentUpdate`, with `version` and `approval` and no other field, and
       `AgentChanged`. Implement `PATCH /agents/{agent_id}` for the approval choice in
       `src/freyja_agent/api/agents.py`: no card is read and no agent contacted; a request that
       names the choice the agent has changes nothing and answers with the agent; the change is
       taken up on this instance at once; the log line (FR-009, FR-012, FR-017, FR-030, R14,
       R16)
-- [ ] T088 [P] [US4] Add `changeAgent` to `web/lib/agents.ts` and teach `isGone` in
+- [ ] T091 [P] [US4] Add `changeAgent` to `web/lib/agents.ts` and teach `isGone` in
       `web/lib/api.ts` the code `agent_not_found`
-- [ ] T089 [US4] Extend `web/components/agents/agent-form.tsx` with the approval choice when
+- [ ] T092 [US4] Extend `web/components/agents/agent-form.tsx` with the approval choice when
       adding, behind its confirmation, and to change a saved agent's approval choice, with the
       two confirmations, the version the form opened with, and the confirmation taken back when
-      the list shows a later one, as T082 asks (FR-011, FR-012, R14, R17)
-- [ ] T090 [US4] Add Edit to `web/components/agents/agent-card.tsx`, for a saved agent in use
-- [ ] T091 [US4] Write the end-to-end tests of this story: extend
+      the list shows a later one, as T085 asks (FR-011, FR-012, R14, R17)
+- [ ] T093 [US4] Add Edit to `web/components/agents/agent-card.tsx`, for a saved agent in use
+- [ ] T094 [US4] Write the end-to-end tests of this story: extend
       `web/e2e/agents-manage.spec.ts` and `AgentService`, part 3. Adding with "runs without
       approval" asks first, sends no request before Confirm, and Cancel leaves no card; an
       agent added without touching the choice requires approval. Switching to running without
@@ -954,7 +975,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       change made elsewhere while the form is open takes the confirmation back. A change
       refused as `agent_changed` shows the agent as it is now. An environment agent's card
       offers no way to change its approval choice (FR-032, R21)
-- [ ] T092 [US4] Record in plan.md that the middleware's sentence is still the one matched
+- [ ] T095 [US4] Record in plan.md that the middleware's sentence is still the one matched
       (research "Not verified")
 
 **Checkpoint**: quickstart section 4 works.
@@ -975,8 +996,8 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
 
 ### Tests for User Story 5
 
-- [ ] T093 [P] [US5] Extend `tests/test_agents_api.py`, part 4. `PATCH` with `url`, which the
-      test of T077 that refused it is changed to accept: a move to a stand-in that can be used
+- [ ] T096 [P] [US5] Extend `tests/test_agents_api.py`, part 4. `PATCH` with `url`, which the
+      test of T080 that refused it is changed to accept: a move to a stand-in that can be used
       gives the agent with the new address in the kept form, the details read there, `version`
       one higher, and `given_up`; the new stand-in saw one `GET` and the earlier one nothing;
       an address where the agent cannot be used is refused with `agent_unusable` and the
@@ -992,7 +1013,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       at the earlier id. Both routes refuse a page of another origin, and each logs the agent,
       what changed, and how many tasks were given up, with no address (FR-009, FR-010, FR-012,
       FR-017, FR-024, FR-029, FR-030, SC-007, SC-012, SC-016)
-- [ ] T094 [P] [US5] Write `tests/test_agents_tasks.py`. With three tasks pending for an agent,
+- [ ] T097 [P] [US5] Write `tests/test_agents_tasks.py`. With three tasks pending for an agent,
       the list reports 3; a move, and a removal, answers with `given_up` 3, each task is listed
       in its thread as `given_up` at once, a background run tells each thread exactly once, and
       by the stand-ins' records no cancel was sent and nothing about those tasks reached the
@@ -1012,7 +1033,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       thread is told once one is active. A removed agent's earlier tasks stay listed in their
       threads; a thread's conversation follows the name across a move and across a removal and
       a new add (FR-024 to FR-026, SC-010, R10, R13)
-- [ ] T095 [P] [US5] Extend `tests/test_agents_approval.py`, part 3, through the routes. After
+- [ ] T098 [P] [US5] Extend `tests/test_agents_approval.py`, part 3, through the routes. After
       a removal: the next run has neither tool; a run in progress that started while the agent
       ran without approval and then hands off to it sends nothing, with the error result "Agent
       '<name>' was removed; nothing was sent."; a continuation that began before the removal
@@ -1027,10 +1048,10 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       progress finishes at the address it started with; when another agent was meanwhile added
       at that address, it sends nothing: "Agent '<name>': the address this run started with is
       another agent's now; nothing was sent." (FR-019, FR-022, FR-023, SC-003, SC-004, R7, R8)
-- [ ] T096 [P] [US5] Extend `web/__tests__/lib/agents.test.ts`, part 5: `changeAgent` with
+- [ ] T099 [P] [US5] Extend `web/__tests__/lib/agents.test.ts`, part 5: `changeAgent` with
       `url` sends it in the body; `removeAgent(id, version)` sends a `DELETE` with the version
       as a query and returns how many tasks were given up
-- [ ] T097 [P] [US5] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 3,
+- [ ] T100 [P] [US5] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 3,
       changing the address: the confirmation names the agent and says that the change applies
       from the next run, that a run in progress finishes at the earlier address, that a
       proposal already waiting for a decision will go to the new address once approved, how
@@ -1038,7 +1059,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       will be given up; an address and an approval choice changed together show both meanings;
       a refusal keeps what was typed and says why; after the change the form says how many
       tasks were given up (FR-011, FR-024)
-- [ ] T098 [P] [US5] Write `web/__tests__/components/agents/remove-dialog.test.tsx`, after the
+- [ ] T101 [P] [US5] Write `web/__tests__/components/agents/remove-dialog.test.tsx`, after the
       profile deletion's tests: the dialog names the agent, says the removal holds at once,
       also for runs in progress, says how many tasks are pending as the list has it at that
       moment, and that they will be given up; nothing is sent before Confirm, and the second
@@ -1047,44 +1068,44 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       `agent_not_found` have the list read again; no answer says the outcome is not known; the
       dialog follows the live copy and closes when the agent is gone from the list (FR-004,
       FR-010 to FR-012, FR-024)
-- [ ] T099 [P] [US5] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 4: a
+- [ ] T102 [P] [US5] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 4: a
       saved agent has Remove; a saved agent that is not in use has Remove and nothing else; an
       environment agent has none; a saved agent's card shows its number of pending tasks when
       it is not zero (FR-017, FR-024)
-- [ ] T100 [P] [US5] Extend `tests/test_agents_address_nowhere.py`, part 4: a move with each
+- [ ] T103 [P] [US5] Extend `tests/test_agents_address_nowhere.py`, part 4: a move with each
       refusal, a removal, a task given up and reported in its thread, and a run refused because
       the address it started with is another agent's; the search of part 1 again (FR-028,
       SC-008)
 
 ### Implementation for User Story 5
 
-- [ ] T101 [US5] Extend `src/freyja_agent/delegates/a2a_tools.py`. One more rule in the check
-      before a send, after the two of T085: the tool's link is of an earlier address and
+- [ ] T104 [US5] Extend `src/freyja_agent/delegates/a2a_tools.py`. One more rule in the check
+      before a send, after the two of T088: the tool's link is of an earlier address and
       another agent now has that destination, so nothing is sent, with the error result of
-      T095, logged. A hand-off updates a task's row only while the task is still pending, where
+      T098, logged. A hand-off updates a task's row only while the task is still pending, where
       today an answer updates it whatever its state. A reply naming a task id the name already
       has under another ref is malformed (FR-022, FR-025, FR-030, R7, R10)
-- [ ] T102 [US5] Change `src/freyja_agent/delegates/delegation_worker.py` and `record_outcome`
+- [ ] T105 [US5] Change `src/freyja_agent/delegates/delegation_worker.py` and `record_outcome`
       in `a2a_tools.py`: `record_outcome` takes the states it may write over, the worker
       passing the pending ones so a check never writes over a given-up task, and the cancel
       path keeping today's; a task the worker gives up because its ref is of an earlier address
       of an agent that still exists gets the text for a move (FR-024, FR-025, R10)
-- [ ] T103 [US5] Add `url` to `AgentUpdate` and `AgentRemoved` to
+- [ ] T106 [US5] Add `url` to `AgentUpdate` and `AgentRemoved` to
       `src/freyja_agent/api/schemas.py`, and implement the move and `DELETE /agents/{agent_id}`
       in `src/freyja_agent/api/agents.py`: a `url` that is the saved form is no change;
       otherwise the checks and the card read of an add, taking one of the four slots only, then
       the store's move, then `registry.adopt` with the card, which makes a new link with a new
       client; a removal through the store; each taken up on this instance at once; the two log
       lines (FR-009, FR-010, FR-012, FR-014, FR-024, FR-030, R10, R15, R16)
-- [ ] T104 [P] [US5] Add `removeAgent` to `web/lib/agents.ts` and `url` to what `changeAgent`
+- [ ] T107 [P] [US5] Add `removeAgent` to `web/lib/agents.ts` and `url` to what `changeAgent`
       sends
-- [ ] T105 [US5] Extend `web/components/agents/agent-form.tsx` with the address of a saved
-      agent and its confirmation, as T097 asks
-- [ ] T106 [US5] Create `web/components/agents/remove-dialog.tsx`, after
+- [ ] T108 [US5] Extend `web/components/agents/agent-form.tsx` with the address of a saved
+      agent and its confirmation, as T100 asks
+- [ ] T109 [US5] Create `web/components/agents/remove-dialog.tsx`, after
       `web/components/llm/delete-dialog.tsx`; add Remove and the pending count to
       `web/components/agents/agent-card.tsx`; say how many tasks were given up from
       `web/components/agents/agent-list.tsx`
-- [ ] T107 [US5] Write the end-to-end tests of this story: extend
+- [ ] T110 [US5] Write the end-to-end tests of this story: extend
       `web/e2e/agents-manage.spec.ts` and `AgentService`, part 4. A move shows the confirmation
       with the number of pending tasks, and once confirmed the card shows the new address and
       the console says how many were given up; a move to an address where nothing answers is
@@ -1101,8 +1122,9 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
 ## Phase 9: User Story 6 - An agent's address stays inside the Agents section (Priority: P6)
 
 **Goal**: Proof that a saved agent's address is returned by the Agents routes and by nothing
-else, that a page of another origin can neither read nor change an agent, and that the console
-cannot be shown inside another origin's page.
+else, and that a page of another origin can neither read nor change an agent. The rule that the
+console cannot be shown inside another origin's page is in place since Phase 3; this phase
+checks it once more with an address on the page.
 
 **Independent Test**: add an agent on a recognizable port, drive every route of the Agents
 section with it, refusals included, with runs that complete, pause, and fail, and search
@@ -1111,37 +1133,29 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ### Tests for User Story 6
 
-- [ ] T108 [P] [US6] Complete `tests/test_agents_address_nowhere.py`, part 5. The saved agent
+- [ ] T111 [P] [US6] Complete `tests/test_agents_address_nowhere.py`, part 5. The saved agent
       is saved under `localhost`, removed, and saved again under `127.0.0.1`, so both spellings
       are searched for; the parts of Phases 5 to 8 are run as one journey; and a check at the
       end of the file fails when a route of `api/agents.py` or a refusal code of
       contracts/openapi.yaml is driven by no part of it (FR-028, SC-008, R20)
-- [ ] T109 [P] [US6] Extend `tests/test_agents_api.py`, part 5, as one sweep: each of the four
+- [ ] T112 [P] [US6] Extend `tests/test_agents_api.py`, part 5, as one sweep: each of the four
       routes that change something is refused with 403 `other_origin` for `Sec-Fetch-Site:
       cross-site` and `same-site`, and for an `Origin` whose host is not the one asked for,
       also behind `X-Forwarded-Host`, before anything else is looked at, and nothing changed; a
       request with none of the three headers is served; each route that takes a body refuses
       `text/plain` and a form post with 422; no response of the five routes, and no answer to a
       preflight, carries a cross-origin header (FR-029, SC-009)
-- [ ] T110 [P] [US6] Extend `web/__tests__/next.config.test.ts`: `headers()` sets
-      `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on the
-      source `/:path*` (FR-029, R19)
 
 ### Implementation for User Story 6
 
-- [ ] T111 [US6] Add `headers()` to `web/next.config.ts` with the two headers of T110, on every
-      path (FR-029, R19)
-- [ ] T112 [US6] Close each gap T108 and T109 find, in the module that words, returns, or logs
+- [ ] T113 [US6] Close each gap T111 and T112 find, in the module that words, returns, or logs
       the text, and add the route or the line to the proof. When they find none, say so in the
       pull request (FR-028, FR-029)
-- [ ] T113 [US6] Write the end-to-end tests of this story: extend `web/e2e/agents.spec.ts`. The
-      built app answers `/agents` and `/llm` with both headers; a page of another origin (the
-      test server reached as `127.0.0.1`, where the console runs on `localhost`) that puts the
-      console in a frame is shown nothing of it, in Chromium and in Firefox; a saved agent's
-      card shows its address and an environment agent's shows none; the only requests of the
-      page that hold a saved agent's address hold it in a body. Record in plan.md that
-      `frame-ancestors` was seen in both browsers and that `headers()` applies beside the
-      `/api` rewrite (FR-032, R19, R21, research "Not verified")
+- [ ] T114 [US6] Write the end-to-end tests of this story: extend `web/e2e/agents.spec.ts`. A
+      saved agent's card shows its address and an environment agent's shows none; the only
+      requests of the page that hold a saved agent's address hold it in a body; with a saved
+      agent on the page, the Agents section still cannot be shown in a frame of another origin
+      (FR-029, FR-032, R21)
 
 **Checkpoint**: quickstart section 7 works; User Story 6 is complete.
 
@@ -1149,12 +1163,12 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ## Phase 10: Polish & Cross-Cutting Concerns
 
-- [ ] T114 [P] Complete `README.md`, which Phases 3 to 5 kept true: the Agents section and how
+- [ ] T115 [P] Complete `README.md`, which Phases 3 to 5 kept true: the Agents section and how
       an agent is added, checked, changed, and removed; saved agents beside
       `FREYJA_A2A_AGENTS`; the console's warnings; that requiring approval and a removal hold
       at once; the `approval_now_required` code; and what anyone who can reach the port can now
       do. Only what now exists
-- [ ] T115 [P] Update `AGENTS.md`: Layout entries for `runtime/saved_agents.py`,
+- [ ] T116 [P] Update `AGENTS.md`: Layout entries for `runtime/saved_agents.py`,
       `delegates/agent_registry.py`, `delegates/agent_cards.py`, `delegates/addresses.py`,
       `api/agents.py`, and `api/guards.py`; what changed in `a2a_agents.py`, `a2a_tools.py`,
       `delegation_worker.py`, `runtime.py`, `threads.py`, and `tools.py`, a context in place of
@@ -1162,29 +1176,30 @@ another origin, nothing can be read or changed, and the console is not shown in 
       new end-to-end files; and under Conventions, that an agent's address appears nowhere
       outside the Agents routes, that text about an agent goes through the scrubber, and that a
       new route or log line about agents is added to `tests/test_agents_address_nowhere.py`
-- [ ] T116 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
+- [ ] T117 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
       contract names the `approval_now_required` code where a reader looks first, pointing at
       `specs/005-web-delegate-agents/contracts/sse-events.md`
-- [ ] T117 [P] Update `specs/005-web-delegate-agents/plan.md`: list `tasks.md` in its tree, and
-      under Implementation Notes anything the implementation settled differently from the plan,
-      beside what T015, T033, T059, T076, T092, and T113 recorded
-- [ ] T118 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
+- [ ] T118 [P] Update `specs/005-web-delegate-agents/plan.md`: under Implementation Notes,
+      anything the implementation settled differently from the plan, beside what T015, T035,
+      T036, T062, T079, and T095 recorded, and its file tree where the implementation touched a
+      file it does not list
+- [ ] T119 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
       `FREYJA_TEST_DATABASE_URI=... uv run pytest tests/integration`, in `web/` `pnpm lint`,
       `pnpm test`, `pnpm build`, and `pnpm test:e2e`, and `uv run pre-commit run --all-files`;
       confirm that no Ruff suppression was added, that both default suites pass with the
       network disconnected, and that no test that existed before this feature changed beyond:
-      the seven cases of T016; the one of T079; the page test of T038; the one in
+      the seven cases of T016; the one of T082; the page test of T041; the one in
       `web/e2e/console.spec.ts`; and the files that gained setup or names and lost nothing,
-      `tests/integration/test_a2a_tasks_postgres.py` (T015, T049),
-      `web/__tests__/components/app-sidebar.test.tsx` (T070), and the shared setup of
-      `web/e2e/llm.spec.ts` and `web/e2e/profiles.spec.ts` (T076) (FR-031, FR-032, SC-014,
+      `tests/integration/test_a2a_tasks_postgres.py` (T015, T052),
+      `web/__tests__/components/app-sidebar.test.tsx` (T073), and the shared setup of
+      `web/e2e/llm.spec.ts` and `web/e2e/profiles.spec.ts` (T079) (FR-031, FR-032, SC-014,
       principle V)
-- [ ] T119 Run `specs/005-web-delegate-agents/quickstart.md`, all eight sections, against the
+- [ ] T120 Run `specs/005-web-delegate-agents/quickstart.md`, all eight sections, against the
       real service, stand-ins on loopback, and the web app in a browser. Then save twenty
       agents through the API and time the Agents section from navigation to the last card:
       within two seconds (SC-015). Time a start with three stand-ins that never answer against
       a start with all answering: no later than the startup limit (SC-006)
-- [ ] T120 Re-run the Constitution Check of `specs/005-web-delegate-agents/plan.md` against the
+- [ ] T121 Re-run the Constitution Check of `specs/005-web-delegate-agents/plan.md` against the
       implemented code and note the result in the pull request description (principles I to VI)
 
 ---
@@ -1220,6 +1235,7 @@ another origin, nothing can be read or changed, and the console is not shown in 
 - T017 before T018; T018 before T019 and T020; T020 before T021; T021 before T022; T022
   before T023 and T025.
 - T024, T025, and T026 touch different files and follow T022.
+- T033, T034, and T035 depend on nothing else in the phase and run in that order.
 - T027 follows T021 to T026; T028, T029, and T030 follow T027, since the fixture is built on
   the code; T029 follows T028 (same file).
 - T031 follows T026. T032 can be written at any time and is merged with the phase.
@@ -1228,35 +1244,37 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 - Tests first, and they must fail before implementation starts.
 - Tasks that share a file run in the order listed. `tests/test_agents_api.py` grows by parts in
-  T034, T047, T077, T093, T109; `tests/test_agents_apply.py` in T030, T048, T080;
-  `tests/test_agents_approval.py` in T050, T078, T095;
-  `tests/test_agents_address_nowhere.py` in T051, T066, T084, T100, T108;
-  `tests/test_agent_task_store.py` in T008, T049; `src/freyja_agent/api/agents.py` in T040,
-  T056, T071, T087, T103; `src/freyja_agent/api/schemas.py` in T039, T055, T071, T087, T103;
-  `src/freyja_agent/delegates/a2a_tools.py` in T019, T058, T059, T085, T101, T102;
-  `src/freyja_agent/api/streaming.py` in T022, T059, T086;
-  `src/freyja_agent/runtime/agent_tasks.py` in T012, T057; `web/lib/agents.ts` in T041, T060,
-  T072, T088, T104, and its test file in T035, T052, T067, T081, T096; the card in T042, T073,
-  T090, T106, and its test file in T036, T068, T083, T099; the form in T061, T089, T105, and
-  its test file in T053, T082, T097; the list in T043, T062, T074, T106, and its test file in
-  T037, T054, T069; `README.md` in T032, T046, T064, T114.
-- `web/e2e/api.ts` grows in T045, T063, T076, T091, and T107, `web/e2e/agents-manage.spec.ts`
-  in T063, T076, T091, and T107, and `web/e2e/agents.spec.ts` in T045, T076, and T113.
-- A story's end-to-end task (T045, T063, T076, T091, T107, T113) comes after its
+  T037, T050, T080, T096, T112; `tests/test_agents_apply.py` in T030, T051, T083;
+  `tests/test_agents_approval.py` in T053, T081, T098;
+  `tests/test_agents_address_nowhere.py` in T054, T069, T087, T103, T111;
+  `tests/test_agent_task_store.py` in T008, T052; `src/freyja_agent/api/agents.py` in T043,
+  T059, T074, T090, T106; `src/freyja_agent/api/schemas.py` in T042, T058, T074, T090, T106;
+  `src/freyja_agent/delegates/a2a_tools.py` in T019, T061, T062, T088, T104, T105;
+  `src/freyja_agent/api/streaming.py` in T022, T062, T089;
+  `src/freyja_agent/runtime/agent_tasks.py` in T012, T060; `web/lib/agents.ts` in T044, T063,
+  T075, T091, T107, and its test file in T038, T055, T070, T084, T099; the card in T045, T076,
+  T093, T109, and its test file in T039, T071, T086, T102; the form in T064, T092, T108, and
+  its test file in T056, T085, T100; the list in T046, T065, T077, T109, and its test file in
+  T040, T057, T072; `README.md` in T032, T049, T067, T115.
+- `web/e2e/api.ts` grows in T048, T066, T079, T094, and T110, `web/e2e/agents-manage.spec.ts`
+  in T066, T079, T094, and T110, `web/e2e/agents.spec.ts` in T048, T079, and T114, and
+  `web/e2e/console.spec.ts` in T035 and T048.
+- A story's end-to-end task (T048, T066, T079, T094, T110, T114) comes after its
   implementation: it drives the built console. It is not one of the tests that must fail first.
 
 ### Parallel Opportunities
 
 - Phase 1: T001, T002, T003 together.
 - Phase 2: T004, T006, T007, T008 together; T011 beside T012.
-- Phase 3: T024, T025, T026 together; T031 and T032 beside the tests.
-- Phase 4: T034 to T038 together; then T041 beside T039 and T040.
-- Phase 5: T047 to T054 together; T060 beside T055 to T059.
-- Phase 6: T065 to T070 together; T072 beside T071.
-- Phase 7: T077 to T084 together; T088 beside T085 to T087.
-- Phase 8: T093 to T100 together; T104 beside T101 to T103.
-- Phase 9: T108 to T110 together.
-- Phase 10: T114 to T117 together.
+- Phase 3: T024, T025, T026 together; T031 and T032 beside the tests; T033 to T035 beside all
+  of it.
+- Phase 4: T037 to T041 together; then T044 beside T042 and T043.
+- Phase 5: T050 to T057 together; T063 beside T058 to T062.
+- Phase 6: T068 to T073 together; T075 beside T074.
+- Phase 7: T080 to T087 together; T091 beside T088 to T090.
+- Phase 8: T096 to T103 together; T107 beside T104 to T106.
+- Phase 9: T111 and T112 together.
+- Phase 10: T115 to T118 together.
 - Phase 6 can be built at the same time as Phase 7, since both depend on Phase 5 only. They
   share `src/freyja_agent/api/agents.py` and `schemas.py`, `web/lib/agents.ts`, the card
   component, their test files, `tests/test_agents_address_nowhere.py`, `web/e2e/api.ts`, and
@@ -1269,23 +1287,23 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ```bash
 # Write the tests, then watch them fail:
-Task: "POST /agents in tests/test_agents_api.py part 2 (T047)"
-Task: "An add, then runs, a restart, and two apps in tests/test_agents_apply.py part 2 (T048)"
-Task: "The proposed calls in tests/test_agent_task_store.py (T049)"
-Task: "A call belongs to its agent, in tests/test_agents_approval.py part 1 (T050)"
-Task: "The address proof, part 1, in tests/test_agents_address_nowhere.py (T051)"
-Task: "addAgent in web/__tests__/lib/agents.test.ts part 2 (T052)"
-Task: "The Add form in web/__tests__/components/agents/agent-form.test.tsx part 1 (T053)"
-Task: "The Add button in web/__tests__/components/agents/agent-list.test.tsx part 2 (T054)"
+Task: "POST /agents in tests/test_agents_api.py part 2 (T050)"
+Task: "An add, then runs, a restart, and two apps in tests/test_agents_apply.py part 2 (T051)"
+Task: "The proposed calls in tests/test_agent_task_store.py (T052)"
+Task: "A call belongs to its agent, in tests/test_agents_approval.py part 1 (T053)"
+Task: "The address proof, part 1, in tests/test_agents_address_nowhere.py (T054)"
+Task: "addAgent in web/__tests__/lib/agents.test.ts part 2 (T055)"
+Task: "The Add form in web/__tests__/components/agents/agent-form.test.tsx part 1 (T056)"
+Task: "The Add button in web/__tests__/components/agents/agent-list.test.tsx part 2 (T057)"
 
 # Then implement:
-Task: "AgentCreate, then POST /agents, in src/freyja_agent/api/ (T055, T056)"
-Task: "The proposed calls: the table, the middleware, the tools (T057, T058, T059)"
-Task: "addAgent in web/lib/agents.ts (T060)"
-Task: "The form in web/components/agents/agent-form.tsx (T061), then the list (T062)"
+Task: "AgentCreate, then POST /agents, in src/freyja_agent/api/ (T058, T059)"
+Task: "The proposed calls: the table, the middleware, the tools (T060, T061, T062)"
+Task: "addAgent in web/lib/agents.ts (T063)"
+Task: "The form in web/components/agents/agent-form.tsx (T064), then the list (T065)"
 
 # Then drive the built console:
-Task: "web/e2e/agents-manage.spec.ts part 1 (T063)"
+Task: "web/e2e/agents-manage.spec.ts part 1 (T066)"
 ```
 
 ---
@@ -1304,7 +1322,8 @@ Task: "web/e2e/agents-manage.spec.ts part 1 (T063)"
 
 ### Incremental Delivery
 
-1. Setup and the foundation: every earlier test passes, changed only as FR-031 lists.
+1. Setup and the foundation: every earlier test passes, changed only as FR-031 lists, and the
+   console can no longer be framed.
 2. User Story 1: the console shows which agents Freyja can hand work to. First increment
    worth showing.
 3. User Story 2: an agent can be added from the console and used with no restart, always
@@ -1313,7 +1332,7 @@ Task: "web/e2e/agents-manage.spec.ts part 1 (T063)"
 5. User Story 4: the approval choice can be set and changed, with the checks that make a
    tightening hold at once.
 6. User Story 5: agents can be moved and removed, and their tasks are given up with them.
-7. User Story 6: the proof completed, the sweep of other origins, and the frame rule.
+7. User Story 6: the proof completed and the sweep of other origins.
 8. Polish: documentation, the full quickstart, the gates.
 
 Each phase is one pull request and one merge request, as in features 001 to 004. Phase 1 is
@@ -1338,7 +1357,7 @@ and 7 can proceed at the same time once Phase 5 is merged.
 - Verify that tests fail before implementing.
 - Commit after each task or logical group, in the `type: summary` form.
 - Stop at any checkpoint to validate a story on its own.
-- Six tasks check something the plan could not verify: T015, T033, T059, T076, T092, and T113.
+- Six tasks check something the plan could not verify: T015, T035, T036, T062, T079, and T095.
   Each records what it found in plan.md.
 - Choices this task list makes beyond the plan, each open to change before its phase starts:
   - The foundation is two phases, and the second carries the change to startup (FR-020,
@@ -1369,14 +1388,16 @@ and 7 can proceed at the same time once Phase 5 is merged.
     `CREATE TABLE IF NOT EXISTS` once deployed.
   - The proof that an address stays in the Agents section starts in Phase 5 and grows with
     each phase, where feature 004 wrote its proof last and it then found two leaks.
-  - Documentation is corrected in the phase that makes a sentence false (T032, T046, T064),
+  - Documentation is corrected in the phase that makes a sentence false (T032, T049, T067),
     and completed in Phase 10.
+    - The frame rule (FR-029) is built in Phase 3, not with User Story 6: the confirmations it
+    protects arrive in Phases 5 to 8, and the LLM section has some already.
   - The Add button arrives with User Story 2, not User Story 1, so the console never offers
     something the service cannot do yet.
   - Values the plan left open: five seconds for the lock timeout of the column (T012); 200
     addresses that were never saved kept by the scrubber (T005, T010).
   - Wording the plan left open: the text of a task given up at a move (T012); the error
-    results a call gives without sending (T019, T050, T078, T095), whose content
+    results a call gives without sending (T019, T053, T081, T098), whose content
     data-model.md fixes.
-  - `DelegateTool` gains `agent_id` (T058), so the middleware knows which saved agent a tool
+  - `DelegateTool` gains `agent_id` (T061), so the middleware knows which saved agent a tool
     is for; the catalog's shape in `/tools` does not change.
