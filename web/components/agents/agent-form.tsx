@@ -1,6 +1,6 @@
 "use client";
 
-import { type FormEvent, useId, useRef, useState } from "react";
+import { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -92,7 +92,8 @@ function Fields({
   onUnknown,
 }: {
   onCancel: () => void;
-  onSaved: (agent: Agent) => void;
+  /** Told that the agent was saved, and whether this form is still the one on the page. */
+  onSaved: (agent: Agent, shown: boolean) => void;
   onUnknown: () => void;
 }) {
   const id = useId();
@@ -104,6 +105,16 @@ function Fields({
   const [sending, setSending] = useState(false);
   // A second press arriving before the first one shows as sending still sends nothing.
   const inFlight = useRef(false);
+  // Reading a card can take a while, and the form can be closed, and opened again, before
+  // the answer comes. The answer then belongs to a form that is gone: it changes nothing in
+  // the one that is open now.
+  const shown = useRef(true);
+  useEffect(() => {
+    shown.current = true;
+    return () => {
+      shown.current = false;
+    };
+  }, []);
 
   // Changing a value takes back what was said about it.
   function changing(field: FieldName, set: (value: string) => void) {
@@ -115,12 +126,19 @@ function Fields({
 
   /** What went wrong with the request, put where it belongs: at a field, or over the form. */
   function refused(error: unknown) {
+    const answered = error instanceof ApiError && error.code !== "unreachable";
+    if (!answered) {
+      // No answer came back. The list is what says whether the agent is there now.
+      onUnknown();
+    }
+    if (!shown.current) {
+      // Nobody is looking at this form any more: what it would say is said to no one.
+      return;
+    }
     const told: Errors = {};
     let other: string | null = null;
     if (!(error instanceof ApiError) || error.code === "unreachable") {
-      // No answer came back. The list is what says whether the agent is there now.
       other = OUTCOME_NOT_KNOWN;
-      onUnknown();
     } else if (error.code === "invalid") {
       for (const { field, message } of error.fields) {
         const at = FIELD_OF[field];
@@ -154,12 +172,15 @@ function Fields({
     setSending(true);
     try {
       // One request, and nothing to confirm: an agent added here requires approval.
-      onSaved(await addAgent(values));
+      const agent = await addAgent(values);
+      onSaved(agent, shown.current);
     } catch (error) {
       refused(error);
     } finally {
       inFlight.current = false;
-      setSending(false);
+      if (shown.current) {
+        setSending(false);
+      }
     }
   }
 
@@ -266,8 +287,12 @@ export function AgentForm({
         <Fields
           key={session}
           onCancel={() => change(false)}
-          onSaved={(agent) => {
-            change(false);
+          onSaved={(agent, shown) => {
+            // Only the form that asked closes itself. An answer that arrives after its form
+            // was closed leaves the form that is open now alone; the list is read either way.
+            if (shown) {
+              change(false);
+            }
             onSaved(agent);
           }}
           onUnknown={onUnknown}

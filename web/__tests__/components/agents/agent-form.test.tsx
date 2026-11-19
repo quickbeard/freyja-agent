@@ -407,4 +407,94 @@ describe("AgentForm, adding", () => {
     expect(localStorage.length).toBe(0);
     expect(sessionStorage.length).toBe(0);
   });
+
+  // The card read can take twenty seconds, so a form may be closed, and opened again, while
+  // its request is still under way.
+  function held() {
+    let answer: (response: Response) => void = () => {};
+    let lose: (reason: unknown) => void = () => {};
+    const fetchStub = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise<Response>((resolve, reject) => {
+          answer = resolve;
+          lose = reject;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    return {
+      fetchStub,
+      answer: (status: number, json: unknown) =>
+        answer(
+          new Response(JSON.stringify(json), {
+            status,
+            headers: { "content-type": "application/json" },
+          }),
+        ),
+      lose: () => lose(new TypeError("Failed to fetch")),
+    };
+  }
+
+  async function closedWhileSavingThenOpenedAgain() {
+    fill();
+    save();
+    await screen.findByRole("button", { name: "Saving…" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    type("Name", "report");
+  }
+
+  it("keeps the form that is open now when an earlier form's request is answered", async () => {
+    const request = held();
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    await closedWhileSavingThenOpenedAgain();
+
+    request.answer(201, STUB);
+    // The agent was saved, so whoever holds the list is told, and reads it again.
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(STUB));
+    // The form that is open now is another one: it stays, with what is being typed in it.
+    expect(screen.getByRole("dialog")).toBeDefined();
+    expect(field("Name").value).toBe("report");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeDefined();
+    expect(onSaved).toHaveBeenCalledTimes(1);
+  });
+
+  it("says nothing in the form that is open now when an earlier form's request is refused", async () => {
+    const request = held();
+    const onSaved = vi.fn();
+    const onUnknown = vi.fn();
+    render(<Harness onSaved={onSaved} onUnknown={onUnknown} />);
+    await closedWhileSavingThenOpenedAgain();
+
+    request.answer(409, {
+      detail: {
+        code: "name_taken",
+        message: "Another saved agent has this name.",
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // The refusal was about what the closed form sent, not about what is typed now.
+    expect(field("Name").value).toBe("report");
+    expect(field("Name").getAttribute("aria-invalid")).toBeNull();
+    expect(document.body.textContent).not.toContain("has this name");
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onUnknown).not.toHaveBeenCalled();
+  });
+
+  it("has the list read again when an earlier form's request got no answer", async () => {
+    const request = held();
+    const onUnknown = vi.fn();
+    render(<Harness onUnknown={onUnknown} />);
+    await closedWhileSavingThenOpenedAgain();
+
+    request.lose();
+    // Nobody is left to tell that the outcome is not known: the list says what is so.
+    await waitFor(() => expect(onUnknown).toHaveBeenCalledTimes(1));
+    expect(field("Name").value).toBe("report");
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(document.body.textContent).not.toContain("not known");
+  });
 });

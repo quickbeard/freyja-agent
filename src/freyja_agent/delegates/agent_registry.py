@@ -229,6 +229,9 @@ class AgentRegistry:
         not_in_use: list[NotInUse] = []
         in_use: dict[str, SavedAgentRecord] = {}
         for record in sorted(records, key=lambda found: found.name):
+            # Every saved agent's address is one the scrubber keeps, also when the agent is
+            # not in use and gets no link to tell it (FR-028).
+            SCRUBBER.mark_saved(record.url)
             reason = self._why_not_in_use(record)
             if reason is not None:
                 not_in_use.append(NotInUse(record, reason))
@@ -254,9 +257,10 @@ class AgentRegistry:
             links.append(link)
             read_only[record.name] = record.read_only
             in_use[record.name] = record
-        # Every address of this set is known to the scrubber by now: each link told it when
-        # it was made. Details that were read or kept before one of them became an agent's
-        # are cleaned of it here, before the tools are described from them (FR-028).
+        # Every saved agent's address is known to the scrubber by now, and every environment
+        # agent's since its link was made. Details that were read or kept before one of them
+        # became an agent's are cleaned of it here, before the tools are described from them
+        # (FR-028).
         for link in links:
             if link.card is not None:
                 link.card = cleaned(link.card, SCRUBBER.scrub)

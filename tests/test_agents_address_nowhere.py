@@ -82,6 +82,10 @@ def test_the_search_finds_the_port_in_every_form_an_address_takes(text: str) -> 
     [
         f"0af3{SAVED_PORT}c2",
         f"7c9e6679f0a54b3e8d2a1f4b6c{SAVED_PORT}0a",
+        # An id written in groups: the port's digits as a whole group, first, inner, or last.
+        f"checkpoint 1f0c5a2e-{SAVED_PORT}-6f0a-8001-3b1f2a4c5d6e",
+        f"task {SAVED_PORT}-6f0a-8001-3b1f2a4c5d6e",
+        f"run 1f0c5a2e-6f0a-8001-{SAVED_PORT}",
         f"2026-11-19T09:04:10.{SAVED_PORT}00+00:00",
         f"2026-11-19T09:04:10.12{SAVED_PORT}+00:00",
         f"1700{SAVED_PORT}.25",

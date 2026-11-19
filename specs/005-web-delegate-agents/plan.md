@@ -579,9 +579,12 @@ What the implementation settled differently from the plan, or found out, phase b
   until the next reply in its namespace replaces it, or the thread's next run with input
   clears it. All of it was seen on Postgres 17.11 as well, in the opt-in tests and with
   the real service.
-- **A call's row is compared by the agent's name and by its id**, where T062 names the id.
-  A row under this call's key that names another agent can only be wrong, whichever of
-  the two differs.
+- **A call's row is compared by the saved agent's id alone**, as T062 says. The first
+  version compared the agent's name as well, and the independent review showed what that
+  broke: one tool call id used twice in a reply for two environment agents has one row,
+  naming the later call's agent, and the other call was then kept back, where both were
+  sent before this feature. Between two environment agents both ids are none, so a call
+  follows the tool's name, as it always has.
 - **The order inside a tool** is the send ledger, the task's ref for an answer or a cancel,
   the card read when the link needs it, the conversation, the store's clock, and then the
   row. Nothing is awaited between the row's check and the send's first write but that
@@ -594,11 +597,12 @@ What the implementation settled differently from the plan, or found out, phase b
   delete, and one insert per call of an agent's tool, in one transaction. With no agent
   nothing is written at a reply. Every run with input makes one delete, with agents or
   without.
-- **Known: two calls of one reply that share a tool call id have one row.** Both are sent
-  to an environment agent, as before. For a saved agent both were sent when it was tried,
-  because both read the row before either finished; a second call that reads after the
-  first one's send was recorded would find no row and be kept back, with the sentence for
-  a removed agent. It fails toward sending nothing.
+- **Known: two calls of one reply that share a tool call id have one row**, the later
+  call's. To environment agents both are sent, as before. To two saved agents only the one
+  the row names is sent; the other is kept back with the sentence for a removed agent. To
+  one saved agent both were sent when it was tried, because both read the row before
+  either finished; a second call that read after the first one's send was recorded would
+  find no row and be kept back. Each of these fails toward sending nothing.
 - **The address proof found a leak the first time it ran.** Card details were cleaned of
   the addresses known when the card was read, and never again. An environment agent's
   card, read at startup, or a saved agent's, kept in the database, that names an address
@@ -607,7 +611,10 @@ What the implementation settled differently from the plan, or found out, phase b
   where they are used (`cleaned` in `delegates/agent_cards.py`): when an instance makes an
   agent set, after every link of the set has told the scrubber its address, and in every
   answer of the Agents routes. What stands in for an address can be a character longer
-  than the address was, so a text is cut again and marked as cut. Cleaning again costs
+  than the address was, so a text is cut again and marked as cut. A saved agent that is not
+  in use has no link to tell the scrubber its address, so making a set now tells it every
+  saved agent's address itself: the independent review found that such an agent's address
+  stayed in an environment agent's card text after a restart. Cleaning again costs
   nothing for a text with no colon in it, which the scrubber skips, and 0.3 ms for a card
   at every limit of FR-002. What a card says of an address is cleaned from the moment an
   agent is saved there, not before: until then it is only what the card says. Research
@@ -659,10 +666,34 @@ What the implementation settled differently from the plan, or found out, phase b
   spec changed: the section's buttons are now Refresh and Add. Chromium's permission for
   requests to this machine was not needed: the page talks to its own origin only.
 - **A test that searches for a port looks for it as a number of its own** (`holds_port` in
-  `tests/conftest.py`). A bare search for four digits can find them in an id or in the
-  fraction of a timestamp. One test of Phase 4 in `tests/test_agents_api.py` searched that
+  `tests/conftest.py`). A bare search for four digits can find them in an id, written
+  plainly or in groups with hyphens between them, or in the fraction of a timestamp. The
+  first version of the helper let a group of a hyphenated id through; the review counted
+  about a hundred such ids in what the address proof searches, which would have failed it
+  by chance about once in sixty-five runs. One test of Phase 4 in `tests/test_agents_api.py` searched that
   way over text that holds `checked_at`, and now uses the helper. The test of
   `tests/test_catalog.py` that fails this way on `main` is left for a request of its own.
+- **An answer that arrives after its form was closed changes nothing in the form that is
+  open now.** Reading a card can take twenty seconds, and the form can be closed and
+  opened again meanwhile. The late answer has the list read again, when the agent was
+  saved and when no answer came, and is otherwise said to no one. The first version
+  closed the form that was open, with what was being typed in it; the review found it.
+  The LLM section's form, which this one is modelled on, behaves the earlier way and is
+  not changed in this phase.
+- **Known: a 422 names an unknown field by the name it was sent under.** A request that
+  sends an address as the name of a field gets that name back in `loc`. The validation
+  error keeps where and why and drops the value; the name of a field the shape does not
+  have is neither. The console sends two fields with fixed names. The same holds on the
+  LLM routes, whose guard this is, and it is left for a change of that guard.
+- **What the independent review found, and what was done.** It found no path that sends a
+  message without its decision, and none that sends a proposal to another agent under its
+  name. It found the two leaks and the two defects named above, that the checks of a
+  refused add's log line could not fail once an earlier test had saved the same port,
+  that three tests of the rows passed with the tools' deletion taken out, and that nothing
+  tested a row that cannot be read or rows that cannot be cleared. All were acted on, and
+  each test added or changed for a defect was seen to fail with its fix taken out: an add
+  that must be refused is now made at a port nothing ever saves, and the rows are looked
+  at as the next reply finds them.
 - **Seen by hand, with the real service, the console in a browser, and a real model**
   (quickstart section 2). On an instance started with no agent, Add in the console saved
   the stand-in entered as `HTTP://LocalHost:9998/`: its card shows `http://localhost:9998`,

@@ -348,11 +348,12 @@ async def _proposed_for(
     """Keep back a call that was proposed for another agent than this tool's (005 FR-023).
 
     A pause holds the tool's name and nothing about which agent had the name. The row written
-    when the model proposed the call does: the agent's name, and the saved agent's id or none
-    for an agent named in the environment. A call whose row names another agent is not sent,
-    whichever of the two kinds either is: a saved agent added under the name of an environment
-    agent that left, an environment agent that took a saved agent's name at a restart, or a
-    saved agent removed and added again.
+    when the model proposed the call does: the saved agent's id, or none for an agent named
+    in the environment. A call whose row has another id than this tool's agent is not sent,
+    none on either side included: a saved agent added under the name of an environment agent
+    that left, an environment agent that took a saved agent's name at a restart, or a saved
+    agent removed and added again. Two agents named in the environment both have none, so
+    between them a call follows the tool's name, as it always has.
 
     A call with no row follows the name when this is an environment agent's tool, as every
     call did before the rows existed. A saved agent's tool sends nothing for one: every call
@@ -363,7 +364,7 @@ async def _proposed_for(
     if call is None:
         if link.source != "saved":
             return
-    elif call.agent == link.name and call.agent_id == link.agent_id:
+    elif call.agent_id == link.agent_id:
         return
     raise _failed(link, proposed_for_another(link.name))
 

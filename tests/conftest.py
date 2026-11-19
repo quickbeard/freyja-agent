@@ -451,10 +451,11 @@ def holds_port(text: str, port: str | int) -> bool:
     """Whether ``text`` holds ``port`` as a number of its own.
 
     A search for an agent's port must not find the same digits inside something else: a
-    hexadecimal id, a longer number, or the fraction of a timestamp. In every form an address
-    takes, the port follows a colon, a space, or a bracket, and no digit follows it.
+    hexadecimal id, written plainly or in groups with hyphens between them, a longer number,
+    or the fraction of a timestamp. In every form an address takes, the port follows a
+    colon, a space, an equals sign, or a bracket, and neither a digit nor a hyphen follows it.
     """
-    return re.search(rf"(?<![0-9A-Fa-f.]){port}(?![0-9A-Fa-f])", text) is not None
+    return re.search(rf"(?<![0-9A-Fa-f.\-]){port}(?![0-9A-Fa-f\-])", text) is not None
 
 
 def parse_sse(lines: Iterable[str]) -> Iterator[tuple[str, Any]]:

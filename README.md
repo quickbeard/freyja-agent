@@ -260,7 +260,7 @@ A name is in the form the environment's agents use, and an address is `http` or 
 - 409 `agent_unusable` when the card cannot be used, with `reason` and the service's own sentence: nothing answered, no answer in time, no card, a card that cannot be read, a redirect, a card larger than one megabyte, or a card that requires authentication, accepts no text, or offers no JSON-RPC interface;
 - 403 `other_origin` when a browser marks the request as made by a page of another origin.
 
-`GET /agents` lists every agent, and is the one answer of the service that holds a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where another agent's card names it.
+`GET /agents` lists every agent. It and the answer to an add are the only answers of the service that hold a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where another agent's card names it.
 
 A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
 

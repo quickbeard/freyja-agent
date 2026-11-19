@@ -25,6 +25,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from freyja_agent.config import AddressError, canonical_address
+from freyja_agent.delegates.addresses import SCRUBBER, UNSAVED_LIMIT
 from freyja_agent.runtime.saved_agents import (
     AddressTakenError,
     AgentLimitError,
@@ -376,10 +377,18 @@ def test_a_saved_agent_changed_since_the_set_was_read_is_listed_as_not_tried(
 # Part 2 (T050): `POST /agents`.
 
 ROUTES = "freyja_agent.api.agents"
-# A port nothing else in this file uses, so that finding it anywhere means the address got out.
+# Ports nothing else in the suite uses, so that finding one anywhere means an address got out.
+# The scrubber is the process's own and forgets nothing a test told it, so a check that an
+# address is not logged can only fail for an address no earlier test gave an agent: an add
+# that must be refused is made at a port of its own, which nothing ever saves.
 NEW_URL = "http://127.0.0.1:9311"
 NEW_PORT = "9311"
 OTHER_PORT = "9312"
+# Where the adds that break a rule point: never requested, never told to the scrubber.
+RULE_PORT = "9314"
+# One port for each way a card can be refused, from 9330.
+UNUSABLE_PORT = 9330
+PORTS = (NEW_PORT, OTHER_PORT, RULE_PORT, *(str(UNUSABLE_PORT + n) for n in range(9)))
 FIELDS = {
     "id",
     "name",
@@ -424,7 +433,7 @@ def no_address(*texts: str) -> None:
 def no_port(*texts: str) -> None:
     """No port of an address is in a log, which also holds the test client's own lines."""
     for text in texts:
-        for port in (NEW_PORT, OTHER_PORT):
+        for port in PORTS:
             assert not holds_port(text, port), (port, text[:400])
 
 
@@ -520,14 +529,16 @@ def test_an_agent_that_cannot_be_used_is_refused_with_the_reason_and_leaves_noth
     model = ScriptedChatModel()
     made = make_a2a_app(model, {"hello": {}}, a2a_startup_timeout_seconds=0.4)
     stub = stand_in(code)
-    transport = made.add_stub(NEW_URL, stub)
+    # An address nothing else was ever told: what keeps it out of the log is this request.
+    url = f"http://127.0.0.1:{UNUSABLE_PORT + list(UNUSABLE).index(code)}"
+    transport = made.add_stub(url, stub)
     transport.down = code == "no_answer"
     transport.hang = code == "timeout"
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         run(client, "p-1", sse_events)
         before, bound = what_exists(client), list(model.bound_tool_names)
         began = time.monotonic()
-        response = add(client)
+        response = add(client, url=url)
         took = time.monotonic() - began
         after = what_exists(client)
         run(client, "p-1", sse_events, "again")
@@ -551,6 +562,16 @@ def test_an_agent_that_cannot_be_used_is_refused_with_the_reason_and_leaves_noth
     assert took < 3
     no_address(response.text)
     no_port(caplog.text)
+    if code not in ("no_answer", "timeout"):
+        # The request was answered, so the HTTP library logged it, with the address taken out.
+        requested = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name == "httpx" and CARD_PATH in record.getMessage()
+        ]
+        # Two card reads: the environment agent's at startup, and this add's.
+        assert len(requested) == 2, requested
+        assert all("GET <address>/.well-known" in line for line in requested), requested
     assert f"Agent helper was not added: {UNUSABLE[code]}" in route_lines(caplog)
 
 
@@ -686,7 +707,9 @@ def test_the_twenty_first_agent_is_refused_before_any_card_is_read(
 def test_a_fifth_card_read_at_once_is_refused_and_a_slot_is_given_back_when_a_read_ends(
     make_a2a_app: Callable[..., A2aApp],
 ) -> None:
-    made = make_a2a_app(ScriptedChatModel(), {}, a2a_startup_timeout_seconds=1.5)
+    # The four reads hang until this limit, and the fifth request has to arrive before the
+    # first of them ends: three seconds is room for a slow machine.
+    made = make_a2a_app(ScriptedChatModel(), {}, a2a_startup_timeout_seconds=3.0)
     hanging = []
     for number in range(4):
         transport = made.add_stub(f"http://127.0.0.1:{9500 + number}", make_stub(f"slow{number}"))
@@ -763,21 +786,21 @@ NAME_RULE = (
     "digits, hyphens, and underscores."
 )
 BAD_ADDRESSES = [
-    "ftp://127.0.0.1:9311",
-    "127.0.0.1:9311",
-    "http://example.com:9311",
-    "http://192.168.1.5:9311",
-    "http://user:secret@127.0.0.1:9311",
-    "http://127.0.0.1:9311/?x=1",
-    "http://127.0.0.1:9311/#top",
-    "http://127.0.0.1:9311//a",
-    "http://127.0.0.1:9311/a/../b",
-    "http://127.0.0.1:9311/a%20b",
-    "http://127.0.0.1:9311/a\\b",
-    "http://127.0.0.1:9311/a b",
+    "ftp://127.0.0.1:9314",
+    "127.0.0.1:9314",
+    "http://example.com:9314",
+    "http://192.168.1.5:9314",
+    "http://user:secret@127.0.0.1:9314",
+    "http://127.0.0.1:9314/?x=1",
+    "http://127.0.0.1:9314/#top",
+    "http://127.0.0.1:9314//a",
+    "http://127.0.0.1:9314/a/../b",
+    "http://127.0.0.1:9314/a%20b",
+    "http://127.0.0.1:9314/a\\b",
+    "http://127.0.0.1:9314/a b",
     "http://127.0.0.1:0",
-    "http://127.0.0.1:9311/a{b}",
-    "http://127.0.0.1:9311/" + "a" * 2000,
+    "http://127.0.0.1:9314/a{b}",
+    "http://127.0.0.1:9314/" + "a" * 2000,
 ]
 BAD_NAMES = ["Helper", "1helper", "", "a" * 33, "has space", "naïve", "helper!"]
 
@@ -787,7 +810,7 @@ def test_an_address_that_breaks_a_rule_is_refused_in_the_service_s_words_without
     make_a2a_app: Callable[..., A2aApp], caplog: pytest.LogCaptureFixture, url: str
 ) -> None:
     made = make_a2a_app(ScriptedChatModel(), {})
-    transport = made.add_stub(NEW_URL, make_stub("helper"))
+    transport = made.add_stub(f"http://127.0.0.1:{RULE_PORT}", make_stub("helper"))
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         response = add(client, url=url)
         saved = client.portal.call(made.saved_agents.list_agents)
@@ -950,18 +973,26 @@ def test_an_add_stands_when_this_instance_cannot_take_it_up_at_once(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     made = make_a2a_app(ScriptedChatModel(), {})
-    transport = made.add_stub(NEW_URL, make_stub("helper"))
+    # An address of this test's own: the scrubber has it from this add and nothing else.
+    kept_url = "http://127.0.0.1:9316"
+    transport = made.add_stub(kept_url, make_stub("helper"))
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         registry = made.runtime.registry
         assert registry is not None
 
         async def failing(*_args: Any) -> Any:
-            raise RuntimeError(f"could not connect to {NEW_URL}")
+            raise RuntimeError(f"could not connect to {kept_url}")
 
         monkeypatch.setattr(registry, "adopt", failing)
-        response = add(client)
+        response = add(client, url=kept_url)
         monkeypatch.undo()
+        # No link exists for the agent yet, and its address is already kept for as long as
+        # the process runs: it is not forgotten with the addresses of adds that were refused.
+        for number in range(UNSAVED_LIMIT + 1):
+            SCRUBBER.register(f"http://127.0.0.1:{20000 + number}")
+        still_cleaned = SCRUBBER.scrub(f"asked {kept_url} for its card")
         (listed,) = agents(client)["agents"]
+    assert still_cleaned == "asked <address> for its card"
     # Saved all the same: every instance takes it up at its next context.
     assert response.status_code == 201, response.text
     assert response.json()["state"] == "not_tried"
@@ -1103,3 +1134,31 @@ def test_an_address_that_becomes_a_saved_agent_s_is_removed_from_what_other_card
             assert not holds_port(text, port), (where, text)
     # It is where it belongs: in `url` of the agent's own entry.
     assert answered["url"] == later
+
+
+def test_the_address_of_a_saved_agent_that_is_not_in_use_is_removed_from_what_cards_say(
+    make_a2a_app: Callable[..., A2aApp],
+) -> None:
+    # A saved agent the environment overrides has no link, so nothing but its record says
+    # what its address is. The address is this test's own: nothing told the scrubber of it.
+    unused, port = "http://127.0.0.1:9319", "9319"
+    naming = f"My neighbour is at {unused}/a2a and localhost:{port}."
+    made = make_a2a_app(
+        ScriptedChatModel(),
+        {"desk": {}},
+        stubs={"desk": make_stub("desk", card=stub_card("desk", description=naming))},
+        saved={"desk": {"url": unused}},
+    )
+    with TestClient(made.app) as client:
+        catalog = client.get("/tools").json()
+        listed = agents(client)["agents"]
+    environment, saved = listed
+    assert (saved["state"], saved["url"]) == ("not_in_use", unused)
+    tools = {tool["name"]: tool for tool in catalog["tools"]}
+    for where, text in {
+        "/tools": catalog["agents"][0]["card"]["description"],
+        "tool": tools["handoff_to_desk"]["description"],
+        "/agents": environment["card"]["description"],
+    }.items():
+        assert "My neighbour is at <address>/a2a and <address>." in text, (where, text)
+        assert not holds_port(text, port), (where, text)

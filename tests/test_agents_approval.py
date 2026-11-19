@@ -10,6 +10,7 @@ Every agent is the stand-in, inside the test process. Saved agents are written t
 as `tests/test_agents_apply.py` part 1 does; the route that adds one is covered there.
 """
 
+import dataclasses
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -72,6 +73,20 @@ def at_the_send(made: A2aApp, monkeypatch: pytest.MonkeyPatch, thread: str) -> l
     return seen
 
 
+def at_each_reply(made: A2aApp, monkeypatch: pytest.MonkeyPatch, thread: str) -> list[Any]:
+    """Collects the thread's rows as each reply of the model finds them, before it replaces
+    its namespace's: after a send, what is found is what the tool left."""
+    seen: list[Any] = []
+    replace = made.store.replace_calls
+
+    async def looking(*args: Any, **kwargs: Any) -> None:
+        seen.append(await made.store.list_calls(thread))
+        await replace(*args, **kwargs)
+
+    monkeypatch.setattr(made.store, "replace_calls", looking)
+    return seen
+
+
 def restart(
     make_a2a_app: Callable[..., A2aApp],
     first: A2aApp,
@@ -103,6 +118,7 @@ def test_a_proposed_call_has_a_row_before_the_run_pauses_and_until_its_send_is_f
     made = make_a2a_app(ScriptedChatModel(script=[propose(TO_HELPER)]), {}, saved=HELPER)
     record = made.saved["helper"]
     during = at_the_send(made, monkeypatch, "v-1")
+    found = at_each_reply(made, monkeypatch, "v-1")
     with TestClient(made.app) as client:
         interrupted(run(client, "v-1", sse_events))
         (paused,) = rows(client, made, "v-1")
@@ -115,8 +131,10 @@ def test_a_proposed_call_has_a_row_before_the_run_pauses_and_until_its_send_is_f
     assert paused.proposed_at is not None
     assert events[-1] == ("end", {"status": "completed"})
     assert texts(made) == ["Summarize the week."]
-    # Still there while the message was on its way, and gone once the send was recorded.
-    assert [keys(found) for found in during] == [[("", "c1")]]
+    # Still there while the message was on its way, and gone once the send was recorded:
+    # the reply that followed the send found no row, before it replaced any.
+    assert [keys(rows_then) for rows_then in during] == [[("", "c1")]]
+    assert [keys(rows_then) for rows_then in found] == [[], []]
     assert afterwards == []
 
 
@@ -127,6 +145,7 @@ def test_a_call_that_needs_no_decision_has_its_row_while_it_is_sent(
         ScriptedChatModel(script=[handoff("Say hello.")]), {"hello": {"read_only": True}}
     )
     during = at_the_send(made, monkeypatch, "v-2")
+    found = at_each_reply(made, monkeypatch, "v-2")
     with TestClient(made.app) as client:
         events = run(client, "v-2", sse_events)
         afterwards = rows(client, made, "v-2")
@@ -135,6 +154,8 @@ def test_a_call_that_needs_no_decision_has_its_row_while_it_is_sent(
     # An environment agent has no id, and its call needed no decision.
     assert (row.namespace, row.tool_call_id) == ("", "h1")
     assert (row.agent, row.agent_id, row.gated) == ("hello", None, False)
+    # The tool took its row away: the next reply found none.
+    assert found == [[], []]
     assert afterwards == []
 
 
@@ -144,6 +165,7 @@ def test_a_subagent_s_call_has_its_row_under_the_subagent_s_namespace(
     model = ScriptedChatModel(script=[DELEGATE, propose(TO_HELPER, step="d")])
     made = make_a2a_app(model, {}, saved=HELPER)
     during = at_the_send(made, monkeypatch, "v-3")
+    found = at_each_reply(made, monkeypatch, "v-3")
     with TestClient(made.app) as client:
         interrupted(run(client, "v-3", sse_events))
         (paused,) = rows(client, made, "v-3")
@@ -160,7 +182,9 @@ def test_a_subagent_s_call_has_its_row_under_the_subagent_s_namespace(
     )
     assert events[-1] == ("end", {"status": "completed"})
     assert texts(made) == ["Summarize the week."]
-    assert [keys(found) for found in during] == [[(paused.namespace, "d1")]]
+    assert [keys(rows_then) for rows_then in during] == [[(paused.namespace, "d1")]]
+    # Every reply after the send, the subagent's and the orchestrator's, found no row.
+    assert len(found) == 4 and found[2:] == [[], []]
     assert afterwards == []
 
 
@@ -506,3 +530,130 @@ def _task(thread: str, ref: str, now: Any) -> AgentTaskRecord:
         last_checked_at=now,
         agent_ref=ref,
     )
+
+
+def test_a_cancel_that_was_sent_takes_its_row_away(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cancel = AIMessage(
+        content="",
+        tool_calls=[{"id": "x1", "name": "cancel_stub_task", "args": {"task_id": "t-1"}}],
+    )
+    made = make_a2a_app(ScriptedChatModel(script=[cancel]), {"stub": {"read_only": True}})
+    during = at_the_send(made, monkeypatch, "v-9")
+    found = at_each_reply(made, monkeypatch, "v-9")
+    with TestClient(made.app) as client:
+        now = client.portal.call(made.store.now)
+        task = dataclasses.replace(_task("v-9", "", now), agent_ref=None)
+        client.portal.call(made.store.record_task, task)
+        events = run(client, "v-9", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    # The cancel reached the agent, which does not know the made-up task, with its row in
+    # place; the row was gone afterwards.
+    (result,) = tool_results(events, "cancel_stub_task")
+    assert "no longer knows task t-1" in result["content"]
+    assert sent(made.transports["stub"]) == 1
+    assert [keys(rows_then) for rows_then in during] == [[("", "x1")]]
+    assert found == [[], []]
+
+
+@pytest.mark.parametrize("saved", [True, False])
+def test_a_row_that_cannot_be_read_fails_the_step_and_nothing_is_sent(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    saved: bool,
+) -> None:
+    # Neither kind of agent is sent a message whose row could not be looked at.
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("Say hello.", agent="helper")]),
+        {} if saved else {"helper": {"url": SAVED_URL, "read_only": True}},
+        saved={"helper": {"url": SAVED_URL, "read_only": True}} if saved else None,
+    )
+
+    async def unreadable(*_args: Any) -> None:
+        raise RuntimeError("the database went away")
+
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.store, "get_call", unreadable)
+        events = run(client, "v-10", sse_events)
+        transport = made.transport_at(SAVED_URL) if saved else made.transports["helper"]
+        requests = sent(transport)
+    kind, data = events[-1]
+    assert (kind, data["code"]) == ("error", "internal")
+    assert requests == 0
+
+
+def test_rows_that_cannot_be_cleared_end_the_run_before_the_model_is_asked(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ScriptedChatModel(script=[handoff("Say hello.", agent="helper")])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+
+    async def unclearable(_thread: str) -> None:
+        raise RuntimeError("the database went away")
+
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.store, "clear_calls", unclearable)
+        events = run(client, "v-11", sse_events)
+        monkeypatch.undo()
+        busy = client.portal.call(made.runtime.locks.is_active, "v-11")
+    assert [kind for kind, _data in events] == ["start", "error"]
+    assert events[-1][1]["code"] == "internal"
+    assert model.calls == 0
+    # The thread's lease was given back.
+    assert busy is False
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_one_tool_call_id_used_twice_for_two_environment_agents_reaches_both_as_before(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    # Nothing makes a provider keep the id unique within a reply. The two calls have one
+    # row; an environment agent's tool follows the name, as it did before the rows existed.
+    step = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "same", "name": "handoff_to_alpha", "args": {"message": "one"}},
+            {"id": "same", "name": "handoff_to_beta", "args": {"message": "two"}},
+        ],
+    )
+    made = make_a2a_app(
+        ScriptedChatModel(script=[step]),
+        {"alpha": {"read_only": True}, "beta": {"read_only": True}},
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "v-12", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [m.text for m in made.stubs["alpha"].record.messages] == ["one"]
+    assert [m.text for m in made.stubs["beta"].record.messages] == ["two"]
+
+
+def test_one_tool_call_id_used_twice_for_two_saved_agents_reaches_only_the_one_its_row_names(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    step = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "same", "name": "handoff_to_helper", "args": {"message": "one"}},
+            {"id": "same", "name": "handoff_to_other", "args": {"message": "two"}},
+        ],
+    )
+    other_url = "http://127.0.0.1:9101"
+    made = make_a2a_app(
+        ScriptedChatModel(script=[step]),
+        {},
+        saved={
+            "helper": {"url": SAVED_URL, "read_only": True},
+            "other": {"url": other_url, "read_only": True},
+        },
+    )
+    with TestClient(made.app) as client:
+        events = run(client, "v-13", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    # The one row names the later call's agent. The other call is kept back: it fails toward
+    # sending nothing, and says so.
+    (kept_back,) = tool_results(events, "handoff_to_helper")
+    assert kept_back["content"] == KEPT_BACK.format(agent="helper")
+    assert sent(made.transport_at(SAVED_URL)) == 0
+    assert [m.text for m in made.stub_at(other_url).record.messages] == ["two"]
