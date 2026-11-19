@@ -327,10 +327,11 @@ console's warnings.
       result "Agent '<name>' task <id> was given up when the agent was moved or removed;
       nothing was sent."; then, on a link that is not connected, `connect()` inside the call's
       own time limit, and whatever that raises becomes the error result "Agent '<name>' cannot
-      be used: <the card problem's sentence>" and never escapes the tool; then the send. A task
-      the tool records carries `agent_ref=link.ref`. `handoff_description` reads `link.card`,
-      and gives the name alone when there is none (FR-021, FR-025, R6, R7 "Order inside a
-      tool", R10)
+      be used: <the card problem's sentence>" and never escapes the tool; then the send. Each
+      message kept back is logged with the agent's name and the rule that kept it. A task the
+      tool records carries `agent_ref=link.ref`. `handoff_description` reads `link.card`, and
+      gives the name alone when there is none (FR-021, FR-025, R6, R7 "Order inside a tool",
+      R10)
 - [ ] T020 Change `ModelManager` in `src/freyja_agent/llm/active.py`: `current(agents)` and
       `load(agents)` are given the `AgentSet`, `build` becomes `build(model, agents)`, and the
       orchestrator is rebuilt when the LLM revision moved or the set is not the one it was
@@ -411,11 +412,14 @@ console's warnings.
       or whose address leads where an environment agent's does: the service starts, the agent
       has no tools, a warning gives the reason, its pending tasks are given up as tasks of an
       agent that is no longer configured, and the environment agent's own tasks under that name
-      are left alone. An answer, and a cancel, for a task whose `agent_ref` is not the link's
-      sends nothing and gives the error result of T019: a saved agent's task under a name the
-      environment now has, and an environment agent's task under a name a saved agent now has;
-      a task given up for its age can still be canceled (FR-015, FR-017, FR-020, FR-021,
-      FR-025, FR-026, R4, R10)
+      are left alone. An app restarted without the entry that overrode it has the saved agent
+      in use again, with the same id, and the tasks given up meanwhile stay given up. An
+      answer, and a cancel, for a task whose `agent_ref` is not the link's sends nothing and
+      gives the error result of T019: a saved agent's task under a name the environment now
+      has, and an environment agent's task under a name a saved agent now has; a task given up
+      for its age can still be canceled; each answer or cancel kept back is in the log with the
+      agent's name and the rule (FR-015, FR-017, FR-020, FR-021, FR-025, FR-026, FR-030, R4,
+      R10)
 - [ ] T030 Write `tests/test_agents_apply.py`, part 1, with agents written to the store, no
       route. An agent added to the store: the next run has both of its tools on the
       orchestrator and on its subagent, gated or not as its approval choice says, the catalog
@@ -615,7 +619,10 @@ listens, and a name that is taken, are each refused with the reason and leave no
       for was removed; nothing was sent.". A proposal paused for a saved agent, then an app
       restarted with an environment agent under its name: the same. A proposal for an
       environment agent that is still configured after a restart follows the name, as today,
-      and so does a call with no row (FR-023, R8)
+      and so does a call with no row when the tool is an environment agent's. A call with no
+      row that reaches a saved agent's tool, as one proposed for an environment agent before
+      this feature was installed would, sends nothing and gives the same result. Each message
+      kept back is in the log with the agent's name and the rule (FR-023, FR-030, R8)
 - [ ] T051 [P] [US2] Write `tests/test_agents_address_nowhere.py`, part 1, built like
       `tests/test_llm_secrets_nowhere.py` and grown in every later phase. One saved agent on a
       port chosen to be recognizable and one environment agent on another. Drive what exists:
@@ -679,10 +686,12 @@ listens, and a name that is taken, are each refused with the reason and leave no
       environment agent's included, after `connect()` and before the send: read the call's row,
       and when it names another agent than the link's, by `agent_id`, a null on either side
       included, send nothing and give the error result of T050, logged with the agent's name. A
-      call with no row follows the name. The tool deletes its row when its send is finished. In
-      `src/freyja_agent/api/streaming.py`, a run that starts with input clears the thread's
-      proposed calls before the graph runs. Record in plan.md what the build showed of the rows
-      as a whole (FR-023, FR-030, R8, research "Not verified")
+      call with no row follows the name when the tool is an environment agent's; a saved
+      agent's tool that finds no row sends nothing and gives the same result. The tool deletes
+      its row when its send is finished. In `src/freyja_agent/api/streaming.py`, a run that
+      starts with input clears the thread's proposed calls before the graph runs. Record in
+      plan.md what the build showed of the rows as a whole (FR-023, FR-030, R8, research "Not
+      verified")
 - [ ] T060 [P] [US2] Add `addAgent` to `web/lib/agents.ts`
 - [ ] T061 [US2] Create `web/components/agents/agent-form.tsx`, after
       `web/components/llm/profile-form.tsx`, for adding: the two fields, the sentence about
@@ -729,18 +738,20 @@ succeeds. The service was never restarted after the first time.
       with the code and the sentence, the list shows it unreachable with that reason, the link
       is not connected any more so a hand-off fails with the sentence until a later read
       succeeds, and the agent stays configured as it was. A saved agent's changed details are
-      kept and move the revision, so the next run on every app describes its tools from them;
-      unchanged details move nothing; an environment agent's details change on this app only,
-      from its next run. The stand-in saw one `GET` and nothing else; no thread, pending task,
-      address, approval choice, or `version` changed. A second check of an agent that is being
-      checked, and a fifth card read while four are under way, are refused with `check_busy`
-      and contact nothing. A stand-in that never answers ends the check as `timeout` within the
-      lesser of the startup limit and twenty seconds. When the agent's row is moved or removed
-      while the check runs, the answer has `recorded` false and nothing was kept. An unknown id
-      is `agent_not_found`; a saved agent that is not in use is `agent_read_only`; an id in
-      neither form is 422; a page of another origin is refused with 403; the log names the
-      agent and the result and holds no address (FR-013 to FR-016, FR-026, FR-027, FR-029,
-      FR-030, SC-011, SC-012, R15)
+      kept and move the revision, so the next run on every app describes its tools from them,
+      and the answer has `card_changed` true; unchanged details move nothing and give
+      `card_changed` false, as do a card that cannot be used, a result that was not recorded,
+      and the first read of an environment agent's card; an environment agent's details change
+      on this app only, from its next run. The stand-in saw one `GET` and nothing else; no
+      thread, pending task, address, approval choice, or `version` changed. A second check of
+      an agent that is being checked, and a fifth card read while four are under way, are
+      refused with `check_busy` and contact nothing. A stand-in that never answers ends the
+      check as `timeout` within the lesser of the startup limit and twenty seconds. When the
+      agent's row is moved or removed while the check runs, the answer has `recorded` false and
+      nothing was kept. An unknown id is `agent_not_found`; a saved agent that is not in use is
+      `agent_read_only`; an id in neither form is 422; a page of another origin is refused with
+      403; the log names the agent, the result, and whether the card details were replaced, and
+      holds no address (FR-013 to FR-016, FR-026, FR-027, FR-029, FR-030, SC-011, SC-012, R15)
 - [ ] T066 [P] [US3] Extend `tests/test_agents_address_nowhere.py`, part 2: a check that
       succeeds, one that fails for each card problem, one refused as busy, and a card that
       mentions its own address and another agent's; the search of part 1 again (FR-028, SC-008)
@@ -751,9 +762,10 @@ succeeds. The service was never restarted after the first time.
       from the environment, and a card of an agent that is not in use has none; while a check
       runs the button says so and cannot be pressed again; a usable result says the agent can
       be used; one that is not says why, in the service's sentence as text; a result with
-      `recorded` false says it was not recorded; `check_busy` and `agent_not_found` are shown
-      as the service words them, and the second has the list read again; after any result the
-      list is read again (FR-013, FR-014)
+      `recorded` false says it was not recorded; a result with `card_changed` true says that
+      the agent's card changed and that its tools are described from the new details from the
+      next run; `check_busy` and `agent_not_found` are shown as the service words them, and the
+      second has the list read again; after any result the list is read again (FR-013, FR-014)
 - [ ] T069 [P] [US3] Write `web/__tests__/components/agents/agents-warning.test.tsx` and extend
       `agent-list.test.tsx`, part 3: with one or more agents `unreachable` or `not_in_use`, a
       warning above the cards names each of them and says in words that they cannot be used;
@@ -772,10 +784,10 @@ succeeds. The service was never restarted after the first time.
       /agents/{agent_id}/check` in `src/freyja_agent/api/agents.py`: the id's two forms; a
       context held for as long as the link is used; the agent's slot and one of the four; the
       card read through `link.connect` within the lesser of the startup limit and twenty
-      seconds; for a saved agent `replace_card(id, ref, details)`, with `recorded` from its
-      answer; for an environment agent the link's details replaced and
-      `registry.mark_changed()`; a read that fails leaves the link not connected; the log line
-      (FR-013 to FR-015, FR-030, R6, R15)
+      seconds; for a saved agent `replace_card(id, ref, details)`, with `recorded` and
+      `card_changed` from its answer; for an environment agent the link's details replaced and
+      `registry.mark_changed()`; a read that fails leaves the link not connected; the log line,
+      which says whether the card details were replaced (FR-013 to FR-015, FR-030, R6, R15)
 - [ ] T072 [P] [US3] Add `checkAgent` and the `AgentCheck` type to `web/lib/agents.ts`
 - [ ] T073 [US3] Create `web/components/agents/check-result.tsx`, after
       `web/components/llm/test-result.tsx`, and add Check to
@@ -793,10 +805,11 @@ succeeds. The service was never restarted after the first time.
       sidebar shows no badge; opening the Agents section asks for the list once, which shows
       the sidebar and the list share one reading. Extend `web/e2e/agents-manage.spec.ts` and
       `AgentService`, part 2: Check on a saved and on an environment card reports that the
-      agent can be used, then that it cannot and why, and the card follows. Give the shared
-      setup of `web/e2e/llm.spec.ts` and `web/e2e/profiles.spec.ts` an answer for `/api/agents`
-      wherever a spec counts requests. Record in plan.md what the test showed of the shared
-      reading (FR-032, R18, R21, research "Not verified")
+      agent can be used, then that it cannot and why, and the card follows; a check that finds
+      other card details says that the agent's card changed. Give the shared setup of
+      `web/e2e/llm.spec.ts` and `web/e2e/profiles.spec.ts` an answer for `/api/agents` wherever
+      a spec counts requests. Record in plan.md what the test showed of the shared reading
+      (FR-032, R18, R21, research "Not verified")
 
 **Checkpoint**: quickstart section 3 works, and the last paragraph of section 6.
 
@@ -841,16 +854,17 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       nothing reached it after the change was answered; a send that had begun before the change
       is not recalled. The same run, when the agent's row is gone from the store, also when
       another agent was saved under its name with another id, sends nothing: "Agent '<name>'
-      was removed; nothing was sent.". A step that runs again after its send was recorded
-      returns the recorded result and is not refused. An environment agent's tools read no
-      saved agent before they send. A paused proposal decided after a switch to running without
-      approval accepts approve only and is sent as proposed. A paused step that holds a
-      hand-off that needed no decision when it was proposed, to an agent that now requires
-      approval: the resume ends with the `error` code `approval_now_required` and the message
-      of contracts/sse-events.md naming the agent, nothing from the step ran, and the proposal
-      is still pending; the same for a subagent's step; once the agent is switched back the
-      resume goes through. A card that calls its agent read-only changes nothing: the agent
-      still pauses (FR-019, FR-022, FR-023, FR-030, SC-004, R7, R9)
+      was removed; nothing was sent.", and the log says so. A step that runs again after its
+      send was recorded returns the recorded result and is not refused. An environment agent's
+      tools read no saved agent before they send. A paused proposal decided after a switch to
+      running without approval accepts approve only and is sent as proposed. A paused step that
+      holds a hand-off that needed no decision when it was proposed, to an agent that now
+      requires approval: the resume ends with the `error` code `approval_now_required` and the
+      message of contracts/sse-events.md naming the agent, nothing from the step ran, the
+      refusal is in the log with the thread and the agent, and the proposal is still pending;
+      the same for a subagent's step; once the agent is switched back the resume goes through.
+      A card that calls its agent read-only changes nothing: the agent still pauses (FR-019,
+      FR-022, FR-023, FR-030, SC-004, R7, R9)
 - [ ] T079 [P] [US4] Change the test at line 394 of `tests/test_a2a_gate.py`
       (`test_a_hand_off_that_became_gated_blocks_the_resume_and_the_proposal_stays`): the
       resume now ends with `approval_now_required` and a message naming `hello`. Add beside it
@@ -914,8 +928,9 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       approval middleware's sentence about the number of decisions ends with
       `approval_now_required` and the message of contracts/sse-events.md, naming each agent of
       the thread's proposed calls that needed no decision when proposed and whose tool is gated
-      in the run's catalog, and with `internal`, as today, when it finds none. The code is not
-      one a background run is tried again for (FR-023, R9)
+      in the run's catalog, and with `internal`, as today, when it finds none. The refusal is
+      logged with the thread and the agents it named. The code is not one a background run is
+      tried again for (FR-023, R9)
 - [ ] T087 [US4] In `src/freyja_agent/api/schemas.py`, let `AgentCreate` accept `approval`
       `none`, and add `AgentUpdate`, with `version` and `approval` and no other field, and
       `AgentChanged`. Implement `PATCH /agents/{agent_id}` for the approval choice in
@@ -1007,11 +1022,11 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       was removed and another added under its name, the proposal accepts what the tool under
       that name now allows, nothing is sent whatever is decided, and the call gives "Agent
       '<name>': the agent this message was proposed for was removed; nothing was sent."; a call
-      with no row follows the name, as today. A paused proposal approved after its agent was
-      moved is sent to the current address. A run in progress finishes at the address it
-      started with; when another agent was meanwhile added at that address, it sends nothing:
-      "Agent '<name>': the address this run started with is another agent's now; nothing was
-      sent." (FR-019, FR-022, FR-023, SC-003, SC-004, R7, R8)
+      with no row follows the name only when the tool is an environment agent's. A paused
+      proposal approved after its agent was moved is sent to the current address. A run in
+      progress finishes at the address it started with; when another agent was meanwhile added
+      at that address, it sends nothing: "Agent '<name>': the address this run started with is
+      another agent's now; nothing was sent." (FR-019, FR-022, FR-023, SC-003, SC-004, R7, R8)
 - [ ] T096 [P] [US5] Extend `web/__tests__/lib/agents.test.ts`, part 5: `changeAgent` with
       `url` sends it in the body; `removeAgent(id, version)` sends a `DELETE` with the version
       as a query and returns how many tasks were given up

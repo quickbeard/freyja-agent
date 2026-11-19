@@ -328,19 +328,30 @@ Every instance has to run this version before the first agent is saved: an insta
 earlier version gives up the tasks of agents it does not know (R2). The one schema change to
 an existing table is made at startup only when it is missing, under a lock timeout.
 
+Going back to the earlier version leaves approval intact, by that version's own rules: it
+reads no saved agent, so none of their tools exist, a proposal for one is never sent, and
+their pending tasks are given up. The new column is nullable and the earlier version names
+the columns it reads and writes. Saved agents stay in the database and are in use again when
+this version returns. All of this holds as long as the environment the earlier version runs
+with gives no agent a saved agent's name: that version knows names only, so such an agent
+would be handed the saved agent's waiting proposals and pending tasks. This was reasoned
+from the code on `main` and is not tested.
+
 ## Corrections to the spec made with this plan
 
-One statement of the spec did not survive the design and is corrected in the same request,
-and two are met more strictly than they are worded:
+One statement of the spec did not survive the design and is corrected in the same request.
+A second was met more strictly than it was worded until the spec was brought in line, and
+a third is general enough to stand:
 
 - **What a re-added agent's old proposal accepts** (Edge Cases). The spec said it accepts
   approve and reject, as for any removed agent. A pause holds no record of which agent held
   the name, so the proposal accepts what the tool under that name allows now; whatever is
   decided, nothing is sent (R8). The rule the clarification set is unchanged.
-- **The check before a send** (FR-022) is worded for a message sent without a pause. The
+- **The check before a send** (FR-022) was worded for a message sent without a pause. The
   design makes it for every message to a saved agent, because a continuation that began
-  before a removal would otherwise still send its approved message, against SC-004 (R7). The
-  spec is not changed: the design does more than it asks.
+  before a removal would otherwise still send its approved message, against SC-004 (R7).
+  FR-022 was brought in line at the checklist review of 2026-11-19, with the rule for an
+  earlier address that became another agent's.
 - **How many existing tests change** (FR-031 says "the tests that expect startup to fail").
   There are five test functions, seven cases, not three as the pull request for the spec
   said; the requirement's wording was already general and stays (R22).

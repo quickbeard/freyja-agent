@@ -249,7 +249,11 @@ Two rules read it:
   restart can give the environment a saved agent's name while a proposal for the saved agent
   waits (corrected when the tasks were written). This covers every call of a
   paused step, the ones that needed a decision and the ones that did not. A call with no row,
-  such as one proposed before this feature was installed, follows the name, as today.
+  such as one proposed before this feature was installed, follows the name, as today, when
+  the tool is an environment agent's. A saved agent's tool that finds no row sends nothing
+  and gives the same result: every call proposed for a saved agent has a row, so a missing
+  one means the call was proposed for an environment agent that held the name before
+  (corrected at the checklist review).
 - **A blocked resume names its agent** (R9).
 
 **Rationale**: a pause stores the tool's name and arguments and nothing about which agent held
@@ -456,6 +460,9 @@ and differs from the kept details, it replaces them and moves the revision, so e
 instance's next run describes the tools from them. For an environment agent it replaces the
 link's details on this instance and marks the set as changed here. The result is not recorded
 when the agent's ref changed while the check ran, and the answer says so (FR-013, FR-014).
+The answer also says whether the details kept or shown for the agent were replaced by
+different ones, since that is the moment new text from a card starts to reach the model
+(added at the checklist review).
 
 The limits are FR-014's: one check per agent, and four card reads in all on an instance. A
 check takes its agent's slot and one of the four; the card read of an add or a move takes one
