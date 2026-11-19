@@ -8,6 +8,7 @@ from freyja_agent.api.llm import router as llm_router
 from freyja_agent.api.threads import router as threads_router
 from freyja_agent.api.tools import router as tools_router
 from freyja_agent.config import Settings, settings
+from freyja_agent.delegates.addresses import install_log_scrubber
 from freyja_agent.runtime.runtime import Runtime
 
 OpenRuntime = Callable[[Settings], AbstractAsyncContextManager[Runtime]]
@@ -31,7 +32,12 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
     settings and stores the yielded ``Runtime`` on ``app.state``. Production uses
     ``Runtime.open``; tests pass a context manager yielding an in-memory runtime, so the
     routes run the same code either way (constitution principle III).
+
+    Before any runtime opens, every log record of the process is set to be cleaned of agent
+    addresses as it is made: the HTTP and agent libraries log the addresses they request
+    (feature 005, FR-028, research R12).
     """
+    install_log_scrubber()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:

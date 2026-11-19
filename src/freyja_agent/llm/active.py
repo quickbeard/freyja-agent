@@ -8,13 +8,17 @@ FR-014).
 
 A rebuild goes through the same factory as startup and replaces the orchestrator as a whole. A
 run binds its orchestrator when it starts, so a run in progress keeps the one it started on.
+
+Since feature 005 the agents an orchestrator has tools for can change while the service runs
+as well. The manager is handed the agent set a run starts with and rebuilds when it is not
+the set the orchestrator was built for, with the model it already has (005 research R3).
 """
 
 import asyncio
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import SecretStr
@@ -30,6 +34,9 @@ from freyja_agent.llm.providers import (
 )
 from freyja_agent.llm.secrets import KeyUnreadableError, SecretNotConfiguredError, decrypt
 from freyja_agent.llm.store import LlmProfileRecord, LlmProfileStore, LlmState
+
+if TYPE_CHECKING:  # the registry is built by the runtime, which builds the manager
+    from freyja_agent.delegates.agent_registry import AgentSet
 
 logger = logging.getLogger(__name__)
 
@@ -85,7 +92,8 @@ class ModelManager:
     """Keeps one instance's orchestrator in step with the active profile.
 
     ``environment`` builds the environment's model and ``factory`` a saved profile's; ``build``
-    assembles the orchestrator around a model, with everything else as it was at startup.
+    assembles the orchestrator around a model and for a set of agents, with everything else
+    as it was at startup. The set is None where there is no registry of agents.
     """
 
     def __init__(
@@ -95,7 +103,7 @@ class ModelManager:
         secret: SecretStr | None,
         factory: ModelFactory,
         environment: Callable[[], BaseChatModel],
-        build: Callable[[BaseChatModel], Orchestrator],
+        build: Callable[[BaseChatModel, "AgentSet | None"], Orchestrator],
         environment_secrets: tuple[str, ...] = (),
         environment_unusable: str | None = None,
     ) -> None:
@@ -112,33 +120,55 @@ class ModelManager:
         self._lock = asyncio.Lock()
         self.active = ActiveModel(revision=-1, profile=ENVIRONMENT_PROFILE)
         self.orchestrator: Orchestrator | None = None
+        # The model the orchestrator is built around, and the agent set it was built for.
+        self._model: BaseChatModel | None = None
+        self._agents: AgentSet | None = None
 
-    async def load(self) -> Orchestrator:
-        """Build the orchestrator for the active profile, at startup."""
+    async def load(self, agents: "AgentSet | None" = None) -> Orchestrator:
+        """Build the orchestrator for the active profile and ``agents``, at startup."""
         async with self._lock:
-            return await self._apply(await self._store.state())
+            return await self._apply(await self._store.state(), agents)
 
-    async def current(self) -> tuple[Orchestrator, ActiveModel]:
-        """The orchestrator for the active profile as it is now, rebuilt if the choice moved."""
+    def _stale(self, state: LlmState, agents: "AgentSet | None") -> bool:
+        return (
+            state.revision != self.active.revision
+            or self.orchestrator is None
+            or agents is not self._agents
+        )
+
+    async def current(self, agents: "AgentSet | None" = None) -> tuple[Orchestrator, ActiveModel]:
+        """The orchestrator for the active profile and ``agents`` as they are now.
+
+        Rebuilt when the choice of profile moved, or when ``agents`` is not the set the
+        orchestrator was built for.
+        """
         state = await self._store.state()
-        if state.revision != self.active.revision or self.orchestrator is None:
+        if self._stale(state, agents):
             async with self._lock:
                 # Another run may have rebuilt while this one waited for the lock.
                 state = await self._store.state()
-                if state.revision != self.active.revision or self.orchestrator is None:
-                    await self._apply(state)
+                if self._stale(state, agents):
+                    await self._apply(state, agents)
         if self.orchestrator is None:  # _apply either sets it or raises
             raise RuntimeError("the orchestrator was not built")
         return self.orchestrator, self.active
 
-    async def _apply(self, state: LlmState) -> Orchestrator:
+    async def _apply(self, state: LlmState, agents: "AgentSet | None") -> Orchestrator:
         """Build the orchestrator for the active profile, usable or not (FR-016, research R8).
 
         A profile that cannot be turned into a model does not stop the service: the reason is
         recorded, and the orchestrator is built around a placeholder so that the graph, the
         catalog, and the thread routes exist. Runs are turned away before the placeholder is
         asked anything. Nothing here falls back to another profile.
+
+        When only the agents changed, the model is the one already built: no key is read and
+        no client is made again.
         """
+        if state.revision == self.active.revision and self._model is not None:
+            orchestrator = self._build(self._model, agents)
+            logger.info("The orchestrator was rebuilt for a changed set of agents")
+            self.orchestrator, self._agents = orchestrator, agents
+            return orchestrator
         model: BaseChatModel | None = None
         secrets: tuple[str, ...] = ()
         if state.active_profile_id is None:
@@ -185,7 +215,7 @@ class ModelManager:
             # A provider may repeat the key in an error, and LangGraph shows a failed step's
             # error in the debug stream and saves it with the thread (FR-020, FR-021).
             model = guard_model(model, secrets)
-        orchestrator = self._build(model)
+        orchestrator = self._build(model, agents)
         if self.orchestrator is None:
             pass  # startup: the runtime logs every profile that is not usable, this one too
         elif reason is not None:
@@ -201,6 +231,7 @@ class ModelManager:
                 "LLM profile in use is now %s (%s, %s)", profile.name, profile.id, profile.source
             )
         self.orchestrator = orchestrator
+        self._model, self._agents = model, agents
         self.active = ActiveModel(
             revision=state.revision,
             profile=profile,

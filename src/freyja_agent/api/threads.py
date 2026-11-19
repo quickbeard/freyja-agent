@@ -23,8 +23,8 @@ from freyja_agent.api.schemas import (
     ThreadState,
 )
 from freyja_agent.api.serialize import interrupt_to_pending, message_to_dict
-from freyja_agent.api.streaming import lease_owner, run_stream
-from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.api.streaming import lease_owner, no_context_stream, run_stream, take_context
+from freyja_agent.runtime.runtime import RunContext, Runtime
 
 router = APIRouter(prefix="/threads", tags=["threads"])
 
@@ -42,8 +42,8 @@ def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
 
 
-async def _state(runtime: Runtime, thread_id: str) -> Any:
-    return await runtime.agent.aget_state({"configurable": {"thread_id": thread_id}})
+async def _state(context: RunContext, thread_id: str) -> Any:
+    return await context.agent.aget_state({"configurable": {"thread_id": thread_id}})
 
 
 @router.post("/{thread_id}/runs")
@@ -63,14 +63,23 @@ async def start_run(
     user's message, and count as delivered once the input is in a checkpoint (feature 003,
     FR-018, research R10). Ahead of them go the results of messages to agents that a stop left
     in flight (FR-017). A resume records neither: it finishes a step already under way.
+
+    The run's context is taken right after the lease, and the thread's state is read on it,
+    so the run sees the thread through the orchestrator it then runs on (005 research R3).
+    When none can be taken, the stream says so and nothing runs.
     """
     runtime = _runtime(request)
     run_id = uuid.uuid4().hex
     owner = lease_owner(runtime, run_id)
     if not await runtime.locks.acquire(thread_id, owner):
         raise _error(409, "run_active", "A run is already active on this thread.")
+    context = await take_context(runtime, thread_id, run_id)
+    if context is None:
+        return EventSourceResponse(
+            no_context_stream(runtime, thread_id, mode="run", debug=debug, run_id=run_id)
+        )
     try:
-        snapshot = await _state(runtime, thread_id)
+        snapshot = await _state(context, thread_id)
         if snapshot.interrupts:
             raise _error(
                 409,
@@ -80,6 +89,7 @@ async def start_run(
         answers, cut_off = await answer_in_flight(runtime.agent_tasks, thread_id, snapshot)
         outcomes, delivering = await take_undelivered(runtime.agent_tasks, thread_id, snapshot)
     except BaseException:
+        await context.release()
         await runtime.locks.release(thread_id, owner)
         raise
 
@@ -91,6 +101,7 @@ async def start_run(
         run_stream(
             runtime,
             thread_id,
+            context=context,
             input={"messages": [*answers, *outcomes, HumanMessage(body.message)]},
             mode="run",
             debug=debug,
@@ -114,14 +125,24 @@ async def resume_run(
     sent twice cannot approve a later proposal. Decisions are then validated against the
     pending proposal before anything resumes; every refusal leaves the proposal untouched
     (FR-013).
+
+    One context serves the whole request: the pending proposal is worded, the decisions are
+    validated, and the continuation runs on the same orchestrator. Validating against one
+    catalog and running on another would let a decision meant for one call be applied to
+    another when an approval choice changed in between (005 research R3).
     """
     runtime = _runtime(request)
     run_id = uuid.uuid4().hex
     owner = lease_owner(runtime, run_id)
     if not await runtime.locks.acquire(thread_id, owner):
         raise _error(409, "run_active", "A run is already active on this thread.")
+    context = await take_context(runtime, thread_id, run_id)
+    if context is None:
+        return EventSourceResponse(
+            no_context_stream(runtime, thread_id, mode="resume", debug=debug, run_id=run_id)
+        )
     try:
-        snapshot = await _state(runtime, thread_id)
+        snapshot = await _state(context, thread_id)
         if snapshot.metadata is None:
             raise _error(404, "thread_not_found", "This thread has never been used.")
         if not snapshot.interrupts:
@@ -130,7 +151,7 @@ async def resume_run(
             raise _error(
                 500, "internal", "The thread is paused on more than one interrupt at once."
             )
-        pending = interrupt_to_pending(snapshot.interrupts[0], runtime.catalog)
+        pending = interrupt_to_pending(snapshot.interrupts[0], context.catalog)
         if body.interrupt_id != pending["interrupt_id"]:
             raise _error(
                 409,
@@ -138,12 +159,21 @@ async def resume_run(
                 "The interrupt_id is not the pending proposal's; read the thread state and "
                 "decide the proposal it shows.",
             )
-        command = build_resume_command(pending, body.decisions, runtime.catalog)
+        command = build_resume_command(pending, body.decisions, context.catalog)
     except BaseException:
+        await context.release()
         await runtime.locks.release(thread_id, owner)
         raise
     return EventSourceResponse(
-        run_stream(runtime, thread_id, input=command, mode="resume", debug=debug, run_id=run_id)
+        run_stream(
+            runtime,
+            thread_id,
+            context=context,
+            input=command,
+            mode="resume",
+            debug=debug,
+            run_id=run_id,
+        )
     )
 
 
@@ -156,9 +186,20 @@ async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
     mistyped id is not mistaken for a fresh thread. ``run_active`` comes from the shared
     lease, so it reflects a run on any instance. The read takes no lease: the snapshot is the
     latest durable checkpoint, which already reflects a stream that has closed (SC-005).
+
+    A pending proposal is worded with the catalog of the agents as they are now; when they
+    cannot be read, with what this instance last built (005 research R3).
     """
     runtime = _runtime(request)
-    snapshot = await _state(runtime, thread_id)
+    context = await runtime.begin_read()
+    try:
+        return await _read_state(runtime, context, thread_id)
+    finally:
+        await context.release()
+
+
+async def _read_state(runtime: Runtime, context: RunContext, thread_id: str) -> ThreadState:
+    snapshot = await _state(context, thread_id)
     if snapshot.metadata is None:
         raise _error(404, "thread_not_found", "This thread has never been used.")
     if len(snapshot.interrupts) > 1:
@@ -168,7 +209,7 @@ async def read_state(thread_id: ThreadIdPath, request: Request) -> ThreadState:
         run_active=await runtime.locks.is_active(thread_id),
         messages=[message_to_dict(message) for message in snapshot.values.get("messages", [])],
         pending=(
-            interrupt_to_pending(snapshot.interrupts[0], runtime.catalog)
+            interrupt_to_pending(snapshot.interrupts[0], context.catalog)
             if snapshot.interrupts
             else None
         ),

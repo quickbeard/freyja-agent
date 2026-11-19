@@ -277,7 +277,7 @@ console's warnings.
 frame (FR-029). It protects the confirmations the later phases add, and the ones the LLM section
 already has, so it is in place before the first of them and not with User Story 6.
 
-- [ ] T016 Change the seven cases in `tests/test_a2a_startup.py` that expect startup to fail
+- [X] T016 Change the seven cases in `tests/test_a2a_startup.py` that expect startup to fail
       for a card problem (the tests at lines 89, 96, 107, 118 with its three cases, and 163).
       Each now expects: the service starts and `/healthz` answers; the log has one warning per
       agent that names the agent and gives the card problem's sentence; `/tools` lists the
@@ -286,7 +286,7 @@ already has, so it is in place before the first of them and not with User Story 
       within 5 seconds with a startup limit of 0.3 seconds; the redirected card is still not
       followed. The two entry tests at lines 136 and 147 are not touched. These fail until T021
       and T024 (FR-020, FR-031, R22)
-- [ ] T017 Change `AgentLink` in `src/freyja_agent/delegates/a2a_agents.py`. Its constructor
+- [X] T017 Change `AgentLink` in `src/freyja_agent/delegates/a2a_agents.py`. Its constructor
       keeps its shape, `AgentLink(name, config, *, transport, call_timeout)`, and its
       `read_only`, so `tests/test_factory.py`, which builds links by hand, passes unchanged; it
       gains the keywords `source` (`environment` by default, or `saved`), `agent_id`, and
@@ -306,7 +306,7 @@ already has, so it is in place before the first of them and not with User Story 
       of this module, on this module's logger, which the registry calls for each agent it
       connected, so the existing test that reads it is unchanged (FR-021, FR-025, FR-027,
       FR-031, R6, R12, R13, data-model.md "Agent link")
-- [ ] T018 Implement `src/freyja_agent/delegates/agent_registry.py`: `AgentSet` (the revision
+- [X] T018 Implement `src/freyja_agent/delegates/agent_registry.py`: `AgentSet` (the revision
       it was read at; the links in use, environment agents first and then saved agents by name;
       each agent's approval choice; the saved agents not in use with the reason for each) and
       `AgentRegistry`. `start()` refuses with `AgentStartupError`, as today and in today's
@@ -325,7 +325,7 @@ already has, so it is in place before the first of them and not with User Story 
       with the card it just read. `mark_changed()` makes the next context rebuild on this
       instance without the revision having moved. `close()` closes every link (FR-017, FR-018,
       FR-019, FR-020, FR-030, R3, R4)
-- [ ] T019 Change `src/freyja_agent/delegates/a2a_tools.py`: `agent_tools(link, store, *,
+- [X] T019 Change `src/freyja_agent/delegates/a2a_tools.py`: `agent_tools(link, store, *,
       gated=None)` takes the classification from the set, and from `link.read_only` when it is
       given none, as today; the tool fixes `gated` when it is built. Inside every agent tool,
       an environment agent's included, in this order: the send ledger, as today; for an answer
@@ -338,12 +338,12 @@ already has, so it is in place before the first of them and not with User Story 
       logged with the agent's name and the rule that kept it. A task the tool records carries
       `agent_ref=link.ref`. `handoff_description` reads `link.card`, and gives the name alone
       when there is none (FR-021, FR-025, R6, R7 "Order inside a tool", R10)
-- [ ] T020 Change `ModelManager` in `src/freyja_agent/llm/active.py`: `current(agents)` and
+- [X] T020 Change `ModelManager` in `src/freyja_agent/llm/active.py`: `current(agents)` and
       `load(agents)` are given the `AgentSet`, `build` becomes `build(model, agents)`, and the
       orchestrator is rebuilt when the LLM revision moved or the set is not the one it was
       built for. Two runs that start together still rebuild once. With no change of agents the
       manager does what it did (R3)
-- [ ] T021 Change `src/freyja_agent/runtime/runtime.py`: `Runtime` holds `saved_agents`,
+- [X] T021 Change `src/freyja_agent/runtime/runtime.py`: `Runtime` holds `saved_agents`,
       `registry`, and `card_reads`, a `CheckSlots` made with words about card reads and agents;
       `RunContext` holds the graph, the catalog, the active model, and the set, and `release()`
       gives it back; `begin_run()` refreshes the set, asks the manager, holds the set, and
@@ -355,22 +355,22 @@ already has, so it is in place before the first of them and not with User Story 
       what a read falls back to; `model_for_run()` stays for its callers and goes through the
       same refresh. A runtime put together by hand, with no registry, gets a context from what
       it was given (FR-019, R3, R4)
-- [ ] T022 Change `src/freyja_agent/api/streaming.py`: `run_stream` is given the context, runs
+- [X] T022 Change `src/freyja_agent/api/streaming.py`: `run_stream` is given the context, runs
       on its graph, words a pause with its catalog, no longer calls `model_for_run()` or reads
       `runtime.agent`, and releases the context in its `finally`, beside the lease. Add the
       stream a route returns when no context could be taken: the `start` event and the
       `internal` error of today, the failure logged, and the lease released (FR-019, R3)
-- [ ] T023 Change `src/freyja_agent/api/threads.py`: the run and resume routes take a context
+- [X] T023 Change `src/freyja_agent/api/threads.py`: the run and resume routes take a context
       right after the lease and use it to read the thread's state, to word the pending
       proposal, to validate the decisions, and for the run; every refusal releases the context
       with the lease. The state route takes a context before it answers and releases it after,
       and answers from what the instance last built when none can be taken (R3)
-- [ ] T024 [P] Change `src/freyja_agent/api/tools.py`: `GET /tools` takes a context before it
+- [X] T024 [P] Change `src/freyja_agent/api/tools.py`: `GET /tools` takes a context before it
       answers and lists that context's links and catalog, and falls back to the last set when
       none can be taken. Its shape is unchanged. An agent this instance has not tried is listed
       as not reachable with the reason "This instance has not tried the agent yet."; card texts
       are the cut and cleaned ones (FR-003, R22)
-- [ ] T025 [P] Change `src/freyja_agent/delegates/delegation_worker.py`. A round of watching
+- [X] T025 [P] Change `src/freyja_agent/delegates/delegation_worker.py`. A round of watching
       takes one context before it claims and releases it when the round's checks are done. A
       claimed task is given up when its `agent_ref` is not the `ref` of the link in use under
       its name, which keeps today's rule for an agent that left the configuration, both being
@@ -382,16 +382,16 @@ already has, so it is in place before the first of them and not with User Story 
       it, releases it itself on each early return, and otherwise hands it to `run_stream`,
       which releases it. `start_deliveries` asks whether a usable model is active as it does
       today (FR-017, FR-026, R3, R6, R10)
-- [ ] T026 [P] Call `install_log_scrubber()` from `create_app` in
+- [X] T026 [P] Call `install_log_scrubber()` from `create_app` in
       `src/freyja_agent/api/app.py`, before the runtime opens (FR-028, R12)
-- [ ] T027 Extend the fixture in `tests/conftest.py`: `make_a2a_app` takes `saved_agents`, a
+- [X] T027 Extend the fixture in `tests/conftest.py`: `make_a2a_app` takes `saved_agents`, a
       store shared between apps as the task store is, and `saved`, agents to seed it with
       before the app starts, each with the card details of its stand-in; a stand-in given
       through `saved` or through the new `A2aApp.add_stub(url, stub)` is found by the
       destination of the address asked for, and any other by name, as today, since every
       environment agent of the fixture has one address; `A2aApp` gains `saved_agents`. Every
       existing use of the fixture works unchanged (R20)
-- [ ] T028 Write `tests/test_agents_startup.py`, part 1, environment agents. Three agents that
+- [X] T028 Write `tests/test_agents_startup.py`, part 1, environment agents. Three agents that
       never answer delay startup by one startup limit, not three (SC-006). A hand-off to an
       agent the instance holds no card from gives an error result with the agent's name and the
       sentence, the run continues, nothing is tried again, the step did not fail, and a warning
@@ -406,7 +406,7 @@ already has, so it is in place before the first of them and not with User Story 
       the agent, also with a saved agent in the store. With `HTTP_PROXY` and `ALL_PROXY` set, a
       link's client holds no proxy and its card read reaches the stand-in (FR-018 to FR-021,
       FR-026, FR-027, SC-006, R4, R6, R13)
-- [ ] T029 Extend `tests/test_agents_startup.py`, part 2, saved agents seeded in the store.
+- [X] T029 Extend `tests/test_agents_startup.py`, part 2, saved agents seeded in the store.
       With a saved agent that does not answer, the service starts and serves requests; the log
       has a warning naming the agent and the sentence and no address; `/tools` lists it as not
       reachable with the reason and describes its tools from the card details kept for it;
@@ -429,7 +429,7 @@ already has, so it is in place before the first of them and not with User Story 
       for its age can still be canceled; each answer or cancel kept back is in the log with the
       agent's name and the rule (FR-015, FR-017, FR-020, FR-021, FR-025, FR-026, FR-030, R4,
       R10)
-- [ ] T030 Write `tests/test_agents_apply.py`, part 1, with agents written to the store, no
+- [X] T030 Write `tests/test_agents_apply.py`, part 1, with agents written to the store, no
       route. An agent added to the store: the next run has both of its tools on the
       orchestrator and on its subagent, gated or not as its approval choice says, the catalog
       lists them, and the service was not restarted; the first agent of a service with none
@@ -450,28 +450,28 @@ already has, so it is in place before the first of them and not with User Story 
       agent's row was moved in the store, the earlier link is closed once the run that held it
       ends, and not before. An app that learns from the store that a saved agent is not in use
       logs a warning with the reason (FR-019, FR-030, SC-002, SC-003, R3)
-- [ ] T031 [P] Extend `tests/test_a2a_transport.py`, which serves a stand-in on loopback: with
+- [X] T031 [P] Extend `tests/test_a2a_transport.py`, which serves a stand-in on loopback: with
       every logger at DEBUG, httpx's, httpcore's, and the SDK's included, nothing logged during
       a card read and a hand-off holds the port (FR-028, R12)
-- [ ] T032 [P] Correct what this phase makes false, and nothing more: in `README.md`, that an
+- [X] T032 [P] Correct what this phase makes false, and nothing more: in `README.md`, that an
       agent the service cannot use stops startup, which now holds only for an entry that is
       invalid in itself, that the catalog answers from memory, since it now reads one row
       first, and the list of tables created at startup; the comment on `FREYJA_A2A_AGENTS` in
       `.env.example`; and `specs/003-a2a-agent-delegation/contracts/agent-config.md`, whose
       cases of a card that cannot be read or used now start the service with a warning (FR-020,
       AGENTS.md "The README documents only what exists")
-- [ ] T033 [P] Extend `web/__tests__/next.config.test.ts`: `headers()` sets
+- [X] T033 [P] Extend `web/__tests__/next.config.test.ts`: `headers()` sets
       `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY` on the
       source `/:path*` (FR-029, R19)
-- [ ] T034 Add `headers()` to `web/next.config.ts` with the two headers of T033, on every path
+- [X] T034 Add `headers()` to `web/next.config.ts` with the two headers of T033, on every path
       (FR-029, R19)
-- [ ] T035 Extend `web/e2e/console.spec.ts`: the built app answers `/llm` and `/agents` with
+- [X] T035 Extend `web/e2e/console.spec.ts`: the built app answers `/llm` and `/agents` with
       both headers, and a page of another origin (the test server reached as `127.0.0.1`, where
       the console runs on `localhost`) that puts the console in a frame is shown nothing of it,
       in Chromium and in Firefox. Record in plan.md that `frame-ancestors` was seen in both
       browsers and that `headers()` applies beside the `/api` rewrite (FR-029, FR-032, R19,
       R21, research "Not verified")
-- [ ] T036 Check by hand what the plan could not: start the service through uvicorn and see
+- [X] T036 Check by hand what the plan could not: start the service through uvicorn and see
       that its access line and a traceback are logged as before with the factory installed; run
       `uv run pytest -x` and see that pytest's log capture works beside it; and time a rebuild
       with twenty saved agents, forty agent tools. Record all three in plan.md (research "Not

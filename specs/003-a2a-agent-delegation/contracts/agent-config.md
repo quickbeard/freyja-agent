@@ -37,12 +37,19 @@ Refused while agents start, with an error beginning `Agent '<name>'`, and the se
 serve:
 
 - the name is also a tool server name in `FREYJA_MCP_SERVERS`;
+- one of the agent's two tool names is already taken by another tool.
+
+Not refused since feature 005 (its FR-020 and FR-021): an agent whose card cannot be used. The
+service starts, logs a warning naming the agent and the reason, and lists the agent as not
+reachable with that reason. The agent keeps its two tools; nothing is sent to it until a
+usable card has been read, which a hand-off and a round of watching try again. These are the
+cases:
+
 - the card cannot be read within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS`, or reading it is
   redirected;
 - the card requires authentication (it declares security requirements or schemes);
 - the card lists default input modes and none of them is text;
-- the card has no JSON-RPC interface;
-- one of the agent's two tool names is already taken by another tool.
+- the card has no JSON-RPC interface.
 
 What the card says about where the agent is reachable is not used: only the path of its
 JSON-RPC interface is kept, joined to the configured `url`.

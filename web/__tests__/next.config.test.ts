@@ -73,3 +73,17 @@ describe("the web app's address alone", () => {
     ]);
   });
 });
+
+describe("a page of another origin", () => {
+  it("may not show the console in a frame, whatever the path", async () => {
+    expect(await nextConfig.headers?.()).toEqual([
+      {
+        source: "/:path*",
+        headers: [
+          { key: "Content-Security-Policy", value: "frame-ancestors 'none'" },
+          { key: "X-Frame-Options", value: "DENY" },
+        ],
+      },
+    ]);
+  });
+});

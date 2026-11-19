@@ -122,3 +122,91 @@ test.describe("in a narrow window", () => {
     ).toBeVisible();
   });
 });
+
+// 005, FR-029: no page of another origin may show the console in a frame.
+
+const FRAME_HEADERS = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+};
+
+for (const path of ["/llm", "/agents"]) {
+  test(`${path} is answered with the headers that forbid a frame`, async ({
+    request,
+  }) => {
+    const response = await request.get(path);
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()).toMatchObject(FRAME_HEADERS);
+  });
+}
+
+test("a page of another origin that frames the console is shown nothing of it", async ({
+  page,
+  context,
+  browserName,
+  baseURL,
+}) => {
+  // Chromium asks before a page may reach an address on this machine, and refuses the
+  // frame's request unasked. With the permission given, the request is made, so that what
+  // keeps the frame empty is the console's answer and not the browser's own caution.
+  if (browserName === "chromium") {
+    await context.grantPermissions(["local-network-access"]);
+  }
+  // The same server under its other name is another origin to a browser: the console runs
+  // on localhost, and this page is served from 127.0.0.1.
+  const framedConsole = new URL("/llm", baseURL);
+  expect(framedConsole.hostname).toBe("localhost");
+  const origin = `http://127.0.0.1:${framedConsole.port}`;
+  const elsewhere = `${origin}/a-page-of-another-origin`;
+  // A second frame, of a page that forbids nothing, to know when frames have been drawn.
+  const allowed = `${origin}/a-frame-that-may-be-shown`;
+  await page.route(allowed, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Allowed</title><p>This frame is shown.</p>",
+    }),
+  );
+  await page.route(elsewhere, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><title>Elsewhere</title><h1>Elsewhere</h1>
+        <iframe title="console" src="${framedConsole.href}" width="900" height="400"></iframe>
+        <iframe title="allowed" src="${allowed}" width="900" height="100"></iframe>`,
+    }),
+  );
+
+  await page.goto(elsewhere);
+  await expect(page.getByRole("heading", { name: "Elsewhere" })).toBeVisible();
+  await expect(
+    page
+      .frameLocator('iframe[title="allowed"]')
+      .getByText("This frame is shown."),
+  ).toBeVisible();
+
+  // Nothing of the console is in its frame: not its title, its heading, or a profile. A
+  // frame the browser refused holds the browser's own error page or nothing, and neither
+  // answers like a page, so each read gives up after two seconds and counts as empty.
+  const others = page
+    .frames()
+    .filter((frame) => frame !== page.mainFrame() && frame.url() !== allowed);
+  expect(others).toHaveLength(1);
+  // A frame that is allowed finishes loading; one that is refused may never say so.
+  await others[0].waitForLoadState("load", { timeout: 5_000 }).catch(() => {});
+  const shown = await Promise.race([
+    others[0]
+      .evaluate(() => `${document.title}\n${document.body?.innerText ?? ""}`)
+      .catch(() => ""),
+    new Promise<string>((resolve) => setTimeout(() => resolve(""), 2_000)),
+  ]);
+  expect(shown).not.toContain("Freyja");
+  expect(shown).not.toContain("LLM");
+  expect(shown).not.toContain("Environment");
+
+  // The same address opened as a page of its own shows the console, so the frame was
+  // empty because of the rule and not because nothing was served.
+  await page.goto(framedConsole.href);
+  await expect(
+    page.getByRole("heading", { level: 1, name: "LLM" }),
+  ).toBeVisible();
+});

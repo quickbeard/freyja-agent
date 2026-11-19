@@ -1,9 +1,16 @@
 """An A2A agent's two tools: the hand-off and the cancel (feature 003, research R4, R12).
 
-Each configured agent contributes ``handoff_to_<agent>`` and ``cancel_<agent>_task``. Both carry
-the agent's classification, decided by its entry alone: ``read_only`` when the entry says
-``read_only: true``, ``gated`` otherwise (FR-011). What the card says about the agent describes
-the hand-off tool and never classifies it.
+Each agent in use contributes ``handoff_to_<agent>`` and ``cancel_<agent>_task``. Both carry
+the agent's classification, decided by its approval choice alone: the environment's entry
+for an agent named there (``read_only: true`` or not), the saved choice for a saved agent,
+which the agent set carries (FR-011, 005 FR-022). What the card says about the agent
+describes the hand-off tool and never classifies it, and neither does whether it answers.
+
+Before a tool sends anything it checks, in this order (005 research R7): the send ledger, so
+a step that runs again returns what it recorded; for an answer or a cancel, that the task
+belongs to the agent this tool was built for; and that the link holds a usable card, reading
+it when it does not. A message kept back by one of these is an error result that names the
+agent, the run continues, and nothing is sent.
 
 The argument models are pydantic, so an edit decision is validated by the existing model path
 and an unknown key is refused; ``task_id`` is pinned, so an answer or a cancel stays bound to its
@@ -15,6 +22,7 @@ thread's pending or given-up tasks (FR-022). Both go through the send ledger, so
 runs again never sends twice.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -38,6 +46,7 @@ from freyja_agent.delegates.a2a_agents import (
     send_message,
     state_name,
 )
+from freyja_agent.delegates.agent_cards import SENTENCES, CardError
 from freyja_agent.delegates.mcp_tools import DelegateTool
 from freyja_agent.runtime.agent_tasks import (
     PENDING_STATES,
@@ -119,9 +128,19 @@ def _delegate(
     )
 
 
-def agent_tools(link: AgentLink, store: AgentTaskStore) -> tuple[DelegateTool, DelegateTool]:
-    """The hand-off and cancel tools of one agent, classified by its entry (FR-011)."""
-    classification = Classification.READ_ONLY if link.read_only else Classification.GATED
+def agent_tools(
+    link: AgentLink, store: AgentTaskStore, *, gated: bool | None = None
+) -> tuple[DelegateTool, DelegateTool]:
+    """The hand-off and cancel tools of one agent, classified by its approval choice (FR-011).
+
+    ``gated`` is the choice the agent set carries. Given none, the link's own entry decides,
+    as it always has for an agent named in the environment; a saved agent's link is never
+    read-only, so a caller that forgets the set gates. The tools keep the classification
+    they are built with, whatever becomes of the link.
+    """
+    if gated is None:
+        gated = not link.read_only
+    classification = Classification.GATED if gated else Classification.READ_ONLY
     handoff = StructuredTool(
         name=handoff_tool_name(link.name),
         description=handoff_description(link),
@@ -281,6 +300,37 @@ async def _sent_before(
     raise ToolException(may_not_have_received(link.name))
 
 
+def given_up_with_its_agent(agent: str, task_id: str) -> str:
+    """The result of an answer or a cancel for a task of the agent as it was (005 FR-025)."""
+    return (
+        f"Agent '{agent}' task {task_id} was given up when the agent was moved or removed; "
+        "nothing was sent."
+    )
+
+
+async def _connected(link: AgentLink) -> float | None:
+    """Have the link hold a usable card, reading it inside the call's own time limit.
+
+    Returns what is left of that limit when the card had to be read, and None when the link
+    was connected already. A card that cannot be read or used is the tool's error result,
+    with the card problem's sentence; nothing of what the read raised leaves the tool, where
+    it would end the step and be kept with the thread (005 FR-021, research R6).
+    """
+    if link.connected:
+        return None
+    clock = asyncio.get_running_loop().time
+    began = clock()
+    try:
+        await link.connect(limit=link.call_timeout)
+    except CardError as error:
+        sentence = error.message
+    except Exception:  # anything else is a card that could not be read; none ends a run
+        sentence = SENTENCES["unreadable"]
+    else:
+        return max(link.call_timeout - (clock() - began), 0.0)
+    raise _failed(link, f"Agent '{link.name}' cannot be used: {sentence}")
+
+
 def may_not_have_received(agent: str) -> str:
     """The result of a message whose sending started and was never confirmed (FR-017)."""
     return (
@@ -313,6 +363,11 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 raise ToolException(
                     f"Agent '{link.name}' has no task {task_id} on this thread; nothing was sent."
                 )
+            if known is not None and known.agent_ref != link.ref:
+                # The task is the agent's as it was when the task started: it is never
+                # answered at a later address, nor by another agent under the name (FR-025).
+                raise _failed(link, given_up_with_its_agent(link.name, task_id))
+        limit = await _connected(link)
         context_id = await store.get_context(thread_id, link.name)
         a2a_message = Message(
             message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
@@ -338,7 +393,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         def on_progress(task: str, state: str, text: str) -> None:
             writer({"agent": link.name, "task_id": task, "state": state, "text": text})
 
-        outcome = await send_message(link, a2a_message, on_progress, clock=store.now)
+        outcome = await send_message(link, a2a_message, on_progress, clock=store.now, limit=limit)
         result, ok = await _record(link, store, thread_id, message, outcome)
         await store.finish_send(
             thread_id,
@@ -435,6 +490,8 @@ async def _record(
                 # When the agent acknowledged it, on the store's clock, so its age counts from
                 # then on every instance (FR-017, FR-021).
                 started_at=outcome.acknowledged_at or now,
+                # The agent, at the address, the task was started with (005 FR-025).
+                agent_ref=link.ref,
                 **known,
             )
         )
@@ -496,8 +553,13 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
             raise ToolException(
                 f"Agent '{link.name}' has no task {task_id} on this thread; nothing was sent."
             )
+        if task.agent_ref != link.ref:
+            # Given up when its agent was moved or removed, or the name passed between the
+            # environment and a saved agent: never canceled at another agent (005 FR-025).
+            raise _failed(link, given_up_with_its_agent(link.name, task_id))
         if task.state not in CANCELABLE:
             return f"Agent '{link.name}' task {task_id} already ended as {task.state}; nothing was sent."
+        limit = await _connected(link)
         await store.start_send(
             AgentSend(
                 thread_id=thread_id,
@@ -511,7 +573,7 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 task_id=task_id,
             )
         )
-        result, ok = await _cancel(link, store, task)
+        result, ok = await _cancel(link, store, task, limit)
         await store.finish_send(thread_id, step, tool_call_id, result=result, task_id=task_id)
         if not ok:
             raise _failed(link, result)
@@ -521,12 +583,15 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
 
 
 async def _cancel(
-    link: AgentLink, store: AgentTaskStore, task: AgentTaskRecord
+    link: AgentLink, store: AgentTaskStore, task: AgentTaskRecord, limit: float | None = None
 ) -> tuple[str, bool]:
-    """Send the cancel and record what the agent answered; never repeated (FR-022)."""
+    """Send the cancel and record what the agent answered; never repeated (FR-022).
+
+    ``limit`` is what is left of the call time limit when the card had to be read first.
+    """
     name, task_id = link.name, task.task_id
     try:
-        answer = await link.cancel(task_id)
+        answer = await link.cancel(task_id, limit=limit)
     except TaskNotCancelableError:
         # The task ended at the agent first: report its outcome with this result.
         link.mark(True)
@@ -619,6 +684,9 @@ async def _ended(
 
 def _failed(link: AgentLink, result: str) -> ToolException:
     """The error result of a message the agent did not carry out, logged naming the agent.
+
+    A message one of the tool's own rules kept back is logged here as well, with the rule in
+    the result's words (005 FR-030).
 
     The text goes through ``describe`` for the log, so the agent's address is never written
     (FR-009, research R14); the result itself was built from described text already.

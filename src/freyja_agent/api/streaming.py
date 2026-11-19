@@ -31,7 +31,7 @@ from freyja_agent.llm.secrets import redact
 
 if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
     from freyja_agent.llm.active import ActiveModel
-    from freyja_agent.runtime.runtime import Runtime
+    from freyja_agent.runtime.runtime import RunContext, Runtime
 
 logger = logging.getLogger(__name__)
 
@@ -86,10 +86,71 @@ def _is_model_error(exc: BaseException) -> bool:
     return False
 
 
+_INTERNAL = {"code": "internal", "message": "The run failed because of an internal error."}
+
+
+async def take_context(runtime: Runtime, thread_id: str, run_id: str) -> RunContext | None:
+    """The context a run uses, taken under its thread's lease; None when it cannot be had.
+
+    The one place a run picks up a change of agents or of LLM profile: the orchestrator is
+    brought in step with both here, and the run keeps what it gets, whatever is changed
+    while it runs (feature 004, FR-013; feature 005, FR-019). The caller releases the
+    context, or hands it to ``run_stream``, which does.
+
+    A failure is logged and answered with None, and the caller still holds the lease. A
+    cancellation, such as the service stopping, is not a failure to report: the lease is
+    given back here before it goes on, so the thread is not left busy until the lease
+    expires.
+    """
+    try:
+        return await runtime.begin_run()
+    except Exception:
+        logger.exception(
+            "run %s on thread %s: the agents or the active LLM profile could not be applied",
+            run_id,
+            thread_id,
+        )
+        return None
+    except BaseException:
+        with anyio.CancelScope(shield=True):
+            await runtime.locks.release(thread_id, lease_owner(runtime, run_id))
+        raise
+
+
+async def no_context_stream(
+    runtime: Runtime,
+    thread_id: str,
+    *,
+    mode: RunMode,
+    debug: bool,
+    run_id: str,
+    on_end: OnEnd | None = None,
+) -> AsyncIterator[ServerSentEvent]:
+    """The stream of a run for which no context could be taken. Nothing runs (005 FR-019).
+
+    The caller holds the lease for ``run_id`` and has logged the failure; the stream names
+    the profile this instance last applied, reports an internal error, and releases the
+    lease.
+    """
+    owner = lease_owner(runtime, run_id)
+    try:
+        yield _event("start", _start(runtime.applied_model(), thread_id, run_id, mode, debug))
+        yield _event("error", _INTERNAL)
+    finally:
+        with anyio.CancelScope(shield=True):
+            if on_end is not None:
+                try:
+                    await on_end("error", "internal")
+                except Exception:
+                    logger.exception("run %s on thread %s: on_end failed", run_id, thread_id)
+            await runtime.locks.release(thread_id, owner)
+
+
 async def run_stream(
     runtime: Runtime,
     thread_id: str,
     *,
+    context: RunContext,
     input: Any,
     mode: RunMode,
     debug: bool,
@@ -98,6 +159,10 @@ async def run_stream(
     on_recorded: OnRecorded | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream one run. The caller must already hold the lease for ``run_id``.
+
+    ``context`` is the orchestrator the run uses, taken by the caller under the lease
+    (``take_context``): the graph it runs on, the catalog a pause is worded with, and the
+    model it names. The stream releases it, beside the lease, however the run ends.
 
     ``on_end``, when given, is awaited with how the run ended, before the lease is released.
     A client that disconnects first ends the run without it. A run that ends normally, pauses,
@@ -122,25 +187,8 @@ async def run_stream(
     # How the run ended, for ``on_end``; None while it runs and after a disconnect.
     ended: tuple[str, str | None] | None = None
     try:
-        # The one place a run picks up a change of LLM profile: the orchestrator is brought in
-        # step with the active profile here, and this run keeps the one it gets, whatever is
-        # activated while it runs (feature 004, FR-013, research R2).
-        try:
-            active = await runtime.model_for_run()
-        except Exception:
-            logger.exception(
-                "run %s on thread %s: the active LLM profile could not be applied",
-                run_id,
-                thread_id,
-            )
-            ended = ("error", "internal")
-            yield _event("start", _start(runtime.applied_model(), thread_id, run_id, mode, debug))
-            yield _event(
-                "error",
-                {"code": "internal", "message": "The run failed because of an internal error."},
-            )
-            return
-        agent = runtime.agent
+        active = context.active
+        agent = context.agent
         profile = active.profile
         if not active.usable:
             # A fixed rule ahead of the model (principle VI): the graph is not invoked, so
@@ -253,10 +301,7 @@ async def run_stream(
             else:
                 logger.exception("run %s on thread %s failed", run_id, thread_id)
                 ended = ("error", "internal")
-                yield _event(
-                    "error",
-                    {"code": "internal", "message": "The run failed because of an internal error."},
-                )
+                yield _event("error", _INTERNAL)
             return
 
         if len(interrupts) > 1:
@@ -273,7 +318,7 @@ async def run_stream(
             )
         elif interrupts:
             ended = ("interrupt", None)
-            yield _event("interrupt", interrupt_to_pending(interrupts[0], runtime.catalog))
+            yield _event("interrupt", interrupt_to_pending(interrupts[0], context.catalog))
         else:
             ended = ("end", None)
             yield _event("end", {"status": "completed"})
@@ -295,4 +340,11 @@ async def run_stream(
                     await on_end(*ended)
                 except Exception:
                     logger.exception("run %s on thread %s: on_end failed", run_id, thread_id)
+            try:
+                # The links of an earlier set close once the last run that held it ends.
+                await context.release()
+            except Exception:
+                logger.exception(
+                    "run %s on thread %s: releasing its agents failed", run_id, thread_id
+                )
             await runtime.locks.release(thread_id, owner)

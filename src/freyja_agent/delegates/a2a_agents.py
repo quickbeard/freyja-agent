@@ -1,27 +1,33 @@
-"""Links to the A2A agents named in ``FREYJA_A2A_AGENTS`` (feature 003, research R3, R14).
+"""Links to the A2A agents Freyja may hand work to (feature 003, research R3, R14; feature 005,
+research R6, R12, R13).
 
-``open_agents`` is entered once, by the runtime, after the tool servers and before the
-orchestrator is built. It reads every agent's card, checks it, and fails naming the agent when
-anything is wrong, so the service never serves requests with an agent it cannot use (FR-003).
+A link is the running connection to one agent in use on one instance: an agent named in
+``FREYJA_A2A_AGENTS``, or one an operator saved. Making a link contacts nothing. ``connect``
+reads the agent's card and builds the client from it; until that has succeeded the link is
+not connected and nothing is sent over it (005 FR-021). The registry connects every link at
+startup, and a hand-off or a round of watching connects one that is not connected yet, so an
+agent that was down is used again without a restart.
 
-Each link owns one ``httpx.AsyncClient`` for the life of the process. It follows no redirect,
-and every request goes to the configured scheme, host, and port: the card says where the agent
-can be reached, and Freyja keeps only the path of its JSON-RPC interface (FR-002). Text about an
-agent that is logged, raised, or stored as its status passes through ``describe``, which removes
-the configured address (FR-009).
+Each link owns one ``httpx.AsyncClient`` for its whole life. It has an explicit transport, so
+no proxy setting of the environment applies to it, it follows no redirect, and every request
+goes to the configured scheme, host, and port: the card says where the agent can be reached,
+and Freyja keeps only the path of its JSON-RPC interface (003 FR-002, 005 FR-027). A link
+belongs to one address; an agent that is moved gets a new link with a new client. Text about
+an agent that is logged, raised, or stored as its status passes through ``describe``, which
+removes every agent address the process knows (005 FR-028).
 """
 
 import asyncio
 import contextlib
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable, Collection, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Literal
 from urllib.parse import urlsplit, urlunsplit
 
 import httpx
-from a2a.client import A2ACardResolver, Client, ClientConfig, ClientFactory
+from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.client.errors import A2AClientTimeoutError
 from a2a.types import (
     AgentCard,
@@ -38,19 +44,27 @@ from a2a.types import (
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, VERSION_HEADER
 
 from freyja_agent.config import A2aAgentConfig
+from freyja_agent.delegates.addresses import ADDRESS as ADDRESS
+from freyja_agent.delegates.addresses import SCRUBBER
 
 # The card classes and checks live in ``agent_cards`` since feature 005 and are imported back
 # so that everything that took them from here still finds them.
 from freyja_agent.delegates.agent_cards import JSONRPC as JSONRPC
 from freyja_agent.delegates.agent_cards import AgentCardSummary as AgentCardSummary
+from freyja_agent.delegates.agent_cards import (
+    CardError,
+    CardProblem,
+    card_details,
+    read_card,
+)
 from freyja_agent.delegates.agent_cards import SkillSummary as SkillSummary
 from freyja_agent.delegates.agent_cards import card_problem as card_problem
 
 logger = logging.getLogger(__name__)
 
 ERROR_TEXT_LIMIT = 500
-# Stands in for an agent's address in any text that may be shown or logged (FR-009).
-ADDRESS = "<address>"
+# Where an agent comes from: named in the environment, or saved by an operator (005 FR-017).
+Source = Literal["environment", "saved"]
 
 # Returns the httpx transport a link uses for one agent: the network in production, the
 # streaming in-process transport in the suite (research R15, R16).
@@ -62,7 +76,11 @@ def default_transport(_name: str, _url: str) -> httpx.AsyncBaseTransport:
 
 
 class AgentStartupError(RuntimeError):
-    """An agent that cannot be used at startup. The service does not start (FR-003)."""
+    """An agent's entry that is invalid in itself. The service does not start (005 FR-018)."""
+
+
+class NotConnectedError(RuntimeError):
+    """A request for a link that holds no usable card: nothing was sent (005 FR-021)."""
 
 
 def handoff_tool_name(agent: str) -> str:
@@ -91,7 +109,16 @@ def pinned_card(card: AgentCard, configured_url: str) -> AgentCard:
 
 
 class AgentLink:
-    """The running link to one configured agent (data-model.md "Delegate agent")."""
+    """The running link to one agent in use on one instance (005 data-model.md "Agent link").
+
+    ``source`` says where the agent comes from. A saved agent's link carries its ``agent_id``
+    and ``address_version``, which make its ``ref``, and the card details kept for it; an
+    environment agent's has no ref, and its ``card`` is what this instance last read.
+
+    A link does not carry the approval choice of a saved agent: the agent set does, and a
+    saved agent's link is made with ``read_only`` false, so a caller that forgets the set
+    gates (005 research R7).
+    """
 
     def __init__(
         self,
@@ -100,175 +127,169 @@ class AgentLink:
         *,
         transport: AgentTransport,
         call_timeout: float,
+        source: Source = "environment",
+        agent_id: str | None = None,
+        address_version: int | None = None,
+        card: AgentCardSummary | None = None,
     ) -> None:
         self.name = name
         self.config = config
-        self.card: AgentCardSummary | None = None
+        self.source: Source = source
+        self.agent_id = agent_id
+        self.address_version = address_version
+        # The card details the tools are described from.
+        self.card = card
         self.streaming = False
-        # Outcome of the most recent attempt to use the agent (FR-024).
+        # True while this instance holds a usable card from the address and a client built
+        # from it. Nothing is sent over a link that is not connected.
+        self.connected = False
+        # False until this instance has tried the agent.
+        self.tried = False
+        # Outcome of the most recent attempt to use the agent (003 FR-024).
         self.reachable = False
         self.checked_at = datetime.now(UTC)
         self.error: str | None = None
-        self._transport = transport
         self.call_timeout = call_timeout
-        self._http: httpx.AsyncClient | None = None
         self.client: Client | None = None
+        # Told when the card details of an environment agent change, so that the tools built
+        # without them, or from earlier ones, are built again (005 FR-021). Set by the
+        # registry.
+        self.on_card_changed: Callable[[AgentLink], None] | None = None
+        # The address is known to the scrubber before anything requests it (005 research R12).
+        SCRUBBER.mark_saved(config.url)
+        # An explicit transport: no proxy of the environment applies. No redirect is followed
+        # (005 FR-027, research R13).
+        self._http = httpx.AsyncClient(
+            transport=transport(name, config.url),
+            follow_redirects=False,
+            timeout=call_timeout,
+            headers={VERSION_HEADER: PROTOCOL_VERSION_CURRENT},
+        )
+        # One caller reads the card while the others wait for its result.
+        self._connecting = asyncio.Lock()
+        self._readings = 0
+        self._problem: CardProblem | None = None
 
     @property
     def read_only(self) -> bool:
         return self.config.read_only
 
-    def describe(self, text: str) -> str:
-        """Text about this agent that is safe to log, to raise, and to store (FR-009)."""
-        for address in self._addresses:
-            text = text.replace(address, ADDRESS)
-        return text[:ERROR_TEXT_LIMIT]
-
     @property
-    def _addresses(self) -> tuple[str, ...]:
-        """The forms in which the configured address can appear, longest first."""
-        parts = urlsplit(self.config.url)
-        host_and_port = parts.netloc.rpartition("@")[2]
-        forms = {
-            self.config.url,
-            self.config.url.rstrip("/"),
-            f"{parts.scheme}://{parts.netloc}",
-            parts.netloc,
-            host_and_port,
-        }
-        return tuple(sorted((form for form in forms if form), key=len, reverse=True))
+    def ref(self) -> str | None:
+        """Which agent, at which address: ``<id>:<address_version>``; None from the environment."""
+        if self.source != "saved":
+            return None
+        return f"{self.agent_id}:{self.address_version}"
+
+    def describe(self, text: str) -> str:
+        """Text about this agent that is safe to log, to raise, and to store (005 FR-028)."""
+        return SCRUBBER.scrub(text)[:ERROR_TEXT_LIMIT]
 
     def mark(self, reachable: bool, error: str | None = None) -> None:
         """Record the outcome of the most recent attempt to use the agent."""
+        self.tried = True
         self.reachable = reachable
         self.checked_at = datetime.now(UTC)
         self.error = None if reachable else self.describe(error or "")
 
-    async def start(self, startup_timeout: float) -> None:
-        """Read and check the card and build the client. Closes the link again on failure."""
-        self._http = httpx.AsyncClient(
-            transport=self._transport(self.name, self.config.url),
-            follow_redirects=False,
-            timeout=self.call_timeout,
-            headers={VERSION_HEADER: PROTOCOL_VERSION_CURRENT},
-        )
+    async def connect(self, card: AgentCard | None = None, *, limit: float) -> None:
+        """Hold a usable card from the agent's address and a client built from it.
+
+        The card is read unless one is handed over, which a caller does that has just read
+        it. One caller reads at a time; one that waited takes the result of the reading it
+        waited for and requests nothing itself. A reading that fails leaves the link not
+        connected, with the card problem's sentence as its error, and raises ``CardError``.
+        """
+        seen = self._readings
         try:
-            async with asyncio.timeout(startup_timeout):
-                card = await A2ACardResolver(
-                    self._http, self.config.url.rstrip("/")
-                ).get_agent_card()
-            problem = card_problem(card)
-            if problem is not None:
-                raise AgentStartupError(f"Agent '{self.name}': {problem}.")
-            config = ClientConfig(httpx_client=self._http, streaming=card.capabilities.streaming)
-            self.client = ClientFactory(config).create(pinned_card(card, self.config.url))
-        except BaseException:
-            await self.close()
-            raise
-        self.card = AgentCardSummary.from_card(card)
-        self.streaming = card.capabilities.streaming
-        self.mark(True)
+            async with asyncio.timeout(limit):
+                await self._connecting.acquire()
+        except TimeoutError:
+            raise CardError("timeout", seconds=limit) from None
+        try:
+            if card is None and self._readings != seen:
+                # Another caller read while this one waited.
+                if self._problem is not None:
+                    raise CardError.of(self._problem)
+                return
+            try:
+                if card is None:
+                    card = await read_card(self._http, self.config.url, limit=limit)
+                config = ClientConfig(
+                    httpx_client=self._http, streaming=card.capabilities.streaming
+                )
+                client = ClientFactory(config).create(pinned_card(card, self.config.url))
+            except CardError as error:
+                self._failed(error.problem)
+                raise
+            except Exception:
+                # A card the SDK cannot build a client from; its error may name the address.
+                failure = CardError("unreadable")
+            else:
+                failure = None
+            if failure is not None:
+                self._failed(failure.problem)
+                raise failure
+            self._readings += 1
+            self._problem = None
+            self.client = client
+            self.streaming = card.capabilities.streaming
+            self.connected = True
+            self.mark(True)
+            if self.source == "environment":
+                # A saved agent's details are the kept ones, and change only by an operator's
+                # move or check (005 FR-015).
+                details = card_details(card, SCRUBBER.scrub)
+                changed, self.card = details != self.card, details
+                if changed and self.on_card_changed is not None:
+                    self.on_card_changed(self)
+        finally:
+            self._connecting.release()
+
+    def _failed(self, problem: CardProblem) -> None:
+        self._readings += 1
+        self._problem = problem
+        self.client = None
+        self.connected = False
+        self.mark(False, problem.message)
 
     async def get_task(self, task_id: str) -> Task:
         """Read a task's status within the call time limit; raises what the agent raised.
 
-        Reading sends the agent no new work (FR-019).
+        Reading sends the agent no new work (003 FR-019).
         """
         if self.client is None:
-            raise RuntimeError(f"Agent '{self.name}' is not started.")
+            raise NotConnectedError(f"Agent '{self.name}' is not connected.")
         async with asyncio.timeout(self.call_timeout):
             return await self.client.get_task(GetTaskRequest(id=task_id))
 
-    async def cancel(self, task_id: str) -> Task:
-        """Ask the agent to cancel a task within the call time limit; raises what it raised."""
+    async def cancel(self, task_id: str, *, limit: float | None = None) -> Task:
+        """Ask the agent to cancel a task within the time limit; raises what it raised."""
         if self.client is None:
-            raise RuntimeError(f"Agent '{self.name}' is not started.")
-        async with asyncio.timeout(self.call_timeout):
+            raise NotConnectedError(f"Agent '{self.name}' is not connected.")
+        async with asyncio.timeout(self.call_timeout if limit is None else limit):
             return await self.client.cancel_task(CancelTaskRequest(id=task_id))
 
     async def close(self) -> None:
+        """Close the link's client for good. Nothing is sent over it afterwards."""
         client, self.client = self.client, None
-        http, self._http = self._http, None
+        self.connected = False
         if client is not None:
             await client.close()
-        if http is not None:
-            await http.aclose()
+        if not self._http.is_closed:
+            await self._http.aclose()
 
 
-def _start_failure(link: AgentLink, exc: BaseException, startup_timeout: float) -> str:
-    if isinstance(exc, AgentStartupError):
-        return str(exc)
-    if isinstance(exc, TimeoutError):
-        why = f"its card was not read within {startup_timeout:g} seconds"
-    else:
-        why = f"its card could not be read: {link.describe(str(exc) or type(exc).__name__)}"
-    return f"Agent '{link.name}': {why}."
-
-
-async def _close_all(links: Sequence[AgentLink]) -> None:
-    await asyncio.gather(*(link.close() for link in links), return_exceptions=True)
-
-
-@asynccontextmanager
-async def open_agents(
-    configs: Mapping[str, A2aAgentConfig],
-    *,
-    transport: AgentTransport = default_transport,
-    startup_timeout: float,
-    call_timeout: float,
-    server_names: Collection[str] = (),
-    taken_tool_names: Collection[str] = (),
-) -> AsyncIterator[tuple[AgentLink, ...]]:
-    """Read every configured agent's card and yield the links; close them on exit.
-
-    Raises ``AgentStartupError`` naming every agent that cannot be used. An agent named like a
-    tool server is refused before any card is read, because a proposal must name one origin,
-    and so is an agent whose tools would share a name with ``taken_tool_names``: Freyja's own
-    tools and the tool servers'. Nothing is left open when it raises.
-    """
-    problems = [
-        f"Agent '{name}': the name is also a tool server's name."
-        for name in configs
-        if name in server_names
-    ]
-    problems += [
-        f"Agent '{name}': the tool name '{tool}' is already used by another tool."
-        for name in configs
-        for tool in (handoff_tool_name(name), cancel_tool_name(name))
-        if tool in taken_tool_names
-    ]
-    if problems:
-        raise AgentStartupError("; ".join(problems))
-    links = [
-        AgentLink(name, config, transport=transport, call_timeout=call_timeout)
-        for name, config in configs.items()
-    ]
-    outcomes = await asyncio.gather(
-        *(link.start(startup_timeout) for link in links), return_exceptions=True
+def log_connected(link: AgentLink, *, read_only: bool) -> None:
+    """The line that says an agent is in use, with its classification and its skills."""
+    skills = len(link.card.skills) if link.card is not None else 0
+    logger.info(
+        "Agent %s: %s, %d skill%s",
+        link.name,
+        "read-only" if read_only else "gated",
+        skills,
+        "" if skills == 1 else "s",
     )
-    failures = [
-        (link, outcome)
-        for link, outcome in zip(links, outcomes, strict=True)
-        if isinstance(outcome, BaseException)
-    ]
-    if failures:
-        await _close_all(links)
-        raise AgentStartupError(
-            "; ".join(_start_failure(link, exc, startup_timeout) for link, exc in failures)
-        )
-    try:
-        for link in links:
-            skills = len(link.card.skills) if link.card is not None else 0
-            logger.info(
-                "Agent %s: %s, %d skill%s",
-                link.name,
-                "read-only" if link.read_only else "gated",
-                skills,
-                "" if skills == 1 else "s",
-            )
-        yield tuple(links)
-    finally:
-        await _close_all(links)
 
 
 # How often a task of an agent that does not stream is checked while a call waits (research R5).
@@ -363,7 +384,7 @@ async def _send(
 ) -> None:
     """Send one message and follow it until it stops, updating ``outcome`` as events arrive."""
     if link.client is None:
-        raise RuntimeError(f"Agent '{link.name}' is not started.")
+        raise NotConnectedError(f"Agent '{link.name}' is not connected.")
     configuration = None if link.streaming else SendMessageConfiguration(return_immediately=True)
     request = SendMessageRequest(message=message, configuration=configuration)
     async for event in link.client.send_message(request):
@@ -453,16 +474,22 @@ async def _poll(link: "AgentLink", outcome: SendOutcome, on_progress: OnProgress
 
 
 async def send_message(
-    link: "AgentLink", message: Message, on_progress: OnProgress, clock: Clock | None = None
+    link: "AgentLink",
+    message: Message,
+    on_progress: OnProgress,
+    clock: Clock | None = None,
+    *,
+    limit: float | None = None,
 ) -> SendOutcome:
     """Send ``message`` to the agent and wait for it within the call time limit (FR-009).
 
-    ``clock`` times the acknowledgment (``SendOutcome.acknowledged_at``).
+    ``clock`` times the acknowledgment (``SendOutcome.acknowledged_at``). ``limit`` is what is
+    left of the call time limit when the call first had to read the agent's card.
     """
     outcome = SendOutcome()
     broke = False
     try:
-        async with asyncio.timeout(link.call_timeout):
+        async with asyncio.timeout(link.call_timeout if limit is None else limit):
             await _send(link, message, on_progress, outcome, clock)
     except (TimeoutError, A2AClientTimeoutError):
         outcome.timed_out = True
