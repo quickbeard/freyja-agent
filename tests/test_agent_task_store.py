@@ -232,3 +232,87 @@ async def test_threads_with_a_due_retry_are_listed_once_it_is_due(
     assert await store.threads_with_due_followups() == []
     await advance(1.5)
     assert await store.threads_with_due_followups() == ["th-1"]
+
+
+# Feature 005 (T008): a task says which agent, at which address, it was started with.
+
+MOVED = "Stopped waiting for task {task_id} of agent '{agent}', which was moved."
+
+
+async def test_a_task_keeps_the_ref_of_the_agent_it_was_started_with(store: AgentTaskStore) -> None:
+    await store.record_task(await a_task(store, "t1"))
+    await store.record_task(await a_task(store, "t2", agent_ref="0af3:1"))
+    plain = await store.get_task("stub", "t1")
+    saved = await store.get_task("stub", "t2")
+    assert plain is not None and plain.agent_ref is None
+    assert saved is not None and saved.agent_ref == "0af3:1"
+    assert [task.agent_ref for task in await store.list_tasks("th-1")] == [None, "0af3:1"]
+    (claimed,) = [t for t in await store.claim_due("instance-a", 30) if t.task_id == "t2"]
+    assert claimed.agent_ref == "0af3:1"
+
+
+async def test_the_ref_of_a_task_cannot_be_changed(store: AgentTaskStore) -> None:
+    await store.record_task(await a_task(store, "t1", agent_ref="0af3:1"))
+    with pytest.raises(ValueError, match="agent_ref"):
+        await store.update_task("stub", "t1", agent_ref="0af3:2")
+    task = await store.get_task("stub", "t1")
+    assert task is not None and task.agent_ref == "0af3:1"
+
+
+async def test_pending_tasks_are_given_up_by_ref(store: AgentTaskStore, advance: Advance) -> None:
+    await store.record_task(await a_task(store, "first", agent_ref="0af3:1"))
+    await store.record_task(
+        await a_task(store, "second", agent_ref="0af3:2", state="input_required")
+    )
+    await store.record_task(await a_task(store, "other-agent", agent_ref="77aa:1"))
+    await store.record_task(await a_task(store, "environment"))
+    await store.record_task(
+        await a_task(store, "ended", agent_ref="0af3:1", state="completed", outcome="done")
+    )
+    await advance(1)
+    before = await store.now()
+
+    assert await store.give_up_pending(["0af3:1", "0af3:2"], MOVED) == 2
+
+    for task_id in ("first", "second"):
+        task = await store.get_task("stub", task_id)
+        assert task is not None
+        assert task.state == "given_up"
+        assert (
+            task.outcome == f"Stopped waiting for task {task_id} of agent 'stub', which was moved."
+        )
+        assert task.outcome_ready and task.delivered_at is None
+        assert task.ended_at is not None and task.ended_at >= before
+        assert task.last_checked_at == task.ended_at
+    # Another agent's task, an environment agent's, and one that had ended are as they were.
+    for task_id, state in (("other-agent", "working"), ("environment", "working")):
+        task = await store.get_task("stub", task_id)
+        assert task is not None and (task.state, task.outcome, task.outcome_ready) == (
+            state,
+            None,
+            False,
+        )
+    ended = await store.get_task("stub", "ended")
+    assert ended is not None and (ended.state, ended.outcome) == ("completed", "done")
+    # Its thread is told, like any task given up.
+    assert await store.threads_with_ready_outcomes() == ["th-1"]
+    # Nothing is left to give up, and no ref gives nothing up.
+    assert await store.give_up_pending(["0af3:1", "0af3:2"], MOVED) == 0
+    assert await store.give_up_pending([], MOVED) == 0
+
+
+async def test_pending_tasks_are_counted_by_agent_and_ref(store: AgentTaskStore) -> None:
+    assert await store.pending_counts() == {}
+    await store.record_task(await a_task(store, "a", agent_ref="0af3:1"))
+    await store.record_task(await a_task(store, "b", agent_ref="0af3:1", state="input_required"))
+    await store.record_task(await a_task(store, "c", agent_ref="0af3:2", thread_id="th-2"))
+    await store.record_task(await a_task(store, "d"))
+    await store.record_task(await a_task(store, "e", agent="hello"))
+    await store.record_task(await a_task(store, "f", agent_ref="0af3:1", state="completed"))
+    await store.record_task(await a_task(store, "g", state="given_up"))
+    assert await store.pending_counts() == {
+        ("stub", "0af3:1"): 2,
+        ("stub", "0af3:2"): 1,
+        ("stub", None): 1,
+        ("hello", None): 1,
+    }

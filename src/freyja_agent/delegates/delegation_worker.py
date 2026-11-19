@@ -47,7 +47,13 @@ from freyja_agent.api.outcomes import (
 from freyja_agent.api.streaming import lease_owner, run_stream
 from freyja_agent.delegates.a2a_agents import AgentLink, state_name
 from freyja_agent.delegates.a2a_tools import a2a_result_text, record_outcome
-from freyja_agent.runtime.agent_tasks import PENDING_STATES, AgentTaskRecord
+from freyja_agent.runtime.agent_tasks import (
+    GIVEN_UP_AGED,
+    GIVEN_UP_REMOVED,
+    PENDING_STATES,
+    AgentTaskRecord,
+    given_up_text,
+)
 
 if TYPE_CHECKING:  # the runtime builds the worker
     from freyja_agent.runtime.runtime import Runtime
@@ -171,16 +177,8 @@ class DelegationWorker:
         No cancel is sent: the agent may still be working, and the report says the person can
         ask for one, which goes through the gate like any message to the agent (FR-022).
         """
-        if removed:
-            outcome = (
-                f"Freyja stopped waiting for task {task.task_id} of agent '{task.agent}', which "
-                "is no longer configured; the agent may still be working on it."
-            )
-        else:
-            outcome = (
-                f"Freyja stopped waiting for task {task.task_id} of agent '{task.agent}'; the "
-                "agent may still be working on it. Ask to cancel it if it should stop."
-            )
+        template = GIVEN_UP_REMOVED if removed else GIVEN_UP_AGED
+        outcome = given_up_text(template, task.agent, task.task_id)
         store = self.runtime.agent_tasks
         now = await store.now()
         if await store.update_task(

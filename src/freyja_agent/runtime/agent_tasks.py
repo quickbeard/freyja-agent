@@ -11,6 +11,10 @@ the same state:
   delivered, the instance watching it, and the background run's retries (FR-017 to FR-027).
   Rows are never deleted: the thread state lists every task the thread started.
 
+Feature 005 adds which agent, at which address, a task was started with (``agent_ref``), so
+that a saved agent's tasks can be told from the tasks of another agent under its name
+(005 research R2, R10).
+
 ``PostgresAgentTaskStore`` is the service's store and ``InMemoryAgentTaskStore`` the suite's.
 Both take every time they set or compare from their own clock: the database's ``now()`` and
 the injected clock, so instances never compare their own clocks (spec Assumptions).
@@ -22,7 +26,7 @@ from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal, Protocol
 
-from psycopg import sql
+from psycopg import errors, sql
 from psycopg_pool import AsyncConnectionPool
 
 TaskState = Literal[
@@ -33,6 +37,33 @@ SendKind = Literal["handoff", "answer", "cancel"]
 # A task in one of these states is still pending: the worker claims it (research R9).
 PENDING_STATES: tuple[TaskState, ...] = ("working", "input_required")
 FINAL_STATES: tuple[TaskState, ...] = ("completed", "failed", "rejected", "canceled", "given_up")
+
+# What a thread is told when Freyja stops waiting for a task. Each takes the task's id and the
+# agent's name; ``given_up_text`` fills them in, and the Postgres stores do the same in SQL.
+# The first two are feature 003's (FR-021, FR-023); the third is for a saved agent whose
+# address was changed (005 FR-024): it offers no cancel, because the task cannot be reached
+# through Freyja any more.
+GIVEN_UP_REMOVED = (
+    "Freyja stopped waiting for task {task_id} of agent '{agent}', which is no longer "
+    "configured; the agent may still be working on it."
+)
+GIVEN_UP_AGED = (
+    "Freyja stopped waiting for task {task_id} of agent '{agent}'; the agent may still be "
+    "working on it. Ask to cancel it if it should stop."
+)
+GIVEN_UP_MOVED = (
+    "Freyja stopped waiting for task {task_id} of agent '{agent}', which was moved to another "
+    "address; the agent may still be working on it where it was."
+)
+
+
+def given_up_text(template: str, agent: str, task_id: str) -> str:
+    """``template`` with the task's id and the agent's name filled in."""
+    return template.replace("{task_id}", task_id).replace("{agent}", agent)
+
+
+class AgentTaskSetupError(RuntimeError):
+    """The task tables could not be brought up to date at startup. The service does not start."""
 
 
 @dataclass(frozen=True)
@@ -81,6 +112,10 @@ class AgentTaskRecord:
     followup_attempts: int = 0
     followup_next_at: datetime | None = None
     followup_error: str | None = None
+    # Which agent, at which address, the task was started with: ``<id>:<address_version>``
+    # for a saved agent. None for an environment agent's task, which follows the agent's
+    # name, and for every task recorded before feature 005 (005 research R2).
+    agent_ref: str | None = None
 
     @property
     def pending(self) -> bool:
@@ -98,9 +133,12 @@ class AgentTaskRecord:
         return not self.outcome_ready and self.state != "working"
 
 
-# The columns an update may set; the key and the thread never change.
+# The columns an update may set; the key, the thread, and the agent a task was started with
+# never change.
 UPDATABLE = frozenset(
-    f.name for f in fields(AgentTaskRecord) if f.name not in {"agent", "task_id", "thread_id"}
+    f.name
+    for f in fields(AgentTaskRecord)
+    if f.name not in {"agent", "task_id", "thread_id", "agent_ref"}
 )
 
 
@@ -159,6 +197,10 @@ class AgentTaskStore(Protocol):
     ) -> None: ...
 
     async def clear_followups(self, thread_id: str) -> None: ...
+
+    async def give_up_pending(self, refs: Collection[str], text: str) -> int: ...
+
+    async def pending_counts(self) -> dict[tuple[str, str | None], int]: ...
 
 
 def _check_columns(changes: dict[str, Any]) -> None:
@@ -309,6 +351,38 @@ class InMemoryAgentTaskStore:
                     task, followup_attempts=0, followup_next_at=None, followup_error=None
                 )
 
+    async def give_up_pending(self, refs: Collection[str], text: str) -> int:
+        """Give up every pending task started with one of ``refs``; return how many.
+
+        ``text`` is one of the ``GIVEN_UP_*`` templates. Each task gets its outcome ready, so
+        a background run tells its thread, as for any task given up (005 FR-024).
+        """
+        wanted = set(refs)
+        now = await self.now()
+        given_up = 0
+        for key, task in self._tasks.items():
+            if task.pending and task.agent_ref is not None and task.agent_ref in wanted:
+                self._tasks[key] = replace(
+                    task,
+                    state="given_up",
+                    last_checked_at=now,
+                    ended_at=now,
+                    outcome=given_up_text(text, task.agent, task.task_id),
+                    outcome_ready=True,
+                    delivered_at=None,
+                )
+                given_up += 1
+        return given_up
+
+    async def pending_counts(self) -> dict[tuple[str, str | None], int]:
+        """How many tasks are pending, by the agent's name and the ref they were started with."""
+        counts: dict[tuple[str, str | None], int] = {}
+        for task in self._tasks.values():
+            if task.pending:
+                key = (task.agent, task.agent_ref)
+                counts[key] = counts.get(key, 0) + 1
+        return counts
+
 
 # Every statement is one parameterized command; identifiers come from a fixed set.
 _CREATE = (
@@ -355,14 +429,38 @@ _CREATE = (
         followup_attempts integer NOT NULL DEFAULT 0,
         followup_next_at  timestamptz,
         followup_error    text,
+        agent_ref         text,
         PRIMARY KEY (agent, task_id)
     )
     """,
     "CREATE INDEX IF NOT EXISTS freyja_agent_tasks_thread ON freyja_agent_tasks (thread_id)",
 )
 
+# Feature 005 is the first to add a column to a table that exists in deployments. Adding a
+# nullable column rewrites nothing, but it takes a lock that waits behind any long reader of
+# the table, and every query on the table then waits behind it. So the column is looked for
+# first, and added only when it is missing, under a lock timeout (005 research R2).
+_HAS_AGENT_REF = (
+    "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()"
+    " AND table_name = 'freyja_agent_tasks' AND column_name = 'agent_ref'"
+)
+_ADD_AGENT_REF = "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS agent_ref text"
+LOCK_TIMEOUT = "5s"
+
 _TASK_COLUMNS = [f.name for f in fields(AgentTaskRecord)]
 _SEND_COLUMNS = [f.name for f in fields(AgentSend)]
+
+
+# Gives pending tasks up with one of the ``GIVEN_UP_*`` templates as ``%(text)s``; the caller
+# adds which tasks. The saved-agent store runs it inside the transaction that moves or
+# removes an agent, so the change and the giving up happen together or not at all (FR-024).
+GIVE_UP = (
+    "UPDATE freyja_agent_tasks"
+    " SET state = 'given_up', last_checked_at = now(), ended_at = now(),"
+    "     outcome = replace(replace(%(text)s, '{task_id}', task_id), '{agent}', agent),"
+    "     outcome_ready = true, delivered_at = NULL"
+    " WHERE state IN ('working', 'input_required')"
+)
 
 
 def _columns(names: list[str]) -> sql.Composed:
@@ -387,6 +485,21 @@ class PostgresAgentTaskStore:
         async with self._pool.connection() as conn:
             for statement in _CREATE:
                 await conn.execute(statement)
+            cursor = await conn.execute(_HAS_AGENT_REF)
+            if await cursor.fetchone() is not None:
+                return
+            try:
+                async with conn.transaction():
+                    await conn.execute(
+                        sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT))
+                    )
+                    await conn.execute(_ADD_AGENT_REF)
+            except errors.LockNotAvailable:
+                raise AgentTaskSetupError(
+                    "The table freyja_agent_tasks needs a new column, agent_ref, and could not "
+                    f"be changed within {LOCK_TIMEOUT}: another session is holding the table. "
+                    "Start the service again once that session has ended."
+                ) from None
 
     async def _rows(self, query: sql.Composable | str, params: dict[str, Any]) -> list[Any]:
         async with self._pool.connection() as conn:
@@ -606,3 +719,18 @@ class PostgresAgentTaskStore:
             " WHERE thread_id = %(thread_id)s AND followup_attempts > 0",
             {"thread_id": thread_id},
         )
+
+    async def give_up_pending(self, refs: Collection[str], text: str) -> int:
+        if not refs:
+            return 0
+        return await self._execute(
+            GIVE_UP + " AND agent_ref = ANY(%(refs)s)", {"refs": list(refs), "text": text}
+        )
+
+    async def pending_counts(self) -> dict[tuple[str, str | None], int]:
+        rows = await self._rows(
+            "SELECT agent, agent_ref, count(*) AS count FROM freyja_agent_tasks"
+            " WHERE state IN ('working', 'input_required') GROUP BY agent, agent_ref",
+            {},
+        )
+        return {(row["agent"], row["agent_ref"]): row["count"] for row in rows}

@@ -115,7 +115,7 @@ two agent tables and the one new column are in this phase.
 
 **CRITICAL**: No user story work can begin until Phases 2 and 3 are complete.
 
-- [ ] T004 [P] Write `tests/test_addresses.py`, part 1, for `canonical_address` and
+- [X] T004 [P] Write `tests/test_addresses.py`, part 1, for `canonical_address` and
       `destination` in `src/freyja_agent/config.py`. The kept form: `HTTP://LocalHost:9998/`
       gives `http://localhost:9998`; a port left out is written, 80 for `http` and 443 for
       `https`; `http://127.0.0.1:9998/a/` gives the path without its trailing slash;
@@ -129,7 +129,7 @@ two agent tables and the one new column are in this phase.
       `http://localhost:abc`, whose own error is caught. `destination` is the port and the
       path: `http://localhost:9998/a`, `http://127.0.0.1:9998/a`, and `https://[::1]:9998/a`
       give one value, and `/a` and `/b` on one port give two (FR-006, R11)
-- [ ] T005 Write `tests/test_addresses.py`, part 2, for the scrubber and the log record factory
+- [X] T005 Write `tests/test_addresses.py`, part 2, for the scrubber and the log record factory
       in `src/freyja_agent/delegates/addresses.py`. The scrubber removes a registered address
       as kept, as its host and port, as its port after `localhost`, `127.0.0.1`, and `[::1]`,
       and as the pairs `('127.0.0.1', 9998)`, `('localhost', 9998)`, and `('::1', 9998)`,
@@ -148,7 +148,7 @@ two agent tables and the one new column are in this phase.
       and their children, and left alone in a record of any other logger. Installing the
       factory twice installs it once, and the factory that was there before is still called
       (FR-028, R12)
-- [ ] T006 [P] Write `tests/test_agent_cards.py` for `read_card` and the card details in
+- [X] T006 [P] Write `tests/test_agent_cards.py` for `read_card` and the card details in
       `src/freyja_agent/delegates/agent_cards.py`, reaching stand-ins through
       `StreamingASGITransport`. A usable card is returned after exactly one request: a `GET` of
       `<address>/.well-known/agent-card.json` with `Accept-Encoding: identity`. Each problem
@@ -168,7 +168,7 @@ two agent tables and the one new column are in this phase.
       first 2,000 characters, `skills` to the first 50 and a skill's `tags` to the first 50,
       `cut` is true when anything was cut and false otherwise, and every text has every address
       the scrubber knows removed, another agent's included (FR-002, FR-007, FR-016, R5)
-- [ ] T007 [P] Write `tests/test_saved_agent_store.py` as contract tests any store can be
+- [X] T007 [P] Write `tests/test_saved_agent_store.py` as contract tests any store can be
       given, exported in `__all__`. An added agent has an `id` of 32 hex characters, `version`
       1, `address_version` 1, `read_only` false unless given, its card details and
       `card_read_at`, and is listed by name and read back by id. A second agent under the same
@@ -189,20 +189,20 @@ two agent tables and the one new column are in this phase.
       differ, leaves both when they are equal, never moves `version`, and reports that nothing
       was recorded when `ref` is no longer the agent's. The pending count is reported by saved
       agent id (FR-005, FR-006, FR-012, FR-015, FR-024, R1, R2, R10, R14, data-model.md)
-- [ ] T008 [P] Extend the contract tests in `tests/test_agent_task_store.py`: a task is
+- [X] T008 [P] Extend the contract tests in `tests/test_agent_task_store.py`: a task is
       recorded and read back with `agent_ref`, null by default; `give_up_pending(refs, text)`
       gives up exactly the pending tasks whose `agent_ref` is in `refs`, marks each outcome
       ready, and returns the count; `pending_counts()` counts pending tasks by agent name and
       `agent_ref` (R2, R10, data-model.md)
-- [ ] T009 Implement `canonical_address(url)` and `destination(url)` in
+- [X] T009 Implement `canonical_address(url)` and `destination(url)` in
       `src/freyja_agent/config.py`, beside `is_local_host`, with an error type of their own
       whose message is the service's sentence. `A2aAgentConfig` is not changed: environment
       entries keep their rule and their spelling (FR-006, R11)
-- [ ] T010 Implement `src/freyja_agent/delegates/addresses.py`: the scrubber, with `register`,
+- [X] T010 Implement `src/freyja_agent/delegates/addresses.py`: the scrubber, with `register`,
       `mark_saved`, and `scrub(text)`; the forms of T005; the bound of 200 on addresses that
       were never saved; and `install_log_scrubber()`, which sets the log record factory once
       per process, wrapping whichever factory was there. Nothing imports it yet (FR-028, R12)
-- [ ] T011 [P] Implement `src/freyja_agent/delegates/agent_cards.py`: `CardProblem` with the
+- [X] T011 [P] Implement `src/freyja_agent/delegates/agent_cards.py`: `CardProblem` with the
       nine codes and sentences of data-model.md; `read_card(http, address, *, limit)`, which
       makes the one request of T006 with the client it is given, reads at most one megabyte,
       parses with the SDK's `parse_agent_card`, and applies today's three checks; and
@@ -211,7 +211,7 @@ two agent tables and the one new column are in this phase.
       `src/freyja_agent/delegates/a2a_agents.py`, which imports them back so every existing
       import keeps working; `AgentCardSummary` gains `cut: bool = False`. The path constant
       stays the SDK's (FR-002, FR-007, FR-016, R5)
-- [ ] T012 Extend `src/freyja_agent/runtime/agent_tasks.py`: `AgentTaskRecord.agent_ref: str |
+- [X] T012 Extend `src/freyja_agent/runtime/agent_tasks.py`: `AgentTaskRecord.agent_ref: str |
       None = None`; the two methods of T008 on the protocol, on `InMemoryAgentTaskStore`, and
       on `PostgresAgentTaskStore`; and the column: `setup()` looks in
       `information_schema.columns` and, only when `freyja_agent_tasks` has no `agent_ref`, runs
@@ -222,7 +222,7 @@ two agent tables and the one new column are in this phase.
       word for word, and the one for a move, "Freyja stopped waiting for task {task_id} of
       agent '{agent}', which was moved to another address; the agent may still be working on it
       where it was." (FR-024, R2, R10)
-- [ ] T013 Implement `SavedAgentRecord` with its `ref` (`<id>:<address_version>`), the
+- [X] T013 Implement `SavedAgentRecord` with its `ref` (`<id>:<address_version>`), the
       `SavedAgentStore` protocol, its errors, and `InMemorySavedAgentStore` in
       `src/freyja_agent/runtime/saved_agents.py`, with the rules of data-model.md: `id` "32 hex
       characters, new for every add"; `name` "`^[a-z][a-z0-9_-]{0,31}$`", unique; `url` the
@@ -231,7 +231,7 @@ two agent tables and the one new column are in this phase.
       default 1"; `version` "integer, default 1"; "At most 20 rows". The in-memory store is
       given the in-memory task store and gives tasks up through `give_up_pending`, the one
       place the two meet (R1, R10)
-- [ ] T014 Implement `PostgresSavedAgentStore` in `src/freyja_agent/runtime/saved_agents.py` on
+- [X] T014 Implement `PostgresSavedAgentStore` in `src/freyja_agent/runtime/saved_agents.py` on
       the shared pool, creating `freyja_agents` and the one-row `freyja_agents_state` with
       `CREATE TABLE IF NOT EXISTS`: `name` and `destination` `UNIQUE`; `CHECK (id = 1)` on the
       state; the insert counted under a transaction-level advisory lock of its own; a unique
@@ -240,7 +240,7 @@ two agent tables and the one new column are in this phase.
       change the row, give up the agent's pending tasks in `freyja_agent_tasks`, and move the
       revision in one transaction; times from the database's `now()`; every statement with
       bound parameters (FR-005, FR-006, FR-024, R1, R10, R14)
-- [ ] T015 Write `tests/integration/test_saved_agents_postgres.py`: the contract tests of T007
+- [X] T015 Write `tests/integration/test_saved_agents_postgres.py`: the contract tests of T007
       collected against Postgres, and the task store's of T008 added by name to the imports and
       `__all__` of `tests/integration/test_a2a_tasks_postgres.py`; two adds sent together at 19
       agents leave 20; two adds of one name, and two of one destination, sent together on two

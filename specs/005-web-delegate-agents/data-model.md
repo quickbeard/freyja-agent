@@ -108,7 +108,8 @@ holds any more closes the links only it had (R3).
 ### Card problem (`CardProblem`)
 
 Why an agent cannot be used, as a code and one fixed sentence the service words itself
-(FR-016). Nothing from the agent or from a library is in the sentence.
+(FR-016). Nothing from the agent or from a library is in the sentence. Reading a card that
+cannot be used raises `CardError`, which carries the problem.
 
 | Code | Sentence |
 |---|---|
