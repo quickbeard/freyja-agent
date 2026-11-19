@@ -44,15 +44,6 @@ Set `FREYJA_API_URL` in the shell, or in `.env.local`, which Next.js loads and g
 
 The variable has no `NEXT_PUBLIC_` prefix, because the browser never learns the service's address: it only ever calls the console's own origin, and the console's server passes `/api/...` on.
 
-## What the console shows
-
-A sidebar on the left lists the sections; on a screen narrower than 768 pixels it opens from a button. `/` redirects to `/llm`.
-
-- **LLM** (`/llm`) shows every LLM profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first. A key typed into a form is sent once and kept nowhere in the browser.
-- **Agents** (`/agents`) shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt. An agent that cannot be handed work carries a warning with the reason. What the agent's card says of itself is shown as plain text and marked as the agent's own claim. The section is read-only: it adds, changes, and removes no agent.
-
-Every page is sent with `Content-Security-Policy: frame-ancestors 'none'` and `X-Frame-Options: DENY`, so no page of another origin can show the console in a frame.
-
 ## Layout
 
 - `app/`: the pages. `layout.tsx` is the shell, the sidebar beside the page; `llm/page.tsx` and `agents/page.tsx` are the two sections.
