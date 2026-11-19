@@ -240,11 +240,39 @@ startup and exits with an error naming the connection when it is unreachable.
 
 ## Spec Kit
 
-Features follow specify, plan, tasks, implement, then converge, with clarify, checklist, and
-analyze as optional gates. The skills are named `speckit-<step>`: Claude Code invokes them as
-`/speckit-<step>`, Codex CLI as `$speckit-<step>`. Do not start a Spec Kit skill unless the user
-asks for it; a human reviews each step's output before the next one runs. Every plan includes a
-Constitution Check that names the principles it touches and justifies any deviation.
+Every feature runs all eight steps of the "Spec Kit workflow" section of `README.md`, in its
+order, and skips none:
+
+1. `speckit-specify` writes `spec.md` and the spec quality checklist,
+   `checklists/requirements.md`.
+2. `speckit-clarify` asks up to five questions and writes the answers into `spec.md`.
+3. `speckit-plan` writes `plan.md`, `research.md`, `data-model.md`, `contracts/`, and
+   `quickstart.md`. Every plan includes a Constitution Check that names the principles it
+   touches and justifies any deviation.
+4. `speckit-checklist` writes `checklists/<domain>.md` for one focus area. Review every item
+   and tick it once the spec and the plan satisfy it; where they do not, fix `spec.md` or
+   `plan.md` in the same pull request. Leave no item unchecked: `speckit-implement` stops and
+   asks when it finds one.
+5. `speckit-tasks` writes `tasks.md`.
+6. `speckit-analyze` cross-checks the spec, the plan, and the tasks, and changes no file. Report
+   what it found; what needs fixing is fixed by editing the files, in a pull request of its own.
+7. `speckit-implement` works through `tasks.md` one phase at a time, each phase a pull request.
+8. `speckit-converge` runs after the last phase and appends any unbuilt work to `tasks.md`.
+
+Spec Kit and the constitution name clarify, checklist, and analyze as optional gates. This
+project runs all three for every feature, so none of the eight is left out because it is
+optional.
+
+The skills are named `speckit-<step>`: Claude Code invokes them as `/speckit-<step>`, Codex CLI
+as `$speckit-<step>`. Do not start a Spec Kit skill unless the user asks for it; a human reviews
+each step's output before the next one runs. When the user asks for a step and an earlier step
+of that feature has not been run, say which one is missing before running anything, and
+recommend running it first. When a step is finished, name the next one in the order above.
+
+Each step is one pull request, and each implementation phase is one. Pull requests are
+squash-merged and their branch deleted, so before every step after specify, recreate the
+feature branch from the latest `main`; never run a step on `main` or on a branch left from an
+earlier step.
 
 The Spec Kit git extension is installed. Its `before_specify` hook creates the numbered feature
 branch off `main`, so `speckit-specify` never writes a spec on `main`. Its auto-commit hooks are
