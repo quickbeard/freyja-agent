@@ -76,8 +76,27 @@ MUST ship with tests. The `S` (security) and
 style issue. Rule suppressions MUST carry a reason and SHOULD be removed when the cause is
 fixed.
 
+gitleaks MUST find no secret in the repository, enforced by the same hook over what is
+staged and in CI over every commit. A made-up key that a test needs MUST be let through by
+its exact value, never by its path.
+
+Trivy MUST report no known vulnerability of HIGH or CRITICAL severity in what the lock files
+install, in a Dockerfile, or in a container image built from one, and Semgrep MUST report no
+finding; both run in CI. A finding that is wrong MUST be suppressed where it stands, with its
+reason, never by leaving a file or a rule out of the scan.
+
+Each test suite MUST meet its coverage floor, enforced by the hook and in CI: the service's
+in `pyproject.toml`, the web app's in `web/vitest.config.mts`. A floor is measured as CI
+runs the suite and counts all of the project's own code. It SHOULD be raised as coverage
+rises, and MUST NOT be lowered without the reason written beside it.
+
 Rationale: the gates are cheap, already automated, and catch the two defect classes that
-matter most here, insecure calls and stalled event loops.
+matter most here, insecure calls and stalled event loops. A secret that was committed stays
+in the history after the file is fixed, so it has to be stopped before the commit. The
+deploy pipeline refuses a vulnerable dependency or image, and it is cheaper to learn that
+on the pull request. A floor keeps untested code from adding up one change at a time; it
+shows what no test runs, not that what runs is checked, so it adds to the rule that new
+behavior ships with tests and does not replace it.
 
 ### VI. Deterministic Guardrails Before Model Judgment
 
@@ -102,6 +121,9 @@ not wait on it.
 - The web app lives under `web/`: Next.js with TypeScript, dependencies managed by pnpm with a
   committed `pnpm-lock.yaml`. Biome is its only linter and formatter, configuration in
   `web/biome.json`, and Vitest runs its unit tests.
+- gitleaks scans for secrets, Trivy for known vulnerabilities and for mistakes in the
+  Dockerfiles, and Semgrep for insecure code. Each runs at one named version wherever it
+  runs.
 - Agent skills under `workspace/skills/` are source and are committed; working files written at
   runtime under `workspace/cases/` are not.
 
@@ -124,4 +146,4 @@ wording), and updates the Last Amended date. Reviewers MUST check pull requests 
 compliance with the principles above, and added complexity MUST be justified in the plan.
 Spec Kit artifacts live under `specs/` and are reviewed with the code they describe.
 
-**Version**: 1.4.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-17
+**Version**: 1.5.0 | **Ratified**: 2026-10-28 | **Last Amended**: 2026-11-19
