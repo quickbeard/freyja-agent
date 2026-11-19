@@ -96,3 +96,6 @@
   FR-022), and a pending proposal follows its agent across a move but not across a removal
   and a new addition (call 4, FR-023). Calls 5 and 7 to 10, and the task half of call 4,
   were not asked about and stay as written.
+- The first answer was extended the same day: beside the log, the console itself warns about
+  every agent that is down, on its card, above the cards by name, and on the sidebar's Agents
+  entry from every section (FR-001a, SC-017). 16 of 16 items still pass.
