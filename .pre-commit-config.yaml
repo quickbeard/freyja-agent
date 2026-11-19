@@ -30,7 +30,8 @@ repos:
     hooks:
       - id: pytest
         name: pytest
-        entry: uv run pytest -q
+        # --cov: with coverage, held to fail_under in pyproject.toml.
+        entry: uv run pytest -q --cov
         language: system
         pass_filenames: false
         always_run: true
@@ -45,7 +46,8 @@ repos:
         pass_filenames: false
       - id: vitest
         name: vitest (web)
-        entry: pnpm --dir web run test
+        # With coverage, held to the thresholds in web/vitest.config.mts.
+        entry: pnpm --dir web run test:coverage
         language: system
         files: ^web/
         pass_filenames: false

@@ -23,8 +23,8 @@ jobs:
         run: uv sync --locked
       - name: Run pytest
         # The Postgres tests under tests/integration are skipped: they are opt-in and need
-        # FREYJA_TEST_DATABASE_URI.
-        run: uv run pytest
+        # FREYJA_TEST_DATABASE_URI. --cov: with coverage, held to fail_under in pyproject.toml.
+        run: uv run pytest --cov
   web:
     name: vitest
     timeout-minutes: 15
@@ -40,4 +40,5 @@ jobs:
       - name: Install dependencies
         run: npm install -g pnpm@12 && pnpm install --frozen-lockfile
       - name: Run Vitest
-        run: pnpm test
+        # With coverage, held to the thresholds in web/vitest.config.mts.
+        run: pnpm test:coverage

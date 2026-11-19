@@ -68,8 +68,8 @@ pytest:
     - uv sync --locked
   script:
     # The Postgres tests under tests/integration are skipped: they are opt-in and need
-    # FREYJA_TEST_DATABASE_URI.
-    - uv run pytest
+    # FREYJA_TEST_DATABASE_URI. --cov: with coverage, held to fail_under in pyproject.toml.
+    - uv run pytest --cov
 
 vitest:
   extends: .every-change
@@ -79,7 +79,8 @@ vitest:
     - cd web
     - pnpm install --frozen-lockfile
   script:
-    - pnpm test
+    # With coverage, held to the thresholds in web/vitest.config.mts.
+    - pnpm test:coverage
 
 playwright:
   stage: test

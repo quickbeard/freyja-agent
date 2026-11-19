@@ -25,6 +25,9 @@ Always go through uv. Never call python, pip, or pytest directly.
   agents by the stand-in in `tests/a2a_stub.py`, so no MCP server or agent needs to be
   installed or running and no network is used; only the transport tests launch a stub as a
   process or serve it on the loopback interface.
+- `uv run pytest --cov` runs the suite with coverage and fails below `fail_under` in
+  `pyproject.toml`. The commit hook and CI run it this way. Without `--cov` nothing is
+  measured, so a run of one file is not held to the suite's number.
 - `uv run python -m tests.mcp_stub --http 8765` serves the stub at
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
@@ -49,6 +52,8 @@ Always go through uv. Never call python, pip, or pytest directly.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
+- In `web/`: `pnpm test:coverage` runs the unit tests with coverage and fails below the
+  thresholds in `web/vitest.config.mts`. The commit hook and CI run it this way.
 - In `web/`: `pnpm test:e2e` runs the end-to-end tests with Playwright in Chromium and Firefox,
   the browsers `web/playwright.config.ts` names. Playwright builds the app and serves it on port
   3100 itself, so nothing needs to be running, the Freyja service included. `pnpm exec
@@ -244,6 +249,12 @@ startup and exits with an error naming the connection when it is unreachable.
   credential, and document it in `.env.example`.
 - New behavior ships with a test: in `tests/` for Python, and in a `*.test.ts` or `*.test.tsx`
   file under `web/__tests__/` for the web app.
+- Coverage has a floor: `fail_under` in `pyproject.toml` for the service's lines, and the
+  four thresholds in `web/vitest.config.mts` for the web app. Both are measured as CI runs the
+  suites, so without the opt-in Postgres tests, and nothing of either project is left out of
+  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. A floor
+  is raised as its number rises and lowered only with the reason written beside it. Coverage
+  shows what no test runs; it does not show that what runs is checked.
 - Write the tests before opening a pull request or merge request, not after. Its description
   has a Tests section that names the tests covering the change, new ones and existing ones
   alike. A change that needs no test, such as documentation or a dependency bump, says so in

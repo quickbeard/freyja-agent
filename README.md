@@ -405,6 +405,7 @@ A finding is reported without its value. A secret that was committed is in the h
 uv run pytest                  # full suite
 uv run pytest -q               # quiet output
 uv run pytest tests/test_health.py::test_healthz   # a single test
+uv run pytest --cov            # full suite with coverage; fails below the threshold
 ```
 
 The web app's unit tests run with Vitest:
@@ -412,6 +413,7 @@ The web app's unit tests run with Vitest:
 ```bash
 cd web
 pnpm test                      # vitest run
+pnpm test:coverage             # with coverage; fails below the thresholds
 ```
 
 They are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of the code it covers: `web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`. They run with jsdom and reach no service: `web/__tests__/testing.ts` replaces `fetch`.
@@ -434,6 +436,19 @@ FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test u
 ```
 
 CI runs both unit test suites on every pull request and merge request and on `main`: `.github/workflows/unit-tests.yml` on GitHub, and the `pytest` and `vitest` jobs of `.gitlab-ci.yml` on GitLab. The Postgres tests under `tests/integration` stay opt-in and are skipped there.
+
+### Coverage
+
+Both suites have a floor, and the commit hook and CI run them with coverage, so a change that falls below it is stopped in all three places.
+
+| Project | Measured | Floor | Where it is set |
+|---|---|---|---|
+| Service | 89.97% of lines | 88% | `fail_under` under `[tool.coverage.report]` in `pyproject.toml` |
+| Web app | 95.05% of statements, 93.67% of branches, 95% of functions, 96.74% of lines | 90% each | `coverage.thresholds` in `web/vitest.config.mts` |
+
+The numbers were measured on 2026-11-19, as CI runs the suites. For the service that means without the Postgres tests, which leaves the Postgres stores unmeasured; with them it is 96.62%. Nothing of either project is left out of the count, except `web/components/ui/`, which shadcn generates. A run without coverage (`uv run pytest`, `pnpm test`) is not measured, so running one file is not held to the whole suite's number. Raise a floor as its number rises.
+
+The service's lines are counted with Python 3.12's own monitoring (`core = "sysmon"`), which adds about a second to the suite; on 3.12 that counts lines and not branches.
 
 ## End-to-end tests
 
