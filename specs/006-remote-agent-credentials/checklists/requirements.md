@@ -70,3 +70,10 @@
 - The spec is written as if feature 005 were complete, as the description asks. It refers to
   005's requirements by number and replaces earlier requirements of 003 and 005, listed at
   the end of Assumptions. It is to be read again before planning if 005 is finished differently.
+- Validated again on 2026-11-19 after `/speckit-clarify`: 16 of 16 items still pass. Five
+  questions were asked and answered; each is in the spec's Clarifications section. They
+  settled candidates 1, 3, 4, 5, and 6 above, and changed two of them: an allowed host now
+  always names its port (candidate 1, FR-001, FR-002), and a destination that is a loopback,
+  unspecified, or link-local address is refused each time the service connects (candidate 5,
+  new FR-005a, SC-014). The other three were confirmed as written. Candidates 2 and 7 to 10
+  were not asked about and stay as written.
