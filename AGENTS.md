@@ -255,7 +255,7 @@ order, and skips none:
    asks when it finds one.
 5. `speckit-tasks` writes `tasks.md`.
 6. `speckit-analyze` cross-checks the spec, the plan, and the tasks, and changes no file. Report
-   what it found; what needs fixing is fixed by editing the files, in a pull request of its own.
+   what it found; what needs fixing is fixed by editing the files.
 7. `speckit-implement` works through `tasks.md` one phase at a time, each phase a pull request.
 8. `speckit-converge` runs after the last phase and appends any unbuilt work to `tasks.md`.
 
@@ -265,14 +265,20 @@ optional.
 
 The skills are named `speckit-<step>`: Claude Code invokes them as `/speckit-<step>`, Codex CLI
 as `$speckit-<step>`. Do not start a Spec Kit skill unless the user asks for it; a human reviews
-each step's output before the next one runs. When the user asks for a step and an earlier step
+each pull request before the next step runs. When the user asks for a step and an earlier step
 of that feature has not been run, say which one is missing before running anything, and
 recommend running it first. When a step is finished, name the next one in the order above.
 
-Each step is one pull request, and each implementation phase is one. Pull requests are
-squash-merged and their branch deleted, so before every step after specify, recreate the
-feature branch from the latest `main`; never run a step on `main` or on a branch left from an
-earlier step.
+Specify, plan, and tasks each open a pull request, and each implementation phase is one. A gate
+may share the pull request of the step before it: specify with clarify, plan with checklist,
+tasks with analyze. It is then run on the same branch before that pull request is merged, with
+a commit of its own, and the description covers both steps. A gate run after its step was
+merged gets a pull request of its own. The README shows every step as a separate pull request;
+both ways are accepted.
+
+Pull requests are squash-merged and their branch deleted, so before every step that starts a
+new pull request, apart from specify, recreate the feature branch from the latest `main`; never
+run a step on `main` or on a branch left from a pull request that was merged.
 
 The Spec Kit git extension is installed. Its `before_specify` hook creates the numbered feature
 branch off `main`, so `speckit-specify` never writes a spec on `main`. Its auto-commit hooks are
