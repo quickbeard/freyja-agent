@@ -1,5 +1,6 @@
 // What the Freyja service would answer, for the end-to-end tests. A test hands a page the
-// answers to its requests for the profile list, so no test needs the service itself.
+// answers to its requests for the profile list and for the agents, so no test needs the
+// service itself.
 
 import type { Page, Route } from "@playwright/test";
 import type { Agent, AgentList } from "../lib/agents";
@@ -508,6 +509,208 @@ export class ProfileService {
       }
       return route.fulfill({ status: 404, json: { detail: "Not Found" } });
     });
+    return this;
+  }
+}
+
+/**
+ * What the stand-in for the Agents routes says when it refuses: the service's own sentences
+ * (`src/freyja_agent/api/agents.py`, `delegates/agent_registry.py`, `agent_cards.py`,
+ * `config.py`).
+ */
+export const NOTHING_ANSWERED = "Nothing answered at the address.";
+export const SAVED_NAME_TAKEN = "Another saved agent has this name.";
+export const ENVIRONMENT_NAME_TAKEN =
+  "An agent named in the environment has this name.";
+export const AGENT_ADDRESS_TAKEN = "Another saved agent is at this address.";
+export const NOT_THIS_MACHINE =
+  "The address must be on this machine: localhost or a loopback IP address.";
+
+const THIS_MACHINE = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
+
+/**
+ * An address in the one form the service keeps it in: scheme and host in lowercase, the port
+ * always written, and no trailing slash (005 FR-006). Null for what is no web address.
+ */
+export function keptAddress(entered: string): string | null {
+  let url: URL;
+  try {
+    url = new URL(entered);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "http:" && url.protocol !== "https:") {
+    return null;
+  }
+  const port = url.port || (url.protocol === "https:" ? "443" : "80");
+  const path = url.pathname.replace(/\/$/, "");
+  return `${url.protocol}//${url.hostname}:${port}${path}`;
+}
+
+/** Where an address leads: its port and path, however this machine is written. */
+function destination(kept: string): string {
+  const url = new URL(kept);
+  return `${url.port}${url.pathname.replace(/\/$/, "")}`;
+}
+
+/**
+ * A stand-in for the service's Agents routes that lives in the test, for pages that change
+ * agents: it keeps what a page saved, records what it was asked, and answers as the service
+ * would (specs/005-web-delegate-agents/contracts/openapi.yaml). It checks only what a test
+ * needs it to refuse; the service's own rules are tested with the service.
+ */
+export class AgentService {
+  agents: Agent[];
+  /** Every request the page made to the Agents routes, in order. */
+  readonly asked: Asked[] = [];
+  /** The ports at which no agent answers: adding one there is refused. */
+  private readonly silent = new Set<string>();
+  private saved = 0;
+  private losing = 0;
+  private stopped = false;
+
+  constructor(...agents: Agent[]) {
+    this.agents = agents;
+  }
+
+  /** The requests that changed something. */
+  get changes(): Asked[] {
+    return this.asked.filter(({ method }) => method !== "GET");
+  }
+
+  /** How often the page read the list. */
+  get reads(): number {
+    return this.asked.filter(({ method }) => method === "GET").length;
+  }
+
+  /** The list as the service orders it: the environment's agents, then the saved by name. */
+  list(): AgentList {
+    const environment = this.agents.filter((a) => a.source === "environment");
+    const saved = this.agents
+      .filter((a) => a.source === "saved")
+      .sort((a, b) => a.name.localeCompare(b.name));
+    return agentList(...environment, ...saved);
+  }
+
+  /** Whether an agent answers at this port: none does where a test said so. */
+  answersAt(port: number, answers: boolean): this {
+    if (answers) {
+      this.silent.delete(String(port));
+    } else {
+      this.silent.add(String(port));
+    }
+    return this;
+  }
+
+  /**
+   * The next request that changes something is carried out, and its answer is lost on the
+   * way back: the page gets none.
+   */
+  loseNextAnswer(): this {
+    this.losing += 1;
+    return this;
+  }
+
+  /**
+   * The service stops: from now on every request goes to the web app's server, which finds
+   * nothing at the service's address, as in a deployed console.
+   */
+  stop(): this {
+    this.stopped = true;
+    return this;
+  }
+
+  private refuse(
+    route: Route,
+    code: string,
+    message: string,
+    more: Record<string, string> = {},
+  ) {
+    return route.fulfill({
+      status: 409,
+      json: { detail: { code, message, ...more } },
+    });
+  }
+
+  private add(route: Route, body: Record<string, unknown>) {
+    const name = String(body.name);
+    const url = keptAddress(String(body.url));
+    if (url === null || !THIS_MACHINE.test(new URL(url).hostname)) {
+      // A refused value is named by its field and never repeated.
+      return route.fulfill({
+        status: 422,
+        json: {
+          detail: [
+            {
+              type: "agent_address",
+              loc: ["body", "url"],
+              msg: NOT_THIS_MACHINE,
+            },
+          ],
+        },
+      });
+    }
+    const named = this.agents.find((agent) => agent.name === name);
+    if (named !== undefined) {
+      return this.refuse(
+        route,
+        "name_taken",
+        named.source === "environment"
+          ? ENVIRONMENT_NAME_TAKEN
+          : SAVED_NAME_TAKEN,
+      );
+    }
+    const taken = this.agents.some(
+      (agent) =>
+        agent.url !== null && destination(agent.url) === destination(url),
+    );
+    if (taken) {
+      return this.refuse(route, "address_taken", AGENT_ADDRESS_TAKEN);
+    }
+    // The card is read before anything is saved.
+    if (this.silent.has(new URL(url).port)) {
+      return this.refuse(route, "agent_unusable", NOTHING_ANSWERED, {
+        reason: "no_answer",
+      });
+    }
+    this.saved += 1;
+    const agent = savedAgent(name, {
+      id: this.saved.toString(16).padStart(32, "0"),
+      url,
+      // An agent added in this increment always requires approval.
+      approval: "required",
+    });
+    this.agents.push(agent);
+    if (this.losing > 0) {
+      this.losing -= 1;
+      return route.abort("connectionfailed");
+    }
+    return route.fulfill({ status: 201, json: agent });
+  }
+
+  /** Answer this page's requests to the Agents routes, in the browser. */
+  async serve(page: Page): Promise<this> {
+    await page.route(
+      ({ pathname }) =>
+        pathname === "/api/agents" || pathname.startsWith("/api/agents/"),
+      async (route) => {
+        const request = route.request();
+        const method = request.method();
+        const path = new URL(request.url()).pathname.replace(/^\/api/, "");
+        const body = request.postData() ? request.postDataJSON() : undefined;
+        this.asked.push({ method, path, body });
+        if (this.stopped) {
+          return route.continue();
+        }
+        if (method === "GET" && path === "/agents") {
+          return route.fulfill({ json: this.list() });
+        }
+        if (method === "POST" && path === "/agents") {
+          return this.add(route, body as Record<string, unknown>);
+        }
+        return route.fulfill({ status: 404, json: { detail: "Not Found" } });
+      },
+    );
     return this;
   }
 }

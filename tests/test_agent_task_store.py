@@ -17,6 +17,8 @@ from freyja_agent.runtime.agent_tasks import (
     AgentTaskRecord,
     AgentTaskStore,
     InMemoryAgentTaskStore,
+    ProposedCall,
+    call_namespace,
 )
 from tests.fakes import FakeClock
 
@@ -316,3 +318,146 @@ async def test_pending_tasks_are_counted_by_agent_and_ref(store: AgentTaskStore)
         ("stub", None): 1,
         ("hello", None): 1,
     }
+
+
+# Feature 005, T052: the proposed calls (research R8, data-model.md "Proposed call").
+
+
+def a_call(
+    tool_call_id: str = "call-1",
+    *,
+    thread_id: str = "th-1",
+    namespace: str = "",
+    agent: str = "stub",
+    agent_id: str | None = None,
+    gated: bool = True,
+) -> ProposedCall:
+    return ProposedCall(
+        thread_id=thread_id,
+        namespace=namespace,
+        tool_call_id=tool_call_id,
+        agent=agent,
+        agent_id=agent_id,
+        gated=gated,
+    )
+
+
+def keys(calls: list[ProposedCall]) -> list[tuple[str, str]]:
+    return [(call.namespace, call.tool_call_id) for call in calls]
+
+
+async def test_a_proposed_call_is_kept_as_it_was_proposed(
+    store: AgentTaskStore, advance: Advance
+) -> None:
+    assert await store.get_call("th-1", "", "call-1") is None
+    assert await store.list_calls("th-1") == []
+    await advance(1)
+    before = await store.now()
+    await store.replace_calls(
+        "th-1",
+        "",
+        [a_call("call-1", agent_id="0af3", gated=False), a_call("call-2", agent="hello")],
+    )
+    saved = await store.get_call("th-1", "", "call-1")
+    assert saved is not None
+    assert (saved.thread_id, saved.namespace, saved.tool_call_id) == ("th-1", "", "call-1")
+    assert (saved.agent, saved.agent_id, saved.gated) == ("stub", "0af3", False)
+    # The store's own clock says when, whatever the caller's.
+    assert saved.proposed_at is not None and saved.proposed_at >= before
+    environment = await store.get_call("th-1", "", "call-2")
+    assert environment is not None
+    assert (environment.agent, environment.agent_id, environment.gated) == ("hello", None, True)
+    assert keys(await store.list_calls("th-1")) == [("", "call-1"), ("", "call-2")]
+    # Another thread, another namespace, and another id each find nothing.
+    assert await store.get_call("th-2", "", "call-1") is None
+    assert await store.get_call("th-1", "tools:x", "call-1") is None
+    assert await store.get_call("th-1", "", "call-3") is None
+
+
+async def test_a_reply_replaces_the_calls_of_its_thread_and_namespace_and_no_other(
+    store: AgentTaskStore,
+) -> None:
+    await store.replace_calls("th-1", "", [a_call("old-1"), a_call("old-2")])
+    await store.replace_calls("th-1", "tools:x", [a_call("sub-1", namespace="tools:x")])
+    await store.replace_calls("th-2", "", [a_call("other-1", thread_id="th-2")])
+
+    await store.replace_calls("th-1", "", [a_call("new-1")])
+
+    assert keys(await store.list_calls("th-1")) == [("", "new-1"), ("tools:x", "sub-1")]
+    assert keys(await store.list_calls("th-2")) == [("", "other-1")]
+    # A reply that calls no agent leaves its namespace with no call.
+    await store.replace_calls("th-1", "tools:x", [])
+    assert keys(await store.list_calls("th-1")) == [("", "new-1")]
+
+
+async def test_one_tool_call_id_in_two_namespaces_of_a_thread_is_two_calls(
+    store: AgentTaskStore,
+) -> None:
+    await store.replace_calls("th-1", "", [a_call("call-1", agent="stub")])
+    await store.replace_calls(
+        "th-1", "tools:x", [a_call("call-1", namespace="tools:x", agent="hello", agent_id="77aa")]
+    )
+    here = await store.get_call("th-1", "", "call-1")
+    there = await store.get_call("th-1", "tools:x", "call-1")
+    assert here is not None and (here.agent, here.agent_id) == ("stub", None)
+    assert there is not None and (there.agent, there.agent_id) == ("hello", "77aa")
+    assert len(await store.list_calls("th-1")) == 2
+
+
+async def test_one_tool_call_id_twice_in_one_reply_keeps_the_later_call(
+    store: AgentTaskStore,
+) -> None:
+    # Nothing makes a provider keep the id unique within a reply either.
+    await store.replace_calls(
+        "th-1", "", [a_call("call-1", agent="stub"), a_call("call-1", agent="hello")]
+    )
+    (kept,) = await store.list_calls("th-1")
+    assert kept.agent == "hello"
+
+
+async def test_a_call_is_stored_under_the_thread_and_namespace_it_is_replaced_for(
+    store: AgentTaskStore,
+) -> None:
+    # What the call itself says of its place is not what decides where it is kept.
+    await store.replace_calls("th-1", "", [a_call("call-1", thread_id="th-9", namespace="else")])
+    assert keys(await store.list_calls("th-1")) == [("", "call-1")]
+    assert await store.list_calls("th-9") == []
+
+
+async def test_a_call_is_deleted_alone_and_a_thread_s_calls_are_cleared_together(
+    store: AgentTaskStore,
+) -> None:
+    await store.replace_calls("th-1", "", [a_call("call-1"), a_call("call-2")])
+    await store.replace_calls("th-1", "tools:x", [a_call("call-1", namespace="tools:x")])
+    await store.replace_calls("th-2", "", [a_call("call-1", thread_id="th-2")])
+
+    await store.delete_call("th-1", "", "call-1")
+    assert keys(await store.list_calls("th-1")) == [("", "call-2"), ("tools:x", "call-1")]
+    # Deleting what is not there changes nothing.
+    await store.delete_call("th-1", "", "call-1")
+    await store.delete_call("th-1", "tools:y", "call-2")
+    assert len(await store.list_calls("th-1")) == 2
+
+    await store.clear_calls("th-1")
+    assert await store.list_calls("th-1") == []
+    assert keys(await store.list_calls("th-2")) == [("", "call-1")]
+    await store.clear_calls("th-1")
+
+
+@pytest.mark.parametrize(
+    ("checkpoint_ns", "namespace"),
+    [
+        # On the orchestrator the model's node and the tools' node both give the empty one.
+        ("model:0f3a", ""),
+        ("tools:77c1", ""),
+        ("", ""),
+        # In a subagent both give the subagent's own.
+        ("tools:9b2e|model:41aa", "tools:9b2e"),
+        ("tools:9b2e|tools:c0de", "tools:9b2e"),
+        ("tools:9b2e|tools:1111|model:2222", "tools:9b2e|tools:1111"),
+    ],
+)
+def test_a_call_s_namespace_is_what_its_model_and_its_tool_share(
+    checkpoint_ns: str, namespace: str
+) -> None:
+    assert call_namespace(checkpoint_ns) == namespace

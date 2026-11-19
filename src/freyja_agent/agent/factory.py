@@ -30,7 +30,7 @@ from langchain_core.utils.function_calling import convert_to_openai_tool
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
-from freyja_agent.agent.agent_tasks import AgentTasksMiddleware, check_agent_tasks
+from freyja_agent.agent.agent_tasks import AgentTasksMiddleware, AgentTool, check_agent_tasks
 from freyja_agent.agent.catalog import (
     NOT_OFFERED,
     OWN_TOOLS,
@@ -94,7 +94,9 @@ def build_agent(
     configured. ``check_agent_tasks`` reads it and ``AgentTasksMiddleware`` lists the pending
     ones on every model call, on the orchestrator and its subagent (feature 003, FR-018).
     Without it neither is added, so with no agents configured the orchestrator and its catalog
-    are what they were before feature 003 (FR-024).
+    are what they were before feature 003 (FR-024). The middleware is told which agent each
+    agent tool among ``delegate_tools`` sends to, and records every call of one that the
+    model proposes, on the orchestrator and on its subagent (feature 005, FR-023).
     """
     root = Path(workspace_dir)
     root.mkdir(parents=True, exist_ok=True)
@@ -102,16 +104,26 @@ def build_agent(
     delegate_entries = [_delegate_entry(tool) for tool in delegate_tools]
     own_tools: list[BaseTool] = [send_notification]
     task_middleware: list[Any] = []
+    # Which agent each agent tool sends to, and whether a call of it is gated in this build.
+    agent_tools = {
+        tool.name: AgentTool(
+            agent=tool.agent,
+            agent_id=tool.agent_id,
+            gated=tool.classification is Classification.GATED,
+        )
+        for tool in delegate_tools
+        if tool.agent is not None
+    }
     if agent_tasks is not None:
         own_tools.append(check_agent_tasks(agent_tasks))
-        task_middleware.append(AgentTasksMiddleware(agent_tasks))
+        task_middleware.append(AgentTasksMiddleware(agent_tasks, agent_tools))
     tools: list[BaseTool] = [*own_tools, *(entry.tool for entry in delegate_entries)]
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
     chat_model = resolve_model(model, openai_responses_api=openai_responses_api)
     subagent_graph, subagent = _general_purpose_subagent(
-        chat_model, tools, backend, max_steps, gate, agent_tasks
+        chat_model, tools, backend, max_steps, gate, agent_tasks, agent_tools
     )
     agent = create_deep_agent(
         model=chat_model,
@@ -228,6 +240,7 @@ def _general_purpose_subagent(
     max_steps: int,
     gate: dict[str, Any],
     agent_tasks: AgentTaskStore | None,
+    agent_tools: dict[str, AgentTool],
 ) -> tuple[Any, dict[str, Any]]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
@@ -247,7 +260,7 @@ def _general_purpose_subagent(
         PatchToolCallsMiddleware(),
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
         ThreadContextMiddleware(),
-        *([AgentTasksMiddleware(agent_tasks)] if agent_tasks is not None else []),
+        *([AgentTasksMiddleware(agent_tasks, agent_tools)] if agent_tasks is not None else []),
     ]
     append_prompt_caching_middleware(middleware)
     spec: dict[str, Any] = {

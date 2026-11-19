@@ -1,6 +1,7 @@
 import asyncio
 import json
 import os
+import re
 import shutil
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import asynccontextmanager, nullcontext
@@ -444,6 +445,16 @@ def make_app() -> Callable[[Runtime], FastAPI]:
         return create_app(open_runtime=lambda _settings: nullcontext(runtime))
 
     return _make
+
+
+def holds_port(text: str, port: str | int) -> bool:
+    """Whether ``text`` holds ``port`` as a number of its own.
+
+    A search for an agent's port must not find the same digits inside something else: a
+    hexadecimal id, a longer number, or the fraction of a timestamp. In every form an address
+    takes, the port follows a colon, a space, or a bracket, and no digit follows it.
+    """
+    return re.search(rf"(?<![0-9A-Fa-f.]){port}(?![0-9A-Fa-f])", text) is not None
 
 
 def parse_sse(lines: Iterable[str]) -> Iterator[tuple[str, Any]]:

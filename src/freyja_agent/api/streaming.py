@@ -229,6 +229,13 @@ async def run_stream(
         yield _event("start", _start(active, thread_id, run_id, mode, debug))
         interrupts: tuple[Interrupt, ...] = ()
         try:
+            if input is not None and mode != "resume":
+                # A run that starts with input leaves whatever step the thread had behind,
+                # and with it the calls that step proposed to agents; a paused thread is
+                # refused before it gets here. A resume and a background run's retry
+                # continue a step, whose calls are read when they are carried out (feature
+                # 005, research R8).
+                await runtime.agent_tasks.clear_calls(thread_id)
             # Subgraph streaming is on so an agent's progress, written by a hand-off made inside
             # the subagent, reaches the stream. What it adds is filtered back to the 001
             # contract: updates and interrupts come from the root only (feature 003, R7).

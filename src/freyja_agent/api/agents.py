@@ -5,6 +5,10 @@ database and changed only through these routes (constitution principle IV). An a
 address is in the body of an answer of these routes and in no other answer of the service;
 an environment agent's address is in none. The router refuses a request that changes
 something when a page of another origin made it, by the rule the LLM routes apply.
+
+Adding an agent reads its card and nothing more: the agent receives no message and no task
+(FR-027). An agent added here always requires approval; the choice to run without it comes
+with the routes that can take it back.
 """
 
 import logging
@@ -12,10 +16,24 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
 
 from freyja_agent.api.guards import NoInputRoute, refuse_other_origins
-from freyja_agent.api.schemas import Agent, AgentCard, AgentList, AgentSkillClaim
+from freyja_agent.api.schemas import Agent, AgentCard, AgentCreate, AgentList, AgentSkillClaim
+from freyja_agent.config import destination
 from freyja_agent.delegates.a2a_agents import AgentCardSummary, AgentLink
-from freyja_agent.runtime.runtime import RunContext, Runtime
-from freyja_agent.runtime.saved_agents import AGENT_LIMIT, SavedAgentRecord
+from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.delegates.agent_cards import CardError, CardProblem, card_details, cleaned
+from freyja_agent.delegates.agent_registry import (
+    ADDRESS_IS_AN_ENVIRONMENT_AGENT,
+    AgentRegistry,
+    AgentSet,
+)
+from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.runtime.saved_agents import (
+    AGENT_LIMIT,
+    AddressTakenError,
+    AgentLimitError,
+    NameTakenError,
+    SavedAgentRecord,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +47,16 @@ router = APIRouter(
 # The states a warning is about: the agent cannot be handed work now (FR-001a).
 UNUSABLE = ("unreachable", "not_in_use")
 
+# A card read a person asked for ends within this many seconds, whatever the service's limit
+# for reading a card is set to: the console's server stops waiting after thirty (FR-014,
+# research R15). A constant of the contract, not a setting.
+CARD_READ_SECONDS = 20.0
+
+# The refusals of an add, in the service's words. None holds a name or an address.
+SAVED_NAME_TAKEN = "Another saved agent has this name."
+SAVED_ADDRESS_TAKEN = "Another saved agent is at this address."
+LIMIT_REACHED = f"{AGENT_LIMIT} agents are saved, which is the most there can be."
+
 
 def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
@@ -39,9 +67,14 @@ def _runtime(request: Request) -> Runtime:
 
 
 def _claims(card: AgentCardSummary | None) -> AgentCard | None:
-    """Card details as the list returns them; None for a card this instance has not read."""
+    """Card details as the list returns them; None for a card this instance has not read.
+
+    Cleaned again of every address the process knows now: what a card said before another
+    agent was saved at an address it names is kept as it was read (FR-028).
+    """
     if card is None:
         return None
+    card = cleaned(card, SCRUBBER.scrub)
     return AgentCard(
         name=card.name,
         description=card.description,
@@ -83,9 +116,12 @@ def _from_the_environment(link: AgentLink, pending: int) -> Agent:
     )
 
 
-def _saved(record: SavedAgentRecord, context: RunContext, pending: int) -> Agent:
-    """A saved agent as the store has it, with this instance's view of whether it answers."""
-    agents = context.agents
+def _saved(record: SavedAgentRecord, agents: AgentSet | None, pending: int) -> Agent:
+    """A saved agent as the store has it, with this instance's view of whether it answers.
+
+    ``agents`` is the set that view is read from: a context's, or the one this instance
+    took up after a change it made; None when it has none.
+    """
     link = agents.link(record.name) if agents is not None else None
     unused = (
         next((found for found in agents.not_in_use if found.record.id == record.id), None)
@@ -147,7 +183,7 @@ async def agent_list(runtime: Runtime) -> AgentList:
             if link.source == "environment"
         ]
         listed += [
-            _saved(record, context, counts.get((record.name, record.ref), 0))
+            _saved(record, context.agents, counts.get((record.name, record.ref), 0))
             for record in sorted(records, key=lambda found: found.name)
         ]
     finally:
@@ -163,3 +199,114 @@ async def agent_list(runtime: Runtime) -> AgentList:
 async def list_agents(request: Request) -> AgentList:
     """List every agent Freyja may hand work to, with this instance's view of each."""
     return await agent_list(_runtime(request))
+
+
+def _taken(reason: str) -> HTTPException:
+    """The refusal for a name or an address the environment has, by the rule that found it."""
+    code = "address_taken" if reason == ADDRESS_IS_AN_ENVIRONMENT_AGENT else "name_taken"
+    return _error(409, code, reason)
+
+
+def _unusable(problem: CardProblem) -> HTTPException:
+    """The refusal for an agent whose card cannot be used: the code and its sentence (FR-016)."""
+    return HTTPException(
+        status_code=409,
+        detail={"code": "agent_unusable", "reason": problem.code, "message": problem.message},
+    )
+
+
+async def _free(runtime: Runtime, registry: AgentRegistry, name: str, leads_to: str) -> None:
+    """Refuse a name or an address that is taken, or an add beyond the limit (FR-006).
+
+    What the environment has first, which the store does not know, then what is saved. All
+    of it before any card is read; the store decides again when the agent is saved.
+    """
+    reason = registry.overridden(name, leads_to)
+    if reason is not None:
+        raise _taken(reason)
+    try:
+        records = await runtime.saved_agents.list_agents()
+    except Exception as exc:
+        logger.warning("Agent %s was not added: %s", name, type(exc).__name__)
+        raise _error(500, "internal", "The saved agents could not be read.") from None
+    if len(records) >= AGENT_LIMIT:
+        raise _error(409, "agent_limit", LIMIT_REACHED)
+    if any(record.name == name for record in records):
+        raise _error(409, "name_taken", SAVED_NAME_TAKEN)
+    if any(record.destination == leads_to for record in records):
+        raise _error(409, "address_taken", SAVED_ADDRESS_TAKEN)
+
+
+async def _save(runtime: Runtime, body: AgentCreate, card: AgentCardSummary) -> SavedAgentRecord:
+    """Save the agent; the store decides on the name, the address, and the limit again."""
+    refused: HTTPException | None = None
+    try:
+        return await runtime.saved_agents.add(name=body.name, url=body.url, card=card.to_dict())
+    except NameTakenError:
+        refused = _error(409, "name_taken", SAVED_NAME_TAKEN)
+    except AddressTakenError:
+        refused = _error(409, "address_taken", SAVED_ADDRESS_TAKEN)
+    except AgentLimitError:
+        refused = _error(409, "agent_limit", LIMIT_REACHED)
+    except Exception as exc:
+        # What a database says may name its own address, or the value it refused.
+        logger.warning("Agent %s was not added: %s", body.name, type(exc).__name__)
+        refused = _error(500, "internal", "The agent could not be saved.")
+    # Raised here, not in a handler, so that no error of the store is kept behind it.
+    raise refused
+
+
+@router.post("", response_model=Agent, status_code=201)
+async def add_agent(body: AgentCreate, request: Request) -> Agent:
+    """Add an agent: read its card at the address, and save it when it can be used.
+
+    Nothing is saved for an agent that cannot be used, and the agent is sent nothing but the
+    request for its card (FR-008, FR-027). The saved agent requires approval. On success
+    this instance takes the change up at once, and every other at its next context.
+    """
+    runtime = _runtime(request)
+    registry = runtime.registry
+    if registry is None:
+        raise _error(500, "internal", "This instance cannot add agents.")
+    name, url = body.name, body.url
+    await _free(runtime, registry, name, destination(url))
+    slots = runtime.card_reads
+    busy = slots.refusal(None)
+    if busy is not None:
+        raise _error(409, "check_busy", busy)
+    slots.take(None)
+    try:
+        # Known to the scrubber before it is first requested, whatever comes of the request.
+        SCRUBBER.register(url)
+        limit = min(runtime.settings.a2a_startup_timeout_seconds, CARD_READ_SECONDS)
+        problem: CardProblem | None = None
+        try:
+            card = await registry.read_card(name, url, limit=limit)
+        except CardError as error:
+            problem = error.problem
+        if problem is not None:
+            logger.info("Agent %s was not added: %s", name, problem.message)
+            raise _unusable(problem)
+        record = await _save(runtime, body, card_details(card, SCRUBBER.scrub))
+    finally:
+        slots.release(None)
+    # A saved agent's address is kept by the scrubber for as long as the process runs.
+    SCRUBBER.mark_saved(record.url)
+    agents: AgentSet | None = None
+    try:
+        # With the card just read, so that it is not read a second time.
+        agents = await registry.adopt(record, card)
+    except Exception as exc:
+        # The add stands: this instance, like every other, takes it up at its next context.
+        logger.warning(
+            "Agent %s was added, and this instance could not take it up at once: %s",
+            name,
+            type(exc).__name__,
+        )
+    logger.info(
+        "Agent added: %s (%s), approval %s",
+        record.name,
+        record.id,
+        "none" if record.read_only else "required",
+    )
+    return _saved(record, agents, 0)

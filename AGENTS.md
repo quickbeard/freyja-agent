@@ -98,8 +98,10 @@ startup and exits with an error naming the connection when it is unreachable.
   catalog, and the interrupt config generated from it; a tool with no classification raises
   `UnclassifiedToolError` and stops startup. `prompts.py` is the system prompt, `tools.py` the
   gated placeholder tool `send_notification`. `agent_tasks.py` is `AgentTasksMiddleware`, which
-  lists the thread's pending agent tasks in the prompt, and the `check_agent_tasks` tool; both
-  are added only when an agent is configured (`build_agent(agent_tasks=...)`).
+  lists the thread's pending agent tasks in the prompt and, after every reply of the model,
+  records which agent each call of an agent's tool was proposed for, and the
+  `check_agent_tasks` tool; both are added only when an agent is configured
+  (`build_agent(agent_tasks=...)`).
 - `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
   connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
   applies the call time limit, records each server's status, and redacts `pass_env` values from
@@ -117,7 +119,8 @@ startup and exits with an error naming the connection when it is unreachable.
   closes a link once no set that is held has it. `a2a_tools.py` builds each agent's
   `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step that
   runs again never sends twice, checks that a task belongs to the agent the tool was built
-  for and that the link is connected before it sends, and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
+  for, that the link is connected, and that the call was proposed for the agent the tool
+  sends to (`_proposed_for`) before it sends, and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
   takes a context, claims pending tasks, checks or gives them up, and starts a delivery for
   each ready outcome: a background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
   `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
@@ -147,9 +150,9 @@ startup and exits with an error naming the connection when it is unreachable.
   (`CheckSlots`).
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
-  `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, and agent
-  tasks (`PostgresAgentTaskStore` with its three `freyja_agent_*` tables, and
-  `InMemoryAgentTaskStore`); `saved_agents.py` is the `SavedAgentStore` for the agents an operator
+  `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, agent
+  tasks, and the calls of agents' tools that a model proposed (`PostgresAgentTaskStore` with
+  its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); `saved_agents.py` is the `SavedAgentStore` for the agents an operator
   saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
   `InMemorySavedAgentStore`); `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation
@@ -172,8 +175,9 @@ startup and exits with an error naming the connection when it is unreachable.
   learn whether the agents or the active profile changed, contacts nothing, and lists the
   agents;
   `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
-  which is the one answer of the service that holds a saved agent's address and which answers
-  500 when the saved agents cannot be read;
+  which answers 500 when the saved agents cannot be read, and `POST /agents`, which reads an
+  agent's card and saves the agent when it can be used, always requiring approval; the two
+  are the only answers of the service that hold a saved agent's address;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
@@ -193,8 +197,9 @@ startup and exits with an error naming the connection when it is unreachable.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
   `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
-  `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`); nothing is managed from the
-  Agents section yet.
+  `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
+  agent (`agent-form.tsx`, which keeps nothing once it is sent or closed) and changes and
+  removes none yet.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
   (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmations before a
   profile is activated (`activate-dialog.tsx`) and deleted (`delete-dialog.tsx`), and how a test's
@@ -215,10 +220,11 @@ startup and exits with an error naming the connection when it is unreachable.
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest is
   told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
-  `profiles.spec.ts` adding, activating, testing, changing, and deleting, and `agents.spec.ts`
-  the Agents section as it is read; `api.ts` holds what the service would answer
-  (`answerProfiles` and `answerAgents` for a list, `ProfileService` for a page that changes
-  profiles, which keeps what the page saved and activated) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
+  `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
+  the Agents section as it is read, and `agents-manage.spec.ts` adding an agent; `api.ts`
+  holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
+  `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
+  what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
   hands a page no answer sees the console as it is with the service stopped.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
@@ -296,6 +302,15 @@ startup and exits with an error naming the connection when it is unreachable.
   when LangGraph is given them. `tests/test_llm_secrets_nowhere.py` searches everything the
   service gives back and everything the checkpointer keeps. A new route or log line about
   profiles is added to that test.
+- A saved agent's address appears in `url` of an answer of the Agents routes and nowhere
+  else: in no other response, stream, thread, or log line, and in no card's text. An
+  environment agent's appears nowhere. Text that may hold one goes through the scrubber
+  (`delegates/addresses.py`), and card details are cleaned again where they are used
+  (`cleaned`), because an address may become an agent's after a card that names it was read.
+  `tests/test_agents_address_nowhere.py` searches everything the service gives back and
+  everything the checkpointer keeps. A new route or log line about agents is added to that
+  test. A test that searches for a port looks for it as a number of its own (`holds_port` in
+  `tests/conftest.py`), so that digits of an id or a timestamp are not taken for it.
 - No secret is committed, and gitleaks checks it: in the commit hook over what is staged, and
   in CI over every commit. Its rules and the made-up keys the tests use are in
   `.gitleaks.toml`. A test that needs a made-up key uses a value that file lets through, such

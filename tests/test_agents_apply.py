@@ -1,10 +1,14 @@
-"""005: a change of the saved agents takes effect without a restart (part 1, no route yet).
+"""005: a change of the saved agents takes effect without a restart.
 
-FR-019, FR-030, SC-002, SC-003; research R3. The saved agents are written to the store, as a
-route of a later phase will write them. A run that starts after a change has the new set, on
-the orchestrator and on its subagent; a run in progress keeps the tools it started with; a
-second instance on the same stores has the change in its next run, its catalog, and its next
-round of watching; and a decision is validated and carried out on one orchestrator.
+FR-019, FR-030, SC-001, SC-002, SC-003, SC-013; research R3. In part 1 the saved agents are
+written to the store, as another instance's route would write them. A run that starts after
+a change has the new set, on the orchestrator and on its subagent; a run in progress keeps
+the tools it started with; a second instance on the same stores has the change in its next
+run, its catalog, and its next round of watching; and a decision is validated and carried
+out on one orchestrator.
+
+Part 2 adds through the route, `POST /agents`: the agent can be handed work in the next run
+with no restart, always under approval, and is still there after a restart.
 
 Every agent is the stand-in, inside the test process.
 """
@@ -29,7 +33,8 @@ from freyja_agent.runtime.saved_agents import SavedAgentRecord
 from tests.a2a_stub import StubAgent, make_stub
 from tests.conftest import A2aApp, saved_card
 from tests.fakes import FakeClock, LabelledChatModel, ScriptedChatModel
-from tests.test_a2a_gate import DELEGATE, pending, propose, refuse, resume
+from tests.test_a2a_background import seen_outcomes
+from tests.test_a2a_gate import DELEGATE, interrupted, pending, propose, refuse, resume
 from tests.test_a2a_handoff import DONE, handoff, run, tool_results
 from tests.test_agents_startup import SAVED_URL, listed, seed_task, sent, task_state, tick, tools
 
@@ -325,11 +330,11 @@ def test_a_second_instance_has_the_change_in_its_next_run_its_catalog_and_its_ne
     assert texts(first) == ["From the other instance."]
 
 
-def _task(agent: str, task_id: str, ref: str, now: Any) -> AgentTaskRecord:
+def _task(agent: str, task_id: str, ref: str, now: Any, thread: str = "a-0") -> AgentTaskRecord:
     return AgentTaskRecord(
         agent=agent,
         task_id=task_id,
-        thread_id="a-0",
+        thread_id=thread,
         context_id="ctx",
         message="Compile the report.",
         state="working",
@@ -555,3 +560,241 @@ def test_a_cancel_while_the_context_is_being_taken_gives_the_lease_back(
         still_held = client.portal.call(stopped_while_taking)
     # Nothing holds the thread until the lease would have expired.
     assert still_held is False
+
+
+# Part 2 (T051): added through the route.
+
+ADDED_URL = "http://127.0.0.1:9321"
+ASK = ("handoff_to_helper", {"message": "Summarize the week.", "context": "Ship day is Tuesday."})
+
+
+def add(
+    client: TestClient,
+    made: A2aApp,
+    name: str = "helper",
+    url: str = ADDED_URL,
+    *,
+    stub: StubAgent | None = None,
+) -> dict[str, Any]:
+    """Add an agent through the route, with a stand-in at the address; return the answer."""
+    made.add_stub(url, stub or make_stub(name))
+    response = client.post("/agents", json={"name": name, "url": url})
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def received(made: A2aApp, url: str = ADDED_URL) -> list[list[tuple[str, str | None]]]:
+    """Each message the stand-in received, as its parts' kinds and texts."""
+    return [
+        [(kind, text) for kind, text, _metadata in message.parts]
+        for message in made.stub_at(url).record.messages
+    ]
+
+
+def test_an_added_agent_is_handed_work_in_the_next_run_once_a_person_approves(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(script=[DONE, propose(ASK)])
+    made = make_a2a_app(model, {})
+    with TestClient(made.app) as client:
+        run(client, "b-1", sse_events)
+        added = add(client, made)
+        catalog = tools(client)
+        proposal = interrupted(run(client, "b-1", sse_events, "use the helper"))
+        before_the_decision = received(made)
+        events = resume(client, "b-1", [{"type": "approve"}], sse_events)
+
+    # No restart, and the agent's two tools are there, gated as its choice says.
+    assert len(made.runtimes) == 1
+    assert added["approval"] == "required"
+    assert {name: catalog[name]["classification"] for name in HELPER_TOOLS} == {
+        "handoff_to_helper": "gated",
+        "cancel_helper_task": "gated",
+    }
+    for name in HELPER_TOOLS:
+        assert catalog[name]["agent"] == "helper"
+        assert "9321" not in str(catalog[name])
+    # The hand-off pauses, naming the agent, and nothing was sent before the decision.
+    (action,) = proposal["action_requests"]
+    assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+    assert action["allowed_decisions"] == ["approve", "edit", "reject"]
+    assert before_the_decision == []
+    # Once approved, the stand-in received exactly the proposed message.
+    assert events[-1] == ("end", {"status": "completed"})
+    assert received(made) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]
+    (result,) = tool_results(events, "handoff_to_helper")
+    assert result["content"].startswith("Agent 'helper' completed task ")
+
+
+def test_an_added_agent_is_handed_work_by_the_subagent_once_a_person_approves(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(ScriptedChatModel(script=[DELEGATE, propose(ASK, step="d")]), {})
+    with TestClient(made.app) as client:
+        add(client, made)
+        proposal = interrupted(run(client, "b-2", sse_events))
+        before_the_decision = received(made)
+        events = resume(client, "b-2", [{"type": "approve"}], sse_events)
+    (action,) = proposal["action_requests"]
+    assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+    assert before_the_decision == []
+    assert events[-1] == ("end", {"status": "completed"})
+    assert received(made) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]
+
+
+def test_an_added_agent_is_handed_work_in_a_background_run_once_a_person_approves(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(script=[propose(ASK, step="b")])
+    made = make_a2a_app(model, {"hello": {"read_only": True}})
+    # An outcome for the worker to deliver: a task the stand-in will not know.
+    seed_task(made, "hello", "task-1", thread="b-3")
+    with TestClient(made.app) as client:
+        add(client, made)
+        # One round: the outcome is ready, and the background run that tells the thread
+        # proposes a hand-off to the new agent.
+        tick(client, made)
+        waiting = pending(client, "b-3")
+        before_the_decision = received(made)
+        events = resume(client, "b-3", [{"type": "approve"}], sse_events)
+
+    assert len(seen_outcomes(model, 0)) == 1
+    (action,) = waiting["action_requests"]
+    assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+    # A background run is gated like any other: nothing left before the decision.
+    assert before_the_decision == []
+    assert events[-1] == ("end", {"status": "completed"})
+    assert received(made) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]
+
+
+def test_a_run_in_progress_finishes_without_the_added_agent_and_the_next_on_its_thread_has_it(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = LabelledChatModel(
+        script=[
+            propose(("handoff_to_helper", {"message": "Too early."})),
+            DONE,
+            propose(ASK, step="n"),
+        ]
+    )
+    made = make_a2a_app(model, {})
+    streamed: dict[str, Events] = {}
+    with TestClient(made.app) as client:
+        model.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "b-4", sse_events))
+        )
+        running.start()
+        with model.held():
+            # The run has reached its model and waits there while the agent is added.
+            add(client, made)
+        running.join(10)
+        assert not running.is_alive()
+        during = received(made)
+        following = run(client, "b-4", sse_events, "now use the helper")
+
+    # The run in progress was built without the agent: it did not fail, and sent nothing.
+    (unknown,) = tool_results(streamed["events"], "handoff_to_helper")
+    assert "not a valid tool" in unknown["content"]
+    assert streamed["events"][-1] == ("end", {"status": "completed"})
+    assert during == []
+    # The next run on the same thread has the agent, and pauses for it.
+    (action,) = interrupted(following)["action_requests"]
+    assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+
+
+def test_the_first_agent_of_a_service_that_had_none_brings_the_pending_tasks_with_it(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    check = AIMessage(
+        content="", tool_calls=[{"id": "k1", "name": "check_agent_tasks", "args": {}}]
+    )
+    model = ScriptedChatModel(script=[DONE, check, DONE, DONE])
+    made = make_a2a_app(model, {})
+    with TestClient(made.app) as client:
+        run(client, "b-5", sse_events)
+        before = set(model.bound_tool_names)
+        added = add(client, made)
+        # A task of the new agent that is still pending on the thread.
+        now = client.portal.call(made.store.now)
+        ref = f"{added['id']}:1"
+        client.portal.call(made.store.record_task, _task("helper", "task-9", ref, now, "b-5"))
+        events = run(client, "b-5", sse_events, "what is pending?")
+        after = set(model.bound_tool_names)
+
+    assert "check_agent_tasks" not in before
+    assert "check_agent_tasks" in after
+    # The tool lists the thread's tasks, and every model call is told of the pending ones.
+    (listed_tasks,) = tool_results(events, "check_agent_tasks")
+    assert "Agent 'helper', task task-9: working" in listed_tasks["content"]
+    system = model.seen[-1][0]
+    assert "Agent tasks still pending on this thread." in system.text
+    assert "- Agent 'helper', task task-9: working" in system.text
+
+
+def test_an_added_agent_is_the_same_after_a_restart_and_is_handed_work(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    first = make_a2a_app(ScriptedChatModel(), {})
+    with TestClient(first.app) as client:
+        added = add(client, first)
+        before = client.get("/agents").json()
+
+    # The service stops and starts again on the same database.
+    runtime = first.runtime
+    second = make_a2a_app(
+        ScriptedChatModel(script=[propose(ASK)]),
+        {},
+        instance_id="instance-b",
+        saver=runtime.agent.checkpointer,
+        store=first.store,
+        locks=runtime.locks,
+        saved_agents=first.saved_agents,
+        at=first.at,
+    )
+    with TestClient(second.app) as client:
+        after = client.get("/agents").json()
+        interrupted(run(client, "b-6", sse_events))
+        events = resume(client, "b-6", [{"type": "approve"}], sse_events)
+
+    (then,), (now,) = before["agents"], after["agents"]
+    # The same agent: its name, its address, its approval choice, and its card details.
+    for field in ("id", "name", "url", "approval", "card", "version", "created_at", "source"):
+        assert now[field] == then[field] == added[field], field
+    assert now["url"] == ADDED_URL
+    # In use again from the start: its card was read at startup, and work reaches it.
+    assert now["state"] == "reachable"
+    assert events[-1] == ("end", {"status": "completed"})
+    assert received(second) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]
+
+
+def test_a_run_on_a_second_instance_has_the_agent_once_the_add_was_answered_on_the_first(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    shared: dict[str, Any] = {
+        "saver": InMemorySaver(),
+        "locks": InMemoryRunLocks(60, clock=clock.now),
+    }
+    first = make_a2a_app(ScriptedChatModel(), {}, **shared)
+    second = make_a2a_app(
+        ScriptedChatModel(script=[propose(ASK)]),
+        {},
+        instance_id="instance-b",
+        store=first.store,
+        saved_agents=first.saved_agents,
+        at=first.at,
+        **shared,
+    )
+    with TestClient(first.app) as one, TestClient(second.app) as two:
+        assert two.get("/tools").json()["agents"] == []
+        add(one, first)
+        # The very next thing the second instance does is a run.
+        proposal = interrupted(run(two, "b-7", sse_events))
+        in_its_list = two.get("/agents").json()["agents"]
+        events = resume(two, "b-7", [{"type": "approve"}], sse_events)
+
+    (action,) = proposal["action_requests"]
+    assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+    assert [(agent["name"], agent["approval"]) for agent in in_its_list] == [("helper", "required")]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert received(first) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]

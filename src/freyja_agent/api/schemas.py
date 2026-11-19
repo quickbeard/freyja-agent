@@ -13,9 +13,11 @@ from pydantic import (
     StringConstraints,
     model_validator,
 )
+from pydantic_core import PydanticCustomError
 
-from freyja_agent.config import SERVER_NAME_PATTERN
+from freyja_agent.config import SERVER_NAME_PATTERN, AddressError, canonical_address
 from freyja_agent.llm.store import BASE_URL_LIMIT, MODEL_LIMIT, NAME_LIMIT, REASON_LIMIT
+from freyja_agent.runtime.saved_agents import InvalidAgentError, check_name
 
 # Client-chosen, opaque. Letters, digits, hyphen, underscore, dot; 1 to 128 chars; at least one
 # character that is not a dot, so "." and ".." never name a thread (FR-001a). The length is a
@@ -253,6 +255,47 @@ class Agent(BaseModel):
     pending_tasks: Annotated[int, Field(ge=0)]
     created_at: datetime | None
     updated_at: datetime | None
+
+
+def _agent_name(value: str) -> str:
+    """A name in the form environment agents use, refused in the store's own sentence."""
+    refused = None
+    try:
+        return check_name(value)
+    except InvalidAgentError as exc:
+        refused = str(exc)
+    # Raised outside the handler: the error carries the sentence and nothing behind it.
+    raise PydanticCustomError("agent_name", refused)  # type: ignore[arg-type]
+
+
+def _agent_address(value: str) -> str:
+    """The address in the one form it is kept in, refused in the rule's own sentence.
+
+    The rule words every refusal itself and never repeats what was entered (005 research
+    R11), so its sentence is the whole message: nothing of pydantic's is put before it.
+    """
+    refused = None
+    try:
+        return canonical_address(value)
+    except AddressError as exc:
+        refused = str(exc)
+    raise PydanticCustomError("agent_address", refused)  # type: ignore[arg-type]
+
+
+class AgentCreate(BaseModel):
+    """What adding an agent takes: a name and an address (005 FR-006, FR-008).
+
+    ``url`` is validated by the address rule and kept in its form, at most 2,000 characters,
+    which the rule checks itself. ``approval`` accepts ``required`` only, which is also what
+    it is when left out: an agent that runs without approval can be added once the routes
+    that can take that choice back exist. No refused value is repeated.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    name: Annotated[str, AfterValidator(_agent_name)]
+    url: Annotated[str, AfterValidator(_agent_address)]
+    approval: Literal["required"] = "required"
 
 
 class AgentList(BaseModel):

@@ -14,7 +14,9 @@ from freyja_agent.delegates.agent_cards import (
     AgentCardSummary,
     CardError,
     CardProblem,
+    SkillSummary,
     card_details,
+    cleaned,
     read_card,
 )
 from tests.a2a_stub import ELSEWHERE, StubAgent, make_stub, stub_card
@@ -373,3 +375,66 @@ def test_the_stored_form_reads_back_the_same() -> None:
     assert set(stored) == {"name", "description", "version", "skills", "cut"}
     assert set(stored["skills"][0]) == {"id", "name", "description", "tags"}
     assert AgentCardSummary.from_dict(stored) == kept
+
+
+# Feature 005, Phase 5: details are cleaned again of an address that became known later.
+
+
+def test_details_are_cleaned_again_of_an_address_that_became_known_later() -> None:
+    scrubber = AddressScrubber()
+    scrubber.mark_saved("http://127.0.0.1:9998")
+    card = stub_card(
+        "stub",
+        description="I am at http://127.0.0.1:9998; my neighbour is at http://localhost:9997.",
+    )
+    kept = card_details(card, scrubber.scrub)
+    # Cleaned of what was known when the card was read, and of nothing else.
+    assert kept.description == f"I am at {ADDRESS}; my neighbour is at http://localhost:9997."
+    assert cleaned(kept, scrubber.scrub) is kept
+
+    scrubber.mark_saved("http://127.0.0.1:9997")
+    again = cleaned(kept, scrubber.scrub)
+    assert again.description == f"I am at {ADDRESS}; my neighbour is at {ADDRESS}."
+    # Everything else is as it was kept.
+    assert (again.name, again.version, again.skills, again.cut) == (
+        kept.name,
+        kept.version,
+        kept.skills,
+        kept.cut,
+    )
+    assert cleaned(again, scrubber.scrub) is again
+
+
+def test_cleaning_again_reaches_every_text_and_keeps_each_within_the_limit() -> None:
+    scrubber = AddressScrubber()
+    # Shorter than what stands in for it, so that removing it makes a text longer.
+    short = "[::1]:80"
+    assert len(short) < len(ADDRESS)
+    filler = "x" * (2000 - len(short) - 1) + " "
+    kept = AgentCardSummary(
+        name=f"name {short}",
+        description=filler + short,
+        version=f"version {short}",
+        skills=(
+            SkillSummary(
+                f"id {short}", f"skill {short}", f"does {short}", (f"tag {short}", "plain")
+            ),
+        ),
+    )
+    assert len(kept.description) == 2000
+    scrubber.mark_saved("http://[::1]:80")
+    again = cleaned(kept, scrubber.scrub)
+    assert again.name == f"name {ADDRESS}"
+    assert again.version == f"version {ADDRESS}"
+    (skill,) = again.skills
+    assert (skill.id, skill.name, skill.description, skill.tags) == (
+        f"id {ADDRESS}",
+        f"skill {ADDRESS}",
+        f"does {ADDRESS}",
+        (f"tag {ADDRESS}", "plain"),
+    )
+    # Cut again to the limit the list's answer is held to, and marked as cut.
+    assert len(again.description) == 2000
+    assert again.description == (filler + ADDRESS)[:2000]
+    assert again.cut is True
+    assert short not in again.to_dict().__repr__()

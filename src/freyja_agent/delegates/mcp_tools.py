@@ -50,6 +50,9 @@ class DelegateTool:
     # Set for an agent's hand-off and cancel tools (feature 003); `server` is then empty.
     agent: str | None = None
     pinned_args: tuple[str, ...] = ()
+    # For an agent's tools: the saved agent's id, None for an agent named in the environment
+    # (feature 005, research R8). It is not part of the catalog.
+    agent_id: str | None = None
 
 
 def classify(name: str, read_only: Collection[str]) -> Classification:

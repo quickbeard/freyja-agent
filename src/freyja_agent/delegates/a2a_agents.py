@@ -108,6 +108,38 @@ def pinned_card(card: AgentCard, configured_url: str) -> AgentCard:
     return pinned
 
 
+def agent_http_client(
+    name: str, url: str, *, transport: AgentTransport, timeout: float
+) -> httpx.AsyncClient:
+    """The client every request to one agent's address is made with (005 FR-027).
+
+    It has an explicit transport, so no proxy of the environment applies to it, and it
+    follows no redirect (research R13). A link has one for its whole life; a card read for
+    an address that has no link yet gets one of its own.
+    """
+    return httpx.AsyncClient(
+        transport=transport(name, url),
+        follow_redirects=False,
+        timeout=timeout,
+        headers={VERSION_HEADER: PROTOCOL_VERSION_CURRENT},
+    )
+
+
+async def read_card_at(
+    name: str, url: str, *, transport: AgentTransport, limit: float
+) -> AgentCard:
+    """Read the card at an address no link exists for, with a client made for the read.
+
+    One ``GET``, within ``limit`` seconds, and nothing else: no message and no task (005
+    FR-027). Raises ``CardError``. The caller has told the scrubber the address already.
+    """
+    http = agent_http_client(name, url, transport=transport, timeout=limit)
+    try:
+        return await read_card(http, url, limit=limit)
+    finally:
+        await http.aclose()
+
+
 class AgentLink:
     """The running link to one agent in use on one instance (005 data-model.md "Agent link").
 
@@ -159,12 +191,7 @@ class AgentLink:
         SCRUBBER.mark_saved(config.url)
         # An explicit transport: no proxy of the environment applies. No redirect is followed
         # (005 FR-027, research R13).
-        self._http = httpx.AsyncClient(
-            transport=transport(name, config.url),
-            follow_redirects=False,
-            timeout=call_timeout,
-            headers={VERSION_HEADER: PROTOCOL_VERSION_CURRENT},
-        )
+        self._http = agent_http_client(name, config.url, transport=transport, timeout=call_timeout)
         # One caller reads the card while the others wait for its result.
         self._connecting = asyncio.Lock()
         self._readings = 0

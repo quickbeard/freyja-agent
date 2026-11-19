@@ -33,8 +33,10 @@ from freyja_agent.delegates.a2a_agents import (
     default_transport,
     handoff_tool_name,
     log_connected,
+    read_card_at,
 )
-from freyja_agent.delegates.agent_cards import AgentCardSummary, CardError
+from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.delegates.agent_cards import AgentCardSummary, CardError, cleaned
 from freyja_agent.runtime.saved_agents import SavedAgentRecord, SavedAgentStore
 
 logger = logging.getLogger(__name__)
@@ -186,18 +188,36 @@ class AgentRegistry:
         if self._started:
             self.mark_changed()
 
-    def _why_not_in_use(self, record: SavedAgentRecord) -> str | None:
-        """Which rule keeps a saved agent out of use, or None (FR-017)."""
-        if record.name in self._configs:
+    def overridden(self, name: str, leads_to: str) -> str | None:
+        """Which rule keeps a saved agent of this name and destination out of use, or None.
+
+        What the environment configures comes first (FR-017): an agent named there, a tool
+        server, or a tool that has one of the agent's two tool names, and then an
+        environment agent at the place the address leads to. The same rule decides that an
+        agent is not saved under such a name or address in the first place (FR-006).
+        """
+        if name in self._configs:
             return NAME_IS_AN_ENVIRONMENT_AGENT
-        if record.name in self._server_names:
+        if name in self._server_names:
             return NAME_IS_A_TOOL_SERVER
-        tools = (handoff_tool_name(record.name), cancel_tool_name(record.name))
+        tools = (handoff_tool_name(name), cancel_tool_name(name))
         if any(tool in self._taken_tool_names for tool in tools):
             return TOOL_NAME_TAKEN
-        if record.destination in self._destinations:
+        if leads_to in self._destinations:
             return ADDRESS_IS_AN_ENVIRONMENT_AGENT
         return None
+
+    def _why_not_in_use(self, record: SavedAgentRecord) -> str | None:
+        """Which rule keeps a saved agent out of use, or None (FR-017)."""
+        return self.overridden(record.name, record.destination)
+
+    async def read_card(self, name: str, url: str, *, limit: float) -> AgentCard:
+        """Read the card of an agent that is not saved yet, as a link of this instance would.
+
+        The same transport and the same kind of client as a link's, made for this one read
+        and closed after it. Raises ``CardError``.
+        """
+        return await read_card_at(name, url, transport=self._transport, limit=limit)
 
     def _make(
         self, revision: int, records: Collection[SavedAgentRecord], earlier: AgentSet
@@ -234,6 +254,12 @@ class AgentRegistry:
             links.append(link)
             read_only[record.name] = record.read_only
             in_use[record.name] = record
+        # Every address of this set is known to the scrubber by now: each link told it when
+        # it was made. Details that were read or kept before one of them became an agent's
+        # are cleaned of it here, before the tools are described from them (FR-028).
+        for link in links:
+            if link.card is not None:
+                link.card = cleaned(link.card, SCRUBBER.scrub)
         return AgentSet(
             revision=revision,
             links=tuple(links),
