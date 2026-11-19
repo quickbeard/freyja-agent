@@ -37,9 +37,15 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
   tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
-- `uv run pre-commit run --all-files` runs the commit hook over the whole repo: Ruff and
+- `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
+  checks (whitespace at the end of a line, the newline at the end of a file, YAML that
+  parses, merge markers), gitleaks over what is staged, Ruff and
   pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
+  pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
+  needs the network.
+- `docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.1 git --redact .`
+  searches every commit for secrets, as CI does.
 - In `web/`: `pnpm install` installs the web app's dependencies, `pnpm dev` and `pnpm build`
   run and build it, `pnpm lint` runs `biome check`, `pnpm format` formats in place, and
   `pnpm test` runs the unit tests with Vitest.
@@ -184,6 +190,7 @@ startup and exits with an error naming the connection when it is unreachable.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
   `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
   GitLab's `ruff`, `biome`, `pytest`, and `vitest` jobs do the same for merge requests.
+  `secrets.yml` and GitLab's `gitleaks` job search every commit for secrets, on every change.
   `playwright.yml` and GitLab's `playwright` job run the end-to-end tests when a file under
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
@@ -228,6 +235,15 @@ startup and exits with an error naming the connection when it is unreachable.
   when LangGraph is given them. `tests/test_llm_secrets_nowhere.py` searches everything the
   service gives back and everything the checkpointer keeps. A new route or log line about
   profiles is added to that test.
+- No secret is committed, and gitleaks checks it: in the commit hook over what is staged, and
+  in CI over every commit. Its rules and the made-up keys the tests use are in
+  `.gitleaks.toml`. A test that needs a made-up key uses a value that file lets through, such
+  as `sk-recognizable-key-0001`; a new shape is added there as an exact pattern, never as a
+  path, so that a real key pasted into a test is still found. The gitleaks version is named in
+  `.pre-commit-config.yaml`, `.github/workflows/secrets.yml`, and `.gitlab-ci.yml`; change
+  the three together.
+- The file hooks leave what Spec Kit generates alone (`.specify/`, `.claude/skills/`,
+  `.agents/skills/`), and the YAML check skips `web/pnpm-lock.yaml`.
 - A route that changes something and takes no body can be reached by a form on any web page.
   The `/llm` routes refuse such a request by what the browser says of it
   (`refuse_other_origins`); a new router that changes operator-managed configuration does the

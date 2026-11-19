@@ -375,7 +375,7 @@ pnpm lint                      # biome check: lint and report unformatted files
 pnpm format                    # format in place
 ```
 
-The pre-commit hook runs `ruff check --fix` and `ruff format` on staged Python files, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes.
+The pre-commit hook first checks the staged files themselves: it removes whitespace at the end of a line, makes a file end with one newline, and stops a commit that holds YAML that does not parse, a marker a merge left behind, or a secret (see [Secrets](#secrets)). It then runs `ruff check --fix` and `ruff format` on staged Python files, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If a test fails, the commit is blocked until it passes.
 
 The web hooks run the scripts in `web/package.json` with pnpm, so they need Node and pnpm on the path and the dependencies installed in `web/`. Without pnpm they fail with ``Executable `pnpm` not found``. To run the hook over the whole repo:
 
@@ -384,6 +384,20 @@ uv run pre-commit run --all-files
 ```
 
 CI runs both linters on every pull request and merge request and on `main`: `.github/workflows/lint.yml` on GitHub, and the `ruff` and `biome` jobs of `.gitlab-ci.yml` on GitLab. There they only report: `ruff check`, `ruff format --check`, and `biome check` change no file, so a failure is fixed locally with the commands above.
+
+## Secrets
+
+[gitleaks](https://github.com/gitleaks/gitleaks) looks for keys, tokens, and passwords in what is committed. The commit hook runs it over the staged changes and stops the commit when it finds one. pre-commit builds gitleaks itself the first time, which takes about a minute and needs the network; nothing is installed by hand.
+
+CI runs it over every commit, on every pull request and merge request and on `main`: `.github/workflows/secrets.yml` on GitHub and the `gitleaks` job of `.gitlab-ci.yml` on GitLab. To do the same locally:
+
+```bash
+docker run --rm -v "$PWD":/repo -w /repo zricethezav/gitleaks:v8.30.1 git --redact .
+```
+
+The rules are gitleaks' own, extended in `.gitleaks.toml` by the made-up keys the tests use, such as `sk-recognizable-key-0001`. They are let through as exact values and not by their path, so a real key pasted into a test is still found. A test that needs a made-up key uses one of those values; a new shape is added to that file.
+
+A finding is reported without its value. A secret that was committed is in the history even after the file is fixed: change the secret at its provider first, then remove it. The hook's file checks leave what Spec Kit generates alone (`.specify/`, `.claude/skills/`, `.agents/skills/`).
 
 ## Unit tests
 

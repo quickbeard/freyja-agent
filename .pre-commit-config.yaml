@@ -1,4 +1,25 @@
 repos:
+  # Files as they are kept: no whitespace at the end of a line, one newline at the end of a
+  # file, YAML that parses, and no marker a merge left behind. The first two change the file;
+  # what Spec Kit generates is left as Spec Kit writes it.
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        exclude: &generated ^(\.specify|\.claude/skills|\.agents/skills)/
+      - id: end-of-file-fixer
+        exclude: *generated
+      - id: check-yaml
+        # pnpm writes its lock file as two YAML documents.
+        exclude: ^web/pnpm-lock\.yaml$
+      - id: check-merge-conflict
+  # Secrets in what is about to be committed. pre-commit builds gitleaks itself at this
+  # version, so nothing is installed by hand. The rules and the made-up keys of the tests
+  # that are let through are in .gitleaks.toml.
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
   - repo: https://github.com/astral-sh/ruff-pre-commit
     rev: v0.17.3
     hooks:
