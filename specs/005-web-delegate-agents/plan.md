@@ -108,7 +108,11 @@ authentication, a set of agents per thread, renaming, and DNS rebinding.
 
 *GATE: Must pass before Phase 0 research. Re-check after Phase 1 design.*
 
-Checked against constitution 1.4.0.
+Checked against constitution 1.4.0. Constitution 1.5.0 (2026-11-19) added three gates to
+principle V: a secret scan, Trivy and Semgrep, and a coverage floor for each suite. They
+change nothing this plan decides. The commit hook and CI hold every phase from Phase 3 on to
+them; a phase that adds a Postgres store, which CI does not measure, says in its pull request
+what that does to the service's coverage.
 
 | Principle | Touched? | How the plan satisfies it | Pre-research | Post-design |
 |---|---|---|---|---|
