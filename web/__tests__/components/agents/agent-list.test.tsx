@@ -132,9 +132,10 @@ describe("AgentList", () => {
     stubFetch(list());
     const { unmount } = renderList();
     await screen.findByRole("heading", { name: "hello" });
+    // The section's own two, and Check on each card: nothing changes an agent.
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Refresh", "Add"]);
+    ).toEqual(["Refresh", "Add", "Check", "Check"]);
     for (const role of ["link", "textbox", "switch", "combobox", "dialog"]) {
       expect(screen.queryAllByRole(role)).toEqual([]);
     }
@@ -274,5 +275,145 @@ describe("AgentList", () => {
     await screen.findByRole("alert");
     expect(screen.queryByRole("button", { name: "Add" })).toBeNull();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  // Part 3 (T072): the warning above the cards, and checking from a card.
+
+  const DOWN: Agent = {
+    ...STUB,
+    state: "unreachable",
+    checked_at: "2026-11-19T09:04:10Z",
+    reason: "Nothing answered at the address.",
+  };
+  const UNUSED: Agent = {
+    ...STUB,
+    id: "0123456789abcdef0123456789abcdef",
+    name: "report",
+    state: "not_in_use",
+    checked_at: null,
+    reason: "An agent named in the environment has this name.",
+  };
+  const UNTRIED: Agent = {
+    ...STUB,
+    id: "fedcba9876543210fedcba9876543210",
+    name: "later",
+    state: "not_tried",
+    checked_at: null,
+  };
+  const warning = () =>
+    screen.queryByRole("note", { name: "Agents that cannot be used" });
+
+  it("warns above the cards about each agent that cannot be used, by name", async () => {
+    stubFetch(list([HELLO, UNTRIED, UNUSED, DOWN]));
+    renderList();
+    await screen.findByRole("heading", { name: "hello" });
+    expect(warning()?.textContent).toBe(
+      "Warning: 2 agents cannot be used: report, stub. Each one's card says why.",
+    );
+    // Above the cards: it comes before the first of them.
+    const first = screen.getByRole("heading", { name: "hello" });
+    expect(
+      (warning() as HTMLElement).compareDocumentPosition(first) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("warns about nothing when every agent is reachable or has not been tried", async () => {
+    stubFetch(list([HELLO, STUB, UNTRIED]));
+    renderList();
+    await screen.findByRole("heading", { name: "later" });
+    expect(warning()).toBeNull();
+    expect(screen.queryByText(/cannot be used/)).toBeNull();
+  });
+
+  it("warns about no agent while the service cannot be reached", async () => {
+    stubFetch(list([HELLO, DOWN]), { fails: "Failed to fetch" });
+    renderList();
+    await screen.findByRole("heading", { name: "hello" });
+    expect(warning()).not.toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+    await screen.findByRole("alert");
+    // What was read before is not shown as if it were so now.
+    expect(warning()).toBeNull();
+    expect(screen.queryByText(/cannot be used/)).toBeNull();
+  });
+
+  it("reads the list again after a check, and the card and the warning follow it", async () => {
+    const usable = {
+      usable: true,
+      reason: null,
+      message: null,
+      checked_at: "2026-11-19T10:00:00Z",
+      recorded: true,
+      card_changed: false,
+    };
+    const fetchStub = stubFetch(
+      list([DOWN]),
+      { json: usable },
+      list([{ ...STUB, checked_at: usable.checked_at }]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    expect(warning()).not.toBeNull();
+    expect(screen.getByRole("note", { name: "Warning" })).toBeTruthy();
+
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    const said = await screen.findByRole("status");
+    expect(said.textContent).toContain("this agent can be used");
+    // One reading after the check, and what it says is what is shown.
+    await waitFor(() => expect(warning()).toBeNull());
+    expect(screen.queryByRole("note", { name: "Warning" })).toBeNull();
+    expect(fetchStub.mock.calls.map(([path]) => path)).toEqual([
+      "/api/agents",
+      `/api/agents/${STUB.id}/check`,
+      "/api/agents",
+    ]);
+    // The check's own result stays on the card.
+    expect(screen.getByRole("status").textContent).toContain(
+      "this agent can be used",
+    );
+  });
+
+  it("reads the list again when the service says the checked agent is gone", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "agent_not_found",
+            message: "There is no agent with this id.",
+          },
+        },
+      },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    fireEvent.click(screen.getAllByRole("button", { name: "Check" })[1]);
+    await waitFor(() => expect(cards()).toEqual(["hello"]));
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+  });
+
+  it("leaves the list alone when a check is refused as busy", async () => {
+    const fetchStub = stubFetch(list([STUB]), {
+      status: 409,
+      json: {
+        detail: {
+          code: "check_busy",
+          message:
+            "This agent is already being checked. Wait for that check to end.",
+        },
+      },
+    });
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    fireEvent.click(screen.getByRole("button", { name: "Check" }));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "already being checked",
+    );
+    expect(cards()).toEqual(["stub"]);
+    expect(fetchStub).toHaveBeenCalledTimes(2);
   });
 });

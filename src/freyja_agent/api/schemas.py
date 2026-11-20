@@ -298,6 +298,38 @@ class AgentCreate(BaseModel):
     approval: Literal["required"] = "required"
 
 
+# A saved agent's id, or ``env.<name>`` for an environment agent (contracts/openapi.yaml).
+AGENT_ID_PATTERN = r"^([0-9a-f]{32}|env\.[a-z][a-z0-9_-]{0,31})$"
+
+
+class AgentCheck(BaseModel):
+    """What a check of an agent found (005 FR-013, FR-016)."""
+
+    usable: bool
+    # Which check the card failed, and the service's own sentence for it; None when usable.
+    reason: (
+        Literal[
+            "no_answer",
+            "timeout",
+            "no_card",
+            "unreadable",
+            "redirect",
+            "too_large",
+            "auth_required",
+            "no_text",
+            "no_interface",
+        ]
+        | None
+    )
+    message: str | None
+    checked_at: datetime
+    # False when the agent was moved or removed while the check ran: nothing was kept.
+    recorded: bool
+    # True when this check replaced the card details kept or shown for the agent by
+    # different ones. The agent's tools are described from the new details from the next run.
+    card_changed: bool
+
+
 class AgentList(BaseModel):
     # Environment agents first, in configuration order, then saved agents by name.
     agents: list[Agent]

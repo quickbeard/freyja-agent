@@ -1,8 +1,23 @@
 "use client";
 
+import { useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Agent, AgentCard as AgentClaim } from "@/lib/agents";
+import { Button } from "@/components/ui/button";
+import {
+  Card,
+  CardContent,
+  CardFooter,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  type Agent,
+  type AgentCheck,
+  type AgentCard as AgentClaim,
+  checkAgent,
+} from "@/lib/agents";
+import { ApiError, isGone } from "@/lib/api";
+import { CheckResult } from "./check-result";
 
 // The time is the service's own, only put in the reader's words: no clock is read here.
 const WHEN = new Intl.DateTimeFormat(undefined, {
@@ -130,10 +145,69 @@ function Claim({ card }: { card: AgentClaim }) {
 
 /**
  * One agent Freyja can hand work to, as the service describes it. Nothing here changes the
- * agent, and an environment agent's address is not known to the console at all.
+ * agent, and an environment agent's address is not known to the console at all. An agent
+ * that is in use can be checked from its card: the service reads its card again and says
+ * whether the agent can be used. `onChecked` is told when the list should be read again.
  */
-export function AgentCard({ agent }: { agent: Agent }) {
+export function AgentCard({
+  agent,
+  onChecked,
+  onGone,
+}: {
+  agent: Agent;
+  /** Told after any result of a check, and when a check got no answer. */
+  onChecked?: () => void;
+  /** Told when the service says this agent no longer exists. */
+  onGone?: () => void;
+}) {
   const down = agent.state === "unreachable" || agent.state === "not_in_use";
+  // A saved agent the environment overrides has no link to check (FR-013).
+  const inUse = agent.state !== "not_in_use";
+  // What the last check from this card found, or why it was refused. Either stays until the
+  // next check starts: the result carries the time the service gave it.
+  const [checked, setChecked] = useState<AgentCheck | null>(null);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const [checking, setChecking] = useState(false);
+  // A second press arriving before the first one shows as checking still sends nothing.
+  const inFlight = useRef(false);
+  // Reading a card can take a while, and the card can go meanwhile: the list was read again
+  // without its agent, or the section was left. What the answer sets here is then set on
+  // nothing; whoever holds the list is told all the same.
+
+  async function check() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setChecking(true);
+    setChecked(null);
+    setRefusal(null);
+    try {
+      const result = await checkAgent(agent.id);
+      setChecked(result);
+      // The service says what is so now: its state, its time, and its card's details.
+      onChecked?.();
+    } catch (error) {
+      if (isGone(error)) {
+        onGone?.();
+      } else if (
+        !(error instanceof ApiError) ||
+        error.code === "unreachable" ||
+        error.code === "agent_read_only"
+      ) {
+        // No answer came back, so whether the card was read is not known; or the service
+        // says the agent is not in use, which this card does not show yet.
+        onChecked?.();
+      }
+      setRefusal(
+        error instanceof ApiError
+          ? error.message
+          : "The agent could not be checked.",
+      );
+    } finally {
+      inFlight.current = false;
+      setChecking(false);
+    }
+  }
+
   return (
     <Card>
       <CardHeader>
@@ -172,7 +246,35 @@ export function AgentCard({ agent }: { agent: Agent }) {
         ) : (
           <Claim card={agent.card} />
         )}
+        {checked && (
+          // A status, as the result of a profile's test is in the LLM section. It is not
+          // inside a region marked `aria-live`: the dialog that adds an agent leaves such
+          // a region, and what is around it, reachable behind itself.
+          <output className="flex flex-col gap-1 text-sm">
+            <CheckResult check={checked} />
+          </output>
+        )}
+        {/* The service's sentence is text, whatever it holds: nothing is made of it. */}
+        {refusal && (
+          <p role="alert" className="break-words text-sm text-destructive">
+            {refusal}
+          </p>
+        )}
       </CardContent>
+      {inUse && (
+        <CardFooter className="mt-auto flex-wrap gap-2">
+          {/* Reading the card can take a while: the button says so and takes no press. */}
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={checking}
+            aria-busy={checking}
+            onClick={check}
+          >
+            {checking ? "Checking…" : "Check"}
+          </Button>
+        </CardFooter>
+      )}
     </Card>
   );
 }

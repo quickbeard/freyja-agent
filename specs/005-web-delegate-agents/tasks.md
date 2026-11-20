@@ -753,7 +753,7 @@ succeeds. The service was never restarted after the first time.
 
 ### Tests for User Story 3
 
-- [ ] T068 [P] [US3] Write `tests/test_agents_check.py`, `POST /agents/{agent_id}/check`. For a
+- [X] T068 [P] [US3] Write `tests/test_agents_check.py`, `POST /agents/{agent_id}/check`. For a
       saved agent and for `env.<name>`: a usable card gives `usable` true, null `reason` and
       `message`, `checked_at`, and `recorded` true, and the list then shows the agent reachable
       at that time with the details just read; a card that cannot be used gives `usable` false
@@ -774,12 +774,12 @@ succeeds. The service was never restarted after the first time.
       `agent_read_only`; an id in neither form is 422; a page of another origin is refused with
       403; the log names the agent, the result, and whether the card details were replaced, and
       holds no address (FR-013 to FR-016, FR-026, FR-027, FR-029, FR-030, SC-011, SC-012, R15)
-- [ ] T069 [P] [US3] Extend `tests/test_agents_address_nowhere.py`, part 2: a check that
+- [X] T069 [P] [US3] Extend `tests/test_agents_address_nowhere.py`, part 2: a check that
       succeeds, one that fails for each card problem, one refused as busy, and a card that
       mentions its own address and another agent's; the search of part 1 again (FR-028, SC-008)
-- [ ] T070 [P] [US3] Extend `web/__tests__/lib/agents.test.ts`, part 3: `checkAgent(id)` posts
+- [X] T070 [P] [US3] Extend `web/__tests__/lib/agents.test.ts`, part 3: `checkAgent(id)` posts
       to `/api/agents/<id>/check` with no body and returns the result
-- [ ] T071 [P] [US3] Write `web/__tests__/components/agents/check-result.test.tsx` and extend
+- [X] T071 [P] [US3] Write `web/__tests__/components/agents/check-result.test.tsx` and extend
       `agent-card.test.tsx`, part 2: every card of an agent that is in use has Check, saved or
       from the environment, and a card of an agent that is not in use has none; while a check
       runs the button says so and cannot be pressed again; a usable result says the agent can
@@ -788,12 +788,12 @@ succeeds. The service was never restarted after the first time.
       the agent's card changed and that its tools are described from the new details from the
       next run; `check_busy` and `agent_not_found` are shown as the service words them, and the
       second has the list read again; after any result the list is read again (FR-013, FR-014)
-- [ ] T072 [P] [US3] Write `web/__tests__/components/agents/agents-warning.test.tsx` and extend
+- [X] T072 [P] [US3] Write `web/__tests__/components/agents/agents-warning.test.tsx` and extend
       `agent-list.test.tsx`, part 3: with one or more agents `unreachable` or `not_in_use`, a
       warning above the cards names each of them and says in words that they cannot be used;
       with every agent reachable, and with only `not_tried` agents, there is none; while the
       service cannot be reached there is none (FR-001a)
-- [ ] T073 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Agents entry
+- [X] T073 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Agents entry
       carries a badge with the number of agents that cannot be used and a text for assistive
       technology that says what the number means; with none there is no badge; when the read
       fails there is no badge; the badge shows on the LLM section too. The file's existing
@@ -802,7 +802,7 @@ succeeds. The service was never restarted after the first time.
 
 ### Implementation for User Story 3
 
-- [ ] T074 [US3] Add `AgentCheck` to `src/freyja_agent/api/schemas.py` and implement `POST
+- [X] T074 [US3] Add `AgentCheck` to `src/freyja_agent/api/schemas.py` and implement `POST
       /agents/{agent_id}/check` in `src/freyja_agent/api/agents.py`: the id's two forms; a
       context held for as long as the link is used; the agent's slot and one of the four; the
       card read through `link.connect` within the lesser of the startup limit and twenty
@@ -810,16 +810,16 @@ succeeds. The service was never restarted after the first time.
       `card_changed` from its answer; for an environment agent the link's details replaced and
       `registry.mark_changed()`; a read that fails leaves the link not connected; the log line,
       which says whether the card details were replaced (FR-013 to FR-015, FR-030, R6, R15)
-- [ ] T075 [P] [US3] Add `checkAgent` and the `AgentCheck` type to `web/lib/agents.ts`
-- [ ] T076 [US3] Create `web/components/agents/check-result.tsx`, after
+- [X] T075 [P] [US3] Add `checkAgent` and the `AgentCheck` type to `web/lib/agents.ts`
+- [X] T076 [US3] Create `web/components/agents/check-result.tsx`, after
       `web/components/llm/test-result.tsx`, and add Check to
       `web/components/agents/agent-card.tsx` as T071 asks
-- [ ] T077 [US3] Create `web/components/agents/agents-warning.tsx` and show it above the cards
+- [X] T077 [US3] Create `web/components/agents/agents-warning.tsx` and show it above the cards
       in `web/components/agents/agent-list.tsx` (FR-001a, R18)
-- [ ] T078 [US3] Add the badge to the Agents entry in `web/components/app-sidebar.tsx` with
+- [X] T078 [US3] Add the badge to the Agents entry in `web/components/app-sidebar.tsx` with
       `SidebarMenuBadge`, reading the list with SWR under `AGENTS_KEY`, the key the list uses
       (FR-001a, R18)
-- [ ] T079 [US3] Write the end-to-end tests of this story. Extend `web/e2e/agents.spec.ts`:
+- [X] T079 [US3] Write the end-to-end tests of this story. Extend `web/e2e/agents.spec.ts`:
       with an agent that cannot be used, the sidebar's Agents entry carries the number on the
       LLM section, without the Agents section having been opened; in the Agents section the
       warning above the cards names the agent and its card carries the warning; after a reading

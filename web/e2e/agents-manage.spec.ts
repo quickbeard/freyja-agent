@@ -2,11 +2,15 @@ import { expect, type Page, test } from "@playwright/test";
 import {
   AGENT_ADDRESS_TAKEN,
   AgentService,
+  ALREADY_CHECKED,
+  agentsBadge,
+  agentsWarning,
   alerts,
   card,
   cards,
   ENVIRONMENT_NAME_TAKEN,
   environmentAgent,
+  NO_SUCH_AGENT,
   NOT_THIS_MACHINE,
   NOTHING_ANSWERED,
   SAVED_NAME_TAKEN,
@@ -340,6 +344,179 @@ test("the address is sent in a request body and is in no address the page asked 
   expect([...new Set(service.asked.map(({ path }) => path))]).toEqual([
     "/agents",
   ]);
+});
+
+// 005, User Story 3: check an agent from its card.
+
+const CAN = "The check found that this agent can be used";
+const CANNOT = "The check found that this agent cannot be used";
+const check = (page: Page, name: string) =>
+  card(page, name).getByRole("button", { name: "Check" });
+const found = (page: Page, name: string) =>
+  card(page, name).getByRole("status");
+
+test("Check on a saved card and on an environment card says the agent can be used, then that it cannot and why, and the card follows", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  const ids = { hello: "env.hello", stub: "0123456789abcdef0123456789abcdef" };
+
+  for (const name of ["stub", "hello"] as const) {
+    const shown = card(page, name);
+    await check(page, name).click();
+    await expect(found(page, name)).toContainText(CAN);
+    await expect(shown.getByText(/^Reachable/)).toBeVisible();
+    await expect(shown.getByRole("note", { name: "Warning" })).toHaveCount(0);
+    await expect(agentsWarning(page)).toHaveCount(0);
+
+    // The agent stops answering, and is checked again.
+    service.answers(name, false);
+    await check(page, name).click();
+    await expect(found(page, name)).toContainText(CANNOT);
+    await expect(found(page, name)).toContainText(NOTHING_ANSWERED);
+    await expect(found(page, name)).not.toContainText(CAN);
+    // The card follows: its own warning, the one above the cards, and the sidebar's number.
+    const warning = shown.getByRole("note", { name: "Warning" });
+    await expect(warning).toContainText("This agent cannot be reached.");
+    await expect(warning).toContainText(NOTHING_ANSWERED);
+    await expect(shown.getByText("Unreachable")).toBeVisible();
+    await expect(agentsWarning(page)).toContainText(name);
+    await expect(agentsBadge(page)).toHaveText("1");
+
+    // It answers again: one more check, and every warning about it is gone.
+    service.answers(name, true);
+    await check(page, name).click();
+    await expect(found(page, name)).toContainText(CAN);
+    await expect(warning).toHaveCount(0);
+    await expect(agentsWarning(page)).toHaveCount(0);
+    await expect(agentsBadge(page)).toHaveCount(0);
+  }
+  await expect(alerts(page)).toHaveCount(0);
+
+  // Each check named its agent by its id, in the path, and sent nothing with it.
+  expect(service.changes).toEqual(
+    [ids.stub, ids.stub, ids.stub, ids.hello, ids.hello, ids.hello].map(
+      (id) => ({
+        method: "POST",
+        path: `/agents/${id}/check`,
+        body: undefined,
+      }),
+    ),
+  );
+  // And the list was read once on opening and once after each check.
+  expect(service.reads).toBe(7);
+  // A check changes nothing else of an agent.
+  await expect(card(page, "stub").getByText("Requires approval")).toBeVisible();
+  await expect(
+    card(page, "stub").getByText("http://127.0.0.1:9998", { exact: true }),
+  ).toBeVisible();
+});
+
+test("a check that finds other card details says that the agent's card changed, and the card shows them", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  const claim = card(page, "stub").getByRole("group", {
+    name: "What the agent says of itself",
+  });
+  await expect(claim).toContainText("What the stub agent says it does.");
+
+  // Nothing differs: the check says so by saying nothing of the card.
+  await check(page, "stub").click();
+  await expect(found(page, "stub")).toContainText(CAN);
+  await expect(found(page, "stub")).not.toContainText("card changed");
+
+  service.rewritesCard("stub", {
+    description: "It now also translates reports.",
+  });
+  await check(page, "stub").click();
+  await expect(found(page, "stub")).toContainText("The agent's card changed.");
+  await expect(found(page, "stub")).toContainText(
+    "Its tools are described from the new details from the next run.",
+  );
+  // The card shows what was just read, as the agent's own claim.
+  await expect(claim).toContainText("It now also translates reports.");
+  await expect(claim).not.toContainText("What the stub agent says it does.");
+  // The other agent's card says nothing of it.
+  await expect(card(page, "hello").getByRole("status")).toHaveCount(0);
+});
+
+test("while a check is under way the button says so, and a second press sends nothing", async ({
+  page,
+}) => {
+  const service = await new AgentService(savedAgent("stub"))
+    .holdChecks()
+    .serve(page);
+  await page.goto("/agents");
+
+  await check(page, "stub").click();
+  const busy = card(page, "stub").getByRole("button", { name: "Checking…" });
+  await expect(busy).toBeDisabled();
+  await busy.click({ force: true });
+  await busy.press("Enter");
+  await expect(found(page, "stub")).toHaveCount(0);
+
+  service.answerChecks();
+  await expect(found(page, "stub")).toContainText(CAN);
+  await expect(check(page, "stub")).toBeEnabled();
+  expect(service.changes).toHaveLength(1);
+});
+
+test("a check that is refused as busy shows the service's sentence, and the card stays as it was", async ({
+  page,
+}) => {
+  const service = await new AgentService(savedAgent("stub"))
+    .checkedElsewhere("stub", true)
+    .serve(page);
+  await page.goto("/agents");
+  await check(page, "stub").click();
+
+  await expect(card(page, "stub").getByRole("alert")).toHaveText(
+    ALREADY_CHECKED,
+  );
+  await expect(found(page, "stub")).toHaveCount(0);
+  await expect(card(page, "stub").getByText(/^Reachable/)).toBeVisible();
+  // The refusal is not a result: the list was not read again for it.
+  await page.waitForLoadState("networkidle");
+  expect(service.reads).toBe(1);
+
+  // Once that check has ended, this one goes through, and the refusal is taken back.
+  service.checkedElsewhere("stub", false);
+  await check(page, "stub").click();
+  await expect(found(page, "stub")).toContainText(CAN);
+  await expect(card(page, "stub").getByRole("alert")).toHaveCount(0);
+});
+
+test("checking an agent that was removed meanwhile has the list read again, and its card goes", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(cards(page)).toHaveCount(2);
+
+  service.removeElsewhere("stub");
+  const refused = page.waitForResponse((response) => response.status() === 404);
+  await check(page, "stub").click();
+  expect((await refused).status()).toBe(404);
+  expect(await (await refused).json()).toEqual({
+    detail: { code: "agent_not_found", message: NO_SUCH_AGENT },
+  });
+
+  // The service says what is so: the agent is not there any more.
+  await expect(cards(page)).toHaveCount(1);
+  await expect(card(page, "hello")).toBeVisible();
+  expect(service.reads).toBe(2);
 });
 
 test.describe("in a short, narrow window", () => {

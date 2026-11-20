@@ -1,6 +1,7 @@
 // Agents as the service describes them (specs/005-web-delegate-agents/contracts/openapi.yaml).
 // A saved agent's address is in `url`; an environment agent's is in no field of any type here.
-// An address travels in a request's body and in no path or query.
+// An address travels in a request's body and in no path or query; an agent is named in a
+// path by its id.
 
 import { api } from "./api";
 
@@ -81,6 +82,42 @@ export type NewAgent = { name: string; url: string };
  */
 export function addAgent({ name, url }: NewAgent): Promise<Agent> {
   return api<Agent>(AGENTS_KEY, { method: "POST", body: { name, url } });
+}
+
+/** Why an agent's card cannot be used: one code for each way of failing. */
+export type CardProblem =
+  | "no_answer"
+  | "timeout"
+  | "no_card"
+  | "unreadable"
+  | "redirect"
+  | "too_large"
+  | "auth_required"
+  | "no_text"
+  | "no_interface";
+
+/** What a check found: the agent's card was read again, and nothing was sent to the agent. */
+export type AgentCheck = {
+  usable: boolean;
+  /** Null when the agent can be used. */
+  reason: CardProblem | null;
+  /** The service's own sentence for `reason`. */
+  message: string | null;
+  checked_at: string;
+  /** False when the agent was moved or removed while the check ran: nothing was kept. */
+  recorded: boolean;
+  /** True when the check replaced the card details kept or shown for the agent. */
+  card_changed: boolean;
+};
+
+/**
+ * Have the service read an agent's card again, saved or from the environment. It takes no
+ * body: the agent is named by its id, which holds no address.
+ */
+export function checkAgent(id: string): Promise<AgentCheck> {
+  return api<AgentCheck>(`${AGENTS_KEY}/${encodeURIComponent(id)}/check`, {
+    method: "POST",
+  });
 }
 
 /**

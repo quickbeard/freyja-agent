@@ -175,9 +175,11 @@ startup and exits with an error naming the connection when it is unreachable.
   learn whether the agents or the active profile changed, contacts nothing, and lists the
   agents;
   `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
-  which answers 500 when the saved agents cannot be read, and `POST /agents`, which reads an
-  agent's card and saves the agent when it can be used, always requiring approval; the two
-  are the only answers of the service that hold a saved agent's address;
+  which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
+  agent's card and saves the agent when it can be used, always requiring approval, and
+  `POST /agents/{id}/check`, which reads an agent's card again through its link and says
+  whether the agent can be used; the first two are the only answers of the service that hold
+  a saved agent's address;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
@@ -198,8 +200,11 @@ startup and exits with an error naming the connection when it is unreachable.
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
   `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
   `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
-  agent (`agent-form.tsx`, which keeps nothing once it is sent or closed) and changes and
-  removes none yet.
+  agent (`agent-form.tsx`, which keeps nothing once it is sent or closed), checks one from
+  its card (`check-result.tsx`), and warns above the cards about every agent that cannot be
+  used (`agents-warning.tsx`); it changes and removes none yet. The sidebar reads the same
+  list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
+  every page asks for `/api/agents` once.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
   (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmations before a
   profile is activated (`activate-dialog.tsx`) and deleted (`delete-dialog.tsx`), and how a test's
@@ -221,7 +226,8 @@ startup and exits with an error naming the connection when it is unreachable.
   told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
-  the Agents section as it is read, and `agents-manage.spec.ts` adding an agent; `api.ts`
+  the Agents section as it is read and its warnings, and `agents-manage.spec.ts` adding an
+  agent and checking one; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
   what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
