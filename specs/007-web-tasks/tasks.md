@@ -474,12 +474,12 @@ approves, or rejects, and the continuation shows on the same page.
 
 ### Tests for User Story 2
 
-- [ ] T045 [P] [US2] Extend `web/__tests__/lib/tasks.test.ts`, part 2:
+- [X] T045 [P] [US2] Extend `web/__tests__/lib/tasks.test.ts`, part 2:
       `decide(id, interruptId, decisions)` posts to `/api/threads/<id>/resume/unattended`
       with `interrupt_id` and the decisions in order; `parseArguments(text)` gives the object
       for text that is a JSON object and a reason for anything else, an array and a number
       included
-- [ ] T046 [P] [US2] Write `web/__tests__/components/tasks/proposal-card.test.tsx`: each
+- [X] T046 [P] [US2] Write `web/__tests__/components/tasks/proposal-card.test.tsx`: each
       action's name, server or agent, description, and arguments in full as text; only the
       decisions in the action's `allowed_decisions` are offered; Approve sends one approve;
       Edit opens the arguments as text, text that is not a JSON object is not sent and the
@@ -490,21 +490,21 @@ approves, or rejects, and the continuation shows on the same page.
       keeps its text; `proposal_mismatch`, `nothing_pending`, and `run_active` say so and
       read the task again; no answer says the outcome is not known and reads the task again;
       every control's name says its action (FR-014 to FR-019, FR-012a)
-- [ ] T047 [P] [US2] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 2: a
+- [X] T047 [P] [US2] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 2: a
       state with `pending` shows the card and no follow-up; after a decision is accepted the
       continuation is shown as a run is, also when it pauses again
 
 ### Implementation for User Story 2
 
-- [ ] T048 [US2] Add `decide` and `parseArguments` to `web/lib/tasks.ts`
-- [ ] T049 [US2] Create `web/components/tasks/proposal-card.tsx` and show it in
+- [X] T048 [US2] Add `decide` and `parseArguments` to `web/lib/tasks.ts`
+- [X] T049 [US2] Create `web/components/tasks/proposal-card.tsx` and show it in
       `web/components/tasks/task-view.tsx`; its buttons stand outside any form
-- [ ] T050 [US2] Extend `web/e2e/tasks-api.ts` (a proposal, and what each decision answers)
+- [X] T050 [US2] Extend `web/e2e/tasks-api.ts` (a proposal, and what each decision answers)
       and write `web/e2e/tasks-decide.spec.ts`: approve, edit and approve, reject with a
       reason, an edit the service refuses, text that is not JSON, a proposal decided
       elsewhere, two actions in one proposal, Enter in a field, and a decision made with the
       keyboard alone (FR-012a)
-- [ ] T051 [US2] Add the proposal card to `web/README.md` and `README.md`
+- [X] T051 [US2] Add the proposal card to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 2 works.
 

@@ -6,7 +6,7 @@
 // stored; a reload forgets every run, and the page then follows the task by reading it.
 
 import { useSyncExternalStore } from "react";
-import { events, isTerminal, type StreamEvent } from "./tasks";
+import { events, isTerminal, type Message, type StreamEvent } from "./tasks";
 
 /** How a run's stream ended: with its last event, or cut before it came. */
 export type RunEnd =
@@ -15,8 +15,13 @@ export type RunEnd =
 
 export type LiveRun = {
   threadId: string;
-  /** The message the run was started with, to be offered again when it failed at once. */
-  message: string;
+  /**
+   * The message the run was started with, to be offered again when it failed at once; null
+   * for a continuation after a decision, which no message of a person's started.
+   */
+  message: string | null;
+  /** The conversation as it was when the run was started, shown above what streams. */
+  before: readonly Message[];
   /** Every event received so far, in order. */
   events: readonly StreamEvent[];
   /** Null while the stream is open. */
@@ -87,14 +92,15 @@ async function read(
  */
 export function begin(
   threadId: string,
-  message: string,
+  message: string | null,
   body: ReadableStream<Uint8Array>,
+  before: readonly Message[] = [],
 ): LiveRun {
   const current = runs.get(threadId);
   if (current !== undefined && current.ended === null) {
     throw new RunInProgressError(threadId);
   }
-  const run: LiveRun = { threadId, message, events: [], ended: null };
+  const run: LiveRun = { threadId, message, before, events: [], ended: null };
   set(run);
   void read(threadId, body);
   return run;

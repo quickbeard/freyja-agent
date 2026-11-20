@@ -1,0 +1,441 @@
+"use client";
+
+import { useId, useRef, useState } from "react";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { ApiError } from "@/lib/api";
+import {
+  type ActionRequest,
+  type Decision,
+  type DecisionSent,
+  type PendingDecision,
+  parseArguments,
+  REJECT_REASON_LIMIT,
+} from "@/lib/tasks";
+import { argumentsText } from "./message";
+
+// The proposal card (FR-014 to FR-019). It offers the service's three decisions, only those
+// the service allows for each action, and decides nothing itself: what an edit may be, and
+// whether a decision still applies, is the service's to say. Its buttons stand outside any
+// form, so Enter in a field presses none of them (FR-017).
+
+/** Why a decision was refused in a way that means the page no longer shows the task as it is. */
+const STALE: Record<string, string> = {
+  proposal_mismatch:
+    "This proposal is no longer the pending one: it was decided elsewhere, or another took its place. Nothing ran because of this decision. The task is shown as it is now.",
+  nothing_pending:
+    "Nothing is pending on this task any more: the proposal was decided elsewhere. Nothing ran because of this decision. The task is shown as it is now.",
+  run_active:
+    "A run is in progress on this task, so the decision was not applied. The task is shown as it is now.",
+  thread_not_found: "This task no longer exists.",
+};
+
+const UNKNOWN =
+  "No answer came, so whether the decision was applied is not known. The task is read again, and the proposal is shown only if it is still pending.";
+
+type Choice = {
+  decision: Decision | null;
+  /** The edited arguments as the person entered them. */
+  text: string;
+  reason: string;
+};
+
+/** How many characters a text holds, as the service counts them: by code point. */
+function characters(text: string): number {
+  return [...text].length;
+}
+
+function where(action: ActionRequest): string | null {
+  if (action.agent !== null) {
+    return `Sent to agent ${action.agent}`;
+  }
+  if (action.server !== null) {
+    return `Runs on tool server ${action.server}`;
+  }
+  return null;
+}
+
+/** The decision a choice stands for, or why it cannot be sent yet. */
+function sent(choice: Choice): DecisionSent | { error: string } | null {
+  switch (choice.decision) {
+    case null:
+      return null;
+    case "approve":
+      return { type: "approve" };
+    case "reject":
+      if (characters(choice.reason) > REJECT_REASON_LIMIT) {
+        return { error: "The reason is too long." };
+      }
+      return choice.reason.trim() === ""
+        ? { type: "reject" }
+        : { type: "reject", message: choice.reason };
+    case "edit": {
+      const parsed = parseArguments(choice.text);
+      return "error" in parsed ? parsed : { type: "edit", args: parsed.args };
+    }
+  }
+}
+
+/**
+ * The service's reasons for refused values, by the action they are about: a decision's
+ * index is the third part of where a value is (`body`, `decisions`, index, ...). What names
+ * no action is the card's.
+ */
+function reasons(error: ApiError): {
+  byAction: Map<number, string[]>;
+  card: string[];
+} {
+  const byAction = new Map<number, string[]>();
+  const card: string[] = [];
+  error.fields.forEach(({ message }, at) => {
+    const where = error.locations[at] ?? [];
+    const index =
+      where[0] === "body" && where[1] === "decisions" ? where[2] : undefined;
+    // The argument a reason is about, when it names one.
+    const argument =
+      where[3] === "args" &&
+      typeof where.at(-1) === "string" &&
+      where.length > 4
+        ? `${String(where.at(-1))}: `
+        : "";
+    if (typeof index === "number") {
+      byAction.set(index, [
+        ...(byAction.get(index) ?? []),
+        `${argument}${message}`,
+      ]);
+    } else {
+      card.push(message);
+    }
+  });
+  if (byAction.size === 0 && card.length === 0) {
+    card.push(error.message);
+  }
+  return { byAction, card };
+}
+
+type Refusal = { byAction: Map<number, string[]>; card: string[] };
+
+export function ProposalCard({
+  pending,
+  send,
+  onStale,
+}: {
+  pending: PendingDecision;
+  /** Sends the decisions; a refusal is raised as an `ApiError`. */
+  send: (decisions: DecisionSent[]) => Promise<void>;
+  /** Told why the page no longer shows the task as it is; the task is read again. */
+  onStale: (said: string) => void;
+}) {
+  const actions = pending.action_requests;
+  const [choices, setChoices] = useState<Choice[]>(() =>
+    actions.map((action) => ({
+      decision: null,
+      text: argumentsText(action.args),
+      reason: "",
+    })),
+  );
+  const [refused, setRefused] = useState<Refusal | null>(null);
+  const [sending, setSending] = useState(false);
+  const busy = useRef(false);
+  const heading = useId();
+  const single = actions.length === 1;
+
+  function choose(index: number, values: Partial<Choice>) {
+    setRefused(null);
+    setChoices((current) =>
+      current.map((choice, at) =>
+        at === index ? { ...choice, ...values } : choice,
+      ),
+    );
+  }
+
+  async function submit(made: Choice[]) {
+    if (busy.current) {
+      return;
+    }
+    const decisions = made.map(sent);
+    if (
+      decisions.some((decision) => decision === null || "error" in decision)
+    ) {
+      return;
+    }
+    busy.current = true;
+    setSending(true);
+    setRefused(null);
+    try {
+      await send(decisions as DecisionSent[]);
+    } catch (failure) {
+      if (failure instanceof ApiError && failure.code === "invalid") {
+        // Each edit stays, with the service's reason beside it (FR-015).
+        setRefused(reasons(failure));
+      } else if (failure instanceof ApiError && failure.code in STALE) {
+        onStale(STALE[failure.code]);
+      } else if (
+        failure instanceof ApiError &&
+        failure.code === "unreachable"
+      ) {
+        onStale(UNKNOWN);
+      } else {
+        setRefused({
+          byAction: new Map(),
+          card: [
+            failure instanceof ApiError
+              ? failure.message
+              : "The decision could not be sent.",
+          ],
+        });
+      }
+    } finally {
+      busy.current = false;
+      setSending(false);
+    }
+  }
+
+  const ready = choices.map(sent);
+  const complete = ready.every(
+    (decision) => decision !== null && !("error" in decision),
+  );
+
+  return (
+    <section
+      aria-labelledby={heading}
+      className="flex flex-col gap-4 rounded-lg border-2 border-primary/40 p-4"
+    >
+      <div className="flex flex-col gap-1">
+        <h2 id={heading} className="font-heading text-lg font-semibold">
+          {single
+            ? "Freyja proposes an action that needs your decision"
+            : `Freyja proposes ${actions.length} actions that need your decision`}
+        </h2>
+        <p className="text-sm text-muted-foreground">
+          Nothing has run. An approved action runs once; a rejected one never
+          runs.
+        </p>
+      </div>
+      <ol className="flex flex-col gap-4">
+        {actions.map((action, index) => (
+          <li key={`${action.name}-${index}`}>
+            <ActionDecision
+              action={action}
+              choice={choices[index]}
+              single={single}
+              sending={sending}
+              refused={refused?.byAction.get(index)?.join(" ") ?? null}
+              onChoose={(values) => choose(index, values)}
+              onSend={(values) => submit([{ ...choices[index], ...values }])}
+            />
+          </li>
+        ))}
+      </ol>
+      {refused !== null && refused.card.length > 0 && (
+        <p role="alert" className="text-sm text-destructive">
+          {refused.card.join(" ")}
+        </p>
+      )}
+      {!single && (
+        <div className="flex flex-col items-start gap-2 border-t pt-3">
+          <p className="text-sm text-muted-foreground">
+            {complete
+              ? "Every action has a decision."
+              : "Each action needs a decision before anything is sent."}
+          </p>
+          <Button
+            type="button"
+            disabled={!complete || sending}
+            onClick={() => submit(choices)}
+          >
+            {sending ? "Sending…" : `Send the ${actions.length} decisions`}
+          </Button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ActionDecision({
+  action,
+  choice,
+  single,
+  sending,
+  refused,
+  onChoose,
+  onSend,
+}: {
+  action: ActionRequest;
+  choice: Choice;
+  single: boolean;
+  sending: boolean;
+  /** The service's reason for refusing this action's decision. */
+  refused: string | null;
+  onChoose: (values: Partial<Choice>) => void;
+  onSend: (values: Partial<Choice>) => void;
+}) {
+  const editor = useId();
+  const reasonBox = useId();
+  const editSaid = useId();
+  const allowed = (decision: Decision) =>
+    action.allowed_decisions.includes(decision);
+  const parsed =
+    choice.decision === "edit" ? parseArguments(choice.text) : null;
+  const notObject = parsed !== null && "error" in parsed ? parsed.error : null;
+  const length = characters(choice.reason);
+  const tooLong = length > REJECT_REASON_LIMIT;
+  const goesTo = where(action);
+  const name = action.name;
+  const editing = choice.decision === "edit";
+  const rejecting = choice.decision === "reject";
+  // With one action, Edit and Reject open what they need, and the button that sends is
+  // inside it; with several, each button chooses this action's decision.
+  const state = (on: boolean) =>
+    single ? { "aria-expanded": on } : { "aria-pressed": on };
+
+  return (
+    <article
+      aria-label={`Proposed action ${name}`}
+      className="flex flex-col gap-3 rounded-md border p-3"
+    >
+      <div className="flex flex-col gap-1">
+        <h3 className="font-mono text-sm font-semibold">{name}</h3>
+        {goesTo !== null && (
+          <p className="text-xs text-muted-foreground">{goesTo}</p>
+        )}
+        {action.description && (
+          <p className="whitespace-pre-wrap break-words text-sm">
+            {action.description}
+          </p>
+        )}
+      </div>
+      <div className="flex flex-col gap-1">
+        <p className="text-xs font-medium text-muted-foreground">Arguments</p>
+        <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-mono text-xs">
+          {argumentsText(action.args)}
+        </pre>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        {allowed("approve") &&
+          (single ? (
+            <Button
+              type="button"
+              variant={editing || rejecting ? "outline" : "default"}
+              disabled={sending}
+              onClick={() => onSend({ decision: "approve" })}
+            >
+              {/* While the arguments are being edited, this button is not the one that
+                  sends them: it says so. */}
+              {editing ? `Approve ${name} as proposed` : `Approve ${name}`}
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant={choice.decision === "approve" ? "default" : "outline"}
+              aria-pressed={choice.decision === "approve"}
+              disabled={sending}
+              onClick={() => onChoose({ decision: "approve" })}
+            >
+              {`Approve ${name}`}
+            </Button>
+          ))}
+        {allowed("edit") && (
+          <Button
+            type="button"
+            variant={editing ? "default" : "outline"}
+            {...state(editing)}
+            disabled={sending}
+            onClick={() => onChoose({ decision: "edit" })}
+          >
+            {`Edit the arguments of ${name}`}
+          </Button>
+        )}
+        {allowed("reject") && (
+          <Button
+            type="button"
+            variant={rejecting ? "destructive" : "outline"}
+            {...state(rejecting)}
+            disabled={sending}
+            onClick={() => onChoose({ decision: "reject" })}
+          >
+            {`Reject ${name}`}
+          </Button>
+        )}
+      </div>
+
+      {editing && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={editor}>{`Arguments for ${name}, as JSON`}</Label>
+          <textarea
+            id={editor}
+            value={choice.text}
+            onChange={(event) => onChoose({ text: event.target.value })}
+            rows={Math.min(12, choice.text.split("\n").length + 1)}
+            spellCheck={false}
+            aria-describedby={
+              notObject !== null || refused !== null ? editSaid : undefined
+            }
+            aria-invalid={notObject !== null || refused !== null || undefined}
+            className="w-full rounded-lg border border-input bg-transparent px-3 py-2 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+          {(notObject !== null || refused !== null) && (
+            <p id={editSaid} role="alert" className="text-sm text-destructive">
+              {notObject ?? refused}
+            </p>
+          )}
+          {single && (
+            <div>
+              <Button
+                type="button"
+                disabled={sending || notObject !== null}
+                onClick={() => onSend({})}
+              >
+                {sending ? "Sending…" : `Approve ${name} with these arguments`}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {!editing && refused !== null && (
+        <p role="alert" className="text-sm text-destructive">
+          {refused}
+        </p>
+      )}
+
+      {rejecting && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor={reasonBox}>
+            {`Why ${name} is rejected (optional, Freyja is told)`}
+          </Label>
+          <textarea
+            id={reasonBox}
+            value={choice.reason}
+            onChange={(event) => onChoose({ reason: event.target.value })}
+            rows={3}
+            aria-invalid={tooLong || undefined}
+            className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+          <p
+            className={
+              tooLong
+                ? "text-xs text-destructive"
+                : "text-xs text-muted-foreground"
+            }
+          >
+            {`${length} of ${REJECT_REASON_LIMIT} characters`}
+          </p>
+          {single && (
+            <div>
+              <Button
+                type="button"
+                variant="destructive"
+                disabled={sending || tooLong}
+                onClick={() => onSend({})}
+              >
+                {sending ? "Sending…" : `Reject ${name} now`}
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </article>
+  );
+}

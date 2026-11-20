@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -14,6 +14,8 @@ import {
   useRun,
 } from "@/lib/task-runs";
 import {
+  type DecisionSent,
+  decide,
   type Message,
   readState,
   readThread,
@@ -25,6 +27,7 @@ import {
   threadKey,
 } from "@/lib/tasks";
 import { MessageView } from "./message";
+import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
 import { TaskStatus } from "./status";
 
@@ -70,9 +73,15 @@ export function streamed(run: LiveRun): {
   messages: Message[];
   steps: string[];
 } {
-  const messages: Message[] = [
-    { id: "live-human", type: "human", content: run.message, name: null },
-  ];
+  const messages: Message[] = [...run.before];
+  if (run.message !== null) {
+    messages.push({
+      id: "live-human",
+      type: "human",
+      content: run.message,
+      name: null,
+    });
+  }
   const at = new Map<string, number>();
   const steps: string[] = [];
   run.events.forEach((event: StreamEvent, index) => {
@@ -167,6 +176,17 @@ export function TaskView({ threadId }: { threadId: string }) {
 
   // The end of a run for which the task has been read again since.
   const [readFor, setReadFor] = useState<RunEnd | null>(null);
+  // What the page says of a decision the service did not apply, until the next one.
+  // It is about the proposal the task had once it was read again (`about`, null for none),
+  // and goes once the task has moved on from it.
+  const [notice, setNotice] = useState<{
+    text: string;
+    about: string | null | undefined;
+  } | null>(null);
+  // Set when a decision was accepted: the run's status takes the focus once it is shown, so
+  // that the focus is not lost with the card the person pressed.
+  const [focusStatus, setFocusStatus] = useState(false);
+  const statusRef = useRef<HTMLOutputElement>(null);
   // Whether this page's stream was cut before the run's last event. It is said, and the
   // task is followed, until the service says the run is no longer in progress (FR-010).
   const [cut, setCut] = useState(false);
@@ -201,6 +221,10 @@ export function TaskView({ threadId }: { threadId: string }) {
   // A new task whose first run failed before anything was recorded keeps its run, whose
   // message is offered again (FR-008).
   const offerAgain = failed !== null && noConversation;
+  // A continuation that failed while its proposal is still pending, as when an agent came
+  // to need approval since: its reason stays beside the card it is about (005 FR-023).
+  const failedOnProposal =
+    failed !== null && (state.data?.pending ?? null) !== null;
   // What the stream brought stays on the page until the task has been read again after it.
   const showLive =
     run !== undefined && (streaming || (ended !== null && readFor !== ended));
@@ -209,10 +233,35 @@ export function TaskView({ threadId }: { threadId: string }) {
   // Once the end of a run has been read, what the service holds is what the page shows: the
   // run is forgotten, so that how it ended is not shown later as if it were current.
   useEffect(() => {
-    if (settled && !offerAgain && readError === undefined) {
+    if (
+      settled &&
+      !offerAgain &&
+      !failedOnProposal &&
+      readError === undefined
+    ) {
       clear(threadId);
     }
-  }, [settled, offerAgain, readError, threadId]);
+  }, [settled, offerAgain, failedOnProposal, readError, threadId]);
+
+  // A notice about a decision that was not applied goes once the task's proposal is another,
+  // or there is none any more, than the one the task had when the notice was given.
+  const pendingId = state.data?.pending?.interrupt_id ?? null;
+  useEffect(() => {
+    if (
+      notice !== null &&
+      notice.about !== undefined &&
+      pendingId !== notice.about
+    ) {
+      setNotice(null);
+    }
+  }, [notice, pendingId]);
+
+  useEffect(() => {
+    if (focusStatus && streaming && statusRef.current !== null) {
+      statusRef.current.focus();
+      setFocusStatus(false);
+    }
+  }, [focusStatus, streaming]);
 
   // Following: a run this page does not read is in progress, or this page's stream was cut
   // and the service has not said yet where the run stands. The task is read again on a
@@ -241,6 +290,37 @@ export function TaskView({ threadId }: { threadId: string }) {
       }
     }
   }, [cut, row.error, row.data?.status]);
+
+  // A decision goes through the service's own checks; its continuation is shown as a run
+  // is, below the conversation as it was when the person decided (FR-019).
+  async function decideNow(interruptId: string, decisions: DecisionSent[]) {
+    const before = state.data?.messages ?? [];
+    const answer = await decide(threadId, interruptId, decisions);
+    setNotice(null);
+    clear(threadId);
+    begin(threadId, null, answer, before);
+    setFocusStatus(true);
+  }
+
+  async function stale(said: string) {
+    setNotice({ text: said, about: undefined });
+    const [, latest] = await Promise.allSettled([
+      readRowAgain(),
+      readStateAgain(),
+    ]);
+    const read = latest.status === "fulfilled" ? latest.value : undefined;
+    setNotice((current) =>
+      current?.text === said
+        ? {
+            text: said,
+            about:
+              read === undefined
+                ? undefined
+                : (read.pending?.interrupt_id ?? null),
+          }
+        : current,
+    );
+  }
 
   async function sendAgain(text: string) {
     const answer = await startRun(threadId, text);
@@ -328,12 +408,21 @@ export function TaskView({ threadId }: { threadId: string }) {
     failed === null && row.error === undefined && row.data?.status === "failed"
       ? row.data.error
       : null;
+  // A proposal is decided only on a page that is not showing a run in progress.
+  const pending =
+    !showLive && !rowRunning && state.error === undefined
+      ? (state.data?.pending ?? null)
+      : null;
 
   return (
     <section className="flex flex-col gap-4">
       <Header status={status} />
       {streaming && (
-        <output className="block text-sm text-muted-foreground">
+        <output
+          ref={statusRef}
+          tabIndex={-1}
+          className="block text-sm text-muted-foreground"
+        >
           {started
             ? "The run has started. Freyja's reply appears as it is written."
             : "Starting the run…"}
@@ -346,6 +435,14 @@ export function TaskView({ threadId }: { threadId: string }) {
       )}
       {cut && <CutNotice />}
       {unread}
+      {notice !== null && (
+        <p
+          role="alert"
+          className="rounded-lg border border-destructive/40 p-3 text-sm"
+        >
+          {notice.text}
+        </p>
+      )}
       {failed !== null && <Failure error={failed} />}
       {rowFailure !== null && <Failure error={rowFailure} />}
       {live !== null ? (
@@ -374,6 +471,15 @@ export function TaskView({ threadId }: { threadId: string }) {
           <Skeleton className="h-16" />
           <Skeleton className="h-24" />
         </output>
+      )}
+      {pending !== null && (
+        <ProposalCard
+          // Another proposal is another card: nothing of a decision on the earlier one stays.
+          key={pending.interrupt_id}
+          pending={pending}
+          send={(decisions) => decideNow(pending.interrupt_id, decisions)}
+          onStale={stale}
+        />
       )}
     </section>
   );

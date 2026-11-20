@@ -4,7 +4,9 @@
 
 import type { Page, Route } from "@playwright/test";
 import type {
+  ActionRequest,
   Message,
+  PendingDecision,
   ThreadList,
   ThreadState,
   ThreadSummary,
@@ -84,7 +86,7 @@ export type Refusal = { status: number; code: string; message: string };
 /** What the service does with a run it is sent. */
 export type RunAnswer =
   | { refusal: Refusal }
-  | { invalid: string }
+  | { invalid: string; loc?: (string | number)[] }
   | {
       /** The whole stream, sent at once. */
       events: string[];
@@ -109,8 +111,9 @@ export function finished(
 const THREAD_ID = /^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*$/;
 
 /**
- * The service, as far as the Tasks section's pages reach it: the tasks it holds and the runs
- * it is sent. A run is answered by `run`, and what it leaves is kept, so a reload finds it.
+ * The service, as far as the Tasks section's pages reach it: the tasks it holds, and the
+ * runs and decisions it is sent. A run is answered by `run` and a decision by `resume`, and
+ * what each leaves is kept, so a reload finds it.
  */
 export class TaskService {
   readonly tasks = new Map<
@@ -119,15 +122,34 @@ export class TaskService {
   >();
   /** Every run the pages started, in order. */
   readonly sent: { threadId: string; message: string }[] = [];
+  /** Every decision the pages sent, in order. */
+  readonly decided: ({ threadId: string } & DecisionBody)[] = [];
 
   constructor(
     private run: (threadId: string, message: string) => RunAnswer = finished(
       "Done.",
     ),
+    private resume: (
+      threadId: string,
+      body: DecisionBody,
+    ) => RunAnswer = () => ({
+      refusal: {
+        status: 409,
+        code: "nothing_pending",
+        message: "This thread has no pending decision.",
+      },
+    }),
   ) {}
 
   answerRunsWith(run: (threadId: string, message: string) => RunAnswer): this {
     this.run = run;
+    return this;
+  }
+
+  answerDecisionsWith(
+    resume: (threadId: string, body: DecisionBody) => RunAnswer,
+  ): this {
+    this.resume = resume;
     return this;
   }
 
@@ -159,31 +181,13 @@ export class TaskService {
     if (request.method() === "POST" && tail === "runs/unattended") {
       const { message } = request.postDataJSON() as { message: string };
       this.sent.push({ threadId, message });
-      const answer = this.run(threadId, message);
-      if ("refusal" in answer) {
-        const { status, code, message: said } = answer.refusal;
-        await route.fulfill({
-          status,
-          json: { detail: { code, message: said } },
-        });
-        return;
-      }
-      if ("invalid" in answer) {
-        await route.fulfill({
-          status: 422,
-          json: { detail: [{ loc: ["body", "message"], msg: answer.invalid }] },
-        });
-        return;
-      }
-      if (answer.after !== null) {
-        this.tasks.set(threadId, answer.after);
-      }
-      await route.fulfill({
-        status: 200,
-        headers: { "cache-control": "no-store, no-transform" },
-        contentType: "text/event-stream",
-        body: answer.events.join(""),
-      });
+      await this.respond(route, threadId, this.run(threadId, message));
+      return;
+    }
+    if (request.method() === "POST" && tail === "resume/unattended") {
+      const body = request.postDataJSON() as DecisionBody;
+      this.decided.push({ threadId, ...body });
+      await this.respond(route, threadId, this.resume(threadId, body));
       return;
     }
     const task = this.tasks.get(threadId);
@@ -208,6 +212,152 @@ export class TaskService {
       json: { detail: "Method Not Allowed" },
     });
   }
+
+  private async respond(
+    route: Route,
+    threadId: string,
+    answer: RunAnswer,
+  ): Promise<void> {
+    if ("refusal" in answer) {
+      const { status, code, message } = answer.refusal;
+      await route.fulfill({ status, json: { detail: { code, message } } });
+      return;
+    }
+    if ("invalid" in answer) {
+      await route.fulfill({
+        status: 422,
+        json: {
+          detail: [
+            { loc: answer.loc ?? ["body", "message"], msg: answer.invalid },
+          ],
+        },
+      });
+      return;
+    }
+    if (answer.after !== null) {
+      this.tasks.set(threadId, answer.after);
+    }
+    await route.fulfill({
+      status: 200,
+      headers: { "cache-control": "no-store, no-transform" },
+      contentType: "text/event-stream",
+      body: answer.events.join(""),
+    });
+  }
+}
+
+// Phase 5: proposals and decisions.
+
+/** A decision request as the console sends it. */
+export type DecisionBody = {
+  interrupt_id: string;
+  decisions: (
+    | { type: "approve" }
+    | { type: "edit"; args: Record<string, unknown> }
+    | { type: "reject"; message?: string }
+  )[];
+};
+
+export function notify(
+  args: Record<string, unknown> = { channel: "#ops", message: "Ready." },
+): ActionRequest {
+  return {
+    name: "send_notification",
+    server: null,
+    agent: null,
+    args,
+    description: "Send a notification to a channel.",
+    allowed_decisions: ["approve", "edit", "reject"],
+  };
+}
+
+export function proposal(
+  interruptId: string,
+  ...actions: ActionRequest[]
+): PendingDecision {
+  return {
+    interrupt_id: interruptId,
+    action_requests: actions,
+    allowed_decisions: ["approve", "edit", "reject"],
+  };
+}
+
+/** Freyja's reply that asks for the proposed actions. */
+export function asking(...actions: ActionRequest[]): Message {
+  return {
+    id: "ai-ask",
+    type: "ai",
+    content: "",
+    name: null,
+    tool_calls: actions.map((action, index) => ({
+      id: `call-${index}`,
+      name: action.name,
+      args: action.args,
+    })),
+  };
+}
+
+/** A task paused on `pending`, as the service holds it. */
+export function pausedTask(
+  threadId: string,
+  message: string,
+  pending: PendingDecision,
+): { row: ThreadSummary; state: ThreadState } {
+  return {
+    row: summary(threadId, {
+      first_message: message,
+      status: "needs_decision",
+    }),
+    state: threadState(
+      threadId,
+      [human(message), asking(...pending.action_requests)],
+      { pending },
+    ),
+  };
+}
+
+/** A decision whose continuation reports `result` and ends. */
+export function continued(
+  task: { row: ThreadSummary; state: ThreadState },
+  result: string,
+  reply: string,
+): RunAnswer {
+  const threadId = task.row.thread_id;
+  return {
+    events: [
+      sse("start", {
+        thread_id: threadId,
+        run_id: "6e3a",
+        mode: "resume",
+        debug: false,
+        profile: {
+          id: "environment",
+          name: "Environment",
+          source: "environment",
+        },
+      }),
+      piece(reply, "ai-after"),
+      END,
+    ],
+    after: {
+      row: { ...task.row, status: "done" },
+      state: {
+        ...task.state,
+        pending: null,
+        messages: [
+          ...task.state.messages,
+          {
+            id: "tool-result",
+            type: "tool",
+            content: result,
+            name: "send_notification",
+            tool_call_id: "call-0",
+          },
+          ai(reply, "ai-after"),
+        ],
+      },
+    },
+  };
 }
 
 export type ListAnswer = { list: ThreadList } | { refusal: Refusal };

@@ -509,6 +509,52 @@ started 0.9 seconds after Send (SC-001), and the run went on to done after the b
 closed. The database was dropped afterwards. The page without a usable model was checked by
 the unit and end-to-end tests only.
 
+### Phase 5 as built (2026-11-20)
+
+Built as research R14 describes; the differences and additions:
+
+- **One action or several.** With one action, its decision is sent by the button that
+  names it: Approve, Approve with these arguments (after Edit), or Reject now (after Reject).
+  With several, each action's buttons choose its decision, and Send the decisions sends them
+  together, in the service's order, once each has one (FR-016). While the arguments of a
+  single action are open for editing, its plain button says "as proposed", so that it is
+  not taken for the one that sends the edit.
+- **A refused value goes beside the action it is about.** `ApiError` keeps where each
+  refused value is (`locations`), beside `fields`, which is left as it was so that no other
+  section's test changes; the card reads the decision's index from it. This is a small
+  addition to the shared `web/lib/api.ts`.
+- **A continuation is shown below the conversation as it was when the person decided.** The
+  run store keeps that conversation with the run (`before`), and a continuation has no
+  person's message (`message` is null). Phase 7's follow-ups will use the same.
+- **A continuation that failed while its proposal is still pending keeps its reason on the
+  page**, beside the card, as when an agent came to need approval since it was proposed (005
+  FR-023, `approval_now_required`): the row then reads `needs_decision`, which comes before
+  `failed`, so the reason would otherwise be gone.
+- **A refused decision's notice** stays until the task's proposal is another than the one it
+  had when the task was read again after the refusal, or until a decision is accepted.
+- **After a decision is accepted** the focus goes to the run's status, so that it is not lost
+  with the card.
+- **A reason's length is counted by character**, as the service counts it, not by UTF-16 unit.
+- **No hand check of a decision against the real service.** The stand-in model answers in
+  text only and cannot propose an action, so the service's side of a decision is the suite's
+  (`test_unattended_runs.py`, Phase 3), and the console's side the unit and end-to-end tests.
+
+**Read by a reviewer that had not written it.** It found no way around the approval gate:
+the proposal's id is the one the card was drawn from, a card is keyed by it, nothing is sent
+without a press, a second press sends nothing, only allowed decisions are offered, and none
+of the refusals is shown as a failure. It found one real defect and some smaller ones, and
+seven mutations the tests let through. Each was checked against the code, and each test
+added for one was shown to fail with its fix taken out (eleven checks).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium | With several actions a refused edit was shown beside every action being edited, and a refusal of an action that was not edited beside one that was: the decision's index was lost. | The index is kept and the reason goes beside its action; what names no action goes to the card. |
+| Low | With one action, the plain Approve stayed beside the edited arguments under the same name, and sent the arguments as proposed. | It says "as proposed" while they are edited. |
+| Low | A continuation that failed with its proposal still pending lost its reason once the task was read again. | Kept beside the card while that proposal is pending. |
+| Low | A refused decision's notice stayed after the task had moved on. | It goes once the proposal is another. |
+| Low | The focus was lost with the card; Edit and Reject said both `aria-pressed` and `aria-expanded`; a reason was counted in UTF-16 units. | Focus to the run's status; one state each, by mode; counted by character. |
+| Test | A card not keyed by its proposal, a card shown during a run, the earlier conversation shown twice, decisions not allowed offered, a notice never dropped, a reason trimmed, and a refusal beside every action all passed. | One test each. |
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

@@ -16,6 +16,11 @@ export class ApiError extends Error {
     readonly code: string,
     /** For refused values: which field and why. Never the value that was sent. */
     readonly fields: FieldError[] = [],
+    /**
+     * Feature 007: for refused values, where each one is, in the order of `fields`, as the
+     * service gives it: a decision's index and the argument it refused, for one.
+     */
+    readonly locations: readonly (string | number)[][] = [],
   ) {
     super(message);
     this.name = "ApiError";
@@ -38,7 +43,19 @@ function refusal(status: number, payload: unknown): ApiError | null {
       field: String(item.loc?.at(-1) ?? ""),
       message: item.msg ?? "This value was refused.",
     }));
-    return new ApiError("Some values were refused.", status, "invalid", fields);
+    const locations = detail.map((item: { loc?: unknown[] }) =>
+      (item.loc ?? []).filter(
+        (part): part is string | number =>
+          typeof part === "string" || typeof part === "number",
+      ),
+    );
+    return new ApiError(
+      "Some values were refused.",
+      status,
+      "invalid",
+      fields,
+      locations,
+    );
   }
   if (typeof detail === "object" && detail !== null) {
     const { code, message } = detail as { code?: string; message?: string };
