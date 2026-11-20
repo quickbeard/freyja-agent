@@ -555,6 +555,55 @@ added for one was shown to fail with its fix taken out (eleven checks).
 | Low | The focus was lost with the card; Edit and Reject said both `aria-pressed` and `aria-expanded`; a reason was counted in UTF-16 units. | Focus to the run's status; one state each, by mode; counted by character. |
 | Test | A card not keyed by its proposal, a card shown during a run, the earlier conversation shown twice, decisions not allowed offered, a notice never dropped, a reason trimmed, and a refusal beside every action all passed. | One test each. |
 
+### Phase 6 as built (2026-11-20)
+
+Built as research R13 describes; the differences and additions:
+
+- **One timer for the list, shared by its readers** (`web/hooks/use-every.ts`). The list and
+  the sidebar's number read `GET /threads` under one SWR key, again every 15 seconds. SWR's
+  `refreshInterval` skips a reading while the last one failed, so a timer of the console's
+  own does the reading, and it goes on past a failure: once the service is back, the list
+  and the number come back by themselves. The timer is one per key, started by the first
+  reader and stopped by the last, so the Tasks section with the sidebar beside it reads once a
+  period, not twice; it reads nothing while the page is hidden, and SWR reads again when the
+  page is shown.
+- **A task's view reads the list again when a run it shows ends**, so the sidebar's number
+  follows a decision at once and not at the next period.
+- **Every page asks for `/api/threads`** from this phase on. The whole end-to-end suite was run
+  with it, before any spec of this phase was written: no spec of another section failed (T057).
+  Two specs of this feature failed, because the list's "cannot be reached" stood beside the
+  alert they read; `TaskService` now answers the list from the tasks it holds.
+- **The sidebar's unit test** answers `/api/threads` apart from the list of agents, so each of
+  its existing tests keeps its count of agent requests and its meaning (FR-027 names this
+  test).
+- **The Tasks entry's number** is said in words on the screen ("3 to decide") and for
+  assistive technology ("3 tasks need a decision"), as the Agents entry, changed meanwhile
+  by feature 005, says its own.
+- **Not changed: a reading that hangs.** `api()` has no time limit, so a service that takes a
+  connection and never answers leaves the list and the number as they were last read. It is
+  a matter of `web/lib/api.ts` for every section, not of this feature's; recorded here.
+
+**Read by a reviewer that had not written it.** It found nothing serious: a failed reading
+shows no row and no number, the following goes on, and the list and the sidebar are one key.
+It found the list read twice a period on the Tasks section, readings while the page is
+hidden, and tests that let mutations through. Each was checked and fixed, and each test added
+for one was shown to fail with its fix taken out (six checks).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium-low | The list and the sidebar each had a timer: the Tasks section read `/threads` twice a period. | One timer per key. |
+| Low | The timer read while the page was hidden. | It does not. |
+| Low | A reading that hangs is never a failure. | Not changed; see above. |
+| Test | A timer left running, an id put into the address as it is, the time a person reads, half of the sentence about more tasks, and a test whose name claimed three cases and checked one. | One test each; the sidebar's test checks all three cases. |
+
+**Checked by hand** on a check instance on port 8020 with a database of its own, the stand-in
+model on 9977, and the console built against it on 3020, in a real Chromium: a task sent from
+the console and a thread started with curl were two rows, newest first, each `Done`; the
+thread from curl opened its conversation; with no task waiting the sidebar showed no number;
+with the service stopped the section said that it cannot be reached and offered to try again,
+and showed no row and no number. A number above zero needs a pause, which the stand-in model
+cannot make: it is the end-to-end tests'. The database was dropped afterwards.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

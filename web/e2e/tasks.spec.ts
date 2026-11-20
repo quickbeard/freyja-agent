@@ -1,10 +1,20 @@
 import { expect, type Page, test } from "@playwright/test";
+import { answerProfiles, environmentProfile, profileList } from "./api";
 import {
+  ai,
+  answerThreads,
+  continued,
   finished,
+  human,
   NO_USABLE_MODEL,
+  notify,
+  pausedTask,
+  proposal,
   sse,
   start,
+  summary,
   TaskService,
+  threadState,
 } from "./tasks-api";
 
 // 007, User Story 1: hand Freyja a task and read the result.
@@ -76,6 +86,8 @@ test("a message the service refuses keeps its text and lists no task", async ({
   );
   await expect(page).toHaveURL("/tasks");
   expect(service.tasks.size).toBe(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByText(/There is no task yet/)).toBeVisible();
 });
 
 test("a new task sent with no usable model says why and offers its text again", async ({
@@ -129,7 +141,9 @@ test("with the service stopped, a new task keeps its text and a task cannot be r
   // No answer is handed to the page: its requests reach the web app's server, which finds
   // nothing at the service's address.
   await newTask(page, "Summarize the week.");
-  await expect(alerts(page)).toContainText(UNREACHABLE);
+  await expect(page.getByRole("dialog").getByRole("alert")).toContainText(
+    UNREACHABLE,
+  );
   await expect(page.getByLabel("What should Freyja do?")).toHaveValue(
     "Summarize the week.",
   );
@@ -153,4 +167,133 @@ test("markup and links in a task's text are shown as characters", async ({
     '<a href="https://example.test/">',
   );
   await expect(conversation(page).locator("b, a, img")).toHaveCount(0);
+});
+
+// 007, User Story 3: see every task and which ones wait for a decision.
+
+const sections = (page: Page) =>
+  page.getByRole("navigation", { name: "Sections" });
+const tasksEntry = (page: Page) =>
+  sections(page).getByRole("link", { name: "Tasks" });
+// The entry with its number, which stands beside the link.
+const tasksItem = (page: Page) => tasksEntry(page).locator("xpath=..");
+const rows = (page: Page) =>
+  page.getByRole("list", { name: "Tasks" }).getByRole("listitem");
+
+/** What the sidebar's Tasks entry says of its number, for assistive technology. */
+async function said(page: Page): Promise<string | null> {
+  const id = await tasksEntry(page).getAttribute("aria-describedby");
+  return id === null ? null : page.locator(`[id="${id}"]`).textContent();
+}
+
+test("the list shows one row per task, the ones that need a decision first", async ({
+  page,
+}) => {
+  await answerThreads(page, {
+    list: {
+      threads: [
+        summary("paused", {
+          first_message: "Tell #ops.",
+          status: "needs_decision",
+          changed_at: "2026-11-20T07:00:00Z",
+        }),
+        summary("running", {
+          first_message: "Summarize the week.",
+          status: "running",
+          changed_at: "2026-11-20T09:00:00Z",
+        }),
+        summary("failed", {
+          first_message: "List the files.",
+          status: "failed",
+          changed_at: "2026-11-20T08:30:00Z",
+        }),
+        summary("done", {
+          first_message: "Say hello.",
+          status: "done",
+          changed_at: "2026-11-20T08:00:00Z",
+        }),
+      ],
+      needs_decision: 1,
+      total: 4,
+      more: false,
+    },
+  });
+  await page.goto("/tasks");
+
+  await expect(rows(page)).toHaveCount(4);
+  await expect(rows(page).nth(0)).toContainText("Tell #ops.");
+  await expect(rows(page).nth(0)).toContainText("Needs your decision");
+  await expect(rows(page).nth(1)).toContainText("Running");
+  await expect(rows(page).nth(2)).toContainText("Failed");
+  await expect(rows(page).nth(3)).toContainText("Done");
+  await expect(rows(page).nth(0).getByRole("link")).toHaveAttribute(
+    "href",
+    "/tasks/paused",
+  );
+});
+
+test("the sidebar says how many tasks need a decision, on another section", async ({
+  page,
+}) => {
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  await answerThreads(page, {
+    list: { threads: [], needs_decision: 3, total: 3, more: false },
+  });
+  await page.goto("/llm");
+
+  await expect(tasksItem(page)).toContainText("3 to decide");
+  expect(await said(page)).toBe("3 tasks need a decision");
+});
+
+test("the number goes once the proposal is decided, without a reload", async ({
+  page,
+}) => {
+  const ID = "0123456789abcdef0123456789abcdef";
+  const task = pausedTask(ID, "Tell #ops.", proposal("int-1", notify()));
+  const service = new TaskService();
+  service.tasks.set(ID, task);
+  service.answerDecisionsWith(() =>
+    continued(task, "Notification to #ops recorded.", "Sent."),
+  );
+  await service.serve(page);
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+
+  await page.goto("/llm");
+  await expect(tasksItem(page)).toContainText("1 to decide");
+  await tasksEntry(page).click();
+  await expect(rows(page)).toHaveCount(1);
+  await rows(page).first().getByRole("link").click();
+  await page.getByRole("button", { name: "Approve send_notification" }).click();
+
+  await expect(page.getByText("Done", { exact: true })).toBeVisible();
+  // The page was not reloaded: the number followed the decision.
+  await expect(tasksItem(page)).not.toContainText("to decide");
+  expect(await said(page)).toBeNull();
+});
+
+test("with the service stopped, the list says so and the sidebar shows no number", async ({
+  page,
+}) => {
+  await page.goto("/tasks");
+  await expect(alerts(page)).toContainText(UNREACHABLE);
+  await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  await expect(page.getByRole("list", { name: "Tasks" })).toBeHidden();
+  await expect(tasksItem(page)).not.toContainText("to decide");
+});
+
+test("a thread another client started is a row like any other, and opens", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  service.tasks.set("by-curl", {
+    row: summary("by-curl", { first_message: "Say hello." }),
+    state: threadState("by-curl", [human("Say hello."), ai("Hello!")]),
+  });
+  await service.serve(page);
+  await page.goto("/tasks");
+
+  await expect(rows(page)).toHaveCount(1);
+  await rows(page).first().getByRole("link").click();
+  await expect(page).toHaveURL("/tasks/by-curl");
+  await expect(conversation(page)).toContainText("Hello!");
 });

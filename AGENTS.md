@@ -272,14 +272,19 @@ startup and exits with an error naming the connection when it is unreachable.
   used (`agents-warning.tsx`). The sidebar reads the same
   list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
   every page asks for `/api/agents` once.
-  `web/app/tasks/` is the Tasks section (feature 007) and `web/app/tasks/[id]/` one task, whose
+  `web/app/tasks/` is the Tasks section (feature 007), with the list of tasks under the notice
+  that the console has no users (`task-list.tsx`), and `web/app/tasks/[id]/` one task, whose
   id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
   sidebar's section links are read inside one too, or the build fails for that route.
   `web/lib/tasks.ts` holds the task types, the calls, and `events`, which reads a run's
   stream as it arrives; `web/lib/api.ts` has `stream` beside `api` for that answer.
   `web/lib/task-runs.ts` holds the runs this browser tab started, outside React, so that a
   run started by New task on the list's page is shown on the task's page as it arrives
-  (`useRun`); nothing is stored. `web/components/tasks/` holds New task (`new-task.tsx`),
+  (`useRun`); nothing is stored. The list of tasks and the sidebar's number of tasks that
+  need a decision are one reading of `GET /threads` under `THREADS_KEY`, read again every
+  `LIST_SECONDS` by `web/hooks/use-every.ts`, a timer that goes on past a reading that
+  failed, and at once by a task's view when a run it shows ends. From this phase on every
+  page asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
   the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
   run as it streams and the service's conversation once it ended, a message
   (`message.tsx`), the status in words (`status.tsx`), and the proposal card

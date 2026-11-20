@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { SWRConfig } from "swr";
+import useSWR, { SWRConfig } from "swr";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   type Answer,
@@ -19,7 +19,7 @@ import {
 } from "@/__tests__/tasks-testing";
 import { FOLLOW_SECONDS, TaskView } from "@/components/tasks/task-view";
 import { begin, clear, get } from "@/lib/task-runs";
-import type { PendingDecision } from "@/lib/tasks";
+import { listThreads, type PendingDecision, THREADS_KEY } from "@/lib/tasks";
 
 const NOT_USED = refusal(
   404,
@@ -635,5 +635,40 @@ describe("a task's page with a proposal, further", () => {
         "This step cannot continue: the agent now requires approval.",
       ),
     ).toBeTruthy();
+  });
+});
+
+// Phase 6: the list of tasks, and with it the sidebar's number, follows a run's end at once.
+
+function ListReader() {
+  useSWR(THREADS_KEY, listThreads);
+  return null;
+}
+
+describe("a task's page and the list of tasks", () => {
+  it("has the list read again when a run it shows ends", async () => {
+    const asked = serve((_method, path) => {
+      if (path === "/threads") {
+        return {
+          json: { threads: [], needs_decision: 0, total: 0, more: false },
+        };
+      }
+      return path.endsWith("/state")
+        ? { json: state([human("Hi."), ai("Hello.")]) }
+        : { json: summary() };
+    });
+    const answer = openBody();
+    begin("t-1", "Hi.", answer.stream);
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <ListReader />
+        <TaskView threadId="t-1" />
+      </SWRConfig>,
+    );
+    const lists = () => asked.filter(({ path }) => path === "/threads").length;
+    await waitFor(() => expect(lists()).toBe(1));
+    answer.send(START, END);
+    answer.close();
+    await waitFor(() => expect(lists()).toBe(2));
   });
 });
