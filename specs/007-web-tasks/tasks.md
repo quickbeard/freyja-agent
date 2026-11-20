@@ -519,37 +519,37 @@ sidebar says how many wait, from every section.
 
 ### Tests for User Story 3
 
-- [ ] T052 [P] [US3] Write `web/__tests__/components/tasks/task-list.test.tsx`: one row per
+- [X] T052 [P] [US3] Write `web/__tests__/components/tasks/task-list.test.tsx`: one row per
       thread with the beginning of its first message as text, its status in words, and when
       it last changed; each row opens `/tasks/<id>`; the rows in the service's order; with
       none it says so; `more` true says that more tasks exist; a failed reading says the
       service cannot be reached, offers to try again, and shows no row; the list is read
       again every 15 seconds
-- [ ] T053 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Tasks entry
+- [X] T053 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Tasks entry
       shows `needs_decision` with words for whoever does not see the number ("1 task needs a
       decision", "3 tasks need a decision"); no number for zero, before the first answer,
       and after a failed reading; the number follows a later reading; on a section other than Tasks, with
       fake timers, the sidebar reads the list again every 15 seconds by itself; the list and
       the sidebar ask `/api/threads` once between them (FR-001, FR-006, SC-004)
-- [ ] T054 [P] [US3] Extend `web/__tests__/app/tasks/page.test.tsx`: the list stands under
+- [X] T054 [P] [US3] Extend `web/__tests__/app/tasks/page.test.tsx`: the list stands under
       the notice
 
 ### Implementation for User Story 3
 
-- [ ] T055 [US3] Create `web/components/tasks/task-list.tsx`, reading `GET /threads` under
+- [X] T055 [US3] Create `web/components/tasks/task-list.tsx`, reading `GET /threads` under
       `THREADS_KEY` with a refresh every 15 seconds and no retry behind the person's back,
       and show it in `web/app/tasks/page.tsx`
-- [ ] T056 [US3] Add the number to the Tasks entry in `web/components/app-sidebar.tsx`, read
+- [X] T056 [US3] Add the number to the Tasks entry in `web/components/app-sidebar.tsx`, read
       under the same key, with a refresh every 15 seconds of the sidebar's own, since on
       another section it is the only reader, and no retry behind the person's back
-- [ ] T057 [US3] Extend `web/e2e/tasks.spec.ts`, part 2: four tasks in four statuses in
+- [X] T057 [US3] Extend `web/e2e/tasks.spec.ts`, part 2: four tasks in four statuses in
       order; the sidebar's number on the LLM section; the number gone after a decision
       without a reload; a stopped service; a thread started by another client as a row. It follows T050, whose
       helper answers a decision. Then run the whole end-to-end suite, in both browsers: from
       this phase on every page asks for `/api/threads`, and every existing spec, which hands
       its page no answer for it, must still pass; if one does not, stop and tell the owner
       which, since those specs are not this feature's to edit (R15)
-- [ ] T058 [US3] Add the list and the number to `web/README.md` and `README.md`
+- [X] T058 [US3] Add the list and the number to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 3 works.
 
