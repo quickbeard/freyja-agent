@@ -230,7 +230,9 @@ class AgentTaskStore(Protocol):
 
     async def threads_with_due_followups(self) -> list[str]: ...
 
-    async def mark_delivered(self, agent: str, task_id: str) -> None: ...
+    async def mark_delivered(
+        self, agent: str, task_id: str, outcome: str | None = None
+    ) -> None: ...
 
     async def set_followup(
         self,
@@ -380,12 +382,21 @@ class InMemoryAgentTaskStore:
         }
         return sorted(threads)
 
-    async def mark_delivered(self, agent: str, task_id: str) -> None:
+    async def mark_delivered(self, agent: str, task_id: str, outcome: str | None = None) -> None:
+        """Record that the task's outcome is in its thread.
+
+        ``outcome`` is the text that was delivered. Given it, the task is marked only while
+        that is still its outcome: a task given up while another outcome of it was on its
+        way to the thread keeps its report to be delivered (005 FR-024, SC-010).
+        """
         key = (agent, task_id)
         task = self._tasks.get(key)
         # The first delivery is the one kept, and a task that does not exist is left alone.
-        if task is not None and task.delivered_at is None:
-            self._tasks[key] = replace(task, delivered_at=await self.now())
+        if task is None or task.delivered_at is not None:
+            return
+        if outcome is not None and task.outcome != outcome:
+            return
+        self._tasks[key] = replace(task, delivered_at=await self.now())
 
     async def set_followup(
         self,
@@ -811,11 +822,13 @@ class PostgresAgentTaskStore:
         )
         return [row["thread_id"] for row in rows]
 
-    async def mark_delivered(self, agent: str, task_id: str) -> None:
+    async def mark_delivered(self, agent: str, task_id: str, outcome: str | None = None) -> None:
+        # Only while ``outcome`` is still the task's, when it is given (005 FR-024).
         await self._execute(
             "UPDATE freyja_agent_tasks SET delivered_at = now()"
-            " WHERE agent = %(agent)s AND task_id = %(task_id)s AND delivered_at IS NULL",
-            {"agent": agent, "task_id": task_id},
+            " WHERE agent = %(agent)s AND task_id = %(task_id)s AND delivered_at IS NULL"
+            " AND (%(outcome)s::text IS NULL OR outcome = %(outcome)s::text)",
+            {"agent": agent, "task_id": task_id, "outcome": outcome},
         )
 
     async def set_followup(

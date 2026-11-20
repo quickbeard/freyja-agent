@@ -10,6 +10,7 @@ import {
   checkAgent,
   downAgents,
   listAgents,
+  removeAgent,
 } from "@/lib/agents";
 import { ApiError, isGone } from "@/lib/api";
 
@@ -389,6 +390,136 @@ describe("changeAgent", () => {
       version: 3,
       approval: "none",
     }).catch((error: unknown) => error);
+    expect((failed as ApiError).code).toBe("unreachable");
+  });
+});
+
+// Part 5 (T099): moving a saved agent, and removing one.
+
+describe("changeAgent, with an address", () => {
+  const SAVED = "7c9e6679f0a54b3e8d2a1f4b6c8e0a2d";
+  const MOVED_TO = "http://127.0.0.1:9996/agents/recognizable-other";
+  const MOVED = {
+    agent: agent({
+      id: SAVED,
+      name: "stub",
+      source: "saved",
+      url: MOVED_TO,
+      version: 4,
+    }),
+    given_up: 2,
+  };
+
+  it("sends the address in the body, with the version and nothing else, and hands back how many tasks were given up", async () => {
+    const fetchStub = stubFetch({ json: MOVED });
+    expect(await changeAgent(SAVED, { version: 3, url: MOVED_TO })).toEqual(
+      MOVED,
+    );
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    // The address travels in the body and in no path or query.
+    expect(path).toBe(`/api/agents/${SAVED}`);
+    expect(init?.method).toBe("PATCH");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      version: 3,
+      url: MOVED_TO,
+    });
+  });
+
+  it("sends an address and an approval choice in one request when given both", async () => {
+    const fetchStub = stubFetch({ json: MOVED });
+    await changeAgent(SAVED, { version: 3, url: MOVED_TO, approval: "none" });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchStub.mock.calls[0][1]?.body))).toEqual({
+      version: 3,
+      url: MOVED_TO,
+      approval: "none",
+    });
+  });
+
+  it.each([
+    ["address_taken", "Another saved agent is at this address."],
+    ["agent_unusable", "Nothing answered at the address."],
+    [
+      "check_busy",
+      "Four card reads are under way on this instance. Wait for one to end.",
+    ],
+  ])("surfaces a refused move with the service's code and sentence: %s", async (code, message) => {
+    stubFetch({ status: 409, json: { detail: { code, message } } });
+    const refused = await changeAgent(SAVED, {
+      version: 3,
+      url: MOVED_TO,
+    }).catch((error: unknown) => error);
+    expect((refused as ApiError).code).toBe(code);
+    expect((refused as ApiError).message).toBe(message);
+  });
+});
+
+describe("removeAgent", () => {
+  const SAVED = "7c9e6679f0a54b3e8d2a1f4b6c8e0a2d";
+
+  it.each([
+    0, 1, 3,
+  ])("sends a DELETE with the version as a query and no body, and returns how many tasks were given up: %i", async (givenUp) => {
+    const fetchStub = stubFetch({ json: { given_up: givenUp } });
+    expect(await removeAgent(SAVED, 4)).toBe(givenUp);
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/agents/${SAVED}?version=4`);
+    expect(init?.method).toBe("DELETE");
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).toBeUndefined();
+  });
+
+  it("keeps an id that is no id inside its one place in the path", async () => {
+    const fetchStub = stubFetch({ json: { given_up: 0 } });
+    await removeAgent("a/b?c", 1);
+    expect(fetchStub.mock.calls[0][0]).toBe("/api/agents/a%2Fb%3Fc?version=1");
+  });
+
+  it.each([
+    [
+      409,
+      "agent_changed",
+      "The agent was changed since this page read it. Nothing was changed.",
+    ],
+    [
+      409,
+      "agent_read_only",
+      "An agent named in the environment cannot be removed here.",
+    ],
+  ])("surfaces a refusal with the service's code and sentence: %s %s", async (status, code, message) => {
+    stubFetch({ status, json: { detail: { code, message } } });
+    const refused = await removeAgent(SAVED, 4).catch(
+      (error: unknown) => error,
+    );
+    expect(refused).toBeInstanceOf(ApiError);
+    expect((refused as ApiError).code).toBe(code);
+    expect((refused as ApiError).message).toBe(message);
+    expect(isGone(refused)).toBe(false);
+  });
+
+  it("says an agent is gone when the service knows no agent with the id", async () => {
+    stubFetch({
+      status: 404,
+      json: {
+        detail: {
+          code: "agent_not_found",
+          message: "There is no agent with this id.",
+        },
+      },
+    });
+    const refused = await removeAgent(SAVED, 4).catch(
+      (error: unknown) => error,
+    );
+    expect(isGone(refused)).toBe(true);
+  });
+
+  it("surfaces a request that got no answer as unreachable", async () => {
+    stubFetch({ fails: "Failed to fetch" });
+    const failed = await removeAgent(SAVED, 4).catch((error: unknown) => error);
     expect((failed as ApiError).code).toBe("unreachable");
   });
 });

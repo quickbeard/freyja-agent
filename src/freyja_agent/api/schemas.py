@@ -305,17 +305,27 @@ def _a_choice(value: str | None) -> str:
     return value
 
 
+def _a_new_address(value: str | None) -> str:
+    """The address rule for a change. An address sent as null is refused: a value that is
+    kept is left out."""
+    if value is None:
+        raise PydanticCustomError("agent_address", "Enter the address.")
+    return _agent_address(value)
+
+
 class AgentUpdate(BaseModel):
     """What changing a saved agent takes (005 FR-009, FR-012; research R14).
 
     ``version`` is the one the page that asks last read: the change is refused when the agent
-    was changed since. ``approval`` left out is kept. Nothing else is accepted: a saved
-    agent's name never changes, and its address is not changed by this shape yet.
+    was changed since. ``url`` and ``approval`` left out are kept. ``url`` is validated by
+    the address rule and kept in its form, as for an add. Nothing else is accepted: a saved
+    agent's name never changes. No refused value is repeated.
     """
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     version: Annotated[int, Field(ge=1, strict=True)]
+    url: Annotated[str | None, AfterValidator(_a_new_address)] = None
     approval: Annotated[Literal["required", "none"] | None, AfterValidator(_a_choice)] = None
 
 
@@ -323,6 +333,12 @@ class AgentChanged(BaseModel):
     """A saved agent after a change, and how many of its tasks the change gave up."""
 
     agent: Agent
+    given_up: Annotated[int, Field(ge=0)]
+
+
+class AgentRemoved(BaseModel):
+    """How many of a removed agent's tasks the removal gave up (005 FR-024)."""
+
     given_up: Annotated[int, Field(ge=0)]
 
 

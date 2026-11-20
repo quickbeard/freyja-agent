@@ -223,6 +223,25 @@ async def test_an_outcome_is_marked_delivered_once(store: AgentTaskStore, advanc
     assert second is not None and second.delivered_at == first.delivered_at
 
 
+async def test_an_outcome_is_marked_delivered_only_while_it_is_the_one_that_was_delivered(
+    store: AgentTaskStore,
+) -> None:
+    """005 FR-024: a task given up while another outcome of it was on its way to the thread
+    keeps its report to be delivered."""
+    await store.record_task(await a_task(store, outcome="a question", outcome_ready=True))
+    # The task is given up meanwhile: another outcome, not delivered.
+    await store.update_task("stub", "t1", state="given_up", outcome="given up")
+    await store.mark_delivered("stub", "t1", "a question")
+    waiting = await store.get_task("stub", "t1")
+    assert waiting is not None and waiting.delivered_at is None
+    assert [task.task_id for task in await store.ready_outcomes("th-1")] == ["t1"]
+    # The outcome it has now, once that one is delivered, is marked.
+    await store.mark_delivered("stub", "t1", "given up")
+    delivered = await store.get_task("stub", "t1")
+    assert delivered is not None and delivered.delivered_at is not None
+    assert await store.ready_outcomes("th-1") == []
+
+
 async def test_threads_with_a_due_retry_are_listed_once_it_is_due(
     store: AgentTaskStore, advance: Advance
 ) -> None:

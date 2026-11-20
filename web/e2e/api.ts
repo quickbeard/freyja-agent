@@ -536,6 +536,8 @@ export const ENVIRONMENT_AGENT_READ_ONLY =
   "An agent named in the environment cannot be changed here.";
 export const NOT_IN_USE_READ_ONLY =
   "This saved agent is not in use, so it can only be removed.";
+export const ENVIRONMENT_AGENT_NOT_REMOVED =
+  "An agent named in the environment cannot be removed here.";
 
 const THIS_MACHINE = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
 
@@ -780,8 +782,11 @@ export class AgentService {
   }
 
   /**
-   * Change a saved agent's approval choice, as the service does: at the version the page
-   * read, and for a saved agent that is in use only. No agent is contacted for it.
+   * Change a saved agent, as the service does: at the version the page read, and for a saved
+   * agent that is in use only. A change of the approval choice contacts no agent. A change
+   * of address reads the card at the new address first, is refused where no agent answers
+   * or another agent is, and gives up the agent's pending tasks; an address that is the
+   * saved one in another spelling is no change.
    */
   private change(route: Route, id: string, body: Record<string, unknown>) {
     const agent = this.agents.find((found) => found.id === id);
@@ -800,11 +805,59 @@ export class AgentService {
     if (body.version !== agent.version) {
       return this.refuse(route, "agent_changed", AGENT_CHANGED_SINCE);
     }
-    let changed = agent;
+    const changes: Partial<Agent> = {};
+    let givenUp = 0;
+    if (body.url !== undefined) {
+      const url = keptAddress(String(body.url));
+      if (url === null || !THIS_MACHINE.test(new URL(url).hostname)) {
+        // A refused value is named by its field and never repeated.
+        return route.fulfill({
+          status: 422,
+          json: {
+            detail: [
+              {
+                type: "agent_address",
+                loc: ["body", "url"],
+                msg: NOT_THIS_MACHINE,
+              },
+            ],
+          },
+        });
+      }
+      if (url !== agent.url) {
+        const taken = this.agents.some(
+          (other) =>
+            other.id !== agent.id &&
+            other.url !== null &&
+            destination(other.url) === destination(url),
+        );
+        if (taken) {
+          return this.refuse(route, "address_taken", AGENT_ADDRESS_TAKEN);
+        }
+        // The card at the new address is read before anything is changed.
+        if (this.silent.has(new URL(url).port)) {
+          return this.refuse(route, "agent_unusable", NOTHING_ANSWERED, {
+            reason: "no_answer",
+          });
+        }
+        // Moved: its pending tasks are given up, and its card was just read there.
+        givenUp = agent.pending_tasks;
+        Object.assign(changes, {
+          url,
+          pending_tasks: 0,
+          state: "reachable",
+          reason: null,
+        });
+      }
+    }
     if (body.approval !== undefined && body.approval !== agent.approval) {
+      changes.approval = body.approval === "none" ? "none" : "required";
+    }
+    let changed = agent;
+    if (Object.keys(changes).length > 0) {
       this.changed += 1;
       this.found(agent.name, {
-        approval: body.approval === "none" ? "none" : "required",
+        ...changes,
         version: (agent.version ?? 0) + 1,
         // Each change a minute after the one before it, from eleven o'clock.
         updated_at: new Date(
@@ -817,7 +870,37 @@ export class AgentService {
       this.losing -= 1;
       return route.abort("connectionfailed");
     }
-    return route.fulfill({ json: { agent: changed, given_up: 0 } });
+    return route.fulfill({ json: { agent: changed, given_up: givenUp } });
+  }
+
+  /**
+   * Remove a saved agent, as the service does: at the version the page read, in use or not,
+   * giving up its pending tasks. An environment agent is not removed.
+   */
+  private remove(route: Route, id: string, version: string | null) {
+    const agent = this.agents.find((found) => found.id === id);
+    if (agent === undefined) {
+      return route.fulfill({
+        status: 404,
+        json: { detail: { code: "agent_not_found", message: NO_SUCH_AGENT } },
+      });
+    }
+    if (agent.source === "environment") {
+      return this.refuse(
+        route,
+        "agent_read_only",
+        ENVIRONMENT_AGENT_NOT_REMOVED,
+      );
+    }
+    if (version === null || Number(version) !== agent.version) {
+      return this.refuse(route, "agent_changed", AGENT_CHANGED_SINCE);
+    }
+    this.agents = this.agents.filter((found) => found.id !== id);
+    if (this.losing > 0) {
+      this.losing -= 1;
+      return route.abort("connectionfailed");
+    }
+    return route.fulfill({ json: { given_up: agent.pending_tasks } });
   }
 
   /**
@@ -895,9 +978,11 @@ export class AgentService {
       async (route) => {
         const request = route.request();
         const method = request.method();
-        const path = new URL(request.url()).pathname.replace(/^\/api/, "");
+        const asked = new URL(request.url());
+        const path = asked.pathname.replace(/^\/api/, "");
         const body = request.postData() ? request.postDataJSON() : undefined;
-        this.asked.push({ method, path, body });
+        // With its query, which only a removal has: the version it names.
+        this.asked.push({ method, path: `${path}${asked.search}`, body });
         if (this.stopped) {
           return route.continue();
         }
@@ -917,6 +1002,13 @@ export class AgentService {
             route,
             decodeURIComponent(one[1]),
             body as Record<string, unknown>,
+          );
+        }
+        if (method === "DELETE" && one) {
+          return this.remove(
+            route,
+            decodeURIComponent(one[1]),
+            asked.searchParams.get("version"),
           );
         }
         return route.fulfill({ status: 404, json: { detail: "Not Found" } });

@@ -1,7 +1,7 @@
 // Agents as the service describes them (specs/005-web-delegate-agents/contracts/openapi.yaml).
 // A saved agent's address is in `url`; an environment agent's is in no field of any type here.
 // An address travels in a request's body and in no path or query; an agent is named in a
-// path by its id.
+// path by its id, and a removal names the version it was read at in a query.
 
 import { api } from "./api";
 
@@ -95,24 +95,52 @@ export function addAgent({ name, url, approval }: NewAgent): Promise<Agent> {
  * A change of a saved agent: the version the page read the agent at, and each value that is
  * to change. A value left out is kept.
  */
-export type AgentChange = { version: number; approval?: Approval };
+export type AgentChange = {
+  version: number;
+  url?: string;
+  approval?: Approval;
+};
 
 /** A saved agent after a change, and how many of its pending tasks the change gave up. */
 export type AgentChanged = { agent: Agent; given_up: number };
 
 /**
  * Change a saved agent. Exactly the values given are sent: the service refuses the change
- * when the agent is no longer at `version`, and contacts no agent for a change of the
- * approval choice.
+ * when the agent is no longer at `version`. It contacts no agent for a change of the
+ * approval choice. For a change of address it reads the card at the new address first,
+ * refuses an agent it cannot use there, and gives up the agent's pending tasks.
  */
 export function changeAgent(
   id: string,
-  { version, approval }: AgentChange,
+  { version, url, approval }: AgentChange,
 ): Promise<AgentChanged> {
+  const body: AgentChange = { version };
+  if (url !== undefined) {
+    body.url = url;
+  }
+  if (approval !== undefined) {
+    body.approval = approval;
+  }
   return api<AgentChanged>(`${AGENTS_KEY}/${encodeURIComponent(id)}`, {
     method: "PATCH",
-    body: approval === undefined ? { version } : { version, approval },
+    body,
   });
+}
+
+/**
+ * Remove a saved agent, at the version the page read it at: the service refuses the removal
+ * when the agent was changed since. Returns how many of its pending tasks were given up.
+ */
+export async function removeAgent(
+  id: string,
+  version: number,
+): Promise<number> {
+  const query = new URLSearchParams({ version: String(version) });
+  const answer = await api<{ given_up: number }>(
+    `${AGENTS_KEY}/${encodeURIComponent(id)}?${query}`,
+    { method: "DELETE" },
+  );
+  return answer.given_up;
 }
 
 /** Why an agent's card cannot be used: one code for each way of failing. */

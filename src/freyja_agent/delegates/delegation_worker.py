@@ -271,6 +271,12 @@ class DelegationWorker:
         """
         if link is None:
             link = next(found for found in self.runtime.agents if found.name == task.agent)
+        store = self.runtime.agent_tasks
+        # The task as it is now, not as the round claimed it: one that was given up since,
+        # with its agent moved or removed, is not asked about (005 FR-025, SC-004).
+        current = await store.get_task(task.agent, task.task_id)
+        if current is None or current.state not in PENDING_STATES:
+            return
         try:
             found = await link.get_task(task.task_id)
         except TaskNotFoundError:
@@ -285,7 +291,6 @@ class DelegationWorker:
         else:
             link.mark(True)
             state, text = state_name(found.status.state), a2a_result_text(found)
-        store = self.runtime.agent_tasks
         if task.state == "input_required" and state in PENDING_STATES:
             # Still waiting, or working on an answer whose hand-off is still following it: the
             # question is recorded already, and that hand-off records what the answer leads
@@ -300,8 +305,10 @@ class DelegationWorker:
             )
             return
         # Recorded only while the task is still pending here: one Freyja canceled meanwhile
-        # keeps its state, and its late outcome is ignored (FR-022).
-        await record_outcome(store, task, state, text, ready=True)
+        # keeps its state, and its late outcome is ignored (FR-022). So does one that was
+        # given up while this check was under way, with its agent moved or removed: its
+        # thread is told once, that it was given up (005 FR-024).
+        await record_outcome(store, task, state, text, ready=True, over=PENDING_STATES)
 
     @staticmethod
     def _describe(text: str) -> str:

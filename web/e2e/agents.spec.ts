@@ -376,14 +376,17 @@ test("the warnings name every agent that cannot be used, unreachable or not in u
   await expect(section(page, "Agents")).toHaveAccessibleDescription(
     "2 agents cannot be used",
   );
-  // An agent that is not in use can be neither checked nor changed; every other can be
-  // checked, and a saved one changed.
-  await expect(card(page, "shadowed").getByRole("button")).toHaveCount(0);
+  // An agent that is not in use can be neither checked nor changed, only removed; every
+  // other can be checked, and a saved one changed and removed.
+  await expect(card(page, "shadowed").getByRole("button")).toHaveText([
+    "Remove",
+  ]);
   await expect(card(page, "hello").getByRole("button")).toHaveText(["Check"]);
   for (const name of ["later", "stub"]) {
     await expect(card(page, name).getByRole("button")).toHaveText([
       "Check",
       "Edit",
+      "Remove",
     ]);
   }
 });

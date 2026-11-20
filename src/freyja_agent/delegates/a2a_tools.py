@@ -32,6 +32,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Collection
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -45,6 +46,7 @@ from langgraph.config import get_config, get_stream_writer
 from pydantic import BaseModel, ConfigDict, Field
 
 from freyja_agent.agent.catalog import Classification
+from freyja_agent.config import destination
 from freyja_agent.delegates.a2a_agents import (
     AgentLink,
     SendOutcome,
@@ -415,6 +417,27 @@ def now_requires_approval(agent: str) -> str:
     return f"Agent '{agent}' now requires approval, so this message was not sent."
 
 
+def address_is_another_agent_s(agent: str) -> str:
+    """The result of a message a run would send to an address its agent has left (R7)."""
+    return (
+        f"Agent '{agent}': the address this run started with is another agent's now; "
+        "nothing was sent."
+    )
+
+
+async def _not_removed(send: _Send) -> None:
+    """Keep back a message to a saved agent that is gone, before its card is asked for.
+
+    A link that holds no usable card reads the card before it sends, which is a request to
+    the agent. The rules of ``_still_allowed`` are asked again after that read, right
+    before the send (005 FR-019, FR-022).
+    """
+    if send.saved is None:
+        return
+    if await send.saved.get_agent(send.link.agent_id or "") is None:
+        raise _failed(send.link, was_removed(send.link.name))
+
+
 async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
     """Keep back a message to a saved agent that was removed, and a message that no person
     decided to an agent that requires approval now (005 FR-022, research R7).
@@ -442,10 +465,22 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
             raise _failed(link, now_requires_approval(link.name))
         return
     record = await send.saved.get_agent(link.agent_id or "")
+    taken = False
+    if record is not None and record.ref != link.ref:
+        # The agent was moved since this run's tools were built, and the run finishes at the
+        # address it started with (FR-019), unless that address has become another agent's:
+        # an agent that requires approval may have been saved where this one ran without.
+        # Every saved agent is read once more, and all three rules are asked of that reading.
+        records = await send.saved.list_agents()
+        record = next((found for found in records if found.id == link.agent_id), None)
+        left = destination(link.config.url)
+        taken = any(found.id != link.agent_id and found.destination == left for found in records)
     if record is None:
         raise _failed(link, was_removed(link.name))
     if not record.read_only and not decided:
         raise _failed(link, now_requires_approval(link.name))
+    if taken:
+        raise _failed(link, address_is_another_agent_s(link.name))
 
 
 def may_not_have_received(agent: str) -> str:
@@ -474,8 +509,11 @@ def _handoff_coroutine(send: _Send) -> Any:
         earlier = await _sent_before(link, store, thread_id, step, tool_call_id, request)
         if earlier is not None:
             return earlier
+        # The state an answered task is in before the answer is sent.
+        before: str | None = None
         if task_id:
             known = await store.get_task(link.name, task_id)
+            before = known.state if known is not None else None
             if known is not None and known.thread_id != thread_id:
                 # A task belongs to the thread that started it; conversations are never shared
                 # between threads (FR-008), so an answer cannot reach another thread's task.
@@ -486,6 +524,8 @@ def _handoff_coroutine(send: _Send) -> Any:
                 # The task is the agent's as it was when the task started: it is never
                 # answered at a later address, nor by another agent under the name (FR-025).
                 raise _failed(link, given_up_with_its_agent(link.name, task_id))
+        if not link.connected:
+            await _not_removed(send)
         limit = await _connected(link)
         context_id = await store.get_context(thread_id, link.name)
         sent_at = await store.now()
@@ -517,7 +557,7 @@ def _handoff_coroutine(send: _Send) -> Any:
             writer({"agent": link.name, "task_id": task, "state": state, "text": text})
 
         outcome = await send_message(link, a2a_message, on_progress, clock=store.now, limit=limit)
-        result, ok = await _record(link, store, thread_id, message, outcome)
+        result, ok = await _record(link, store, thread_id, message, outcome, before)
         await store.finish_send(
             thread_id,
             step,
@@ -561,12 +601,31 @@ def pending_text(agent: str, task_id: str) -> str:
 
 
 async def _record(
-    link: AgentLink, store: AgentTaskStore, thread_id: str, message: str, outcome: SendOutcome
+    link: AgentLink,
+    store: AgentTaskStore,
+    thread_id: str,
+    message: str,
+    outcome: SendOutcome,
+    before: str | None = None,
 ) -> tuple[str, bool]:
-    """Keep what the send produced, and say what the orchestrator receives."""
+    """Keep what the send produced, and say what the orchestrator receives.
+
+    ``before`` is the state an answered task was in when the answer began.
+    """
     if outcome.malformed is not None:
         # Nothing from the reply is kept: an unusable id could not be watched or answered.
         return f"Agent '{link.name}' replied with something malformed: {outcome.malformed}.", False
+    known_task = (
+        await store.get_task(link.name, outcome.task.id) if outcome.task is not None else None
+    )
+    if known_task is not None and known_task.agent_ref != link.ref:
+        # The row under this id belongs to the agent the name had before, at another address
+        # or under another id, and to that task's thread. Nothing from the reply is kept
+        # (005 FR-025, research R10).
+        return (
+            f"Agent '{link.name}' replied with something malformed: it named a task that "
+            "another agent under this name already has."
+        ), False
     if outcome.context_id is not None:
         await store.set_context(thread_id, link.name, outcome.context_id)
     if outcome.reply is not None:
@@ -604,7 +663,7 @@ async def _record(
         "outcome_ready": False,
         "delivered_at": None,
     }
-    if await store.get_task(link.name, task.id) is None:
+    if known_task is None:
         await store.record_task(
             AgentTaskRecord(
                 agent=link.name,
@@ -624,7 +683,12 @@ async def _record(
         # An answer continues a task this thread started: the row keeps the message the task
         # was started with and its start, and takes the state the answer led to (FR-016). An
         # outcome delivered before the answer is history: the next one is delivered anew.
-        await store.update_task(link.name, task.id, **known)
+        # Only while the task is pending, or as it was when the answer began: an answer
+        # under way when its agent was moved or removed must not write over the row that
+        # change gave up (005 FR-024, R10). A task that was already given up for its age
+        # when it was answered takes the state the answer led to, as it always has.
+        unchanged = (*PENDING_STATES, *([before] if before is not None else []))
+        await store.update_task(link.name, task.id, when_state=unchanged, **known)
     return result, ok
 
 
@@ -639,12 +703,17 @@ async def record_outcome(
     text: str,
     *,
     ready: bool,
+    over: Collection[str] = CANCELABLE,
 ) -> tuple[str, bool]:
     """Record that ``task`` moved to ``state`` at the agent, unless it already moved on.
 
     ``ready`` marks the outcome to be delivered by a run; a result a tool returns is delivered
-    with it, so it is not. The update applies only while the task is still pending or given
-    up, so an outcome that arrives for a task Freyja canceled is ignored (FR-022).
+    with it, so it is not. ``over`` is the states the record may be in for the outcome to be
+    written. A cancel writes over a task that is pending or was given up, so an outcome that
+    arrives for a task Freyja canceled is ignored (FR-022). The worker writes over a pending
+    task only: a check that was under way when the task was given up, with its agent moved
+    or removed, must not turn it back into an outcome and have its thread told twice
+    (005 FR-024, research R10).
     """
     outcome, ok = outcome_text(task.agent, task.task_id, state, text)
     stored = "failed" if state == "auth_required" else state
@@ -652,7 +721,7 @@ async def record_outcome(
     await store.update_task(
         task.agent,
         task.task_id,
-        when_state=CANCELABLE,
+        when_state=over,
         state=stored,
         last_checked_at=now,
         ended_at=None if stored == "input_required" else now,
@@ -686,6 +755,8 @@ def _cancel_coroutine(send: _Send) -> Any:
             raise _failed(link, given_up_with_its_agent(link.name, task_id))
         if task.state not in CANCELABLE:
             return f"Agent '{link.name}' task {task_id} already ended as {task.state}; nothing was sent."
+        if not link.connected:
+            await _not_removed(send)
         limit = await _connected(link)
         sent_at = await store.now()
         proposed = await _proposed_for(link, store, thread_id, step, tool_call_id)

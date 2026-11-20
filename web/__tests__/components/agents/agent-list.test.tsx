@@ -148,15 +148,23 @@ describe("AgentList", () => {
     expect(fetchStub).toHaveBeenCalledTimes(2);
   });
 
-  it("offers Add with agents and with none, and Edit on a saved agent's card only", async () => {
+  it("offers Add with agents and with none, and Edit and Remove on a saved agent's card only", async () => {
     stubFetch(list());
     const { unmount } = renderList();
     await screen.findByRole("heading", { name: "hello" });
-    // The section's own two, Check on each card, and Edit where an agent can be changed.
+    // The section's own two, Check on each card, and Edit and Remove where an agent can
+    // be changed and removed.
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Refresh", "Add", "Check", "Check", "Edit"]);
-    for (const role of ["link", "textbox", "switch", "combobox", "dialog"]) {
+    ).toEqual(["Refresh", "Add", "Check", "Check", "Edit", "Remove"]);
+    for (const role of [
+      "link",
+      "textbox",
+      "switch",
+      "combobox",
+      "dialog",
+      "alertdialog",
+    ]) {
       expect(screen.queryAllByRole(role)).toEqual([]);
     }
     unmount();
@@ -643,12 +651,19 @@ describe("AgentList, changing an agent", () => {
     await askToFree();
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 
-    // The change was made and its answer lost: the list shows a later version.
+    // The change was made and its answer lost: the list shows a later version, and the
+    // form says its own request may be why, not that the agent was changed elsewhere.
     await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(3));
-    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
-    const said = screen.getAllByRole("alert").map((one) => one.textContent);
-    expect(said[0]).toMatch(/not known/);
-    expect(said[1]).toContain("changed elsewhere");
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "stub is no longer as this form has it.",
+      ),
+    );
+    expect(screen.getByRole("alert").textContent).toMatch(/not known/);
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(screen.getByRole("alert").textContent).not.toContain(
+      "changed elsewhere",
+    );
     expect(screen.getByRole("dialog")).toBeTruthy();
   });
 
@@ -688,5 +703,374 @@ describe("AgentList, changing an agent", () => {
         }) as HTMLInputElement
       ).checked,
     ).toBe(true);
+  });
+});
+
+// Part 4 (T108, T109): moving a saved agent, and removing one, from its card.
+
+describe("AgentList, moving and removing an agent", () => {
+  const BUSY: Agent = { ...STUB, pending_tasks: 2 };
+  const ELSEWHERE = "http://127.0.0.1:9996";
+  const MOVED: Agent = {
+    ...BUSY,
+    url: ELSEWHERE,
+    version: 2,
+    pending_tasks: 0,
+  };
+  const asked = (fetchStub: ReturnType<typeof stubFetch>) =>
+    fetchStub.mock.calls.map(([path, init]) => [init?.method ?? "GET", path]);
+  const removal = () => screen.findByRole("alertdialog");
+  const said = () => screen.queryByRole("status")?.textContent ?? null;
+
+  async function askToRemove() {
+    fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+    return removal();
+  }
+
+  const confirmRemoval = (dialog: HTMLElement) =>
+    fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }), {
+      detail: 1,
+    });
+
+  it("asks before removing, removes at the version the card had, and says how many tasks were given up", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, BUSY]),
+      { json: { given_up: 2 } },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+
+    const dialog = await askToRemove();
+    expect(dialog.textContent).toContain("Remove stub?");
+    expect(dialog.textContent).toContain(
+      "stub has 2 pending tasks now, and they will be given up",
+    );
+    // Nothing was sent yet: the dialog asks first.
+    expect(asked(fetchStub)).toEqual([["GET", "/api/agents"]]);
+    confirmRemoval(dialog);
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(cards()).toEqual(["hello"]));
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["DELETE", `/api/agents/${STUB.id}?version=1`],
+      ["GET", "/api/agents"],
+    ]);
+    // The console says how many tasks were given up (FR-024).
+    expect(said()).toBe(
+      "stub was removed. 2 pending tasks were given up: their threads will be told.",
+    );
+  });
+
+  it.each([
+    [0, "stub was removed. It had no pending task, so none was given up."],
+    [
+      1,
+      "stub was removed. 1 pending task was given up: its thread will be told.",
+    ],
+  ])("says so for a removal that gave up %i", async (givenUp, sentence) => {
+    stubFetch(
+      list([HELLO, STUB]),
+      { json: { given_up: givenUp } },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    confirmRemoval(await askToRemove());
+    await waitFor(() => expect(said()).toBe(sentence));
+  });
+
+  it("sends nothing when the removal is cancelled, and says nothing", async () => {
+    const fetchStub = stubFetch(list([HELLO, BUSY]));
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    const dialog = await askToRemove();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(asked(fetchStub)).toEqual([["GET", "/api/agents"]]);
+    expect(cards()).toEqual(["hello", "stub"]);
+    expect(said()).toBeNull();
+  });
+
+  it("shows the pending tasks in the dialog as the list has them once it is read again", async () => {
+    stubFetch(
+      list([HELLO, STUB]),
+      list([HELLO, { ...STUB, pending_tasks: 3 }]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    const dialog = await askToRemove();
+    expect(dialog.textContent).toContain("stub has no pending task now");
+
+    await comeBack();
+    await waitFor(() =>
+      expect(dialog.textContent).toContain("stub has 3 pending tasks now"),
+    );
+  });
+
+  it("closes the dialog and says the agent is gone when the list no longer has it", async () => {
+    const fetchStub = stubFetch(list([HELLO, STUB]), list([HELLO]));
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToRemove();
+
+    // Removed elsewhere, and the list is read again behind the dialog.
+    await comeBack();
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(cards()).toEqual(["hello"]);
+    expect(said()).toBe(
+      "stub is no longer in the list: it was removed elsewhere.",
+    );
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["GET", "/api/agents"],
+    ]);
+  });
+
+  it("reads the list again when the agent to remove is already gone, and reports it as gone", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "agent_not_found",
+            message: "There is no agent with this id.",
+          },
+        },
+      },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    confirmRemoval(await askToRemove());
+
+    await waitFor(() => expect(cards()).toEqual(["hello"]));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(said()).toBe(
+      "stub is no longer in the list: it was removed elsewhere.",
+    );
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["DELETE", `/api/agents/${STUB.id}?version=1`],
+      ["GET", "/api/agents"],
+    ]);
+  });
+
+  it("reads the list again when the removal is refused because the agent was changed since, and removes nothing", async () => {
+    const later = { ...STUB, version: 2, approval: "none" as const };
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "agent_changed",
+            message:
+              "The agent was changed since this page read it. Nothing was changed.",
+          },
+        },
+      },
+      list([HELLO, later]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    const dialog = await askToRemove();
+    confirmRemoval(dialog);
+
+    await waitFor(() =>
+      expect(within(dialog).getByRole("alert").textContent).toContain(
+        "stub was changed elsewhere",
+      ),
+    );
+    expect(
+      (
+        within(dialog).getByRole("button", {
+          name: "Remove",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["DELETE", `/api/agents/${STUB.id}?version=1`],
+      ["GET", "/api/agents"],
+    ]);
+    // Closed and asked again, it is the agent as it is now, and goes at the later version.
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(cardsBehindTheForm()).toEqual(["hello", "stub"]);
+  });
+
+  it("reads the list again when a removal got no answer, and the dialog stays to say the outcome is not known", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      { fails: "Failed to fetch" },
+      list([HELLO, STUB]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    const dialog = await askToRemove();
+    confirmRemoval(dialog);
+
+    const alert = await within(dialog).findByRole("alert");
+    expect(alert.textContent).toMatch(/not known/);
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(3));
+    expect(screen.getByRole("alertdialog")).toBeTruthy();
+    expect(said()).toBeNull();
+  });
+
+  it("says what is known when a removal got no answer and the list then no longer has the agent", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      { fails: "Failed to fetch" },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    confirmRemoval(await askToRemove());
+
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(cards()).toEqual(["hello"]);
+    // Not that it was removed elsewhere, and not how many tasks were given up.
+    expect(said()).toBe(
+      "stub is no longer in the list. The request to remove it got no answer, so how many of its pending tasks were given up is not known here.",
+    );
+  });
+
+  it("removes a saved agent that is not in use, from the one button its card has", async () => {
+    const unused: Agent = {
+      ...STUB,
+      state: "not_in_use",
+      checked_at: null,
+      reason: "An agent named in the environment has this name.",
+    };
+    const fetchStub = stubFetch(
+      list([HELLO, unused]),
+      { json: { given_up: 0 } },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    expect(
+      screen.getAllByRole("button").map((button) => button.textContent),
+    ).toEqual(["Refresh", "Add", "Check", "Remove"]);
+    confirmRemoval(await askToRemove());
+
+    await waitFor(() => expect(cards()).toEqual(["hello"]));
+    expect(asked(fetchStub)[1]).toEqual([
+      "DELETE",
+      `/api/agents/${STUB.id}?version=1`,
+    ]);
+  });
+
+  async function move() {
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await screen.findByRole("dialog", { name: "Edit stub" });
+    fireEvent.change(screen.getByLabelText("Address"), {
+      target: { value: ELSEWHERE },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+  }
+
+  it("asks before moving, moves at the version the card had, and says how many tasks were given up", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, BUSY]),
+      { json: { agent: MOVED, given_up: 2 } },
+      list([HELLO, MOVED]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await move();
+
+    const asks = screen.getByRole("note", { name: "Confirmation" });
+    expect(asks.textContent).toContain(`Move stub to ${ELSEWHERE}?`);
+    expect(asks.textContent).toContain(
+      "stub has 2 pending tasks now, and they will be given up",
+    );
+    expect(asked(fetchStub)).toEqual([["GET", "/api/agents"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const heading = await screen.findByRole("heading", { name: "stub" });
+    const shown = heading.closest('[data-slot="card"]') as HTMLElement;
+    await waitFor(() =>
+      expect(within(shown).getByText(ELSEWHERE)).toBeTruthy(),
+    );
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["PATCH", `/api/agents/${STUB.id}`],
+      ["GET", "/api/agents"],
+    ]);
+    expect(JSON.parse(String(fetchStub.mock.calls[1][1]?.body))).toEqual({
+      version: 1,
+      url: ELSEWHERE,
+    });
+    expect(said()).toBe(
+      "stub was moved. 2 pending tasks were given up: their threads will be told.",
+    );
+  });
+
+  it("says a move gave no task up when none was pending", async () => {
+    stubFetch(
+      list([HELLO, STUB]),
+      { json: { agent: { ...MOVED, pending_tasks: 0 }, given_up: 0 } },
+      list([HELLO, MOVED]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await move();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() =>
+      expect(said()).toBe(
+        "stub was moved. It had no pending task, so none was given up.",
+      ),
+    );
+  });
+
+  it("says nothing of tasks after a change of the approval choice alone", async () => {
+    const freed: Agent = { ...STUB, approval: "none", version: 2 };
+    stubFetch(
+      list([HELLO, STUB]),
+      { json: { agent: freed, given_up: 0 } },
+      list([HELLO, freed]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await screen.findByRole("dialog", { name: "Edit stub" });
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Runs without approval" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    const heading = await screen.findByRole("heading", { name: "stub" });
+    const shown = heading.closest('[data-slot="card"]') as HTMLElement;
+    await waitFor(() =>
+      expect(within(shown).getByText("Runs without approval")).toBeTruthy(),
+    );
+    expect(said()).toBeNull();
+  });
+
+  it("takes back what it said of the last change once another one is started", async () => {
+    stubFetch(
+      list([HELLO, BUSY]),
+      { json: { agent: MOVED, given_up: 2 } },
+      list([HELLO, MOVED]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await move();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+    await waitFor(() => expect(said()).toContain("stub was moved."));
+
+    fireEvent.click(screen.getByRole("button", { name: "Add" }));
+    await screen.findByRole("dialog", { name: "Add an agent" });
+    expect(screen.queryByRole("status", { hidden: true })).toBeNull();
   });
 });

@@ -40,12 +40,14 @@ function Harness({
   onSaved,
   onUnknown,
   onStale,
+  onMoved,
   agent,
   live,
 }: {
   onSaved?: (agent: Agent) => void;
   onUnknown?: () => void;
   onStale?: () => void;
+  onMoved?: (agent: Agent, givenUp: number) => void;
   agent?: Agent;
   live?: Agent | null;
 }) {
@@ -61,6 +63,7 @@ function Harness({
         onSaved={onSaved ?? (() => {})}
         onUnknown={onUnknown ?? (() => {})}
         onStale={onStale}
+        onMoved={onMoved}
         agent={agent}
         live={live}
       />
@@ -730,13 +733,14 @@ describe("AgentForm, changing a saved agent", () => {
   const SERVED: Agent = { ...SAVED, approval: "none" };
   const NOW_REQUIRED: Agent = { ...SERVED, approval: "required", version: 4 };
 
-  it("opens with the agent's values, and neither its name nor its address can be edited", () => {
+  it("opens with the agent's values, and its name cannot be edited", () => {
     render(<Harness agent={SAVED} live={SAVED} />);
     expect(screen.getByRole("dialog", { name: "Edit stub" })).toBeTruthy();
     expect(field("Name").value).toBe("stub");
     expect(field("Name").readOnly).toBe(true);
     expect(field("Address").value).toBe(ADDRESS);
-    expect(field("Address").readOnly).toBe(true);
+    // The address can be changed since Phase 8: part 3 below.
+    expect(field("Address").readOnly).toBe(false);
     expect(choice(REQUIRED).checked).toBe(true);
     expect(choice(FREE).checked).toBe(false);
     // A name that is typed over all the same stays what it was.
@@ -1199,5 +1203,413 @@ describe("AgentForm, changing a saved agent", () => {
     expect(screen.getByRole("dialog")).toBeTruthy();
     expect(choice(FREE).checked).toBe(true);
     expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+});
+
+// Part 3 (T100): changing a saved agent's address.
+
+describe("AgentForm, changing a saved agent's address", () => {
+  const SAVED: Agent = { ...STUB, version: 3, pending_tasks: 1 };
+  const OTHER = "http://localhost:9996/agents/recognizable-other";
+  const MOVED: Agent = { ...SAVED, url: OTHER, version: 4, pending_tasks: 0 };
+  const moved = (givenUp: number, agent: Agent = MOVED): Reply => ({
+    json: { agent, given_up: givenUp },
+  });
+  const said = () => (confirmation() as HTMLElement).textContent ?? "";
+
+  it("lets the address be typed over, and still not the name", () => {
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    expect(field("Address").value).toBe(OTHER);
+    type("Name", "other");
+    expect(field("Name").value).toBe("stub");
+    expect(field("Address").getAttribute("autocomplete")).toBe("off");
+  });
+
+  it("asks before moving the agent, and says what the move means", () => {
+    const fetchStub = stubFetch(moved(1));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+
+    // It names the agent and the address it is to have (FR-011).
+    expect(said()).toContain(`Move stub to ${OTHER}?`);
+    expect(said()).toContain("The change applies from the next run");
+    expect(said()).toContain(
+      "a run in progress finishes at the earlier address",
+    );
+    expect(said()).toContain(
+      "A proposal for stub that is already waiting for a decision will go to the new address once approved.",
+    );
+    // How many tasks are pending, as the list has it now, and that they will be given up.
+    expect(said()).toContain(
+      "stub has 1 pending task now, and it will be given up",
+    );
+    // Nothing about the approval choice, which is not being changed.
+    expect(said()).not.toMatch(/without approval\?|Require approval/);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [0, "stub has no pending task now, so none will be given up."],
+    [1, "stub has 1 pending task now, and it will be given up"],
+    [4, "stub has 4 pending tasks now, and they will be given up"],
+  ])("says how many tasks are pending as the list has it at that moment: %i", (pending, sentence) => {
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    expect(said()).toContain("1 pending task now");
+
+    // The list is read again while the form asks, at the same version: a task ended, or
+    // more became pending.
+    rerender(
+      <Harness agent={SAVED} live={{ ...SAVED, pending_tasks: pending }} />,
+    );
+    expect(said()).toContain(sentence);
+    if (pending !== 1) {
+      expect(said()).not.toContain("1 pending task now");
+    }
+  });
+
+  it("says the number is the form's own while the list cannot be read", () => {
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    rerender(<Harness agent={SAVED} live={undefined} />);
+    expect(said()).toContain(
+      "stub had 1 pending task when this form opened. Every task that is pending when the change is made will be given up.",
+    );
+    expect(said()).not.toContain("pending task now");
+  });
+
+  it("sends the version the form opened with and only the address, once Confirm is pressed, and hands on how many tasks were given up", async () => {
+    const fetchStub = stubFetch(moved(2));
+    const onSaved = vi.fn();
+    const onMoved = vi.fn();
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onMoved={onMoved}
+      />,
+    );
+    // What surrounds a pasted address is not part of it.
+    type("Address", `  ${OTHER} `);
+    save();
+    expect(fetchStub).not.toHaveBeenCalled();
+    confirm();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(MOVED));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub)).toEqual({
+      path: `/api/agents/${SAVED.id}`,
+      method: "PATCH",
+      body: { version: 3, url: OTHER },
+    });
+    // The service's number, whatever the form showed before.
+    expect(onMoved).toHaveBeenCalledTimes(1);
+    expect(onMoved).toHaveBeenCalledWith(MOVED, 2);
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("shows both meanings and sends both values when the address and the choice are changed together", async () => {
+    const both: Agent = { ...MOVED, approval: "none" };
+    const fetchStub = stubFetch(moved(1, both));
+    const onMoved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onMoved={onMoved} />);
+    type("Address", OTHER);
+    choose(FREE);
+    save();
+
+    expect(said()).toContain(`Move stub to ${OTHER}?`);
+    expect(said()).toContain(
+      "A proposal for stub that is already waiting for a decision will go to the new address once approved.",
+    );
+    expect(said()).toContain(
+      "stub has 1 pending task now, and it will be given up",
+    );
+    expect(said()).toContain(
+      "Every message to stub will be sent without a person seeing it first, from the next run.",
+    );
+    expect(fetchStub).not.toHaveBeenCalled();
+    confirm();
+
+    await waitFor(() => expect(onMoved).toHaveBeenCalledWith(both, 1));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub).body).toEqual({
+      version: 3,
+      url: OTHER,
+      approval: "none",
+    });
+  });
+
+  it("sends nothing when the address is the one the form opened with, however it is spaced", () => {
+    const fetchStub = stubFetch(moved(0));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    type("Address", `  ${ADDRESS}  `);
+    save();
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(/nothing/i);
+  });
+
+  it("says the address is missing at its field, and asks nothing", () => {
+    const fetchStub = stubFetch(moved(0));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", "   ");
+    save();
+
+    expect(errorAt("Address")).toBe("Enter the address.");
+    expect(confirmation()).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("takes the confirmation back when the address is changed again", () => {
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    expect(confirmation()).not.toBeNull();
+
+    type("Address", `${OTHER}/elsewhere`);
+    expect(confirmation()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+    save();
+    expect(said()).toContain(`Move stub to ${OTHER}/elsewhere?`);
+  });
+
+  it("does not move on Enter in a field, nor on the second press of a double press", () => {
+    const fetchStub = stubFetch(moved(1));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    const pressed = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(pressed, { detail: 1 });
+    fireEvent.click(pressed, { detail: 2 });
+    expect(confirmation()).not.toBeNull();
+    confirm(2);
+    fireEvent.submit(theForm());
+    fireEvent.submit(theForm());
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).not.toBeNull();
+  });
+
+  it("sends nothing when the confirmation is canceled", async () => {
+    const fetchStub = stubFetch(moved(1));
+    const onMoved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onMoved={onMoved} />);
+    type("Address", OTHER);
+    save();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(onMoved).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Reply, string]>([
+    [
+      "another agent is at the address",
+      refusal("address_taken", "Another saved agent is at this address."),
+      "Another saved agent is at this address.",
+    ],
+    [
+      "the address breaks a rule",
+      {
+        status: 422,
+        json: {
+          detail: [
+            {
+              type: "agent_address",
+              loc: ["body", "url"],
+              msg: "The address must be on this machine: localhost or a loopback IP address.",
+            },
+          ],
+        },
+      },
+      "The address must be on this machine: localhost or a loopback IP address.",
+    ],
+  ])("says why at the address, and keeps what was typed, when %s", async (_when, reply, sentence) => {
+    stubFetch(reply);
+    const onSaved = vi.fn();
+    const onMoved = vi.fn();
+    const onStale = vi.fn();
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onMoved={onMoved}
+        onStale={onStale}
+      />,
+    );
+    type("Address", OTHER);
+    choose(FREE);
+    save();
+    confirm();
+
+    await waitFor(() => expect(errorAt("Address")).toBe(sentence));
+    expect(screen.queryByRole("alert")).toBeNull();
+    // What was typed and chosen stays, and saving again is asked about again.
+    expect(field("Address").value).toBe(OTHER);
+    expect(choice(FREE).checked).toBe(true);
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onMoved).not.toHaveBeenCalled();
+    // The agent is as the form has it: the list is left alone.
+    expect(onStale).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [
+      "agent_unusable",
+      "Nothing answered at the address.",
+      { reason: "no_answer" },
+    ],
+    [
+      "check_busy",
+      "Four card reads are under way on this instance. Wait for one to end.",
+      {},
+    ],
+  ])("says why over the form in the service's sentence, and keeps what was typed: %s", async (code, sentence, more) => {
+    const fetchStub = stubFetch(refusal(code, sentence, more));
+    const onMoved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onMoved={onMoved} />);
+    type("Address", OTHER);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(sentence);
+    expect(errorAt("Address")).toBeNull();
+    expect(field("Address").value).toBe(OTHER);
+    expect(confirmation()).toBeNull();
+    expect(onMoved).not.toHaveBeenCalled();
+    // Saved again, it is asked about again, and sent again once confirmed.
+    save();
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(said()).toContain(`Move stub to ${OTHER}?`);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes back what it said at the address once the address is changed", async () => {
+    stubFetch(
+      refusal("address_taken", "Another saved agent is at this address."),
+    );
+    render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    confirm();
+    await waitFor(() => expect(errorAt("Address")).not.toBeNull());
+
+    type("Address", `${OTHER}/elsewhere`);
+    expect(errorAt("Address")).toBeNull();
+  });
+
+  it("says the outcome is not known when a move got no answer, and has the list read again", async () => {
+    const fetchStub = stubFetch({ fails: "Failed to fetch" });
+    const onUnknown = vi.fn();
+    const onMoved = vi.fn();
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onUnknown={onUnknown}
+        onMoved={onMoved}
+      />,
+    );
+    type("Address", OTHER);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/not known/);
+    expect(alert.textContent).not.toMatch(/fail|could not|was not|cannot/i);
+    expect(onUnknown).toHaveBeenCalledTimes(1);
+    expect(onMoved).not.toHaveBeenCalled();
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(field("Address").value).toBe(OTHER);
+  });
+
+  it("does not call a change its own unanswered request may have made a change made elsewhere", async () => {
+    stubFetch({ fails: "Failed to fetch" });
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    confirm();
+    expect((await screen.findByRole("alert")).textContent).toMatch(/not known/);
+
+    // The list is read again, and shows the agent at a later version: the request that
+    // got no answer may be what changed it.
+    rerender(
+      <Harness agent={SAVED} live={{ ...SAVED, version: 4, url: OTHER }} />,
+    );
+    const alerts = screen
+      .getAllByRole("alert")
+      .map((alert) => alert.textContent);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toContain("stub is no longer as this form has it.");
+    // Still that the outcome is not known, and never that the request failed (FR-004).
+    expect(alerts[0]).toMatch(/not known/);
+    expect(alerts[0]).not.toMatch(/fail|could not|was not|cannot/i);
+    expect(alerts[0]).not.toContain("changed elsewhere");
+    // Nothing can be saved from this form any more, as for any agent that changed.
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("says nothing of tasks given up after a change of the choice alone, nor when the address the service keeps is the same", async () => {
+    const onMoved = vi.fn();
+    const onSaved = vi.fn();
+    const freed: Agent = { ...SAVED, approval: "none", version: 4 };
+    stubFetch(moved(0, freed));
+    const { unmount } = render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onMoved={onMoved}
+      />,
+    );
+    choose(FREE);
+    save();
+    confirm();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(freed));
+    unmount();
+
+    // Another spelling of the address the agent has: the service answers with the agent
+    // as it is, and nothing was moved.
+    stubFetch(moved(0, SAVED));
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onMoved={onMoved}
+      />,
+    );
+    type("Address", ADDRESS.replace("http://localhost", "HTTP://LocalHost"));
+    save();
+    confirm();
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(SAVED));
+    expect(onMoved).not.toHaveBeenCalled();
+  });
+
+  it("saves nothing once the list shows the agent at a later version, also for a move", () => {
+    const fetchStub = stubFetch(moved(1));
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    type("Address", OTHER);
+    save();
+    rerender(<Harness agent={SAVED} live={{ ...SAVED, version: 4 }} />);
+
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "stub was changed elsewhere",
+    );
+    fireEvent.submit(theForm());
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 });

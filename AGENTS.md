@@ -121,9 +121,13 @@ startup and exits with an error naming the connection when it is unreachable.
   runs again never sends twice, checks that a task belongs to the agent the tool was built
   for, that the link is connected, that the call was proposed for the agent the tool
   sends to (`_proposed_for`), and, for a saved agent, that the agent as the store has it
-  now still exists and still runs without approval when no person decided the call
+  now still exists, still runs without approval when no person decided the call, and,
+  when it was moved since the run's tools were built, that no other saved agent has the
+  address the run started with
   (`_still_allowed`, the last thing awaited before the send's first write), and turns a
-  reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
+  reply into text. A hand-off writes a task's row only while the task is pending, and a
+  reply that names a task another agent of the name has is treated as malformed, so a task
+  stays with the agent it was given to. `delegation_worker.py` is the `DelegationWorker`: each poll it
   takes a context, claims pending tasks, checks or gives them up, and starts a delivery for
   each ready outcome: a background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
   `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
@@ -180,8 +184,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
   agent's card and saves the agent when it can be used, requiring approval unless the request
-  chose otherwise, `PATCH /agents/{id}`, which changes a saved agent's approval choice at the
-  version the page read and contacts no agent, and
+  chose otherwise, `PATCH /agents/{id}`, which changes a saved agent's approval choice, its address, or
+  both at the version the page read, reading the card at a new address first and giving up
+  the agent's pending tasks with the move, `DELETE /agents/{id}`, which removes a saved
+  agent and gives up its pending tasks, and
   `POST /agents/{id}/check`, which reads an agent's card again through its link and says
   whether the agent can be used; the first three are the only answers of the service that hold
   a saved agent's address;
@@ -208,11 +214,13 @@ startup and exits with an error naming the connection when it is unreachable.
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
   `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
   `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
-  agent and changes a saved agent's approval choice (`agent-form.tsx`, which keeps nothing
-  once it is sent or closed, asks for confirmation before it sends anything that loosens or
-  tightens approval, and sends the version it opened with), checks one from
+  agent and changes a saved agent's address and approval choice (`agent-form.tsx`, which
+  keeps nothing once it is sent or closed, asks for confirmation before it sends anything
+  that loosens or tightens approval or moves the agent, and sends the version it opened
+  with), removes a saved agent behind a confirmation (`remove-dialog.tsx`), says how many
+  pending tasks a move or a removal gave up, checks an agent from
   its card (`check-result.tsx`), and warns above the cards about every agent that cannot be
-  used (`agents-warning.tsx`); it moves and removes none yet. The sidebar reads the same
+  used (`agents-warning.tsx`). The sidebar reads the same
   list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
   every page asks for `/api/agents` once.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
@@ -237,7 +245,7 @@ startup and exits with an error naming the connection when it is unreachable.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read and its warnings, and `agents-manage.spec.ts` adding an
-  agent, checking one, and changing one's approval choice; `api.ts`
+  agent, checking one, changing one's approval choice, moving one, and removing one; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
   what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that

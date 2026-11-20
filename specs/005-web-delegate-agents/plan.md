@@ -958,3 +958,123 @@ What the implementation settled differently from the plan, or found out, phase b
   the stand-in's port.
 - **Coverage of the service's lines is 91.00%** as CI measures it; the web app's is
   96.96% of statements, 95.53% of branches, 97% of functions, and 98.02% of lines.
+
+### Phase 8
+
+- **A move is `PATCH /agents/{id}` with `url`.** The order is: the refusals of a change
+  (an environment agent, a saved agent not in use, an unknown id); the version, which is
+  refused before any card is read and decided again by the store when the change is
+  written; whether the address, in its kept form, is the saved one, which is no move;
+  whether an environment agent or another saved agent is where the address leads; one of
+  the four card-read slots; the card read, within the lesser of the startup limit and
+  twenty seconds; the store's change, which gives up the pending tasks in the same
+  transaction; and `registry.adopt` with the card that was read, which makes a new link
+  with a new client.
+- **A move takes one of the four slots and not the agent's own**, so a move of an agent
+  that is being checked goes ahead (R15).
+- **An address that leads where the agent already is, spelled another way that does not
+  come to the saved form, is a move**: `http://localhost:9998` for an agent saved at
+  `http://127.0.0.1:9998`. The store keeps one form per agent and compares that form; the
+  card is read, the address version moves, and pending tasks are given up.
+- **After a move the answer's `pending_tasks` is 0**: every task that was pending was
+  given up with it.
+- **`DELETE /agents/{id}?version=`** reads the agent for its name, removes it through the
+  store, and has this instance take the removal up at once. A saved agent that is not in
+  use can be removed. `env.<name>` is `agent_read_only` with "An agent named in the
+  environment cannot be removed here."
+- **Three failures the tasks do not name are answered with 500 `internal`**: the saved
+  agents cannot be read, the change cannot be written, and "The agent could not be
+  removed."
+- **The log lines**: "Agent changed: <name> (<id>): its address changed; N task(s) were
+  given up", with ", and its approval choice is now <new>, was <old>" when both changed;
+  "Agent <name> was not moved: <the card problem's sentence>"; and "Agent removed: <name>
+  (<id>); N task(s) were given up".
+- **The third rule before a send** (`_still_allowed`): when the saved agent's ref is no
+  longer the link's, every saved agent is read once more and all three rules are asked of
+  that one reading, so the last read before the send's first write decides. Another saved
+  agent where the link's address leads: "Agent '<name>': the address this run started with
+  is another agent's now; nothing was sent." An environment agent cannot come to hold a
+  saved agent's address while the service runs, so only saved agents are looked at.
+- **A hand-off writes a task's row only while the task is pending** (R10). An answer that
+  was under way when its agent was moved leaves the row as the move gave it up.
+- **A reply that names a task the name already has under another ref is malformed**:
+  "Agent '<name>' replied with something malformed: it named a task that another agent
+  under this name already has." Nothing of the reply is kept, the conversation included.
+- **`record_outcome` takes the states it may write over** (`over`). The worker passes the
+  pending ones; a cancel keeps pending and given up. The worker already gave the text for
+  a move to a task whose ref is of an earlier address of an agent that still exists
+  (Phase 3).
+- **The console.** The Edit form's address can be changed; the name cannot. The move's
+  confirmation: "Move <name> to <address>? The change applies from the next run: a run in
+  progress finishes at the earlier address. A proposal for <name> that is already waiting
+  for a decision will go to the new address once approved.", then the pending tasks as
+  the list has them: "<name> has N pending task(s) now, and they will be given up: Freyja
+  stops waiting for them and tells their threads. No cancel is sent." The removal dialog:
+  "Remove <name>?", "The removal holds at once, also for runs in progress: nothing more is
+  sent to <name>, and the next run has neither of its tools. This cannot be undone: an
+  agent added again under this name is another agent.", and the same line about pending
+  tasks. Its buttons are Cancel and Remove.
+- **How many tasks were given up is said by the list**, in a status line above the cards
+  that stays after the form or the dialog has closed: "<name> was moved. 1 pending task
+  was given up: its thread will be told." A move says so for no task too; a change of the
+  approval choice alone says nothing.
+- **The removal dialog takes its confirmation back at a later version**, as the form does,
+  and closes itself when the list no longer has the agent, which the status line then
+  says.
+- **A saved agent's card shows "Pending tasks" with the number when it is not zero**, and
+  has Remove; one that is not in use has Remove and nothing else.
+- **Existing tests of feature 005 that changed.** `tests/test_agents_api.py`: the body
+  with `url` left the list of refused bodies of a change, as T096 says, and the test of a
+  store that fails now names the read the route makes. `tests/test_agents_address_nowhere.py`
+  part 3: the `url` it sends to be refused now breaks a rule. In the console: the tests
+  that list a card's buttons, two that expected no button on a card not in use, and the
+  one that expected the address not to be editable.
+- **The independent review** found no way around approval, and five lesser defects, each
+  reproduced before it was fixed and each with a test that fails without its fix.
+  - **A report that a task was given up could be lost.** A delivery marked a task as
+    delivered by its id. A task whose question was on its way to the thread when its agent
+    was removed got that mark for a report nobody had seen. `mark_delivered` now takes the
+    outcome that was delivered and marks only while that is still the task's. The cause is
+    older than this feature; the two new routes made it reachable on request.
+  - **A round of watching that had claimed a task still asked a removed agent about it.**
+    The worker now reads the task again right before it asks, and asks nothing about one
+    that is no longer pending.
+  - **A tool whose link held no card read the card of a removed agent** before it found the
+    agent gone, because the card is read before the check (R7). The tool now asks whether
+    the agent is still there before that read as well, and only then.
+  - **An answer wrote only over a pending task**, as R10 words it, which changed feature
+    003 for an environment agent: a task given up for its age and then answered stayed
+    given up (FR-031). It now writes over a pending task, or one in the state it had when
+    the answer began. An answer under way during a move still leaves the row as the move
+    gave it up.
+  - **The list counted a saved agent's pending tasks at its current address only**, and a
+    move or a removal gives up those of every address it has had. The list and the routes
+    now count the same way (R10), so a confirmation shows what the change gives up. One
+    test of Phase 4 expected 0 for a task under an earlier address and now expects 1.
+- **Two smaller things from the review.** Taking a change up on this instance waits for
+  another reading of the same link no longer than a card read may take, where it waited up
+  to the startup limit. And the form no longer says an agent "was changed elsewhere" when
+  its own request, which got no answer, may be what changed it: "<name> is no longer as
+  this form has it. The request got no answer, so it is not known whether that request is
+  what changed <name>: close the form and look at the agent in the list."
+- **Known: the move's confirmation is shown for the saved address spelled another way.**
+  The console cannot tell that `http://127.0.0.1:9998/` is the saved address; the service
+  can, and moves nothing. The list then says nothing about a move.
+- **Known: a move or an add can take longer than twenty seconds in one case**: another
+  caller is reading the card through the new link at that moment. The wait is at most one
+  more card read.
+- **Seen by hand, with the real service, the console in a browser, and a real model**
+  (quickstart section 5), before the review's fixes. A hand-off of 'slow 600' was approved
+  and left a task pending. Edit, a new address, Save showed the confirmation with "1
+  pending task" and sent nothing; Confirm sent one PATCH, the section said "stub was
+  moved. 1 pending task was given up: its thread will be told.", and the card showed the
+  new address. The thread listed the task as given up at once, and a background run told
+  it once that the agent was moved. Neither stand-in received a request after the move
+  until a new hand-off, once approved, reached the second one. A move to a port where
+  nothing listens was refused in the form with "Nothing answered at the address." and
+  left the address as it was. A change at an old version was refused as `agent_changed`.
+  Remove showed its confirmation, and after Remove the card was gone and `/tools` had
+  neither tool; after a restart the agent was still gone and the thread still listed its
+  task. No line of the service's logs held a stand-in's port.
+- **Coverage of the service's lines is 91.25%** as CI measures it; the web app's is
+  97.44% of statements, 95.33% of branches, 97.32% of functions, and 98.34% of lines.
