@@ -6,18 +6,31 @@ conversation, its pending proposal, and its agent tasks are still read from
 where each stands, from the index the runtime keeps through the run lease
 (``runtime/thread_index.py``).
 
-Both routes contact no model, agent, or tool server and change no thread. They do write to
-the index: a row whose run has ended and has not been looked at is settled here, by one read
-of the thread's state, and what was found is kept (research R6).
+The two routes that read contact no model, agent, or tool server and change no thread. They
+do write to the index: a row whose run has ended and has not been looked at is settled here,
+by one read of the thread's state, and what was found is kept (research R6).
+
+Three routes start, continue, and stop a console run: a run that goes on whether or not its
+reader stays (research R2, R3, R5). The two that run call the handlers of ``api/threads.py``,
+so every refusal and every check of a decision is the existing code, and take the run's
+events out of the response it returns. ``api/threads.py`` is not changed for them.
 """
 
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from sse_starlette import EventSourceResponse
 
+from freyja_agent.api import threads
 from freyja_agent.api.guards import refuse_other_origins
-from freyja_agent.api.thread_index_schemas import RunError, ThreadList, ThreadSummary
-from freyja_agent.api.threads import ThreadIdPath
+from freyja_agent.api.schemas import ResumeRequest, RunRequest
+from freyja_agent.api.thread_index_schemas import (
+    RunError,
+    StopAnswer,
+    ThreadList,
+    ThreadSummary,
+)
+from freyja_agent.api.threads import DebugQuery, ThreadIdPath
 from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.thread_index import (
     LIST_LIMIT,
@@ -28,6 +41,7 @@ from freyja_agent.runtime.thread_index import (
     stoppable,
     stopping,
 )
+from freyja_agent.runtime.unattended import UnattendedRuns
 
 logger = logging.getLogger(__name__)
 
@@ -196,3 +210,100 @@ async def read_thread(thread_id: ThreadIdPath, request: Request) -> ThreadSummar
         # Runs kept starting and ending while the row was read; the next request reads it.
         raise _error(500, "internal", "The list of threads could not be read.")
     return _summary(*view)
+
+
+# A sign of life on a console run's stream. The console's forwarding ends a stream that is
+# silent for 30 seconds, so two fall inside every such window (research R1).
+PING_SECONDS = 10
+# Next.js compresses what it forwards and holds a compressed stream back until it ends; it
+# leaves an answer alone that says it must not be transformed (research R1).
+NO_TRANSFORM = "no-store, no-transform"
+
+
+def _console_runs(request: Request) -> UnattendedRuns:
+    """The console runs of this instance; asked before a handler takes a lease."""
+    runs = _runtime(request).unattended
+    if runs is None:  # a runtime put together by hand, which the service never runs on
+        raise _error(500, "internal", "This instance cannot run a task without a reader.")
+    return runs
+
+
+async def _go_on(
+    runs: UnattendedRuns,
+    thread_id: str,
+    response: EventSourceResponse,
+    first_message: str | None,
+) -> EventSourceResponse:
+    """Drive the run the handler accepted without its reader, and answer with its events.
+
+    The handler took the thread's lease and made the run's events; nothing of the run has
+    started. It is handed over at once, with nothing awaited before, so that nothing can
+    leave the lease taken. The row is marked as a console run's at the run's first event.
+    """
+    reader = runs.start(thread_id, response.body_iterator, first_message)
+    logger.info("Thread %s: a run started that goes on without a reader", thread_id)
+    return EventSourceResponse(reader, ping=PING_SECONDS, headers={"Cache-Control": NO_TRANSFORM})
+
+
+@router.post("/{thread_id}/runs/unattended")
+async def start_unattended(
+    thread_id: ThreadIdPath,
+    body: RunRequest,
+    request: Request,
+    debug: DebugQuery = False,
+) -> EventSourceResponse:
+    """Start a run that goes on when its reader leaves; the same refusals and events as
+    ``POST /threads/{thread_id}/runs``, from the same code."""
+    runs = _console_runs(request)
+    response = await threads.start_run(thread_id, body, request, debug)
+    return await _go_on(runs, thread_id, response, body.message)
+
+
+@router.post("/{thread_id}/resume/unattended")
+async def resume_unattended(
+    thread_id: ThreadIdPath,
+    body: ResumeRequest,
+    request: Request,
+    debug: DebugQuery = False,
+) -> EventSourceResponse:
+    """Decide the pending proposal; the continuation goes on when its reader leaves. The
+    same refusals and events as ``POST /threads/{thread_id}/resume``, from the same code."""
+    runs = _console_runs(request)
+    response = await threads.resume_run(thread_id, body, request, debug)
+    return await _go_on(runs, thread_id, response, None)
+
+
+@router.post("/{thread_id}/stop", status_code=202)
+async def stop_run(thread_id: ThreadIdPath, request: Request) -> StopAnswer:
+    """Ask the console run in progress to stop after the step under way (research R5).
+
+    The answer says the stop was asked for, not that the run has ended. The mark is read by
+    the instance that runs the thread, between two steps, so this works from any instance.
+    """
+    runtime = _runtime(request)
+    try:
+        record = await runtime.threads.get(thread_id)
+        running = await runtime.locks.is_active(thread_id)
+    except Exception as exc:
+        raise _unreadable(f"thread {thread_id}", exc) from exc
+    if record is None:
+        raise _error(404, "thread_not_found", "No run on this thread is known.")
+    if not running or record.run_owner is None:
+        raise _error(409, "no_run", "No run is in progress on this thread.")
+    if not record.run_unattended:
+        raise _error(
+            409,
+            "not_stoppable",
+            "This run was not started by the console, so it cannot be stopped from here: a "
+            "client that reads its own stream stops it by closing the stream, and a run the "
+            "service started ends by itself.",
+        )
+    try:
+        # For the run that was read: one that has just ended is not stopped in its place.
+        marked = await runtime.threads.request_stop(thread_id, record.run_owner)
+    except Exception as exc:
+        raise _unreadable(f"thread {thread_id}", exc) from exc
+    if marked is None:
+        raise _error(409, "no_run", "No run is in progress on this thread.")
+    logger.info("Thread %s: a stop was asked for the run in progress", thread_id)
+    return StopAnswer(thread_id=thread_id)

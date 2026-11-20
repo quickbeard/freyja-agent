@@ -24,6 +24,7 @@ from tests import test_agents_address_nowhere as addresses
 from tests import test_llm_secrets_nowhere as keys
 from tests.conftest import A2aApp, LlmApp
 from tests.fakes import ScriptedChatModel
+from tests.unattended_helpers import Reader, idle
 
 # A port nothing else in the suite uses, so finding it means an address got out.
 PORT = 9781
@@ -122,6 +123,99 @@ def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
 
     assert statuses == {"a-paused": "needs_decision", "a-done": "done"}
     # The helper did receive the approved message, so the address was in use.
+    assert len(made.stub_at(URL).record.messages) == 1
+    addresses.nowhere(seen.texts, PORT)
+    addresses.nowhere([caplog.handler.format(record) for record in caplog.records], PORT)
+
+
+# Part 2 (Phase 3): console runs, through the three routes that start, continue, and stop
+# them. A failed console run is listed with its reason, the one text of a run the list holds.
+
+
+def ls_call(call_id: str) -> AIMessage:
+    return AIMessage(content="", tool_calls=[{"id": call_id, "name": "ls", "args": {"path": "/"}}])
+
+
+def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
+    make_llm_app: Callable[..., LlmApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    made = make_llm_app(model="openai:env-model")
+    saved_model = made.models.model("saved-model")
+    saved_model.script = [NOTIFY, AIMessage(content="Not sent."), ls_call("l1"), ls_call("l2")]
+    made.models.models["leaky-model"] = keys.LeakyModel()
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = keys.Seen(client, sse_events)
+        saved = seen.call("POST", "/llm/profiles", json=keys.profile()).json()["id"]
+        assert seen.call("POST", f"/llm/profiles/{saved}/activate").status_code == 200
+
+        paused = seen.stream("/threads/c-paused/runs/unattended", {"message": "Tell #ops."})
+        assert paused[-1][0] == "interrupt"
+        body = {"interrupt_id": paused[-1][1]["interrupt_id"], "decisions": [{"type": "reject"}]}
+        decided = seen.stream("/threads/c-paused/resume/unattended", body)
+        assert decided[-1] == ("end", {"status": "completed"})
+
+        # One that is stopped while the model works.
+        saved_model.hold()
+        reader = Reader(client, "/threads/c-stopped/runs/unattended", {"message": "List."})
+        reader.start()
+        with saved_model.held():
+            assert seen.call("POST", "/threads/c-stopped/stop").status_code == 202
+            seen.call("GET", "/threads/c-stopped")
+        stopped = reader.finish()
+        seen.texts.append(repr(stopped))
+        assert stopped[-1] == ("end", {"status": "stopped"})
+        idle(client, "c-stopped")
+        assert seen.call("POST", "/threads/c-stopped/stop").status_code == 409
+
+        # One that fails with a provider's error that repeats the key.
+        leaky = seen.call(
+            "POST", "/llm/profiles", json=keys.profile(name="Leaky", model="leaky-model")
+        ).json()["id"]
+        assert seen.call("POST", f"/llm/profiles/{leaky}/activate").status_code == 200
+        failed = seen.stream("/threads/c-failed/runs/unattended", {"message": "This one fails."})
+        assert failed[-1][0] == "error"
+
+        statuses = index_routes(seen, "c-paused", "c-stopped", "c-failed")
+        failed_row = seen.call("GET", "/threads/c-failed").json()
+
+    assert statuses == {"c-paused": "done", "c-stopped": "stopped", "c-failed": "failed"}
+    # The reason is there, with the key taken out of it.
+    assert "Incorrect API key provided" in failed_row["error"]["message"]
+    keys.nowhere(seen.texts, keys.MARK)
+    keys.nowhere([caplog.handler.format(record) for record in caplog.records], keys.MARK)
+
+
+def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            handoff("Sent once approved.", "h1"),
+            AIMessage(content="Handed over."),
+            handoff("Left waiting.", "h2"),
+        ],
+        final_text="Handed over.",
+    )
+    made = make_a2a_app(model, {}, saved={"helper": {"url": URL}})
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = keys.Seen(client, sse_events)
+        proposed = seen.stream("/threads/c-done/runs/unattended", {"message": "Ask the helper."})
+        assert proposed[-1][0] == "interrupt"
+        body = {
+            "interrupt_id": proposed[-1][1]["interrupt_id"],
+            "decisions": [{"type": "approve"}],
+        }
+        approved = seen.stream("/threads/c-done/resume/unattended", body)
+        assert approved[-1] == ("end", {"status": "completed"})
+        waiting = seen.stream("/threads/c-paused/runs/unattended", {"message": "Again."})
+        assert waiting[-1][0] == "interrupt"
+        assert seen.call("POST", "/threads/c-paused/stop").status_code == 409
+
+        statuses = index_routes(seen, "c-done", "c-paused")
+
+    assert statuses == {"c-done": "done", "c-paused": "needs_decision"}
     assert len(made.stub_at(URL).record.messages) == 1
     addresses.nowhere(seen.texts, PORT)
     addresses.nowhere([caplog.handler.format(record) for record in caplog.records], PORT)

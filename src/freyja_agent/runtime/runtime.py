@@ -76,6 +76,9 @@ from freyja_agent.runtime.thread_index import (
     ThreadIndex,
 )
 
+# Feature 007: runs that go on without a reader, and the stop.
+from freyja_agent.runtime.unattended import SegmentedGraph, UnattendedRuns
+
 logger = logging.getLogger(__name__)
 
 # The two refusals of a card read that cannot start now (005 FR-014, research R15).
@@ -214,6 +217,11 @@ class Runtime:
     # Which threads have run and where each stands (feature 007, research R6). A runtime
     # put together by hand has an index nothing writes to: its lease is not wrapped.
     threads: ThreadIndex = field(default_factory=InMemoryThreadIndex)
+    # The console runs of this instance (feature 007, research R2). None for a runtime put
+    # together by hand, whose runs are all passed straight to the graph.
+    unattended: UnattendedRuns | None = None
+    # The wrapper of the graph last built, so that every context of one build holds one graph.
+    segmented: SegmentedGraph | None = field(default=None, repr=False)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -291,18 +299,29 @@ class Runtime:
             self.registry.hold(agents)
         try:
             orchestrator, active = await self.models.current(agents)
+            # Feature 007: a console run's thread is run in segments, so that a stop is
+            # applied between two steps; every other run is passed straight through (R4).
+            graph = self._segmented(orchestrator.agent)
         except BaseException:
             if self.registry is not None and agents is not None:
                 await self.registry.release(agents)
             raise
         self.agent, self.catalog, self.built_for = orchestrator.agent, orchestrator.catalog, agents
         return RunContext(
-            agent=orchestrator.agent,
+            agent=graph,
             catalog=orchestrator.catalog,
             active=active,
             agents=agents,
             registry=self.registry,
         )
+
+    def _segmented(self, graph: Any) -> Any:
+        """``graph`` as a console run needs it: one wrapper per build (feature 007, R4)."""
+        if self.unattended is None:
+            return graph
+        if self.segmented is None or self.segmented.graph is not graph:
+            self.segmented = SegmentedGraph(graph, self.unattended)
+        return self.segmented
 
     async def model_for_run(self) -> ActiveModel:
         """Bring the orchestrator in step with the active profile, and say which it is.
@@ -496,13 +515,21 @@ class Runtime:
                             record.id,
                             UNUSABLE[why],
                         )
+                # Feature 007: a graph a console run could not be stopped in stops startup.
+                runtime.unattended = UnattendedRuns(index, runtime.instance_id)
+                SegmentedGraph(orchestrator.agent, runtime.unattended)
                 runtime.worker = DelegationWorker(runtime)
                 if run_worker:
                     runtime.worker.start()
                 try:
                     yield runtime
                 finally:
-                    await runtime.worker.stop()
+                    try:
+                        # Feature 007: each console run ends at its next boundary, and the
+                        # step under way is waited for; nothing is cancelled (R17).
+                        await runtime.unattended.close()
+                    finally:
+                        await runtime.worker.stop()
             finally:
                 # After the worker, whose rounds use the links.
                 await registry.close()

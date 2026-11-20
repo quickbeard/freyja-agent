@@ -196,7 +196,16 @@ startup and exits with an error naming the connection when it is unreachable.
   that run's lease owner, and one made from a reading of a thread's state names the number
   of runs the row had; either changes nothing once the row has moved on. Whether a run is in
   progress is the lease's to say, never the row's. Text is cleaned of what a text column
-  does not take before it is kept.
+  does not take before it is kept. `unattended.py` is the console's runs (feature 007, Phase
+  3): `UnattendedRuns` drives a run that goes on without a reader in a task of its own,
+  hands each event to its reader and disconnects one that falls `READER_BACKLOG` events
+  behind, notes in the index how the run ended (`failed` with its error, or `stopped`), and
+  at shutdown (`close`) asks each run to stop at its next boundary and waits for it;
+  `SegmentedGraph`, which `Runtime.begin_run` puts in every context in place of the graph,
+  runs an armed thread in segments that end before each `model` and `tools` step, gives each
+  segment what is left of the step limit, and asks between two segments, and nowhere else,
+  whether to stop. Every other thread is passed straight to the graph. `Runtime.unattended`
+  is the console's runs of this instance.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume),
   each of which takes a context, the two that run under the thread's lease, and validates
@@ -208,7 +217,13 @@ startup and exits with an error naming the connection when it is unreachable.
   `GET /threads/{thread_id}`, in a router of their own under the same prefix, which settle
   the rows whose run ended since they were last read, show no row a status nobody read for
   it, leave out a row that cannot be read instead of failing the list, contact nothing, and
-  change no thread,
+  change no thread, and the three routes of the console's runs:
+  `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`,
+  which call the handlers of `threads.py`, take the run's events out of the response
+  (`body_iterator`), and hand them to `UnattendedRuns`, answering with
+  `Cache-Control: no-store, no-transform` and a ping every `PING_SECONDS`, and
+  `POST /threads/{thread_id}/stop`, which marks the row and answers 202, 404, or 409
+  (`no_run`, `not_stoppable`),
   with their shapes in `thread_index_schemas.py`;
   `agents.py` the routes of the Agents section under `/agents`: `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
@@ -388,6 +403,11 @@ startup and exits with an error naming the connection when it is unreachable.
   searches its answers and the log for a recognizable key and a recognizable agent address,
   with the helpers of the two proofs above. A new route of the index is added to it. The
   three files are to be joined once feature 005 is done.
+- A console run is stopped only between two steps, never by cancelling it, also when the
+  service stops: `SegmentedGraph` is the one place that decides where (`BOUNDARY_NODES`),
+  so that an action under way is never cut off (principle I). `tests/test_unattended_stop.py`
+  stops a run during a model call, during a tool step, and during an approved action; a
+  change to how a run is driven keeps those passing.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
   unit tests and does not replace them. It never needs the Freyja service: the service's
   answers are handed to the page in the browser, through `web/e2e/api.ts`.

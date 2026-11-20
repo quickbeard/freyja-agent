@@ -377,6 +377,71 @@ nobody ran and 422 for an id the service does not accept; `other_origin` for a r
 marked as cross-site and 422 for a body sent as text; the two rows in `freyja_threads`; and
 the same list after the service was restarted. The database was dropped afterwards.
 
+### Phase 3 as built (2026-11-20)
+
+Built as research R2 to R5 and R17 describe; the differences:
+
+- **The step limit.** The prototype had a segmented run reach `step_limit` up to two steps
+  before a plain one. With the installed LangGraph the two ended at the same step in every
+  run tried (limit 9: step 9 both). The test keeps the bound the spec states: no more steps
+  than a plain run, and at most two fewer.
+- **The mark names its run, and is written by `UnattendedRuns`.** `mark_unattended` and
+  `request_stop` take the run's owner, a change to two methods of Phase 2's store, whose
+  tests were changed with them. The mark is written at the run's first event, `start`,
+  which names the owner; the route hands the events over without awaiting anything first,
+  so that nothing between the handler's answer and the drive can leave the lease taken.
+  Until the mark is written, a stop answers `not_stoppable`.
+- **The first message only at the thread's first run.** The store fills the row's first
+  message from the mark only while `runs` is 1, so a follow-up's text is never kept as the
+  first message. A thread from before the index, never opened, whose first run seen is a
+  follow-up through the unattended route still gets that follow-up as its first message.
+  Rare, and left as it is.
+- **A thread is disarmed at the run's last event**, before the generator goes on to give its
+  lease back, so a run that takes the lease next is never run in segments for this one.
+  `close()` waits for every drive, also one disarmed and still giving its lease back.
+- **One wrapper per build.** `Runtime.begin_run` reuses the `SegmentedGraph` of the graph it
+  last built, so every context of one build holds one graph object, which
+  `tests/test_agents_apply.py` (feature 005's) asserts. The first version made a wrapper per
+  context and failed that test.
+- **Where a stop is refused before a lease is taken.** The two run routes ask for the
+  console's runs before they call the handler, so a runtime without them is refused before
+  any lease is taken. Only a runtime put together by hand lacks them.
+- **The background run of the delegation worker** is shown `not_stoppable` by taking the
+  lease the way the worker does (`runtime.locks.acquire`), not by a delivery: the row is what
+  decides, and holding a delivery open in a test needs the worker's internals.
+- **`tests/conftest.py`**: `make_mcp_app` takes `thread_index`, for two apps on one index.
+- **`tests/unattended_helpers.py`** holds what the three new test files share: a tool server
+  whose tool step the test holds open, a stream read in a thread, and the comparison of two
+  runs' events without their ids.
+
+**Read by a reviewer that had not written it.** It found nothing that cuts an action off,
+runs one twice, or exceeds the step limit, and found eight problems. Each was checked against
+the code, and each test added for one was shown to fail with its fix taken out (seven checks,
+none survived).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium | The stop route read the row and then marked whatever run held it: a stop pressed as a run ended and a follow-up started stopped the follow-up (FR-022a). | `request_stop` names the owner read, and refuses a run that is not a console run. |
+| Medium | The mark was written after the run had started, with no owner: a run that ended at once could have its mark land on the next run, another client's, which then showed as stoppable. | The mark names the owner and is written by `UnattendedRuns` at the run's first event. |
+| Low | `_drive` never closed the run's events: a drive cancelled while it noted the run's end left the run's `finally`, which gives the lease and the context back, unrun. | The events are closed in a shielded `finally`. |
+| Low | A graph the wrapper refuses, after a rebuild, failed `begin_run` with the agent set still held. | The wrapper is made inside the `try` that releases the set. |
+| Low | The reads and writes of the index added here had no time limit, where the lease wrapper's have `INDEX_WRITE_SECONDS` (FR-023). | The mark, the note, and the read of a stop have the same limit. |
+| Low | With `debug=true` a console run sends one more `checkpoint` debug event at each boundary. | Not changed; `contracts/sse-events.md` says so. Debug output only. |
+| Test | The `stopped` note could be removed with no test failing: a stopped run reads `unfinished`, which lists it as stopped anyway. | The stop test asserts the note. |
+| Test | The first-message guard could be removed with no test failing, and the test of a handler's answer did not check that the run had not started. | A test of a follow-up after a run the earlier way; the generator's state is asserted. |
+
+**Checked by hand** on a check instance on port 8020 with a database of its own and the
+stand-in model on 9977, and the console built against it on 3020: an unattended run streamed
+`start`, `update`, `message`, and `end` with `Cache-Control: no-store, no-transform`; quickstart
+sections 5 and 6 answered `no_run`, `not_stoppable`, `thread_not_found`, `other_origin` twice,
+and 422; through the console's forwarding the unattended route came back without
+`Content-Encoding`, where the existing route came back as gzip; a stop asked while the
+stand-in's `slow` model answered was `stopping` until the reply came, and the thread was then
+`done`, since that reply asked for no tool (FR-022a); with a console run in that model call
+the service, sent SIGTERM, waited 16 seconds for the reply and recorded it; and a console run
+whose reader left after four seconds ended `done` where the same run through the existing
+route ended `stopped`. The database was dropped afterwards.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

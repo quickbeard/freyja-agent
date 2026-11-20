@@ -255,7 +255,7 @@ can be stopped between two steps. The existing routes are untouched.
 
 ### Tests
 
-- [ ] T019 [P] Write `tests/test_segmented_graph.py`, with the real factory and scripted
+- [X] T019 [P] Write `tests/test_segmented_graph.py`, with the real factory and scripted
       models, a plain run beside one through `SegmentedGraph` for a thread that is armed: the
       same messages, the same number of steps, the same `next`, and the same pause, for a
       script with single tool calls, for one with three tool calls in one reply, through a
@@ -268,7 +268,7 @@ can be stopped between two steps. The existing routes are untouched.
       and at most two fewer. A
       graph without a `model` node, or without a `tools` node, is refused with an error that
       names the node (R4; FR-021, FR-027, SC-011)
-- [ ] T020 [P] Write `tests/test_unattended_runs.py`, part 1, the two routes beside the
+- [X] T020 [P] Write `tests/test_unattended_runs.py`, part 1, the two routes beside the
       existing ones, each case run through both: the same 422 for an empty message and a
       message of 32,001 characters, 409 `run_active`, 409 `decision_pending`, 404
       `thread_not_found`, 409 `nothing_pending`, 409 `proposal_mismatch`, 422 for an edit
@@ -281,7 +281,7 @@ can be stopped between two steps. The existing routes are untouched.
       with 403 `other_origin` and takes no lease. A
       test pins that the handlers of `api/threads.py` return a response whose
       `body_iterator` is an async iterator of events (R1, R3; FR-021, FR-024, FR-027, SC-002, SC-003, SC-005, SC-007)
-- [ ] T021 Write `tests/test_unattended_runs.py`, part 2, readers: a reader that leaves
+- [X] T021 Write `tests/test_unattended_runs.py`, part 2, readers: a reader that leaves
       at the first `update` of a five-step script, and a request nobody reads at all, each
       end with the model's last reply in the thread's state, the lease released, and the
       context released; the same script through `POST /threads/{id}/runs` with the same
@@ -295,7 +295,7 @@ can be stopped between two steps. The existing routes are untouched.
       `mark_unattended` or `note` raises: the run goes on to the same end, the failure is
       logged, and the row is not `stoppable`
       (R2, R3, R7; FR-003, FR-008, FR-010, FR-021, FR-023, SC-006, SC-011)
-- [ ] T022 [P] Write `tests/test_unattended_stop.py`, `POST /threads/{thread_id}/stop`. A
+- [X] T022 [P] Write `tests/test_unattended_stop.py`, `POST /threads/{thread_id}/stop`. A
       stop asked during a model call: that reply is recorded, the tool it asked for does not
       run, the stream ends with `end` and `stopped`, the row is `stopping` and then
       `stopped`, and a new message runs on the thread. A stop asked during a tool step: the
@@ -316,21 +316,21 @@ can be stopped between two steps. The existing routes are untouched.
       ends the run on the first. With `FREYJA_MAX_STEPS` 9 a console run ends with
       `step_limit` and at most 9 steps. The log names each stop that was accepted and each
       run that ended because of one (R4, R5; FR-022, FR-022a, FR-023, FR-024, SC-007, SC-012)
-- [ ] T023 Write `tests/test_unattended_runs.py`, part 3, the service stopping: leaving
+- [X] T023 Write `tests/test_unattended_runs.py`, part 3, the service stopping: leaving
       the runtime while a console run is in a held tool step waits for the step, which is
       recorded; no further step starts; the lease is released; the thread is `stopped`; a
       reader whose stream was cancelled first, as the server does when it stops, changes
       none of it
       (R17; FR-021)
-- [ ] T024 [P] Extend `tests/test_thread_index_nowhere.py`, part 2: console runs that
+- [X] T024 [P] Extend `tests/test_thread_index_nowhere.py`, part 2: console runs that
       finish, pause, fail with an error that repeats the key, and are stopped; search every
       answer and stream of the three new routes, the rows, and the log (FR-025, SC-008)
-- [ ] T025 [P] Extend `tests/integration/test_thread_index_postgres.py`: two runtimes opened
+- [X] T025 [P] Extend `tests/integration/test_thread_index_postgres.py`: two runtimes opened
       on one database, a console run on the first stopped through the second
 
 ### Implementation
 
-- [ ] T026 Create `src/freyja_agent/runtime/unattended.py` with `SegmentedGraph`: it holds the
+- [X] T026 Create `src/freyja_agent/runtime/unattended.py` with `SegmentedGraph`: it holds the
       real graph and an object that answers `armed(thread_id)` and
       `should_stop(thread_id)`; `astream(input, config, **kwargs)` passes an unarmed thread
       straight through; for an armed one it runs segments with
@@ -340,7 +340,7 @@ can be stopped between two steps. The existing routes are untouched.
       `__interrupt__` is empty, and between two segments asks `should_stop` and returns when
       it says so; every other attribute is the real graph's; the constructor refuses a graph
       without both nodes (R4)
-- [ ] T027 Add `UnattendedRuns` to `src/freyja_agent/runtime/unattended.py`:
+- [X] T027 Add `UnattendedRuns` to `src/freyja_agent/runtime/unattended.py`:
       `start(thread_id, events)` arms the thread and drives the events in a task, and takes
       the run's lease owner from the `run_id` of its first event, `start`, with
       `lease_owner`;
@@ -352,12 +352,12 @@ can be stopped between two steps. The existing routes are untouched.
       `close()` sets the closing flag and waits for the runs. A call of the index that raises,
       in `note` or in the read of a stop, is logged and treated as nothing noted and no stop
       asked (R2, R3, R5, R17; FR-023)
-- [ ] T028 Change `src/freyja_agent/runtime/runtime.py`, in the block T013 made: a field
+- [X] T028 Change `src/freyja_agent/runtime/runtime.py`, in the block T013 made: a field
       `unattended: UnattendedRuns`, made in `assemble` after the runtime and closed in its
       `finally` before the worker stops and the registry closes; `begin_run` returns the
       context with `agent` wrapped in `SegmentedGraph`; `assemble` fails at startup when the
       graph lacks a node the wrapper needs
-- [ ] T029 Add to `src/freyja_agent/api/thread_index.py`:
+- [X] T029 Add to `src/freyja_agent/api/thread_index.py`:
       `POST /threads/{thread_id}/runs/unattended` and
       `POST /threads/{thread_id}/resume/unattended`, each declaring the path, body, and
       query types of the existing route, calling `threads.start_run` or `threads.resume_run`,
@@ -367,7 +367,7 @@ can be stopped between two steps. The existing routes are untouched.
       reader's events with `Cache-Control: no-store, no-transform` and `ping=10`; and
       `POST /threads/{thread_id}/stop`, which answers 202, 404, or 409 as the contract says and logs each stop it accepts
       (R3, R5; contracts/openapi.yaml, contracts/sse-events.md)
-- [ ] T030 Add to `README.md` and `AGENTS.md` what Phase 3 added: the three routes, what
+- [X] T030 Add to `README.md` and `AGENTS.md` what Phase 3 added: the three routes, what
       differs in their stream, the stop's rule, that an ordinary stop of the service waits
       for a console run's step under way, and `unattended.py` in the Layout. Correct the
       README's sentence that a clean stop waits for in-flight runs: with the installed
