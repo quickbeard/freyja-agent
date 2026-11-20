@@ -390,7 +390,7 @@ test("Check on a saved card and on an environment card says the agent can be use
     await expect(warning).toContainText(NOTHING_ANSWERED);
     await expect(shown.getByText("Unreachable")).toBeVisible();
     await expect(agentsWarning(page)).toContainText(name);
-    await expect(agentsBadge(page)).toHaveText("1");
+    await expect(agentsBadge(page)).toHaveText("1 cannot be used");
 
     // It answers again: one more check, and every warning about it is gone.
     service.answers(name, true);

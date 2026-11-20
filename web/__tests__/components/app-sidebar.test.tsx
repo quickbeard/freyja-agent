@@ -183,12 +183,12 @@ describe("AppSidebar", () => {
     );
     renderSidebar();
     await waitFor(() => expect(badge()).not.toBeNull());
-    // The number is for the eye; the words are for whoever cannot see where it stands.
-    expect(badge()?.textContent).toBe("22 agents cannot be used");
+    // The eye is told in words what the number is about, not by its colour alone; the
+    // entry's description says it in a sentence for whoever cannot see where it stands.
     expect(badge()?.querySelector('[aria-hidden="true"]')?.textContent).toBe(
-      "2",
+      "2 cannot be used",
     );
-    expect(described()).toBe("22 agents cannot be used");
+    expect(described()).toBe("2 agents cannot be used");
     // The entry is still named Agents, and still leads to the section.
     expect(agentsLink().getAttribute("href")).toBe("/agents");
     expect(screen.getByRole("link", { name: "LLM" })).toBeTruthy();
@@ -198,7 +198,10 @@ describe("AppSidebar", () => {
     stubFetch(list(HELLO, agent("stub", "unreachable")));
     renderSidebar();
     await waitFor(() => expect(badge()).not.toBeNull());
-    expect(badge()?.textContent).toBe("11 agent cannot be used");
+    expect(badge()?.querySelector('[aria-hidden="true"]')?.textContent).toBe(
+      "1 cannot be used",
+    );
+    expect(described()).toBe("1 agent cannot be used");
   });
 
   it("carries no badge when every agent is reachable or has not been tried", async () => {
@@ -272,7 +275,7 @@ describe("AppSidebar", () => {
       stubFetch(list(agent("stub", "unreachable")));
       const { unmount } = renderSidebar();
       await waitFor(() => expect(badge()).not.toBeNull());
-      expect(described()).toBe("11 agent cannot be used");
+      expect(described()).toBe("1 agent cannot be used");
       unmount();
     }
   });

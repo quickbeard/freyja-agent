@@ -319,7 +319,7 @@ a module of their own.
 | FR-022 | `test_agents_approval.py` (every kind of message, the orchestrator, the subagent, a background run; a run in progress after a tightening and after a removal; a continuation that began before a removal; an address another agent took over) |
 | FR-023 | `test_agents_approval.py`, the changed `test_a2a_gate.py` |
 | FR-024, FR-025, FR-026 | `test_agents_tasks.py`, `test_saved_agent_store.py`, `integration/test_saved_agents_postgres.py` |
-| FR-027 | `test_agents_api.py` and `test_agents_check.py` (what the stand-in's transport saw), `test_agent_cards.py` (no redirect, no proxy) |
+| FR-027 | `test_agents_api.py` and `test_agents_check.py` (what the stand-in's transport saw), `test_agent_cards.py` (no redirect), `test_agents_startup.py` (no proxy) |
 | FR-028 | `test_agents_address_nowhere.py`, `test_addresses.py`, `test_a2a_transport.py` |
 | FR-029 | `test_agents_api.py` (other origins on all five routes, bodies that are not JSON); `web/__tests__/next.config.test.ts`, `web/e2e/agents.spec.ts` (the frame) |
 | FR-030 | `test_agents_api.py`, `test_agents_startup.py`, `test_agents_approval.py` (log lines) |
@@ -1214,3 +1214,169 @@ What the implementation settled differently from the plan, or found out, phase b
   passes; no Ruff suppression, dependency, or allowlist entry was added, and the two
   marks named above carry their reasons. VI: every check
   that keeps a message back reads stored values and asks no model.
+
+### Phase 11 (convergence)
+
+`speckit-converge` was run after Phase 10, on a `main` that had it, by five independent
+reviews of one slice each (the routes and the store, taking effect and approval, the
+address, the console, the tasks and the documents). It appended T122 to T128. Each finding
+below was reproduced before it was fixed, and each test added for one fails without its fix.
+
+- **A person's decision is recorded, no longer inferred** (T122, CRITICAL, constitution I,
+  FR-022). Phase 7 took a call for decided when its row said it needed a decision and its
+  tool waited for one, and recorded that as known. The review found a sequence where that
+  sends a message nobody approved: a background run's model proposes a hand-off while the
+  agent requires approval, and the checkpoint after the model's step cannot be written, so
+  the gate never asks; the retry, while the agent runs without approval, lets the call
+  through unasked and its tool's step fails before the send; the next retry, after the
+  agent requires approval again, runs the tool past the gate, and the row and the tool
+  together said "decided". The stand-in received the message.
+  - A call's row now has `decided`, set by `AgentTasksMiddleware.aafter_model`, which runs
+    right after the gate's own step in the same graph, on the orchestrator and on its
+    subagent (the order was looked at in both compiled graphs). The resume route tells it
+    what the person decided (`decided_calls` in `api/decisions.py`): the namespace of the
+    gate whose interrupt the resume answers, and the calls of that interrupt the person
+    approved or edited, by name and arguments as the interrupt holds them, which is how
+    they were shown. The hook marks a call of the reply only in that namespace, only when
+    it is one of those calls, each matched once and in order, and only when the gate did
+    not answer it itself, as it answers a rejection. Nothing about the build or the gate
+    is taken for a decision: a background retry carries none and marks nothing, and a
+    test shows that without this rule such a retry sends a message nobody decided.
+  - The rule came from two independent reviews of this phase, each of which found the
+    version before it sending a message nobody was shown. The first version marked every
+    call of a tool gated in the hook's build, in every namespace of a resume. Two
+    subagents run at once: the first pauses on a proposal, the second's gate lets a
+    message to an agent that ran without approval through unasked, and the second stops
+    before the step after its gate (the step limit, a checkpoint that cannot be written,
+    or a client that disconnects). The agent then requires approval, a person approves the
+    first subagent's proposal, and the resume continued both: the second's step marked its
+    message. The second version marked only in the namespace of the interrupt the resume
+    decides, which the route derives from the paused task (empty for the orchestrator's
+    own interrupt, which its id says, since an interrupt's id is made from the namespace
+    that raised it). A resume that is tried again still broke it: the subagent's gate
+    passes an agent's message unasked and pauses on a notification; the first resume
+    approves, the gate's step completes, and the checkpoint after it cannot be written, so
+    the same proposal is still pending; the agent then requires approval, and the second
+    resume reuses the gate's step of the first, whose build did not gate the agent, while
+    the step after it runs in the build that does. Matching what the person was shown
+    closes both, and each has a test that fails with the version before it.
+  - The calls must also be the paused reply's own, by id. Once this phase was rebased on
+    feature 007's phase 3, whose console runs go on through later replies, a later reply
+    of the same resume could propose the approved message again: passed unasked by a build
+    that ran the agent without approval, it matched what the person was shown, and was sent
+    after the agent came to require approval. The route adds the ids of the rows of the
+    gate's namespace, which each reply replaces, so they are the paused reply's calls. And
+    since a model server may give a later reply's call the same id again (one that numbers
+    calls from 0 in each reply does), the hook records only the first time it runs in that
+    namespace in the resume, which is right after the gate the resume answers; the run's
+    configuration holds the list of namespaces it has run in, shared by every step and
+    segment of the run. When the rows cannot be read the resume is refused with 500 and
+    nothing runs, so the proposal stays pending to be decided again; the test of Phase 7
+    that expected the stream to end with `internal` now expects that refusal. Both came from
+    the last independent review of this phase.
+  - A message a person approved is now sent when its agent comes to require approval
+    again before the send: approved while the agent ran without approval, which allows
+    approve only, with a switch back before its tool sent. Phase 7 refused it, as a known
+    cost of inferring the decision; a person did decide it (FR-022, FR-023). The test of
+    Phase 7 that expected the refusal now expects the message.
+  - The namespace rule came from the independent review of this phase, which found the
+    first version marking in every namespace of a resume. Two subagents run at once: the
+    first pauses on a proposal, the second's gate lets a message to an agent that ran
+    without approval through unasked, and the second stops before the step after its gate
+    (the step limit, a checkpoint that cannot be written, or a client that disconnects).
+    The agent then requires approval, a person approves the first subagent's proposal, and
+    the resume continues both: the second's step marked its message as decided, and the
+    agent received it. The resume route now names the gate's namespace
+    (`decided_namespace` in `api/decisions.py`): empty when the interrupt is the
+    orchestrator's own, which its id says, since an interrupt's id is made from the
+    namespace that raised it, and the paused task's otherwise. The hook marks only there.
+    The test of the two subagents fails with the first version.
+  - `_still_allowed` asks the row alone. A gated tool sends only a call whose row records
+    a decision; a call with no row still follows an environment agent's tool, as before
+    the rows existed.
+  - A decision that cannot be recorded fails the resume with `internal`, and nothing is
+    sent.
+  - The run says it is a resume by a key of its configuration (`freyja_resume`), which
+    `run_stream` sets for `mode="resume"` only.
+  - The column is added to a table that exists without it, by `ADD COLUMN IF NOT EXISTS`
+    under the lock timeout of `agent_ref`. A call proposed before the column existed is
+    undecided until a resume decides it, so a deployment that upgrades with a proposal
+    already approved and its send not yet made refuses that send, toward sending nothing.
+  - Known, older than this phase and not part of 005: a resume that is tried again after
+    the gate's step completed reuses that step, so the first resume's decisions stand and
+    the second's are not applied, whatever they are. For an agent's tools the second
+    decision now holds as far as sending goes, since only a call the second resume
+    approved is marked. For Freyja's own tools and a tool server's, an approval given in
+    the first resume stands after a rejection in the second. That is feature 001 and 002's
+    resume, and wants a change of its own.
+  - Known: a decision that cannot be recorded on the orchestrator ends the resume with
+    `internal`, and the step it decided does not come back to be decided again; the next
+    message leaves it behind, as for any step that fails after the gate.
+- **An environment agent's query and fragment are removed with its address** (T123, FR-028,
+  FR-017). The scrubber removed the host, the port, and the path, and an address's user
+  name with it, but httpx's request line kept what followed the path:
+  `GET <address>?token=s3cret/.well-known/agent-card.json`. Only an environment agent's
+  address can carry a query or a fragment, and either may carry a credential. The scrubber
+  now knows each address's query and its fragment, apart and decoded, and removes each
+  where it follows the address: a client sends the query without the fragment, and may
+  encode it. A query that is not the address's own is put back, as before. The review of
+  this phase found the first version keeping a query written without its fragment, and
+  cutting into what followed an address with no path when it began with `?` or `#`
+  (`?next=/a/b` became `ext=/a/b`); both are fixed and tested.
+- **Every environment entry is compared with saved addresses** (T124, FR-006, FR-017). Phase
+  10 recorded as known that an entry the saved form refuses was compared with nothing; the
+  spec has no such exception, and a saved agent could be added where such an agent was, so
+  that two names led to one place with two approval choices. Such an entry's port and path
+  are now taken as a server takes them: decoded, without empty or `.` segments, with each
+  `..` taking a segment away. When in doubt two addresses lead to one place, which only
+  ever refuses a saved agent.
+- **The sidebar says in words what its number is about** (T125, FR-001a): "1 cannot be
+  used", where it showed the number alone and gave the words to assistive technology only.
+  The entry's description is still "1 agent cannot be used".
+- **A check that got no answer says that its outcome is not known** (T126, FR-004), as the
+  form and the removal dialog do. A check may record what it read.
+- **The removal confirmation shows the agent as the list has it** (T127, FR-011): its
+  address, approval choice, state, and pending tasks, in the words the form's
+  confirmations use (`agentInWords` in `web/lib/agents.ts`).
+- **The documents** (T128). `tests/integration/test_a2a_tasks_postgres.py` lost
+  `test_the_three_tables_are_created_once_and_again_without_harm` in Phase 5, which is
+  `test_the_tables_are_created_once_and_again_without_harm` now, with the fourth table in
+  the set it compares. FR-031 allows a test that expects the tables of the feature to change
+  this way, and the Phase 10 note did not name it. The requirement to test map's FR-027 row
+  now names `tests/test_agents_startup.py` for the proxy. The README gives the Agents routes
+  the 422 for an id in neither form and the 500 `internal`, and `.env.example` and
+  feature 003's contract say that `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` also bounds the card
+  read of an add, a move, and a check.
+- **Accepted as they are**, each LOW, with the reason:
+  - A 422 names an unknown field by the name it was sent under, and a body that cannot be
+    read is refused before the rule about other origins (Phases 5, 9). The console sends
+    fixed field names; a page of another origin can read no answer and changes nothing.
+    Both are the LLM routes' guard, and are for a change of that guard.
+  - An address whose colon is encoded is not found (Phase 9). FR-028 lists the forms it
+    asks for, and nothing writes this one. Neither are asyncio's own lines in its debug
+    mode, which nothing in the service turns on, nor an environment agent's query that an
+    agent writes in its own text with an HTML entity (`&amp;`), or anywhere but right after
+    the address's path, which no library writes.
+  - A model's error is taken out of the key and not of an address before it is streamed,
+    which the index of threads (feature 007) returns. It would take a provider that repeats
+    prompt text holding an address, and the prompt's card text is cleaned. For the joint
+    proof of 005 and 007.
+  - The move's confirmation is shown for the saved address typed another way (Phase 8): a
+    confirmation more than needed, and the service moves nothing.
+  - The end-to-end stand-in does not refuse a name outside the rule; the unit tests and the
+    service's tests cover that refusal.
+  - The contract gives `internal` to the list alone (Phase 9); the README and the proof give
+    it to every route.
+  - An add or a move can wait one more card read than twenty seconds, when another caller
+    reads the card through the new link at that moment (Phase 8).
+  - Two calls of one reply that share a tool call id have one row, and the call kept back
+    is given the sentence of a removed agent (Phase 5): only when a provider repeats an id,
+    and it fails toward sending nothing.
+  - A check's result may not be read out by every screen reader, the sidebar is hidden in
+    a window narrower than 768 pixels, the LLM section's form closes on a late answer, and
+    the frame test of `web/e2e/console.spec.ts` has no positive control while the one in
+    `web/e2e/agents.spec.ts` has (Phases 5, 6, 9). None is a requirement of FR-001a,
+    FR-013, or FR-029 as worded; the LLM section's form is feature 004's.
+  - The coverage floors (88% of the service's lines, 90% of each web measure) were not
+    raised. The other session's code is measured against the same floors, and raising
+    them is left to a change of its own.

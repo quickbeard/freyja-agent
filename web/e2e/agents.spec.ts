@@ -288,7 +288,7 @@ test("an agent that cannot be used shows on the sidebar from the LLM section, be
 
   await expect(card(page, "Environment")).toBeVisible();
   // The number, and in words what it means, on the entry that leads to the agents.
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
   await expect(section(page, "Agents")).toHaveAccessibleDescription(
     "1 agent cannot be used",
   );
@@ -332,7 +332,7 @@ test("in the Agents section the warning above the cards names the agent, and all
     card(page, "hello").getByRole("note", { name: "Warning" }),
   ).toHaveCount(0);
   // And on the sidebar.
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
 
   // Something else found the agent since: a run handed it work. The next reading says so.
   service.found("stub", {
@@ -372,7 +372,7 @@ test("the warnings name every agent that cannot be used, unreachable or not in u
   await expect(agentsWarning(page)).toHaveText(
     "Warning: 2 agents cannot be used: hello, shadowed. Each one's card says why.",
   );
-  await expect(agentsBadge(page)).toHaveText("2");
+  await expect(agentsBadge(page)).toHaveText("2 cannot be used");
   await expect(section(page, "Agents")).toHaveAccessibleDescription(
     "2 agents cannot be used",
   );
@@ -408,7 +408,7 @@ test("with no answer for the list the sidebar shows no number, and a number show
   // A service that answered, and then stops.
   const service = await new AgentService(savedAgent("stub", DOWN)).serve(page);
   await page.goto("/agents");
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
   service.stop();
   await page.getByRole("button", { name: "Refresh" }).click();
   await expect(alerts(page)).toContainText(UNREACHABLE);
@@ -427,7 +427,7 @@ test("opening the Agents section asks for the list once: the sidebar and the lis
 
   // Both show what the list says, the sidebar outside the page and the cards inside it.
   await expect(card(page, "stub")).toBeVisible();
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
   await expect(agentsWarning(page)).toBeVisible();
   await page.waitForLoadState("networkidle");
   expect(service.reads).toBe(1);
@@ -435,7 +435,7 @@ test("opening the Agents section asks for the list once: the sidebar and the lis
   // Reading the list again is one request too, and both follow it.
   service.found("hello", DOWN);
   await page.getByRole("button", { name: "Refresh" }).click();
-  await expect(agentsBadge(page)).toHaveText("2");
+  await expect(agentsBadge(page)).toHaveText("2 cannot be used");
   await expect(agentsWarning(page)).toContainText("hello, stub");
   await page.waitForLoadState("networkidle");
   expect(service.reads).toBe(2);
@@ -448,7 +448,7 @@ test("the list read on the LLM section is the one the Agents section starts from
   await answerProfiles(page, { list: profileList(environmentProfile()) });
   const service = await new AgentService(savedAgent("stub", DOWN)).serve(page);
   await page.goto("/llm");
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
   await page.waitForLoadState("networkidle");
   expect(service.reads).toBe(1);
 
@@ -460,7 +460,7 @@ test("the list read on the LLM section is the one the Agents section starts from
   await expect(agentsWarning(page)).toContainText("stub");
   await page.waitForLoadState("networkidle");
   expect(service.reads).toBeLessThanOrEqual(2);
-  await expect(agentsBadge(page)).toHaveText("1");
+  await expect(agentsBadge(page)).toHaveText("1 cannot be used");
 });
 
 test.describe("in a narrow window", () => {

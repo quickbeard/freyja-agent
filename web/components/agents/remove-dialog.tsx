@@ -11,7 +11,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { type Agent, removeAgent } from "@/lib/agents";
+import { type Agent, agentInWords, removeAgent } from "@/lib/agents";
 import { ApiError, isGone } from "@/lib/api";
 
 // The refusals that say the agent is not what this dialog has: the list is read again.
@@ -164,6 +164,13 @@ function Confirmation({
       </AlertDialogHeader>
       <p className="break-words text-sm">
         {pending(agent.name, listed.pending_tasks, live != null)}
+      </p>
+      {/* The agent as the list has it at this moment, as every confirmation shows it (FR-011). */}
+      <p className="break-words text-sm text-muted-foreground">
+        {live != null
+          ? "As the list has it now:"
+          : "The list cannot be read now. As it was when this opened:"}{" "}
+        {agentInWords(listed)}
       </p>
       {/* The service's sentence is text, whatever it holds: nothing is made of it. */}
       {refusal && !(stale && refusedAsStale) && (

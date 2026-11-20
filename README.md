@@ -277,14 +277,16 @@ Before it is used, know that:
 A name is in the form the environment's agents use, and an address is `http` or `https` on this machine (`localhost` or a loopback IP address), with no user name, password, query, or fragment. It is kept in one form, such as `http://127.0.0.1:9998`. A request is refused, and nothing is saved, with:
 
 - 422 and the field's error when a value breaks a rule, never repeating the value;
-- 409 `name_taken` when another agent or a tool server has the name, or when another tool has the name of one of the agent's two tools, and `address_taken` when another agent is at the address, however this machine is written;
+- 409 `name_taken` when another agent or a tool server has the name, or when another tool has the name of one of the agent's two tools, and `address_taken` when another agent is at the address, however this machine is written, also an agent named in the environment whose address carries a user name, a query, or a fragment;
 - 409 `agent_limit` when twenty agents are saved, and `check_busy` while four card reads are under way on the instance;
 - 409 `agent_unusable` when the card cannot be used, with `reason` and the service's own sentence: nothing answered, no answer in time, no card, a card that cannot be read, a redirect, a card larger than one megabyte, or a card that requires authentication, accepts no text, or offers no JSON-RPC interface;
 - 403 `other_origin` when a browser marks the request as made by a page of another origin.
 
+Every route of the Agents section answers 500 `internal` when the saved agents cannot be read or the change cannot be written; nothing is then changed, and the reason names no address.
+
 `GET /agents` lists every agent, with the number of its pending tasks. It and the answers to an add and to a change are the only answers of the service that hold a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where a card names it: its host and port are taken out after any scheme and however this machine is written, and its path with them.
 
-A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
+A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent, and records there when a person approved or edited it in a resume. A tool that waits for a person sends a call only when that record says a person decided it. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
 
 ### Change whether an agent needs approval
 
@@ -299,11 +301,11 @@ curl -s -X PATCH localhost:8000/agents/<id> -H 'content-type: application/json' 
 
 The two directions do not take effect the same way:
 
-- **Requiring approval holds at once**, on every instance, also for a run in progress and for a failed step that is tried again. Before a tool of a saved agent sends anything, it reads the agent from the database. A message that no person decided, to an agent that requires approval by then, is not sent: the call gets an error result, "Agent '<name>' now requires approval, so this message was not sent.", and the run continues. A message whose sending had begun is not recalled.
+- **Requiring approval holds at once**, on every instance, also for a run in progress and for a failed step that is tried again. Before a tool of a saved agent sends anything, it reads the agent from the database. A message that no person decided, to an agent that requires approval by then, is not sent; a person decided it only when a resume carried their approve or edit for it: the call gets an error result, "Agent '<name>' now requires approval, so this message was not sent.", and the run continues. A message whose sending had begun is not recalled.
 - **Running without approval holds from the next run.** A run in progress keeps pausing until it ends. A proposal for the agent that is already waiting for a decision can then only be approved, and is sent as proposed.
 - **A paused step can become impossible to continue.** When a step waits for a decision and also holds a message to an agent that needed no approval when it was proposed and requires it now, the resume ends with an `error` event of code `approval_now_required` that names the agent. Nothing from the step ran, and the proposal stays. Switch the agent back, then decide again.
 
-A change is refused, and nothing changes, with 409 `agent_changed` when the agent is no longer at `version`, 409 `agent_read_only` for an agent named in the environment and for a saved agent that is not in use, 404 `agent_not_found`, 422 for a body with any field but `version`, `approval`, and `url` (`name` among them), and 403 `other_origin`.
+A change is refused, and nothing changes, with 409 `agent_changed` when the agent is no longer at `version`, 409 `agent_read_only` for an agent named in the environment and for a saved agent that is not in use, 404 `agent_not_found`, 422 for an id in neither form and for a body with any field but `version`, `approval`, and `url` (`name` among them), and 403 `other_origin`.
 
 Anyone who can reach the service's port can make an agent run without approval with this request; see [what such a client can do](#saved-agents-beside-the-environments).
 
@@ -326,7 +328,7 @@ Both name the `version` that `GET /agents` shows, and both answer with `given_up
 - **A task stays with the agent it was given to.** It is never checked, answered, or canceled at the agent's new address, nor at another agent that has its name: such a call's result is "Agent '<name>' task <id> was given up when the agent was moved or removed; nothing was sent."
 - **A run does not send to an address its agent has left once another agent is there.** The result is "Agent '<name>': the address this run started with is another agent's now; nothing was sent."
 
-A move is refused, and nothing changes, with the refusals of a change above, and with 409 `address_taken`, 409 `check_busy`, 409 `agent_unusable`, and 422 for an address that breaks a rule, as for an add. A removal is refused with 409 `agent_changed`, 404 `agent_not_found`, 409 `agent_read_only` for an agent named in the environment, 422 for a missing `version`, and 403 `other_origin`. A saved agent that is not in use can be removed, and nothing else can be done with it.
+A move is refused, and nothing changes, with the refusals of a change above, and with 409 `address_taken`, 409 `check_busy`, 409 `agent_unusable`, and 422 for an address that breaks a rule, as for an add. A removal is refused with 409 `agent_changed`, 404 `agent_not_found`, 409 `agent_read_only` for an agent named in the environment, 422 for an id in neither form or a missing `version`, and 403 `other_origin`. A saved agent that is not in use can be removed, and nothing else can be done with it.
 
 ### Saved agents beside the environment's
 
@@ -356,7 +358,7 @@ A check reads the agent's card again, within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS
 - `card_changed` is true when the card differs from the details kept or shown before. From the next run the agent's tools are described from the new details: on every instance for a saved agent, whose details are kept in the database, and on the answering instance for an agent named in the environment.
 - `recorded` is false when a saved agent was moved or removed while the check ran. Nothing was kept then.
 
-A check is refused, and the agent is not contacted, with 409 `check_busy` while the same agent is being checked or four card reads are under way on the instance, 404 `agent_not_found` for an id no agent has, 409 `agent_read_only` for a saved agent that is not in use, and 403 `other_origin` for a request a browser marks as made by a page of another origin.
+A check is refused, and the agent is not contacted, with 409 `check_busy` while the same agent is being checked or four card reads are under way on the instance, 404 `agent_not_found` for an id no agent has, 422 for an id in neither form, 409 `agent_read_only` for a saved agent that is not in use, and 403 `other_origin` for a request a browser marks as made by a page of another origin.
 
 ### When an agent fails
 

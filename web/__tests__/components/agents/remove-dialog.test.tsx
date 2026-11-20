@@ -117,6 +117,28 @@ describe("RemoveDialog", () => {
     expect(fetchStub).not.toHaveBeenCalled();
   });
 
+  it("shows the agent as the list has it at that moment", () => {
+    const handlers = calls();
+    const { rerender } = render(show(handlers));
+    // Its address, approval choice, state, and pending tasks, as every confirmation shows
+    // the agent it is about (FR-011).
+    expect(dialog().textContent).toContain(
+      "As the list has it now: stub, at http://localhost:9998/agents/recognizable-stub, requires approval, reachable, 2 pending tasks.",
+    );
+    rerender(
+      show(handlers, STUB, { ...STUB, state: "unreachable", pending_tasks: 1 }),
+    );
+    expect(dialog().textContent).toContain(
+      "As the list has it now: stub, at http://localhost:9998/agents/recognizable-stub, requires approval, unreachable, 1 pending task.",
+    );
+    // While the list cannot be read, the dialog says that what it shows is its own copy.
+    rerender(show(handlers, STUB, undefined));
+    expect(dialog().textContent).toContain(
+      "The list cannot be read now. As it was when this opened: stub, at http://localhost:9998/agents/recognizable-stub, requires approval, reachable, 2 pending tasks.",
+    );
+    expect(dialog().textContent).not.toContain("As the list has it now");
+  });
+
   it("shows nothing when no agent is being removed", () => {
     render(show(calls(), null));
     expect(screen.queryByRole("alertdialog")).toBeNull();

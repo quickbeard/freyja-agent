@@ -102,7 +102,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `UnclassifiedToolError` and stops startup. `prompts.py` is the system prompt, `tools.py` the
   gated placeholder tool `send_notification`. `agent_tasks.py` is `AgentTasksMiddleware`, which
   lists the thread's pending agent tasks in the prompt and, after every reply of the model,
-  records which agent each call of an agent's tool was proposed for, and the
+  records which agent each call of an agent's tool was proposed for, and, in a resume, right
+  after the approval gate, which of those calls a person approved or edited; and the
   `check_agent_tasks` tool; both are added only when an agent is configured
   (`build_agent(agent_tasks=...)`).
 - `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
@@ -131,7 +132,8 @@ startup and exits with an error naming the connection when it is unreachable.
   runs again never sends twice, checks that a task belongs to the agent the tool was built
   for, that the link is connected, that the call was proposed for the agent the tool
   sends to (`_proposed_for`), and, for a saved agent, that the agent as the store has it
-  now still exists, still runs without approval when no person decided the call, and,
+  now still exists, still runs without approval when no person decided the call (a person
+  decided it only when its row records an approve or an edit), and,
   when it was moved since the run's tools were built, that no other saved agent has the
   address the run started with
   (`_still_allowed`, the last thing awaited before the send's first write), and turns a
@@ -250,7 +252,9 @@ startup and exits with an error naming the connection when it is unreachable.
   middleware's sentence, which `tests/test_a2a_gate.py` pins),
   and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
   records pending tasks' outcomes in their thread exactly once and answers messages to agents
-  that a stop left in flight; `decisions.py` resume validation, including edits checked against
+  that a stop left in flight; `decisions.py` resume validation, and what a resume tells the step after the gate
+  (`decided_calls`: the gate's namespace and the calls the person approved or edited),
+  including edits checked against
   a server tool's JSON Schema and pinned arguments; `schemas.py` and `serialize.py` the request,
   response, and event shapes.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
