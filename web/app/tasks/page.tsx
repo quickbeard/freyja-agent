@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { NewTask } from "@/components/tasks/new-task";
+import { TaskList } from "@/components/tasks/task-list";
 
 export const metadata: Metadata = { title: "Tasks" };
 
@@ -24,6 +25,7 @@ export default function TasksPage() {
         The console has no users: everyone who can open it sees every task and
         can decide every proposal, and nothing records who decided.
       </p>
+      <TaskList />
     </div>
   );
 }

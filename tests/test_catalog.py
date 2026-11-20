@@ -19,7 +19,7 @@ from jsonschema import Draft202012Validator
 
 from freyja_agent.agent.catalog import OWN_TOOLS
 from freyja_agent.runtime.runtime import Runtime
-from tests.conftest import McpApp
+from tests.conftest import McpApp, holds_port
 from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import STANDARD_TOOLS, STUB_ENV, make_stub
 
@@ -220,11 +220,13 @@ def test_the_catalog_shows_nothing_of_how_a_server_is_configured(
         STUB_ENV,
         "zz-value-given-to-the-server",
         "127.0.0.1",
-        "8765",
         "zz-address-path",
         "pass_env",
     ):
         assert hidden not in text, hidden
+    # The port as a number of its own: the catalog holds each server's check time, whose
+    # fraction of a second can hold the same four digits.
+    assert not holds_port(text, 8765)
 
 
 def test_reading_the_catalog_contacts_no_server(make_mcp_app: Callable[..., McpApp]) -> None:

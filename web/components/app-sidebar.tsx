@@ -17,12 +17,19 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar";
+import { useEvery } from "@/hooks/use-every";
 import {
   AGENTS_KEY,
   type AgentList,
   downAgents,
   listAgents,
 } from "@/lib/agents";
+import {
+  LIST_SECONDS,
+  listThreads,
+  THREADS_KEY,
+  type ThreadList,
+} from "@/lib/tasks";
 
 // The console's sections, in the order the sidebar lists them.
 const SECTIONS = [
@@ -33,6 +40,7 @@ const SECTIONS = [
 ] as const;
 
 const AGENTS = "/agents";
+const TASKS = "/tasks";
 
 /**
  * How many agents cannot be handed work now, as the list was last read; none while it could
@@ -85,10 +93,29 @@ function CurrentSectionLinks() {
 }
 
 /** The sections, with the one `pathname` is in marked; none while it is not known. */
+// Feature 007: how many tasks need a decision, from every section (FR-001, FR-006). The key
+// is the one the Tasks section reads the list under, so the two are one reading. On another
+// section the sidebar is the list's only reader, so it reads it again on a timer of its own,
+// which goes on past a reading that failed. Nothing is counted from a list that could not be
+// read.
+function useTasksWaiting(): number {
+  const { data, error, mutate } = useSWR<ThreadList, unknown>(
+    THREADS_KEY,
+    listThreads,
+    { shouldRetryOnError: false },
+  );
+  useEvery(THREADS_KEY, LIST_SECONDS, () => {
+    void mutate();
+  });
+  return data === undefined || error !== undefined ? 0 : data.needs_decision;
+}
+
 function SectionLinks({ pathname }: { pathname: string | null }) {
   const { setOpenMobile } = useSidebar();
   const down = useAgentsDown();
   const warning = useId();
+  const waiting = useTasksWaiting();
+  const waitingSaid = useId();
   return (
     <SidebarMenu>
       {SECTIONS.map(({ href, label, icon: Icon }) => {
@@ -96,6 +123,7 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
           pathname !== null &&
           (pathname === href || pathname.startsWith(`${href}/`));
         const warned = href === AGENTS && down > 0;
+        const counted = href === TASKS && waiting > 0;
         return (
           <SidebarMenuItem key={href}>
             <SidebarMenuButton
@@ -106,7 +134,9 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
                   aria-current={active ? "page" : undefined}
                   // The entry keeps its name; what the number means is said
                   // beside it, for whoever does not see where the number stands.
-                  aria-describedby={warned ? warning : undefined}
+                  aria-describedby={
+                    warned ? warning : counted ? waitingSaid : undefined
+                  }
                   // In a narrow window the sidebar is a sheet over the page:
                   // choosing a section closes it, or it would hide the page.
                   onClick={() => setOpenMobile(false)}
@@ -125,6 +155,18 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
                   {down === 1
                     ? "1 agent cannot be used"
                     : `${down} agents cannot be used`}
+                </span>
+              </SidebarMenuBadge>
+            )}
+            {counted && (
+              <SidebarMenuBadge>
+                {/* In words to the eye and to assistive technology, never by the badge
+                    alone (FR-001, FR-012a). */}
+                <span aria-hidden="true">{waiting} to decide</span>
+                <span id={waitingSaid} className="sr-only">
+                  {waiting === 1
+                    ? "1 task needs a decision"
+                    : `${waiting} tasks need a decision`}
                 </span>
               </SidebarMenuBadge>
             )}

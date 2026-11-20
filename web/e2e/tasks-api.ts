@@ -153,8 +153,30 @@ export class TaskService {
     return this;
   }
 
+  /**
+   * The list as the service gives it: every task that needs a decision first, then the
+   * others with the most recently changed first (Phase 6).
+   */
+  list(): ThreadList {
+    const rows = [...this.tasks.values()].map(({ row }) => row);
+    const paused = rows.filter((row) => row.status === "needs_decision");
+    const others = rows.filter((row) => row.status !== "needs_decision");
+    const newest = (a: ThreadSummary, b: ThreadSummary) =>
+      b.changed_at.localeCompare(a.changed_at);
+    return {
+      threads: [...paused.sort(newest), ...others.sort(newest)],
+      needs_decision: paused.length,
+      total: rows.length,
+      more: false,
+    };
+  }
+
   async serve(page: Page): Promise<this> {
     await page.route(/\/api\/threads\/[^?]+$/, (route) => this.answer(route));
+    // Phase 6: the list, which the sidebar asks for on every page, from the tasks held.
+    await page.route("**/api/threads", (route) =>
+      route.fulfill({ json: this.list() }),
+    );
     return this;
   }
 
