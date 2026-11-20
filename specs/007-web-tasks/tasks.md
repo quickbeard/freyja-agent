@@ -599,15 +599,15 @@ task stands; Stop ends a run after the step under way.
 
 ### Tests for User Story 5
 
-- [ ] T064 [P] [US5] Extend `web/__tests__/lib/tasks.test.ts`, part 3: `stopRun(id)` posts to
+- [X] T064 [P] [US5] Extend `web/__tests__/lib/tasks.test.ts`, part 3: `stopRun(id)` posts to
       `/api/threads/<id>/stop` with no body
-- [ ] T065 [P] [US5] Write `web/__tests__/components/tasks/stop-button.test.tsx`: Stop is
+- [X] T065 [P] [US5] Write `web/__tests__/components/tasks/stop-button.test.tsx`: Stop is
       shown only while the row is `stoppable`; one press sends one request, and a second
       press none; while `stopping` the page says the run is stopping and offers no Stop; a
       run in progress that is not stoppable shows no Stop and says why; `no_run` and
       `not_stoppable` say so and read the task again; the control is a button outside any
       form and is named "Stop" with the task it stops (FR-022, FR-022a, FR-012a)
-- [ ] T066 [P] [US5] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 4: a
+- [X] T066 [P] [US5] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 4: a
       stream that ends with `end` and `stopped` shows the task as stopped with what the
       state holds and offers the follow-up; a page that asked for a stop and then reads a
       task that needs a decision, is done, or failed shows it as it is and says the run
@@ -615,14 +615,14 @@ task stands; Stop ends a run after the step under way.
 
 ### Implementation for User Story 5
 
-- [ ] T067 [US5] Add `stopRun` to `web/lib/tasks.ts`; create
+- [X] T067 [US5] Add `stopRun` to `web/lib/tasks.ts`; create
       `web/components/tasks/stop-button.tsx` and show it in
       `web/components/tasks/task-view.tsx`, with the messages of T066
-- [ ] T068 [US5] Extend `web/e2e/tasks-run.spec.ts`, part 2: a page closed during a run and
+- [X] T068 [US5] Extend `web/e2e/tasks-run.spec.ts`, part 2: a page closed during a run and
       opened again shows the finished task; a task found paused from the sidebar after its
       page was closed; Stop to stopped and a follow-up after it; a run that cannot be
       stopped; a stop that came too late; Stop pressed with the keyboard alone (FR-012a)
-- [ ] T069 [US5] Add leaving, coming back, and Stop to `web/README.md` and `README.md`
+- [X] T069 [US5] Add leaving, coming back, and Stop to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 5 works: a tab closed during a run, and Stop.
 

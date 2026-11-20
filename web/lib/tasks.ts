@@ -220,6 +220,21 @@ export function parseArguments(
   return { args: value as Record<string, unknown> };
 }
 
+// Phase 8: stopping a run (FR-022).
+
+/** What the service answers when it has accepted a stop. */
+export type StopAnswer = { thread_id: string; stopping: true };
+
+/**
+ * Ask the service to stop the run in progress on the task. The answer says the stop was
+ * asked for, not that the run has ended: the step under way completes first, and the task's
+ * row says `stopping` until it has. Only a run the console started can be stopped; every
+ * refusal is raised as an `ApiError`.
+ */
+export function stopRun(threadId: string): Promise<StopAnswer> {
+  return api<StopAnswer>(`${path(threadId)}/stop`, { method: "POST" });
+}
+
 function decode(data: string[]): unknown {
   const text = data.join("\n");
   if (text === "") {

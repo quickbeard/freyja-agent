@@ -33,6 +33,7 @@ import { MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
 import { TaskStatus } from "./status";
+import { StopButton, type StopState } from "./stop-button";
 
 // How often a page that does not read a run's stream reads the task again while that run is
 // in progress (FR-013).
@@ -187,18 +188,31 @@ export function TaskView({ threadId }: { threadId: string }) {
       },
     },
   );
+  // The same for the conversation's readings.
+  const [stateReads, setStateReads] = useState(0);
+  const stateReadsNow = useRef(0);
   const state = useSWR<ThreadState, unknown>(
     stateKey(threadId),
     () => readState(threadId),
-    { shouldRetryOnError: false },
+    {
+      shouldRetryOnError: false,
+      onSuccess: () => {
+        stateReadsNow.current += 1;
+        setStateReads(stateReadsNow.current);
+      },
+    },
   );
   const { mutate: readListAgain } = useSWRConfig();
   const { mutate: readRowAgain } = row;
   const { mutate: readStateAgain } = state;
   const ended = run?.ended ?? null;
 
-  // The end of a run for which the task has been read again since.
-  const [readFor, setReadFor] = useState<RunEnd | null>(null);
+  // The end of a run for which the task was asked for again and that request was answered,
+  // with the number of readings of the conversation answered before it was asked.
+  const [readFor, setReadFor] = useState<{
+    end: RunEnd;
+    states: number;
+  } | null>(null);
   // What the page says of a decision the service did not apply, until the next one.
   // It is about the proposal the task had once it was read again (`about`, null for none),
   // and goes once the task has moved on from it.
@@ -215,6 +229,16 @@ export function TaskView({ threadId }: { threadId: string }) {
   // until a reading made after it says the run is no longer in progress (FR-010): the row
   // the page held before, as for a follow-up, says nothing of this run.
   const [cut, setCut] = useState<number | null>(null);
+  // Set when the service accepted a stop this page asked for, to the number of readings of
+  // the row answered until then: how the run ended is told by a reading made after it.
+  const [stopAsked, setStopAsked] = useState<number | null>(null);
+  // Set when a run this page asked to stop ended another way before the stop took effect:
+  // it is said until the task's next run (FR-022a). `at` is the number of readings of the
+  // row answered until then, and `rested` whether a reading since has said that no run is
+  // in progress: only after that does a run in progress mean another run.
+  const [late, setLate] = useState<{ at: number; rested: boolean } | null>(
+    null,
+  );
   // The follow-up box: another box, holding `text`, each time `box` changes. It changes when
   // a follow-up's run failed before its message was recorded, so that the text is offered
   // again (FR-008's rule for a new task, kept for a follow-up).
@@ -229,9 +253,10 @@ export function TaskView({ threadId }: { threadId: string }) {
       setCut(rowReadsNow.current);
     }
     let current = true;
+    const states = stateReadsNow.current;
     void Promise.allSettled([readRowAgain(), readStateAgain()]).then(() => {
       if (current) {
-        setReadFor(ended);
+        setReadFor({ end: ended, states });
       }
     });
     // The list and the sidebar's number follow at once, not at their next reading.
@@ -259,11 +284,19 @@ export function TaskView({ threadId }: { threadId: string }) {
   // What the stream brought stays on the page until the task has been read again after it,
   // also when that reading failed: the conversation the page held before lacks what the run
   // added, and would look as if the message had never been sent.
+  // "Read again" is: the request made at the run's end was answered, and the conversation
+  // the page holds comes from a reading answered after that end, or there is none to hold.
+  // The second part matters when another reading was asked for meanwhile, as after a stop:
+  // it takes the place of the one made at the end, which is then answered with what the
+  // page already held, the conversation from before the run.
+  const readAfter =
+    readFor !== null &&
+    readFor.end === ended &&
+    (stateReads > readFor.states || state.error !== undefined);
   const showLive =
     run !== undefined &&
-    (streaming ||
-      (ended !== null && (readFor !== ended || readError !== undefined)));
-  const settled = run !== undefined && ended !== null && readFor === ended;
+    (streaming || (ended !== null && (!readAfter || readError !== undefined)));
+  const settled = run !== undefined && ended !== null && readAfter;
   const failedCode = failed?.code ?? null;
   const recorded = state.data?.messages;
 
@@ -382,12 +415,67 @@ export function TaskView({ threadId }: { threadId: string }) {
     }
   }, [cut, rowReads, rowRead, inProgress]);
 
+  // A stop this page asked for is settled by how the run ended. A run that ended as stopped
+  // needs no more words, since the status says it; one that ended another way, by pausing
+  // on a proposal, finishing, or failing, is shown as it ended, and the page says that the
+  // stop came too late (FR-022a).
+  // A page that reads the run's stream is told by the run's last event, which is about this
+  // run and no other. The row may go on saying "running" for a moment after that event.
+  useEffect(() => {
+    if (stopAsked === null || ended?.kind !== "event") {
+      return;
+    }
+    const { event, data } = ended.event;
+    const stopped =
+      event === "end" &&
+      (data as { status?: string } | null)?.status === "stopped";
+    setStopAsked(null);
+    if (!stopped) {
+      setLate({ at: rowReadsNow.current, rested: false });
+    }
+  }, [stopAsked, ended]);
+  // A page that follows the run by reading is told by a reading of the row made after the
+  // stop. A reading that says a run is in progress and not stopping is of another run. A
+  // run that ended and was followed by another between two readings cannot be told from
+  // one that ended another way: the row names no run.
+  const rowStatus = row.data?.status;
+  const rowStopping = rowRunning && row.data?.stopping === true;
+  useEffect(() => {
+    if (stopAsked === null || rowReads <= stopAsked) {
+      return;
+    }
+    if (rowRunning) {
+      if (!rowStopping) {
+        setStopAsked(null);
+      }
+      return;
+    }
+    // The row says the run has ended, and how: its status is the service's word.
+    setStopAsked(null);
+    if (rowStatus !== "stopped") {
+      setLate({ at: rowReadsNow.current, rested: true });
+    }
+  }, [stopAsked, rowReads, rowRunning, rowStopping, rowStatus]);
+  // That a stop came too late is about the run that ended: it goes with the next run, one
+  // of this page or one the row shows once it has said that the earlier run was over.
+  useEffect(() => {
+    if (late === null) {
+      return;
+    }
+    if (streaming || (late.rested && rowRunning)) {
+      setLate(null);
+    } else if (!late.rested && rowReads > late.at && !rowRunning) {
+      setLate({ at: late.at, rested: true });
+    }
+  }, [late, streaming, rowReads, rowRunning]);
+
   // A decision goes through the service's own checks; its continuation is shown as a run
   // is, below the conversation as it was when the person decided (FR-019).
   async function decideNow(interruptId: string, decisions: DecisionSent[]) {
     const before = state.data?.messages ?? [];
     const answer = await decide(threadId, interruptId, decisions);
     setNotice(null);
+    setStopAsked(null);
     clear(threadId);
     begin(threadId, null, answer, before);
     setFocusStatus(true);
@@ -415,6 +503,7 @@ export function TaskView({ threadId }: { threadId: string }) {
 
   async function sendAgain(text: string) {
     const answer = await startRun(threadId, text);
+    setStopAsked(null);
     clear(threadId);
     begin(threadId, text, answer);
   }
@@ -516,25 +605,59 @@ export function TaskView({ threadId }: { threadId: string }) {
         ? "proposal"
         : null;
   // What the page says of the run, in one place that is always there: it takes the focus
-  // when a message or a decision was accepted, and keeps it when the run ends, where an
+  // when a message, a decision, or a stop was accepted, and keeps it when the run ends, where an
   // element that went away would drop the focus to the top of the page. That a run of this
   // page has ended is said for whoever does not see the status change (FR-012a).
-  const last = ended ?? readFor;
-  const said = streaming
-    ? started
-      ? "The run has started. Freyja's reply appears as it is written."
-      : "Starting the run…"
-    : inProgress
-      ? "A run is in progress. This page reads the task again until it ends."
-      : waiting
-        ? "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet."
-        : null;
+  // A run in progress that the page shows as one: its own while it streams, or one the
+  // readings say is in progress. Not the moment between the end of its own run and the
+  // reading after it, when the row the page holds is still from during the run.
+  const runShown = streaming || (!showLive && inProgress);
+  // The step under way completes first: until the run has ended the page says "stopping",
+  // from its own stop once the service accepted it, and from the row, which also knows of
+  // a stop asked in another window (FR-022).
+  const stopping = runShown && (stopAsked !== null || rowStopping);
+  const last = ended ?? readFor?.end ?? null;
+  const said = stopping
+    ? "The run is stopping. The step under way completes first."
+    : streaming
+      ? started
+        ? "The run has started. Freyja's reply appears as it is written."
+        : "Starting the run…"
+      : inProgress
+        ? "A run is in progress. This page reads the task again until it ends."
+        : waiting
+          ? "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet."
+          : null;
+  const words = [
+    late !== null
+      ? "The run ended before the stop took effect. The task is shown as it ended."
+      : null,
+    said,
+  ]
+    .filter((sentence) => sentence !== null)
+    .join(" ");
   const over =
     last?.kind !== "event"
       ? ""
       : last.event.event === "interrupt"
         ? "The run has paused: a proposal waits for a decision."
         : "The run has ended.";
+  // Stop is offered for a run the console started, whether or not this page reads its
+  // stream (FR-022): a run of this page once the service has said that it started, and a
+  // run this page follows when the row says it can be stopped. With no run in progress
+  // there is no Stop, whatever the row says; a proposal is declined by rejecting it.
+  const stopState: StopState | null =
+    !runShown || stopping
+      ? null
+      : streaming
+        ? started
+          ? "stoppable"
+          : null
+        : rowRunning
+          ? row.data?.stoppable === true
+            ? "stoppable"
+            : "not_stoppable"
+          : null;
   const agentTasks = noConversation ? [] : (state.data?.agent_tasks ?? []);
   // The box stands under a conversation, once the task has been read.
   const conversed =
@@ -548,11 +671,27 @@ export function TaskView({ threadId }: { threadId: string }) {
         ref={statusRef}
         tabIndex={-1}
         className={
-          said === null ? "sr-only" : "block text-sm text-muted-foreground"
+          words === "" ? "sr-only" : "block text-sm text-muted-foreground"
         }
       >
-        {said ?? over}
+        {words === "" ? over : words}
       </output>
+      {stopState !== null && (
+        <StopButton
+          threadId={threadId}
+          about={row.data?.first_message ?? run?.message ?? null}
+          run={stopState}
+          onAsked={() => {
+            setStopAsked(rowReadsNow.current);
+            setNotice(null);
+            // The button goes; the focus goes to where the page says the run is stopping.
+            statusRef.current?.focus();
+            // The row then says that the run is stopping, and later how it ended.
+            void readRowAgain();
+          }}
+          onStale={stale}
+        />
+      )}
       {cut !== null && <CutNotice />}
       {unread}
       {notice !== null && (
@@ -611,6 +750,7 @@ export function TaskView({ threadId }: { threadId: string }) {
           initial={draft.text}
           onSent={() => {
             setNotice(null);
+            setStopAsked(null);
             setFocusStatus(true);
           }}
           onMoved={() => {

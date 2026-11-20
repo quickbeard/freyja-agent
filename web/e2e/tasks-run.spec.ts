@@ -1,13 +1,18 @@
 import { expect, type Page, test } from "@playwright/test";
+import { answerProfiles, environmentProfile, profileList } from "./api";
 import {
   agentTask,
   ai,
+  continued,
+  finished,
   followedUp,
+  goesOn,
   human,
   notify,
   outcome,
   pausedTask,
   proposal,
+  runningTask,
   summary,
   TaskService,
   threadState,
@@ -253,4 +258,252 @@ test("a task whose run is in progress elsewhere is followed, and takes no messag
   await expect(followUp(page)).toHaveValue("And then?\n");
   await expect(sendMessage(page)).toBeEnabled();
   expect(service.sent).toEqual([]);
+});
+
+// 007, User Story 5: leave a task running, come back to it, or stop it.
+
+const STOPPING = "The run is stopping. The step under way completes first.";
+const TOO_LATE =
+  "The run ended before the stop took effect. The task is shown as it ended.";
+const CUT = "The connection to the run ended before the run did.";
+
+const stopButton = (page: Page) => page.getByRole("button", { name: /^Stop/ });
+const status = (page: Page, words: string) =>
+  page.getByText(words, { exact: true });
+
+/** A new task sent from the Tasks section; the id the console chose for it. */
+async function sendNewTask(page: Page, service: TaskService, text: string) {
+  await page.goto("/tasks");
+  await page.getByRole("button", { name: "New task" }).click();
+  await page.getByLabel("What should Freyja do?").fill(text);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page).toHaveURL(/\/tasks\/[0-9a-f]{32}$/);
+  return service.sent[0].threadId;
+}
+
+test("a run goes on when its page is closed, and the task is found finished later", async ({
+  page,
+  context,
+}) => {
+  const service = await new TaskService(goesOn("Counting")).serve(page);
+  const id = await sendNewTask(page, service, "Count slowly.");
+  // The page no longer reads the run; it says so, and that the run is in progress.
+  await expect(page.getByText(CUT)).toBeVisible();
+  await expect(page.getByText(IN_PROGRESS)).toBeVisible();
+
+  await page.close();
+  // The run ends with nobody watching.
+  service.tasks.set(id, {
+    row: summary(id, { first_message: "Count slowly." }),
+    state: threadState(id, [
+      human("Count slowly."),
+      ai("Counting: one, two, three."),
+    ]),
+  });
+
+  const later = await context.newPage();
+  await service.serve(later);
+  await later.goto(`/tasks/${id}`);
+  await expect(status(later, "Done")).toBeVisible();
+  await expect(conversation(later)).toContainText("Counting: one, two, three.");
+  await expect(later.getByText(CUT)).toBeHidden();
+  await expect(stopButton(later)).toHaveCount(0);
+  // Leaving and coming back sent nothing: one run, no stop, no decision.
+  expect(service.sent).toHaveLength(1);
+  expect(service.stops).toEqual([]);
+  expect(service.decided).toEqual([]);
+});
+
+test("a task that paused after its page was left is found from the sidebar and decided", async ({
+  page,
+}) => {
+  const service = await new TaskService(goesOn("Working on it")).serve(page);
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  const id = await sendNewTask(page, service, "Tell #ops.");
+  await expect(page.getByText(IN_PROGRESS)).toBeVisible();
+
+  // The run pauses on a proposal while the person looks at another section.
+  const task = pausedTask(id, "Tell #ops.", proposal("int-1", notify()));
+  service.tasks.set(id, task);
+  service.answerDecisionsWith(() =>
+    continued(task, "Notification to #ops recorded.", "Sent."),
+  );
+  await page.goto("/llm");
+  const tasksEntry = page
+    .getByRole("navigation", { name: "Sections" })
+    .getByRole("link", { name: "Tasks" });
+  await expect(tasksEntry.locator("xpath=..")).toContainText("1 to decide");
+
+  await tasksEntry.click();
+  const row = page.getByRole("list", { name: "Tasks" }).getByRole("listitem");
+  await expect(row).toHaveCount(1);
+  await expect(row).toContainText("Needs your decision");
+  await row.getByRole("link").click();
+  await expect(page).toHaveURL(`/tasks/${id}`);
+  // A paused task has no run in progress, so no Stop: a proposal is declined by rejecting it.
+  await expect(stopButton(page)).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Approve send_notification" }).click();
+  await expect(conversation(page)).toContainText(
+    "Notification to #ops recorded.",
+  );
+  await expect(status(page, "Done")).toBeVisible();
+  expect(service.decided).toHaveLength(1);
+  expect(service.sent).toHaveLength(1);
+});
+
+test("Stop ends a run after the step under way, and a follow-up continues the task", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  service.tasks.set(
+    ID,
+    runningTask(ID, "Read every file.", "Reading the first"),
+  );
+  service.answerRunsWith((id, message) => {
+    const task = service.tasks.get(id);
+    if (task === undefined) {
+      throw new Error(`no task ${id}`);
+    }
+    return followedUp(task, message, "The second file says more.");
+  });
+  await service.serve(page);
+  await page.clock.install();
+  await page.goto(`/tasks/${ID}`);
+
+  await expect(status(page, "Running")).toBeVisible();
+  await page
+    .getByRole("button", { name: "Stop the run of the task: Read every file." })
+    .click();
+
+  // Stopping, in words, and no second Stop; not stopped until the service says so.
+  await expect(page.getByText(STOPPING)).toBeVisible();
+  await expect(stopButton(page)).toHaveCount(0);
+  await expect(status(page, "Stopped")).toBeHidden();
+  expect(service.stops).toEqual([ID]);
+
+  // The step under way completes and is recorded; then the run has ended.
+  service.tasks.set(ID, {
+    row: summary(ID, { first_message: "Read every file.", status: "stopped" }),
+    state: threadState(ID, [
+      human("Read every file."),
+      ai("Reading the first file: it says little."),
+    ]),
+  });
+  await page.clock.fastForward(5_000);
+
+  await expect(status(page, "Stopped")).toBeVisible();
+  await expect(page.getByText(STOPPING)).toBeHidden();
+  await expect(page.getByText(TOO_LATE)).toBeHidden();
+  await expect(conversation(page)).toContainText(
+    "Reading the first file: it says little.",
+  );
+  await expect(stopButton(page)).toHaveCount(0);
+
+  // The task is continued with another message.
+  await followUp(page).fill("Go on.");
+  await sendMessage(page).click();
+  await expect(conversation(page)).toContainText("The second file says more.");
+  await expect(status(page, "Done")).toBeVisible();
+  expect(service.sent).toEqual([{ threadId: ID, message: "Go on." }]);
+  expect(service.stops).toEqual([ID]);
+});
+
+test("Stop is pressed with the keyboard alone", async ({ page }) => {
+  const service = new TaskService();
+  service.tasks.set(ID, runningTask(ID, "Read every file."));
+  await service.serve(page);
+  await page.goto(`/tasks/${ID}`);
+  const stop = stopButton(page);
+  await expect(stop).toBeVisible();
+
+  // From the top of the page, Tab reaches the control; Enter presses it.
+  await page.locator("body").focus();
+  for (let tabs = 0; tabs < 40; tabs += 1) {
+    await page.keyboard.press("Tab");
+    if (await stop.evaluate((element) => element === document.activeElement)) {
+      break;
+    }
+  }
+  await expect(stop).toBeFocused();
+  await page.keyboard.press("Enter");
+
+  await expect(page.getByText(STOPPING)).toBeVisible();
+  // The button is gone; the focus is on what the page says of the run, not lost.
+  await expect(page.getByText(STOPPING)).toBeFocused();
+  expect(service.stops).toEqual([ID]);
+});
+
+test("a run the console did not start has no Stop, and the page says why", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  service.tasks.set(
+    ID,
+    runningTask(ID, "Say hello.", null, { stoppable: false }),
+  );
+  await service.serve(page);
+  await page.goto(`/tasks/${ID}`);
+
+  await expect(page.getByText(IN_PROGRESS)).toBeVisible();
+  await expect(
+    page.getByText("This run has no Stop: the console did not start it."),
+  ).toBeVisible();
+  await expect(stopButton(page)).toHaveCount(0);
+  expect(service.stops).toEqual([]);
+});
+
+test("a run that pauses before the stop takes effect is shown as it ended, never as stopped", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  service.tasks.set(ID, runningTask(ID, "Tell #ops."));
+  await service.serve(page);
+  await page.clock.install();
+  await page.goto(`/tasks/${ID}`);
+  await stopButton(page).click();
+  await expect(page.getByText(STOPPING)).toBeVisible();
+
+  // The reply under way asked for an action that needs approval: the run paused.
+  service.tasks.set(
+    ID,
+    pausedTask(ID, "Tell #ops.", proposal("int-1", notify())),
+  );
+  await page.clock.fastForward(5_000);
+
+  await expect(status(page, "Needs your decision")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Approve send_notification" }),
+  ).toBeVisible();
+  await expect(page.getByText(TOO_LATE)).toBeVisible();
+  await expect(status(page, "Stopped")).toBeHidden();
+  await expect(page.getByText(STOPPING)).toBeHidden();
+  // Nothing was decided by the stop.
+  expect(service.decided).toEqual([]);
+});
+
+test("Stop pressed just as the run ended changes nothing, and the page shows the task as it is", async ({
+  page,
+}) => {
+  const service = new TaskService(finished("unused"));
+  service.tasks.set(ID, runningTask(ID, "Count slowly."));
+  await service.serve(page);
+  await page.goto(`/tasks/${ID}`);
+  await expect(stopButton(page)).toBeVisible();
+
+  // The run finishes by itself before the press reaches the service.
+  service.tasks.set(ID, {
+    row: summary(ID, { first_message: "Count slowly." }),
+    state: threadState(ID, [human("Count slowly."), ai("One, two, three.")]),
+  });
+  await stopButton(page).click();
+
+  await expect(alerts(page)).toContainText(
+    "No run is in progress on this task any more, so nothing was stopped.",
+  );
+  await expect(status(page, "Done")).toBeVisible();
+  await expect(conversation(page)).toContainText("One, two, three.");
+  await expect(status(page, "Stopped")).toBeHidden();
+  await expect(stopButton(page)).toHaveCount(0);
+  expect(service.stops).toEqual([ID]);
 });

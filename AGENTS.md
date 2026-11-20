@@ -300,6 +300,12 @@ startup and exits with an error naming the connection when it is unreachable.
   `awaited` says whether a task still waits for one. The view reads its task again by one
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
   every `AGENT_SECONDS` while an agent task is awaited, and never while the page is hidden.
+  Stop (`stop-button.tsx`) is offered by the view for a run the console started that is in
+  progress: a run of this tab once its `start` event arrived, and a run it follows when the
+  row says `stoppable`. It sends `stopRun` on a press, never otherwise; the view says
+  "stopping" until a reading of the row made after the stop says how the run ended, shows a
+  task as stopped only when the row does, and says that the stop came too late when the run
+  ended another way (FR-022a).
   All text of a task is put in
   text nodes and never rendered as markup. The console has no users, and the section says
   so above its list.
@@ -327,12 +333,14 @@ startup and exits with an error naming the connection when it is unreachable.
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
   `tasks.spec.ts` the Tasks section, `tasks-decide.spec.ts` deciding a proposal, and
-  `tasks-run.spec.ts` follow-ups, agent tasks, and a run the page does not read (it moves
-  the page's clock with `page.clock` in place of waiting five or fifteen seconds), with
+  `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
+  during a run, and Stop (it moves the page's clock with `page.clock` in place of waiting
+  five or fifteen seconds), with
   `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
   its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
-  its decision, `followedUp` and `agentTask` for a follow-up and an agent task, and
-  `answerThreads`); and
+  its decision, `followedUp` and `agentTask` for a follow-up and an agent task,
+  `runningTask` and `goesOn` for a run in progress and one whose stream stops, and
+  `answerThreads`; it answers a stop as the service rules it and keeps each in `stops`); and
   `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
   to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
   forwards to), to see a run's events arrive as they are produced. It runs in projects of

@@ -13,6 +13,7 @@ import {
   type StreamEvent,
   startRun,
   stateKey,
+  stopRun,
   THREADS_KEY,
   threadKey,
 } from "@/lib/tasks";
@@ -204,5 +205,45 @@ describe("parseArguments", () => {
   ])("gives a reason for %s", (_what, text) => {
     const parsed = parseArguments(text);
     expect("error" in parsed && parsed.error).toMatch(/JSON/);
+  });
+});
+
+// Phase 8: stopping a run (FR-022).
+
+describe("stopRun", () => {
+  it("asks the service to stop the task's run, with no body", async () => {
+    const fetchStub = stubFetch({
+      status: 202,
+      json: { thread_id: "t-1", stopping: true },
+    });
+    expect(await stopRun("t-1")).toEqual({ thread_id: "t-1", stopping: true });
+    const [url, init] = fetchStub.mock.calls[0];
+    expect(url).toBe("/api/threads/t-1/stop");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBeUndefined();
+    expect(init?.headers).toBeUndefined();
+    expect(init?.credentials).toBeUndefined();
+  });
+
+  it("raises the service's refusal", async () => {
+    stubFetch({
+      status: 409,
+      json: {
+        detail: {
+          code: "no_run",
+          message: "No run is in progress on this thread.",
+        },
+      },
+    });
+    await expect(stopRun("t-1")).rejects.toMatchObject({
+      status: 409,
+      code: "no_run",
+    });
+  });
+
+  it("puts an id the service would refuse into the path as one segment", async () => {
+    const fetchStub = stubFetch({ status: 202, json: {} });
+    await stopRun("a/b");
+    expect(fetchStub.mock.calls[0][0]).toBe("/api/threads/a%2Fb/stop");
   });
 });
