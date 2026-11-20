@@ -56,3 +56,23 @@
 - One dependency outside the spec: FR-010 and FR-021 rest on a run's stream passing the
   console's forwarding as it is produced, and on a page that leaves ending the run through
   it. Neither is proven (Assumptions, "Not proven"); the plan's research proves them first.
+- Validated again on 2026-11-20 after `/speckit-clarify`: 16 of 16 items still pass. Five
+  questions were asked and answered; each is in the spec's Clarifications section. The first
+  three confirmed the draft: the name stays Tasks, with "agent task" for the other kind
+  (FR-001a); the console having no users is accepted and said on the page and in the README
+  (FR-026a); and follow-ups stay (FR-020). The last two changed it, so the notes above about
+  FR-021 and FR-022 describe the draft and no longer the spec:
+  - A run the console starts goes on after its page is closed (FR-021), where the draft kept
+    today's behavior. User story 5, three edge cases, FR-010, FR-013, FR-023, and SC-011
+    follow from it.
+  - The first version has Stop for runs the console started (FR-022, FR-022a, SC-012), where
+    the draft had none.
+- One rule for Stop is the specification's and was not asked: a stop waits for the step
+  under way, so that an approved action is never cut off between taking effect and being
+  recorded (FR-022; Assumptions, "Behavior choices"). Feature 001 accepted that gap for a
+  client that goes away; a button that causes it on request is another matter under
+  principle I.
+- Three things are not proven and go to the plan's research first (Assumptions, "Not
+  proven"): that a stream passes the console's forwarding as it is produced, that the
+  service can end a run after the step under way, and that FR-021 and FR-022 can be built
+  without changing files another session is working in.
