@@ -119,8 +119,11 @@ startup and exits with an error naming the connection when it is unreachable.
   closes a link once no set that is held has it. `a2a_tools.py` builds each agent's
   `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step that
   runs again never sends twice, checks that a task belongs to the agent the tool was built
-  for, that the link is connected, and that the call was proposed for the agent the tool
-  sends to (`_proposed_for`) before it sends, and turns a reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
+  for, that the link is connected, that the call was proposed for the agent the tool
+  sends to (`_proposed_for`), and, for a saved agent, that the agent as the store has it
+  now still exists and still runs without approval when no person decided the call
+  (`_still_allowed`, the last thing awaited before the send's first write), and turns a
+  reply into text. `delegation_worker.py` is the `DelegationWorker`: each poll it
   takes a context, claims pending tasks, checks or gives them up, and starts a delivery for
   each ready outcome: a background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
   `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
@@ -176,9 +179,11 @@ startup and exits with an error naming the connection when it is unreachable.
   agents;
   `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
-  agent's card and saves the agent when it can be used, always requiring approval, and
+  agent's card and saves the agent when it can be used, requiring approval unless the request
+  chose otherwise, `PATCH /agents/{id}`, which changes a saved agent's approval choice at the
+  version the page read and contacts no agent, and
   `POST /agents/{id}/check`, which reads an agent's card again through its link and says
-  whether the agent can be used; the first two are the only answers of the service that hold
+  whether the agent can be used; the first three are the only answers of the service that hold
   a saved agent's address;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
@@ -189,6 +194,9 @@ startup and exits with an error naming the connection when it is unreachable.
   origin (`refuse_other_origins`, 403 `other_origin`); `streaming.py`
   the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
   which turns a run away with `no_usable_model` before the graph when no usable model is active,
+  ends a resume whose paused step came to hold a call that needs a decision with
+  `approval_now_required` and the agents it is about (it knows that refusal by the approval
+  middleware's sentence, which `tests/test_a2a_gate.py` pins),
   and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
   records pending tasks' outcomes in their thread exactly once and answers messages to agents
   that a stop left in flight; `decisions.py` resume validation, including edits checked against
@@ -200,9 +208,11 @@ startup and exits with an error naming the connection when it is unreachable.
   shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
   `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
   `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
-  agent (`agent-form.tsx`, which keeps nothing once it is sent or closed), checks one from
+  agent and changes a saved agent's approval choice (`agent-form.tsx`, which keeps nothing
+  once it is sent or closed, asks for confirmation before it sends anything that loosens or
+  tightens approval, and sends the version it opened with), checks one from
   its card (`check-result.tsx`), and warns above the cards about every agent that cannot be
-  used (`agents-warning.tsx`); it changes and removes none yet. The sidebar reads the same
+  used (`agents-warning.tsx`); it moves and removes none yet. The sidebar reads the same
   list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
   every page asks for `/api/agents` once.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
@@ -227,7 +237,7 @@ startup and exits with an error naming the connection when it is unreachable.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read and its warnings, and `agents-manage.spec.ts` adding an
-  agent and checking one; `api.ts`
+  agent, checking one, and changing one's approval choice; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
   what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that

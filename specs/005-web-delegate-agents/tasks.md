@@ -850,7 +850,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
 
 ### Tests for User Story 4
 
-- [ ] T080 [P] [US4] Extend `tests/test_agents_api.py`, part 3. `POST /agents` now accepts
+- [X] T080 [P] [US4] Extend `tests/test_agents_api.py`, part 3. `POST /agents` now accepts
       `approval` `none`, and the test of T050 that refused it is changed to say so. `PATCH
       /agents/{agent_id}` with `approval`: a change gives 200 with the agent, `version` one
       higher, and `given_up` 0; the stand-in saw no request, also when it is down, in both
@@ -864,7 +864,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       is refused with 403. Pending tasks are as they were. `/tools` then lists the agent's
       tools with the classification the new choice implies (FR-009, FR-012, FR-017, FR-026,
       FR-029, FR-030)
-- [ ] T081 [P] [US4] Extend `tests/test_agents_approval.py`, part 2. For a saved agent that
+- [X] T081 [P] [US4] Extend `tests/test_agents_approval.py`, part 2. For a saved agent that
       requires approval, a hand-off, a follow-up, an answer, and a cancel each pause before
       anything is sent, on the orchestrator, on its subagent, and in a background run (SC-004).
       After a switch to running without approval, the next run sends with no pause in all
@@ -887,7 +887,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       the same for a subagent's step; once the agent is switched back the resume goes through.
       A card that calls its agent read-only changes nothing: the agent still pauses (FR-019,
       FR-022, FR-023, FR-030, SC-004, R7, R9)
-- [ ] T082 [P] [US4] Change the test at line 394 of `tests/test_a2a_gate.py`
+- [X] T082 [P] [US4] Change the test at line 394 of `tests/test_a2a_gate.py`
       (`test_a_hand_off_that_became_gated_blocks_the_resume_and_the_proposal_stays`): the
       resume now ends with `approval_now_required` and a message naming `hello`. Add beside it
       a test that fails the day the approval middleware words its error differently: the
@@ -895,18 +895,18 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       `langchain.agents.middleware.human_in_the_loop` raises. The matching test for a tool
       server's tool in `tests/test_mcp_gate.py` keeps `internal` and is not touched (FR-023,
       FR-031, R9, R22)
-- [ ] T083 [P] [US4] Extend `tests/test_agents_apply.py`, part 3, two apps on one set of
+- [X] T083 [P] [US4] Extend `tests/test_agents_apply.py`, part 3, two apps on one set of
       stores, the change made through the route on the first and each decision sent to the
       second: after a switch to running without approval, approve sends the message as
       proposed, and reject and edit are refused with the proposal left in place; after a switch
       to requiring approval of an agent whose call in the paused step needed no decision, each
       of approve, edit, and reject ends with `approval_now_required` and nothing is sent to any
       agent (FR-019, FR-023, R3, R20)
-- [ ] T084 [P] [US4] Extend `web/__tests__/lib/agents.test.ts`, part 4, and
+- [X] T084 [P] [US4] Extend `web/__tests__/lib/agents.test.ts`, part 4, and
       `web/__tests__/lib/api.test.ts`: `changeAgent(id, {version, approval})` sends a `PATCH`
       with exactly the values it was given; `isGone` is true for `agent_not_found` as for
       `profile_not_found`
-- [ ] T085 [P] [US4] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 2, the
+- [X] T085 [P] [US4] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 2, the
       approval choice. Adding: the form now offers the choice, set to requiring approval; with
       "runs without approval" chosen, Save sends nothing and shows a confirmation that names
       the agent and says that nothing sent to it will be seen by a person first; Cancel sends
@@ -925,17 +925,17 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       the form takes its confirmation back and says the agent was changed elsewhere.
       `agent_changed` and `agent_not_found` say so and have the list read again. No answer says
       the outcome is not known (FR-004, FR-009, FR-011, FR-012, SC-005, R14, R17)
-- [ ] T086 [P] [US4] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 3: a
+- [X] T086 [P] [US4] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 3: a
       saved agent that is in use has Edit; an environment agent has none; a saved agent that is
       not in use has none (FR-017)
-- [ ] T087 [P] [US4] Extend `tests/test_agents_address_nowhere.py`, part 3: an add with
+- [X] T087 [P] [US4] Extend `tests/test_agents_address_nowhere.py`, part 3: an add with
       `approval` `none`, a change of the approval choice with each refusal, a run refused by
       the check before a send, and a resume that ends with `approval_now_required`; the search
       of part 1 again (FR-028, SC-008)
 
 ### Implementation for User Story 4
 
-- [ ] T088 [US4] Add the check before a send to `src/freyja_agent/delegates/a2a_tools.py`, for
+- [X] T088 [US4] Add the check before a send to `src/freyja_agent/delegates/a2a_tools.py`, for
       the tools of a saved agent only. `agent_tools` is given the saved-agent store, which
       `Runtime.assemble` in `src/freyja_agent/runtime/runtime.py` passes. The order inside a
       tool is R7's: the send ledger; the task's ref; `connect()`; the proposed call; then the
@@ -946,28 +946,28 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       nothing was sent.". When the tool needed no decision when it was built and the agent now
       requires approval, nothing is sent: the error result of T081. Each is logged with the
       agent's name and the reason (FR-022, FR-030, R7)
-- [ ] T089 [US4] Change `src/freyja_agent/api/streaming.py`: a resume that fails with the
+- [X] T089 [US4] Change `src/freyja_agent/api/streaming.py`: a resume that fails with the
       approval middleware's sentence about the number of decisions ends with
       `approval_now_required` and the message of contracts/sse-events.md, naming each agent of
       the thread's proposed calls that needed no decision when proposed and whose tool is gated
       in the run's catalog, and with `internal`, as today, when it finds none. The refusal is
       logged with the thread and the agents it named. The code is not one a background run is
       tried again for (FR-023, R9)
-- [ ] T090 [US4] In `src/freyja_agent/api/schemas.py`, let `AgentCreate` accept `approval`
+- [X] T090 [US4] In `src/freyja_agent/api/schemas.py`, let `AgentCreate` accept `approval`
       `none`, and add `AgentUpdate`, with `version` and `approval` and no other field, and
       `AgentChanged`. Implement `PATCH /agents/{agent_id}` for the approval choice in
       `src/freyja_agent/api/agents.py`: no card is read and no agent contacted; a request that
       names the choice the agent has changes nothing and answers with the agent; the change is
       taken up on this instance at once; the log line (FR-009, FR-012, FR-017, FR-030, R14,
       R16)
-- [ ] T091 [P] [US4] Add `changeAgent` to `web/lib/agents.ts` and teach `isGone` in
+- [X] T091 [P] [US4] Add `changeAgent` to `web/lib/agents.ts` and teach `isGone` in
       `web/lib/api.ts` the code `agent_not_found`
-- [ ] T092 [US4] Extend `web/components/agents/agent-form.tsx` with the approval choice when
+- [X] T092 [US4] Extend `web/components/agents/agent-form.tsx` with the approval choice when
       adding, behind its confirmation, and to change a saved agent's approval choice, with the
       two confirmations, the version the form opened with, and the confirmation taken back when
       the list shows a later one, as T085 asks (FR-011, FR-012, R14, R17)
-- [ ] T093 [US4] Add Edit to `web/components/agents/agent-card.tsx`, for a saved agent in use
-- [ ] T094 [US4] Write the end-to-end tests of this story: extend
+- [X] T093 [US4] Add Edit to `web/components/agents/agent-card.tsx`, for a saved agent in use
+- [X] T094 [US4] Write the end-to-end tests of this story: extend
       `web/e2e/agents-manage.spec.ts` and `AgentService`, part 3. Adding with "runs without
       approval" asks first, sends no request before Confirm, and Cancel leaves no card; an
       agent added without touching the choice requires approval. Switching to running without
@@ -976,7 +976,7 @@ a wait between, switch back during the wait: the second hand-off is not sent.
       change made elsewhere while the form is open takes the confirmation back. A change
       refused as `agent_changed` shows the agent as it is now. An environment agent's card
       offers no way to change its approval choice (FR-032, R21)
-- [ ] T095 [US4] Record in plan.md that the middleware's sentence is still the one matched
+- [X] T095 [US4] Record in plan.md that the middleware's sentence is still the one matched
       (research "Not verified")
 
 **Checkpoint**: quickstart section 4 works.

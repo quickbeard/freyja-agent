@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import traceback
 from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal
@@ -87,6 +88,59 @@ def _is_model_error(exc: BaseException) -> bool:
 
 
 _INTERNAL = {"code": "internal", "message": "The run failed because of an internal error."}
+
+# The code of a resume that a tightened approval choice blocks (005 contracts/sse-events.md).
+APPROVAL_NOW_REQUIRED = "approval_now_required"
+# What the approval middleware raises when a paused step holds another number of calls that
+# need a decision than decisions were given (``langchain.agents.middleware.
+# human_in_the_loop``). The middleware has no error type of its own for it, so it is known
+# by its wording; ``tests/test_a2a_gate.py`` fails the day the library words it differently,
+# and such a resume then ends with ``internal`` again (005 research R9).
+_DECISIONS_MISMATCH = re.compile(
+    r"Number of human decisions \(\d+\) does not match number of hanging tool calls \(\d+\)\."
+)
+
+
+def decisions_mismatch(exc: BaseException) -> bool:
+    """True for the approval middleware's refusal of a resume with too few decisions."""
+    return isinstance(exc, ValueError) and _DECISIONS_MISMATCH.fullmatch(str(exc)) is not None
+
+
+async def _now_require_approval(runtime: Runtime, context: RunContext, thread_id: str) -> list[str]:
+    """The agents a blocked resume is about: each one the thread's paused step holds a call
+    to that needed no decision when it was proposed and whose tool is gated in this run's
+    catalog (005 FR-023, research R9). Empty when none is found, or when the proposed calls
+    cannot be read: the resume then ends as it always has.
+    """
+    try:
+        calls = await runtime.agent_tasks.list_calls(thread_id)
+    except Exception as exc:
+        logger.warning(
+            "thread %s: the proposed calls could not be read (%s)", thread_id, type(exc).__name__
+        )
+        return []
+    gated = {tool.agent for tool in context.catalog.gated() if tool.agent is not None}
+    return sorted({call.agent for call in calls if not call.gated and call.agent in gated})
+
+
+def _approval_now_required(agents: list[str]) -> dict[str, str]:
+    """The error a blocked resume ends with, naming each agent and never an address."""
+    named = " and ".join(
+        part for part in (", ".join(f"'{name}'" for name in agents[:-1]), f"'{agents[-1]}'") if part
+    )
+    if len(agents) == 1:
+        message = (
+            f"This step cannot continue: it holds a message to agent {named} that needed no "
+            "approval when it was proposed, and the agent now requires approval. Switch the "
+            "agent back, or remove it, then decide the proposal again."
+        )
+    else:
+        message = (
+            f"This step cannot continue: it holds messages to agents {named} that needed no "
+            "approval when they were proposed, and the agents now require approval. Switch "
+            "the agents back, or remove them, then decide the proposal again."
+        )
+    return {"code": APPROVAL_NOW_REQUIRED, "message": message}
 
 
 async def take_context(runtime: Runtime, thread_id: str, run_id: str) -> RunContext | None:
@@ -306,9 +360,30 @@ async def run_stream(
                     {"code": "model_error", "message": f"The model request failed: {reason}"},
                 )
             else:
-                logger.exception("run %s on thread %s failed", run_id, thread_id)
-                ended = ("error", "internal")
-                yield _event("error", _INTERNAL)
+                # A step that came to hold a call that needs a decision since it paused is
+                # refused by the gate: nothing from it ran, and the proposal stays. Said
+                # with the agents it is about, where they can be told (005 FR-023).
+                blocked = (
+                    await _now_require_approval(runtime, context, thread_id)
+                    if decisions_mismatch(exc)
+                    else []
+                )
+                if blocked:
+                    logger.warning(
+                        "run %s on thread %s (%s) refused: the paused step holds a message "
+                        "that needed no approval when it was proposed, and now requires it; "
+                        "agents: %s",
+                        run_id,
+                        thread_id,
+                        mode,
+                        ", ".join(blocked),
+                    )
+                    ended = ("error", APPROVAL_NOW_REQUIRED)
+                    yield _event("error", _approval_now_required(blocked))
+                else:
+                    logger.exception("run %s on thread %s failed", run_id, thread_id)
+                    ended = ("error", "internal")
+                    yield _event("error", _INTERNAL)
             return
 
         if len(interrupts) > 1:

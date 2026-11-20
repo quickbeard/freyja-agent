@@ -10,6 +10,11 @@ out on one orchestrator.
 Part 2 adds through the route, `POST /agents`: the agent can be handed work in the next run
 with no restart, always under approval, and is still there after a restart.
 
+Part 3 changes an approval choice through the route, `PATCH /agents/{id}`, on one instance
+and sends each decision to another (FR-019, FR-023; research R3, R20): a proposal can then
+only be approved once its agent runs without approval, and a step whose call came to require
+approval cannot be continued, whatever is decided.
+
 Every agent is the stand-in, inside the test process.
 """
 
@@ -798,3 +803,164 @@ def test_a_run_on_a_second_instance_has_the_agent_once_the_add_was_answered_on_t
     assert [(agent["name"], agent["approval"]) for agent in in_its_list] == [("helper", "required")]
     assert events[-1] == ("end", {"status": "completed"})
     assert received(first) == [[("text", "Summarize the week."), ("text", "Ship day is Tuesday.")]]
+
+
+# Part 3: the approval choice is changed through the route on one instance, and the decision
+# is sent to another.
+
+TO_HELPER = ("handoff_to_helper", {"message": "Summarize the week."})
+TO_OTHER = ("handoff_to_other", {"message": "To the one that needed no approval."})
+DECISIONS = {
+    "approve": {"type": "approve"},
+    "edit": {"type": "edit", "args": {"message": "Summarize the month."}},
+    "reject": {"type": "reject", "message": "no"},
+}
+
+
+def two_instances(
+    make_a2a_app: Callable[..., A2aApp],
+    clock: FakeClock,
+    step: AIMessage,
+    saved: dict[str, dict[str, Any]],
+) -> tuple[A2aApp, A2aApp]:
+    """Two instances on one database; the second one's model proposes ``step``."""
+    shared: dict[str, Any] = {
+        "saver": InMemorySaver(),
+        "locks": InMemoryRunLocks(60, clock=clock.now),
+    }
+    first = make_a2a_app(ScriptedChatModel(), {}, saved=saved, **shared)
+    second = make_a2a_app(
+        ScriptedChatModel(script=[step]),
+        {},
+        instance_id="instance-b",
+        store=first.store,
+        saved_agents=first.saved_agents,
+        at=first.at,
+        **shared,
+    )
+    return first, second
+
+
+def switch(client: TestClient, record: SavedAgentRecord, approval: str) -> dict[str, Any]:
+    """Change an agent's approval choice through the route, as the console does."""
+    response = client.patch(
+        f"/agents/{record.id}", json={"version": record.version, "approval": approval}
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["agent"]
+
+
+@pytest.mark.parametrize("decision", list(DECISIONS))
+def test_a_proposal_decided_on_another_instance_after_a_switch_to_running_without_approval(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock, decision: str
+) -> None:
+    first, second = two_instances(
+        make_a2a_app, clock, propose(TO_HELPER), {"helper": {"url": SAVED_URL}}
+    )
+    with TestClient(first.app) as one, TestClient(second.app) as two:
+        proposal = interrupted(run(two, "c-1", sse_events))
+        changed = switch(one, first.saved["helper"], "none")
+        # The very next thing the second instance hears of the thread is the decision.
+        if decision == "approve":
+            events = resume(two, "c-1", [DECISIONS[decision]], sse_events)
+        else:
+            errors = refuse(two, "c-1", [DECISIONS[decision]])
+            still = pending(two, "c-1")
+
+    assert (changed["approval"], changed["version"]) == ("none", 2)
+    if decision == "approve":
+        # Sent as it was proposed.
+        assert events[-1] == ("end", {"status": "completed"})
+        assert texts(first) == ["Summarize the week."]
+    else:
+        # Neither a reject nor an edit is taken for a call that no longer waits for one,
+        # and the proposal is left in place.
+        assert "no longer needs a decision" in errors[0]["msg"]
+        assert still["interrupt_id"] == proposal["interrupt_id"]
+        assert still["action_requests"][0]["allowed_decisions"] == ["approve"]
+        assert sent(first.transport_at(SAVED_URL)) == 0
+
+
+@pytest.mark.parametrize("decision", list(DECISIONS))
+def test_a_step_decided_on_another_instance_after_one_of_its_calls_came_to_require_approval(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock, decision: str
+) -> None:
+    saved = {"helper": {"url": SAVED_URL}, "other": {"url": OTHER_URL, "read_only": True}}
+    first, second = two_instances(make_a2a_app, clock, propose(TO_HELPER, TO_OTHER), saved)
+    with TestClient(first.app) as one, TestClient(second.app) as two:
+        proposal = interrupted(run(two, "c-2", sse_events))
+        # The step waits for a decision about `helper`; its call to `other` needed none.
+        switch(one, first.saved["other"], "required")
+        events = resume(two, "c-2", [DECISIONS[decision]], sse_events)
+        still = pending(two, "c-2")
+
+    assert [action["name"] for action in proposal["action_requests"]] == ["handoff_to_helper"]
+    kind, data = events[-1]
+    assert (kind, data["code"]) == ("error", "approval_now_required")
+    assert "agent 'other'" in data["message"] and "'helper'" not in data["message"]
+    # Whatever was decided, nothing was sent to any agent, and the proposal is as it was.
+    assert sent(first.transport_at(SAVED_URL)) == 0
+    assert sent(first.transport_at(OTHER_URL)) == 0
+    assert still["interrupt_id"] == proposal["interrupt_id"]
+
+
+def test_a_run_in_progress_on_another_instance_sends_nothing_once_the_switch_was_answered(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shared: dict[str, Any] = {
+        "saver": InMemorySaver(),
+        "locks": InMemoryRunLocks(60, clock=clock.now),
+    }
+    saved = {"helper": {"url": SAVED_URL, "read_only": True}}
+    first = make_a2a_app(ScriptedChatModel(), {}, saved=saved, **shared)
+    model = LabelledChatModel(
+        script=[
+            handoff("Before the switch.", agent="helper"),
+            handoff("After it.", agent="helper", call_id="h2"),
+            DONE,
+        ]
+    )
+    second = make_a2a_app(
+        model,
+        {},
+        instance_id="instance-b",
+        store=first.store,
+        saved_agents=first.saved_agents,
+        at=first.at,
+        **shared,
+    )
+    streamed: dict[str, Events] = {}
+    finish_send = first.store.finish_send
+    held: list[bool] = []
+
+    async def then_hold(*args: Any, **kwargs: Any) -> None:
+        await finish_send(*args, **kwargs)
+        if not held:
+            # The run's first hand-off is sent and recorded: its model's next call waits.
+            held.append(True)
+            model.hold()
+
+    monkeypatch.setattr(first.store, "finish_send", then_hold)
+    with TestClient(first.app) as one, TestClient(second.app) as two:
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(two, "c-3", sse_events))
+        )
+        running.start()
+        with model.held():
+            before = texts(first)
+            switch(one, first.saved["helper"], "required")
+        running.join(10)
+        assert not running.is_alive()
+
+    assert before == ["Before the switch."]
+    events = streamed["events"]
+    assert events[-1] == ("end", {"status": "completed"})
+    _first, second_result = tool_results(events, "handoff_to_helper")
+    assert second_result["content"] == (
+        "Agent 'helper' now requires approval, so this message was not sent."
+    )
+    # By the stand-in's own record, nothing reached it after the switch was answered.
+    assert texts(first) == ["Before the switch."]

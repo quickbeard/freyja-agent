@@ -530,6 +530,12 @@ export const NOT_IN_USE_NOT_CHECKED =
   "This saved agent is not in use, so it cannot be checked.";
 export const ALREADY_CHECKED =
   "This agent is already being checked. Wait for that check to end.";
+export const AGENT_CHANGED_SINCE =
+  "The agent was changed since this page read it. Nothing was changed.";
+export const ENVIRONMENT_AGENT_READ_ONLY =
+  "An agent named in the environment cannot be changed here.";
+export const NOT_IN_USE_READ_ONLY =
+  "This saved agent is not in use, so it can only be removed.";
 
 const THIS_MACHINE = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
 
@@ -580,6 +586,7 @@ export class AgentService {
   private waiting: (() => void)[] = [];
   private holding = false;
   private checks = 0;
+  private changed = 0;
   private saved = 0;
   private losing = 0;
   private stopped = false;
@@ -662,6 +669,19 @@ export class AgentService {
   /** What another operator does meanwhile: remove an agent this page still shows. */
   removeElsewhere(name: string): this {
     this.agents = this.agents.filter((agent) => agent.name !== name);
+    return this;
+  }
+
+  /**
+   * What another operator does meanwhile: change an agent this page still shows, which gives
+   * it a later version.
+   */
+  changeElsewhere(name: string, values: Partial<Agent>): this {
+    this.agents = this.agents.map((agent) =>
+      agent.name === name
+        ? { ...agent, ...values, version: (agent.version ?? 0) + 1 }
+        : agent,
+    );
     return this;
   }
 
@@ -748,8 +768,8 @@ export class AgentService {
     const agent = savedAgent(name, {
       id: this.saved.toString(16).padStart(32, "0"),
       url,
-      // An agent added in this increment always requires approval.
-      approval: "required",
+      // An agent requires approval unless the request says otherwise.
+      approval: body.approval === "none" ? "none" : "required",
     });
     this.agents.push(agent);
     if (this.losing > 0) {
@@ -757,6 +777,47 @@ export class AgentService {
       return route.abort("connectionfailed");
     }
     return route.fulfill({ status: 201, json: agent });
+  }
+
+  /**
+   * Change a saved agent's approval choice, as the service does: at the version the page
+   * read, and for a saved agent that is in use only. No agent is contacted for it.
+   */
+  private change(route: Route, id: string, body: Record<string, unknown>) {
+    const agent = this.agents.find((found) => found.id === id);
+    if (agent === undefined) {
+      return route.fulfill({
+        status: 404,
+        json: { detail: { code: "agent_not_found", message: NO_SUCH_AGENT } },
+      });
+    }
+    if (agent.source === "environment") {
+      return this.refuse(route, "agent_read_only", ENVIRONMENT_AGENT_READ_ONLY);
+    }
+    if (agent.state === "not_in_use") {
+      return this.refuse(route, "agent_read_only", NOT_IN_USE_READ_ONLY);
+    }
+    if (body.version !== agent.version) {
+      return this.refuse(route, "agent_changed", AGENT_CHANGED_SINCE);
+    }
+    let changed = agent;
+    if (body.approval !== undefined && body.approval !== agent.approval) {
+      this.changed += 1;
+      this.found(agent.name, {
+        approval: body.approval === "none" ? "none" : "required",
+        version: (agent.version ?? 0) + 1,
+        // Each change a minute after the one before it, from eleven o'clock.
+        updated_at: new Date(
+          Date.UTC(2026, 10, 19, 11, this.changed),
+        ).toISOString(),
+      });
+      changed = this.agents.find((found) => found.id === id) ?? agent;
+    }
+    if (this.losing > 0) {
+      this.losing -= 1;
+      return route.abort("connectionfailed");
+    }
+    return route.fulfill({ json: { agent: changed, given_up: 0 } });
   }
 
   /**
@@ -849,6 +910,14 @@ export class AgentService {
         const checked = path.match(/^\/agents\/([^/]+)\/check$/);
         if (method === "POST" && checked) {
           return this.check(route, decodeURIComponent(checked[1]));
+        }
+        const one = path.match(/^\/agents\/([^/]+)$/);
+        if (method === "PATCH" && one) {
+          return this.change(
+            route,
+            decodeURIComponent(one[1]),
+            body as Record<string, unknown>,
+          );
         }
         return route.fulfill({ status: 404, json: { detail: "Not Found" } });
       },

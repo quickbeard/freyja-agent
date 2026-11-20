@@ -1,5 +1,5 @@
 """005 FR-028, SC-008: an agent's address appears nowhere outside the Agents routes (parts 1
-and 2).
+to 3).
 
 Built like ``tests/test_llm_secrets_nowhere.py`` and grown in every phase that adds a route.
 One agent is saved on a recognizable port, one is named in the environment on another, and
@@ -17,6 +17,10 @@ address that was asked. Their cards name addresses too.
 Part 2 does the same for a check: one that succeeds, one that fails for each card problem,
 one refused as busy, and one that finds another card, which names its own address and
 another agent's.
+
+Part 3 does the same for the approval choice: an add that runs without approval, a change of
+the choice with each of its refusals, a run whose message the check before a send keeps back,
+and a resume that ends with ``approval_now_required``.
 """
 
 import json
@@ -37,6 +41,7 @@ from tests.conftest import A2aApp, holds_port
 from tests.fakes import ScriptedChatModel
 from tests.test_a2a_gate import propose
 from tests.test_a2a_handoff import DONE, handoff, tool_results
+from tests.test_agents_approval import BLOCKED, NOW_REQUIRES, before_the_send
 from tests.test_llm_secrets_nowhere import Seen, kept
 
 # Ports nothing else in the suite uses. Each is searched for as a number of its own, and
@@ -225,7 +230,7 @@ def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
             add("other", f"http://user:pass@127.0.0.1:{REFUSED_PORT}"),
             add("other", f"ftp://127.0.0.1:{REFUSED_PORT}"),
             add("Not A Name", REFUSED_URL),
-            agents_route("POST", json={"name": "other", "url": REFUSED_URL, "approval": "none"}),
+            agents_route("POST", json={"name": "other", "url": REFUSED_URL, "approval": "maybe"}),
             agents_route("POST", json={"name": "other", "url": REFUSED_URL, "address": SAVED_URL}),
             agents_route(
                 "POST",
@@ -462,3 +467,177 @@ def test_an_address_is_in_nothing_a_check_returns_or_logs(
     assert sum("Agent checked: helper" in line for line in logged) == 2 * 11
     assert sum("Agent checked: desk" in line for line in logged) == 2 * 3
     nowhere(logged, *CHECK_PORTS)
+
+
+# Part 3 (T087): the approval choice.
+
+FREE_PORT = 9751
+GATE_PORT = 9752
+COUNTER_PORT = 9753
+CHOICE_PORTS = (FREE_PORT, GATE_PORT, COUNTER_PORT)
+FREE_URL = f"http://127.0.0.1:{FREE_PORT}"
+GATE_URL = f"http://127.0.0.1:{GATE_PORT}"
+COUNTER_URL = f"http://127.0.0.1:{COUNTER_PORT}"
+# What the cards say: every agent's address. An answer is cleaned of the addresses that are
+# an agent's when it is given, so the agent saved first names only what is one by then.
+NEIGHBOURLY = (
+    f"Reach me at http://127.0.0.1:{FREE_PORT}/a2a or localhost:{GATE_PORT}; the counter is "
+    f"at http://localhost:{COUNTER_PORT} and ('127.0.0.1', {COUNTER_PORT})."
+)
+SAVED_FIRST = (
+    f"Reach me at http://127.0.0.1:{GATE_PORT}/a2a; the counter is at localhost:{COUNTER_PORT}."
+)
+
+
+def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_causes(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            handoff("Kept back by the check before a send.", agent="free"),
+            DONE,
+            propose(
+                ("handoff_to_gate", {"message": "Waits for a decision."}),
+                ("handoff_to_free", {"message": "Needed none when it was proposed."}),
+            ),
+        ]
+    )
+    counter = make_stub("counter", card=stub_card("counter", description=NEIGHBOURLY))
+    made = make_a2a_app(
+        model, {"counter": {"url": COUNTER_URL, "read_only": True}}, stubs={"counter": counter}
+    )
+    put(made, COUNTER_URL, counter)
+    free_transport = put(
+        made, FREE_URL, make_stub("free", card=stub_card("free", description=NEIGHBOURLY))
+    )
+    gate_transport = put(
+        made, GATE_URL, make_stub("gate", card=stub_card("gate", description=SAVED_FIRST))
+    )
+    answers: list[Any] = []
+    refusals: list[str] = []
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = Seen(client, sse_events)
+
+        def agents_route(method: str, path: str = "", **kwargs: Any) -> Any:
+            response = client.request(method, f"/agents{path}", **kwargs)
+            if response.is_success:
+                answers.append(response.json())
+            else:
+                refusals.append(f"{method} {path} -> {response.status_code} {response.text}")
+            return response
+
+        def change(agent_id: str, **kwargs: Any) -> Any:
+            return agents_route("PATCH", f"/{agent_id}", **kwargs)
+
+        # An add that requires approval, and one that runs without it.
+        assert agents_route("POST", json={"name": "gate", "url": GATE_URL}).status_code == 201
+        added = agents_route(
+            "POST",
+            json={"name": "free", "url": f"HTTP://LocalHost:{FREE_PORT}/", "approval": "none"},
+        )
+        assert added.status_code == 201 and added.json()["approval"] == "none"
+        free = added.json()["id"]
+
+        # A change of the choice, there and back, and one that changes nothing.
+        tightened = change(free, json={"version": 1, "approval": "required"})
+        loosened = change(free, json={"version": 2, "approval": "none"})
+        same = change(free, json={"version": 3, "approval": "none"})
+        assert [r.json()["agent"]["version"] for r in (tightened, loosened, same)] == [2, 3, 3]
+
+        # Each refusal of a change.
+        body = {"version": 3, "approval": "required"}
+        assert change(free, json={**body, "version": 1}).json()["detail"]["code"] == "agent_changed"
+        assert change("env.counter", json=body).json()["detail"]["code"] == "agent_read_only"
+        assert change("0" * 32, json=body).json()["detail"]["code"] == "agent_not_found"
+        invalid = [
+            change(free, json={**body, "url": f"http://127.0.0.1:{FREE_PORT}/moved"}),
+            change(free, json={**body, "address": f"http://127.0.0.1:{GATE_PORT}"}),
+            change(free, json={"approval": f"http://127.0.0.1:{COUNTER_PORT}"}),
+            change(free, content=f"url={FREE_URL}", headers={"Content-Type": "text/plain"}),
+        ]
+        assert [r.status_code for r in invalid] == [422] * len(invalid)
+        elsewhere = change(free, json=body, headers={"Sec-Fetch-Site": "cross-site"})
+        assert elsewhere.json()["detail"]["code"] == "other_origin"
+
+        async def failing(*_args: Any, **_values: Any) -> Any:
+            raise RuntimeError(f"connection failed while writing {FREE_URL}")
+
+        monkeypatch.setattr(made.saved_agents, "change", failing)
+        assert change(free, json=body).status_code == 500
+        monkeypatch.undo()
+
+        # A run whose message the check before a send keeps back: the agent ran without
+        # approval when the run started, and requires it by the time its tool would send.
+        async def tighten() -> None:
+            await made.saved_agents.change(free, 3, read_only=False)
+
+        before_the_send(made, monkeypatch, tighten)
+        kept_back = seen.stream("/threads/n-5/runs", {"message": "hello"}, debug="true")
+        monkeypatch.undo()
+        seen.state("n-5")
+
+        # A resume that a tightened choice blocks: the step waits for a decision about
+        # `gate`, and its call to `free` needed none when it was proposed.
+        assert change(free, json={"version": 4, "approval": "none"}).status_code == 200
+        waiting = seen.stream("/threads/n-6/runs", {"message": "hello"}, debug="true")
+        assert [a["name"] for a in waiting[-1][1]["action_requests"]] == ["handoff_to_gate"]
+        assert change(free, json={"version": 5, "approval": "required"}).status_code == 200
+        blocked = seen.stream(
+            "/threads/n-6/resume",
+            {"interrupt_id": waiting[-1][1]["interrupt_id"], "decisions": [{"type": "approve"}]},
+            debug="true",
+        )
+        seen.state("n-6")
+
+        seen.call("GET", "/tools")
+        listed = agents_route("GET").json()
+        in_threads = kept(made.runtime.agent.checkpointer)
+
+    # What was driven happened.
+    (result,) = tool_results(kept_back, "handoff_to_free")
+    assert result["content"] == NOW_REQUIRES.format(agent="free")
+    assert kept_back[-1] == ("end", {"status": "completed"})
+    assert blocked[-1] == (
+        "error",
+        {"code": "approval_now_required", "message": BLOCKED.format(agent="free")},
+    )
+    # Neither saved agent was sent anything but the request for its card.
+    for transport in (free_transport, gate_transport):
+        assert [request.method for request in transport.requests] == ["GET"]
+    assert len(refusals) == 9 and len(answers) == 8
+
+    # Outside the Agents routes: every response, every stream with its debug events, and
+    # every thread as the checkpointer keeps it.
+    assert any("handoff_to_free" in text for text in seen.texts)
+    assert any("<address>" in text for text in seen.texts)
+    nowhere(seen.texts, *CHOICE_PORTS)
+    assert any("now requires approval" in text for text in in_threads)
+    nowhere(in_threads, *CHOICE_PORTS)
+
+    # Every refusal of a change, the one for a failing store included.
+    nowhere(refusals, *CHOICE_PORTS)
+
+    # An answer of the Agents routes holds a saved agent's address in `url` and in nothing
+    # else, and the environment agent's in no part of it.
+    kept_urls = {f"http://localhost:{FREE_PORT}", f"http://127.0.0.1:{GATE_PORT}"}
+    assert any(addresses(answer) for answer in answers)
+    for answer in answers:
+        assert set(addresses(answer)) <= kept_urls
+        nowhere(strings(answer, but="url"), *CHOICE_PORTS)
+        nowhere([json.dumps(answer)], COUNTER_PORT)
+    card_texts = [agent["card"]["description"] for agent in listed["agents"]]
+    assert len(card_texts) == 3 and all("<address>" in text for text in card_texts)
+
+    # Every log record at every level, with its arguments and its traceback.
+    logged = [record.getMessage() for record in caplog.records]
+    logged += [caplog.handler.format(record) for record in caplog.records]
+    assert any("Agent added: free" in line and "approval none" in line for line in logged)
+    assert sum("Agent changed: free" in line for line in set(logged)) >= 4
+    assert any("Agent free was not changed: RuntimeError" in line for line in logged)
+    assert any(f"Agent free: {NOW_REQUIRES.format(agent='free')}" in line for line in logged)
+    assert any("refused" in line and line.endswith("agents: free") for line in logged)
+    nowhere(logged, *CHOICE_PORTS)

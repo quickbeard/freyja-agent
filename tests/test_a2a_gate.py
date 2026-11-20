@@ -402,16 +402,57 @@ def test_a_hand_off_that_became_gated_blocks_the_resume_and_the_proposal_stays(
     second = restarted(
         make_a2a_app, first, ScriptedChatModel(final_text="ok"), {"stub": {}, "hello": {}}
     )
-    caplog.set_level(logging.ERROR, logger="freyja_agent.api.streaming")
+    caplog.set_level(logging.WARNING, logger="freyja_agent.api.streaming")
     with TestClient(second.app) as client:
         events = resume(client, "f-3", [{"type": "approve"}], sse_events)
         kind, data = events[-1]
-        assert (kind, data["code"]) == ("error", "internal")
+        # The refusal names the agent that came to require approval (005 FR-023, R9).
+        assert (kind, data["code"]) == ("error", "approval_now_required")
+        assert "agent 'hello'" in data["message"] and "'stub'" not in data["message"]
         assert pending(client, "f-3")["interrupt_id"] == proposal["interrupt_id"]
 
     # Nothing from the step was sent to either agent.
     assert first.stubs["stub"].record.messages == []
     assert first.stubs["hello"].record.messages == []
+
+
+def test_the_sentence_a_blocked_resume_is_known_by_is_the_approval_middleware_s() -> None:
+    """005 R9: ``run_stream`` knows a resume that a tightened choice blocks by the sentence the
+    approval middleware raises. This fails the day the installed library words it differently;
+    the resume then ends with ``internal``, as it did before feature 005.
+    """
+    from langchain.agents.middleware import human_in_the_loop
+    from langchain.agents.middleware.human_in_the_loop import HumanInTheLoopMiddleware
+
+    from freyja_agent.api.streaming import decisions_mismatch
+
+    middleware = HumanInTheLoopMiddleware(interrupt_on={"send": True})
+    step = AIMessage(
+        content="",
+        tool_calls=[
+            {"id": "c1", "name": "send", "args": {}},
+            {"id": "c2", "name": "send", "args": {}},
+        ],
+    )
+    raised: Exception | None = None
+    with pytest.MonkeyPatch.context() as patch:
+        # One decision where the step holds two calls that need one.
+        patch.setattr(
+            human_in_the_loop, "interrupt", lambda _request: {"decisions": [{"type": "approve"}]}
+        )
+        try:
+            middleware.after_model({"messages": [step]}, None)  # type: ignore[arg-type]
+        except Exception as error:
+            raised = error
+
+    assert raised is not None
+    assert str(raised) == (
+        "Number of human decisions (1) does not match number of hanging tool calls (2)."
+    )
+    assert decisions_mismatch(raised)
+    # Any other failure of a step is not taken for it.
+    assert not decisions_mismatch(ValueError("Number of human decisions is wrong."))
+    assert not decisions_mismatch(RuntimeError(str(raised)))
 
 
 def test_an_answer_or_cancel_for_an_earlier_task_is_classified_by_the_configuration_now(

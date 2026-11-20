@@ -38,7 +38,7 @@ export type Agent = {
   name: string;
   source: "saved" | "environment";
   /** Whether a message to the agent waits for a person: `none` runs without approval. */
-  approval: "required" | "none";
+  approval: Approval;
   /** A saved agent's address as the service keeps it. Null for an environment agent. */
   url: string | null;
   /** What a change or a removal sends back. Null for an environment agent. */
@@ -72,16 +72,47 @@ export function listAgents(): Promise<AgentList> {
   return api<AgentList>(AGENTS_KEY);
 }
 
+/** Whether a message to an agent waits for a person: `none` runs without approval. */
+export type Approval = "required" | "none";
+
 /** What an operator enters to add an agent. */
-export type NewAgent = { name: string; url: string };
+export type NewAgent = { name: string; url: string; approval?: Approval };
 
 /**
  * Save a new agent. The service reads the agent's card at the address first and saves the
- * agent only when it can be used; the agent is sent no message. Only the two values are
- * sent: a saved agent requires approval, which the service decides and not this request.
+ * agent only when it can be used; the agent is sent no message. A saved agent requires
+ * approval unless the request says otherwise, so the choice is sent only when it is to run
+ * without approval, which the form asks about first.
  */
-export function addAgent({ name, url }: NewAgent): Promise<Agent> {
-  return api<Agent>(AGENTS_KEY, { method: "POST", body: { name, url } });
+export function addAgent({ name, url, approval }: NewAgent): Promise<Agent> {
+  return api<Agent>(AGENTS_KEY, {
+    method: "POST",
+    body: approval === "none" ? { name, url, approval } : { name, url },
+  });
+}
+
+/**
+ * A change of a saved agent: the version the page read the agent at, and each value that is
+ * to change. A value left out is kept.
+ */
+export type AgentChange = { version: number; approval?: Approval };
+
+/** A saved agent after a change, and how many of its pending tasks the change gave up. */
+export type AgentChanged = { agent: Agent; given_up: number };
+
+/**
+ * Change a saved agent. Exactly the values given are sent: the service refuses the change
+ * when the agent is no longer at `version`, and contacts no agent for a change of the
+ * approval choice.
+ */
+export function changeAgent(
+  id: string,
+  { version, approval }: AgentChange,
+): Promise<AgentChanged> {
+  return api<AgentChanged>(`${AGENTS_KEY}/${encodeURIComponent(id)}`, {
+    method: "PATCH",
+    body: approval === undefined ? { version } : { version, approval },
+  });
 }
 
 /** Why an agent's card cannot be used: one code for each way of failing. */

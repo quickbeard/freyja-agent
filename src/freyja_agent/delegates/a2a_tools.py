@@ -10,9 +10,13 @@ Before a tool sends anything it checks, in this order (005 research R7): the sen
 a step that runs again returns what it recorded; for an answer or a cancel, that the task
 belongs to the agent this tool was built for; that the link holds a usable card, reading
 it when it does not; and that the call was proposed for the agent this tool was built for,
-which the row written at the model's reply says (005 FR-023, research R8). A message kept
-back by one of these is an error result that names the agent, the run continues, and nothing
-is sent.
+which the row written at the model's reply says (005 FR-023, research R8). A saved agent's
+tool then reads its agent from the store, by id, with nothing left to await before the send's
+first write: an agent that was removed is sent nothing, and neither is one that requires
+approval now when no person decided the call (005 FR-022). So a removal and a switch to
+requiring approval hold at once, on every instance, for runs in progress and for a step
+that runs again. A message kept back by one of these is an error result that names the
+agent, the run continues, and nothing is sent.
 
 The argument models are pydantic, so an edit decision is validated by the existing model path
 and an unknown key is refused; ``task_id`` is pinned, so an answer or a cancel stays bound to its
@@ -28,6 +32,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from a2a.client.errors import A2AClientError, A2AClientTimeoutError
@@ -55,8 +60,10 @@ from freyja_agent.runtime.agent_tasks import (
     AgentSend,
     AgentTaskRecord,
     AgentTaskStore,
+    ProposedCall,
     call_namespace,
 )
+from freyja_agent.runtime.saved_agents import SavedAgentStore
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +139,26 @@ def _delegate(
     )
 
 
+@dataclass(frozen=True)
+class _Send:
+    """What one agent's two tools send with: fixed when the tools are built (research R7)."""
+
+    link: AgentLink
+    store: AgentTaskStore
+    # Whether a call of these tools waits for a person in the run they were built for. Kept
+    # here and not read from the link, which a later set of agents may share.
+    gated: bool
+    # Where a saved agent is read before a send; None for an agent named in the environment,
+    # which cannot change while the service runs.
+    saved: SavedAgentStore | None
+
+
 def agent_tools(
-    link: AgentLink, store: AgentTaskStore, *, gated: bool | None = None
+    link: AgentLink,
+    store: AgentTaskStore,
+    *,
+    gated: bool | None = None,
+    saved: SavedAgentStore | None = None,
 ) -> tuple[DelegateTool, DelegateTool]:
     """The hand-off and cancel tools of one agent, classified by its approval choice (FR-011).
 
@@ -141,22 +166,30 @@ def agent_tools(
     as it always has for an agent named in the environment; a saved agent's link is never
     read-only, so a caller that forgets the set gates. The tools keep the classification
     they are built with, whatever becomes of the link.
+
+    ``saved`` is the saved-agent store, which a saved agent's tools read before every send
+    (005 FR-022). Tools for a saved agent are not built without it.
     """
+    if link.source == "saved" and saved is None:
+        raise ValueError(
+            f"Agent '{link.name}' is a saved agent: its tools need the saved-agent store."
+        )
     if gated is None:
         gated = not link.read_only
     classification = Classification.GATED if gated else Classification.READ_ONLY
+    send = _Send(link, store, gated, saved if link.source == "saved" else None)
     handoff = StructuredTool(
         name=handoff_tool_name(link.name),
         description=handoff_description(link),
         args_schema=HandOffArgs,
-        coroutine=_handoff_coroutine(link, store),
+        coroutine=_handoff_coroutine(send),
         handle_tool_error=True,
     )
     cancel = StructuredTool(
         name=cancel_tool_name(link.name),
         description=f"Ask the agent '{link.name}' to cancel one of its tasks.",
         args_schema=CancelArgs,
-        coroutine=_cancel_coroutine(link, store),
+        coroutine=_cancel_coroutine(send),
         handle_tool_error=True,
     )
     return _delegate(handoff, link, classification), _delegate(cancel, link, classification)
@@ -344,8 +377,11 @@ def proposed_for_another(agent: str) -> str:
 
 async def _proposed_for(
     link: AgentLink, store: AgentTaskStore, thread_id: str, step: str, tool_call_id: str
-) -> None:
+) -> ProposedCall | None:
     """Keep back a call that was proposed for another agent than this tool's (005 FR-023).
+
+    Returns the call's row, which also says whether the call needed a person's decision
+    when it was proposed; None for a call that has none and is an environment agent's.
 
     A pause holds the tool's name and nothing about which agent had the name. The row written
     when the model proposed the call does: the saved agent's id, or none for an agent named
@@ -363,10 +399,53 @@ async def _proposed_for(
     call = await store.get_call(thread_id, call_namespace(step), tool_call_id)
     if call is None:
         if link.source != "saved":
-            return
+            return None
     elif call.agent_id == link.agent_id:
-        return
+        return call
     raise _failed(link, proposed_for_another(link.name))
+
+
+def was_removed(agent: str) -> str:
+    """The result of a message to a saved agent that is gone (005 FR-022)."""
+    return f"Agent '{agent}' was removed; nothing was sent."
+
+
+def now_requires_approval(agent: str) -> str:
+    """The result of a message no person decided, to an agent that requires approval now."""
+    return f"Agent '{agent}' now requires approval, so this message was not sent."
+
+
+async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
+    """Keep back a message to a saved agent that was removed, and a message that no person
+    decided to an agent that requires approval now (005 FR-022, research R7).
+
+    A saved agent is read from the store by its id, so the answer is the same on every
+    instance from the moment a change is committed, and an agent saved again under the
+    name, which has another id, is not taken for this one. An agent named in the environment
+    cannot change while the service runs: its choice is the one its tools were built with.
+
+    A person decided a call only when the call needed a decision when it was proposed, which
+    its row says, and its tool waits for one in this run. Neither is enough alone. A step
+    that passed the gate while its agent ran without approval can run again in a later run,
+    whose tools wait for a person: a background run that failed is tried again from its last
+    checkpoint, which lies after the gate. And a call that was proposed as needing a
+    decision can reach a tool that waits for none.
+
+    This is the last thing a tool awaits before the send's first write; a change committed
+    after it is not recalled.
+    """
+    link = send.link
+    decided = send.gated and call is not None and call.gated
+    if send.saved is None:
+        # A call with no row was proposed before the rows existed, and follows the tool.
+        if send.gated and call is not None and not decided:
+            raise _failed(link, now_requires_approval(link.name))
+        return
+    record = await send.saved.get_agent(link.agent_id or "")
+    if record is None:
+        raise _failed(link, was_removed(link.name))
+    if not record.read_only and not decided:
+        raise _failed(link, now_requires_approval(link.name))
 
 
 def may_not_have_received(agent: str) -> str:
@@ -377,7 +456,9 @@ def may_not_have_received(agent: str) -> str:
     )
 
 
-def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
+def _handoff_coroutine(send: _Send) -> Any:
+    link, store = send.link, send.store
+
     async def call(
         message: str,
         context: str | None = None,
@@ -408,8 +489,9 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         limit = await _connected(link)
         context_id = await store.get_context(thread_id, link.name)
         sent_at = await store.now()
-        # The last check, with nothing between it and the send's first write (research R7).
-        await _proposed_for(link, store, thread_id, step, tool_call_id)
+        # The last checks, with nothing between them and the send's first write (research R7).
+        proposed = await _proposed_for(link, store, thread_id, step, tool_call_id)
+        await _still_allowed(send, proposed)
         a2a_message = Message(
             message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
             role=Role.ROLE_USER,
@@ -581,7 +663,9 @@ async def record_outcome(
     return outcome, ok
 
 
-def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
+def _cancel_coroutine(send: _Send) -> Any:
+    link, store = send.link, send.store
+
     async def call(task_id: str, *, tool_call_id: Annotated[str, InjectedToolCallId]) -> str:
         """One cancel of one of this thread's tasks (FR-022)."""
         thread_id = _thread_id()
@@ -604,7 +688,8 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
             return f"Agent '{link.name}' task {task_id} already ended as {task.state}; nothing was sent."
         limit = await _connected(link)
         sent_at = await store.now()
-        await _proposed_for(link, store, thread_id, step, tool_call_id)
+        proposed = await _proposed_for(link, store, thread_id, step, tool_call_id)
+        await _still_allowed(send, proposed)
         await store.start_send(
             AgentSend(
                 thread_id=thread_id,

@@ -7,8 +7,9 @@ an environment agent's address is in none. The router refuses a request that cha
 something when a page of another origin made it, by the rule the LLM routes apply.
 
 Adding an agent and checking one read its card and nothing more: the agent receives no
-message and no task (FR-027). An agent added here always requires approval; the choice to
-run without it comes with the routes that can take it back.
+message and no task (FR-027). Changing an agent's approval choice contacts no agent at all.
+An agent requires approval unless a request says otherwise; the console asks an operator to
+confirm before it sends such a request (FR-011).
 """
 
 import logging
@@ -23,10 +24,12 @@ from freyja_agent.api.schemas import (
     AGENT_ID_PATTERN,
     Agent,
     AgentCard,
+    AgentChanged,
     AgentCheck,
     AgentCreate,
     AgentList,
     AgentSkillClaim,
+    AgentUpdate,
 )
 from freyja_agent.config import destination
 from freyja_agent.delegates.a2a_agents import AgentCardSummary, AgentLink
@@ -41,7 +44,9 @@ from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.saved_agents import (
     AGENT_LIMIT,
     AddressTakenError,
+    AgentChangedError,
     AgentLimitError,
+    AgentNotFoundError,
     NameTakenError,
     SavedAgentRecord,
 )
@@ -70,6 +75,10 @@ LIMIT_REACHED = f"{AGENT_LIMIT} agents are saved, which is the most there can be
 NOT_FOUND = "There is no agent with this id."
 NOT_IN_USE = "This saved agent is not in use, so it cannot be checked."
 UNREADABLE = "The saved agents could not be read."
+# The refusals of a change.
+CHANGED_SINCE = "The agent was changed since this page read it. Nothing was changed."
+ENVIRONMENT_READ_ONLY = "An agent named in the environment cannot be changed here."
+ONLY_REMOVED = "This saved agent is not in use, so it can only be removed."
 
 AgentIdPath = Annotated[str, Path(min_length=1, max_length=64, pattern=AGENT_ID_PATTERN)]
 
@@ -257,7 +266,12 @@ async def _save(runtime: Runtime, body: AgentCreate, card: AgentCardSummary) -> 
     """Save the agent; the store decides on the name, the address, and the limit again."""
     refused: HTTPException | None = None
     try:
-        return await runtime.saved_agents.add(name=body.name, url=body.url, card=card.to_dict())
+        return await runtime.saved_agents.add(
+            name=body.name,
+            url=body.url,
+            card=card.to_dict(),
+            read_only=body.approval == "none",
+        )
     except NameTakenError:
         refused = _error(409, "name_taken", SAVED_NAME_TAKEN)
     except AddressTakenError:
@@ -277,8 +291,9 @@ async def add_agent(body: AgentCreate, request: Request) -> Agent:
     """Add an agent: read its card at the address, and save it when it can be used.
 
     Nothing is saved for an agent that cannot be used, and the agent is sent nothing but the
-    request for its card (FR-008, FR-027). The saved agent requires approval. On success
-    this instance takes the change up at once, and every other at its next context.
+    request for its card (FR-008, FR-027). The saved agent requires approval unless the
+    request chose ``none``. On success this instance takes the change up at once, and every
+    other at its next context.
     """
     runtime = _runtime(request)
     registry = runtime.registry
@@ -326,6 +341,93 @@ async def add_agent(body: AgentCreate, request: Request) -> Agent:
         "none" if record.read_only else "required",
     )
     return _saved(record, agents, 0)
+
+
+def _approval(read_only: bool) -> str:
+    return "none" if read_only else "required"
+
+
+async def _changeable(
+    runtime: Runtime, registry: AgentRegistry, agent_id: str
+) -> tuple[SavedAgentRecord, int]:
+    """The saved agent a change is for and its pending tasks, or the refusal (FR-009, FR-017).
+
+    An environment agent is never changed here, and a saved agent the environment overrides
+    can only be removed. Read from the store, not from a set this instance holds: what is
+    refused or allowed is what is saved now.
+    """
+    if agent_id.startswith("env."):
+        if agent_id.removeprefix("env.") in runtime.settings.a2a_agents:
+            raise _error(409, "agent_read_only", ENVIRONMENT_READ_ONLY)
+        raise _error(404, "agent_not_found", NOT_FOUND)
+    try:
+        record = await runtime.saved_agents.get_agent(agent_id)
+        counts = await runtime.agent_tasks.pending_counts()
+    except Exception as exc:
+        logger.warning("Agent %s was not changed: %s", agent_id, type(exc).__name__)
+        raise _error(500, "internal", UNREADABLE) from None
+    if record is None:
+        raise _error(404, "agent_not_found", NOT_FOUND)
+    if registry.overridden(record.name, record.destination) is not None:
+        raise _error(409, "agent_read_only", ONLY_REMOVED)
+    return record, counts.get((record.name, record.ref), 0)
+
+
+@router.patch("/{agent_id}", response_model=AgentChanged)
+async def change_agent(agent_id: AgentIdPath, body: AgentUpdate, request: Request) -> AgentChanged:
+    """Change a saved agent's approval choice (FR-009, FR-012).
+
+    No card is read and no agent is contacted, so the change is not refused because of the
+    agent's state, and its pending tasks stay as they are (FR-026). Requiring approval holds
+    at once, also for runs in progress, because every tool of a saved agent reads the agent
+    before it sends (FR-022); running without approval holds from the next run. A request
+    that names the choice the agent has changes nothing and answers with the agent. This
+    instance takes the change up at once, and every other at its next context.
+    """
+    runtime = _runtime(request)
+    registry = runtime.registry
+    if registry is None:
+        raise _error(500, "internal", "This instance cannot change agents.")
+    record, pending = await _changeable(runtime, registry, agent_id)
+    refused: HTTPException | None = None
+    changed = record
+    try:
+        changed, _given_up = await runtime.saved_agents.change(
+            agent_id,
+            body.version,
+            read_only=None if body.approval is None else body.approval == "none",
+        )
+    except AgentNotFoundError:
+        refused = _error(404, "agent_not_found", NOT_FOUND)
+    except AgentChangedError:
+        refused = _error(409, "agent_changed", CHANGED_SINCE)
+    except Exception as exc:
+        # What a database says may name its own address.
+        logger.warning("Agent %s was not changed: %s", record.name, type(exc).__name__)
+        refused = _error(500, "internal", "The agent could not be changed.")
+    if refused is not None:
+        # Raised here, not in a handler, so that no error of the store is kept behind it.
+        raise refused
+    agents: AgentSet | None = None
+    try:
+        agents = await registry.refresh()
+    except Exception as exc:
+        # The change stands: this instance, like every other, takes it up at its next context.
+        logger.warning(
+            "Agent %s was changed, and this instance could not take it up at once: %s",
+            changed.name,
+            type(exc).__name__,
+        )
+    if changed.version != body.version:
+        logger.info(
+            "Agent changed: %s (%s): its approval choice is now %s, was %s",
+            changed.name,
+            changed.id,
+            _approval(changed.read_only),
+            _approval(record.read_only),
+        )
+    # A change of the approval choice alone gives up no task (FR-026).
+    return AgentChanged(agent=_saved(changed, agents, pending), given_up=0)
 
 
 @dataclass(frozen=True)

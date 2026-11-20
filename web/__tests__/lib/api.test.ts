@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stubFetch } from "@/__tests__/testing";
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api, isGone } from "@/lib/api";
 
 async function refusal(run: Promise<unknown>): Promise<ApiError> {
   try {
@@ -130,5 +130,31 @@ describe("api", () => {
     const plain = await refusal(api("/llm/profiles"));
     expect(plain.code).toBe("error");
     expect(plain.status).toBe(404);
+  });
+});
+
+describe("isGone", () => {
+  it.each([
+    "profile_not_found",
+    "agent_not_found",
+  ])("is true for a refusal that says what was named no longer exists: %s", (code) => {
+    expect(isGone(new ApiError("There is none with this id.", 404, code))).toBe(
+      true,
+    );
+  });
+
+  it.each([
+    "agent_changed",
+    "agent_read_only",
+    "check_busy",
+    "unreachable",
+    "error",
+  ])("is false for any other refusal: %s", (code) => {
+    expect(isGone(new ApiError("Refused.", 409, code))).toBe(false);
+  });
+
+  it("is false for what is no refusal of the service at all", () => {
+    expect(isGone(new Error("agent_not_found"))).toBe(false);
+    expect(isGone(undefined)).toBe(false);
   });
 });

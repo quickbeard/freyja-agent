@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { describe, expect, it } from "vitest";
 import { type Reply, stubFetch } from "@/__tests__/testing";
@@ -44,13 +50,27 @@ function list(agents: Agent[] = [HELLO, STUB]): Reply {
   return { json };
 }
 
-// A cache of its own for every test, so one test's list never reaches another.
+// A cache of its own for every test, so one test's list never reaches another. The list is
+// read again whenever the window gets the focus, without the wait a browser's page has
+// between two such readings.
 function renderList() {
   return render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        focusThrottleInterval: 0,
+      }}
+    >
       <AgentList />
     </SWRConfig>,
   );
+}
+
+/** The operator comes back to the window, and the list is read again behind what is open. */
+async function comeBack() {
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  fireEvent.focus(window);
 }
 
 const cards = () =>
@@ -128,14 +148,14 @@ describe("AgentList", () => {
     expect(fetchStub).toHaveBeenCalledTimes(2);
   });
 
-  it("offers Add with agents and with none, and nothing on a card that changes an agent", async () => {
+  it("offers Add with agents and with none, and Edit on a saved agent's card only", async () => {
     stubFetch(list());
     const { unmount } = renderList();
     await screen.findByRole("heading", { name: "hello" });
-    // The section's own two, and Check on each card: nothing changes an agent.
+    // The section's own two, Check on each card, and Edit where an agent can be changed.
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
-    ).toEqual(["Refresh", "Add", "Check", "Check"]);
+    ).toEqual(["Refresh", "Add", "Check", "Check", "Edit"]);
     for (const role of ["link", "textbox", "switch", "combobox", "dialog"]) {
       expect(screen.queryAllByRole(role)).toEqual([]);
     }
@@ -415,5 +435,258 @@ describe("AgentList", () => {
     );
     expect(cards()).toEqual(["stub"]);
     expect(fetchStub).toHaveBeenCalledTimes(2);
+  });
+});
+
+// Part 3 (T092, T093): changing a saved agent's approval choice from its card.
+
+describe("AgentList, changing an agent", () => {
+  const FREED: Agent = {
+    ...STUB,
+    approval: "none",
+    version: 2,
+    updated_at: "2026-11-19T09:30:00Z",
+  };
+  const form = () => screen.findByRole("dialog", { name: "Edit stub" });
+  const confirmation = () =>
+    screen.queryByRole("note", { name: "Confirmation" });
+  const asked = (fetchStub: ReturnType<typeof stubFetch>) =>
+    fetchStub.mock.calls.map(([path, init]) => [init?.method ?? "GET", path]);
+
+  async function askToFree() {
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await form();
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Runs without approval" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    expect(confirmation()).not.toBeNull();
+  }
+
+  it("opens the form from Edit with that agent's values, and reads the list again once the change is confirmed", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      { json: { agent: FREED, given_up: 0 } },
+      list([HELLO, FREED]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    await form();
+    expect((screen.getByLabelText("Name") as HTMLInputElement).value).toBe(
+      "stub",
+    );
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe(
+      STUB.url,
+    );
+    fireEvent.click(
+      screen.getByRole("radio", { name: "Runs without approval" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save" }));
+    // Nothing was sent yet: the form asks first.
+    expect(asked(fetchStub)).toEqual([["GET", "/api/agents"]]);
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // The card is the list's own, read again.
+    const heading = await screen.findByRole("heading", { name: "stub" });
+    const shown = heading.closest('[data-slot="card"]') as HTMLElement;
+    await waitFor(() =>
+      expect(within(shown).getByText("Runs without approval")).toBeTruthy(),
+    );
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["PATCH", `/api/agents/${STUB.id}`],
+      ["GET", "/api/agents"],
+    ]);
+    expect(JSON.parse(String(fetchStub.mock.calls[1][1]?.body))).toEqual({
+      version: 1,
+      approval: "none",
+    });
+  });
+
+  it("takes the confirmation back when the list is read again and shows a later version", async () => {
+    const moved = { ...STUB, version: 2, url: "http://127.0.0.1:9997" };
+    const fetchStub = stubFetch(list([HELLO, STUB]), list([HELLO, moved]));
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+
+    // The window gets the focus again, and the list is read again behind the form.
+    await comeBack();
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toContain("stub was changed elsewhere");
+    expect(confirmation()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["GET", "/api/agents"],
+    ]);
+  });
+
+  it("shows the agent in the confirmation as the list has it once it is read again", async () => {
+    stubFetch(
+      list([HELLO, STUB]),
+      list([HELLO, { ...STUB, pending_tasks: 3 }]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+    expect(confirmation()?.textContent).toContain("0 pending tasks.");
+
+    await comeBack();
+    await waitFor(() =>
+      expect(confirmation()?.textContent).toContain("3 pending tasks."),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("keeps asking, with the agent as the form has it, while the list cannot be read", async () => {
+    const fetchStub = stubFetch(list([HELLO, STUB]), {
+      fails: "Failed to fetch",
+    });
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+
+    await comeBack();
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(2));
+    // The list behind the form says it could not be read; the form does not take that for
+    // a change of its agent, and still shows the agent it opened with.
+    await waitFor(() =>
+      expect(screen.getByRole("alert", { hidden: true })).toBeTruthy(),
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+    expect(confirmation()?.textContent).toContain(String(STUB.url));
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy();
+  });
+
+  it("reads the list again when the change is refused because the agent was changed since", async () => {
+    const moved = { ...STUB, version: 2, url: "http://127.0.0.1:9997" };
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      {
+        status: 409,
+        json: {
+          detail: {
+            code: "agent_changed",
+            message:
+              "The agent was changed since this page read it. Nothing was changed.",
+          },
+        },
+      },
+      list([HELLO, moved]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    // The form says so, once: in its own words once the list shows the later version.
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "changed elsewhere",
+      ),
+    );
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(asked(fetchStub)).toEqual([
+      ["GET", "/api/agents"],
+      ["PATCH", `/api/agents/${STUB.id}`],
+      ["GET", "/api/agents"],
+    ]);
+    // Closed, the card shows the agent as it is now.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByText("http://127.0.0.1:9997")).toBeTruthy();
+    expect(screen.getByText("Requires approval")).toBeTruthy();
+  });
+
+  it("reads the list again when the service says the agent is gone, and its card goes", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      {
+        status: 404,
+        json: {
+          detail: {
+            code: "agent_not_found",
+            message: "There is no agent with this id.",
+          },
+        },
+      },
+      list([HELLO]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("alert").textContent).toContain(
+        "no longer in the list",
+      ),
+    );
+    expect(fetchStub).toHaveBeenCalledTimes(3);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(cards()).toEqual(["hello"]));
+  });
+
+  it("reads the list again when a change got no answer, and the form stays to say the outcome is not known", async () => {
+    const fetchStub = stubFetch(
+      list([HELLO, STUB]),
+      { fails: "Failed to fetch" },
+      list([HELLO, FREED]),
+    );
+    renderList();
+    await screen.findByRole("heading", { name: "stub" });
+    await askToFree();
+    fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
+
+    // The change was made and its answer lost: the list shows a later version.
+    await waitFor(() => expect(fetchStub).toHaveBeenCalledTimes(3));
+    await waitFor(() => expect(screen.getAllByRole("alert")).toHaveLength(2));
+    const said = screen.getAllByRole("alert").map((one) => one.textContent);
+    expect(said[0]).toMatch(/not known/);
+    expect(said[1]).toContain("changed elsewhere");
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("opens each agent's own form, filled from that agent", async () => {
+    const report: Agent = {
+      ...STUB,
+      id: "f".repeat(32),
+      name: "report",
+      approval: "none",
+      url: "http://localhost:9997",
+    };
+    stubFetch(list([STUB, report]));
+    renderList();
+    await screen.findByRole("heading", { name: "report" });
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[1]);
+    await screen.findByRole("dialog", { name: "Edit report" });
+    expect(
+      (
+        screen.getByRole("radio", {
+          name: "Runs without approval",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getAllByRole("button", { name: "Edit" })[0]);
+    await screen.findByRole("dialog", { name: "Edit stub" });
+    expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe(
+      STUB.url,
+    );
+    expect(
+      (
+        screen.getByRole("radio", {
+          name: "Requires approval",
+        }) as HTMLInputElement
+      ).checked,
+    ).toBe(true);
   });
 });
