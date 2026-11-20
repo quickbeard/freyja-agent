@@ -28,7 +28,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the three agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), and the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`) if they are missing. A task table created by an earlier version gains its `agent_ref` column. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](#no-usable-model)).
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the four agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`, `freyja_agent_calls`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), and the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`) if they are missing. A task table created by an earlier version gains its `agent_ref` column. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](#no-usable-model)).
 
 Check it is up:
 
@@ -159,7 +159,7 @@ A proposal for a server tool names its server: each entry of `action_requests` i
 
 ## Agents
 
-The orchestrator can also hand work to agents that do their own reasoning, over the [A2A protocol](https://a2a-protocol.org). The service gives the orchestrator two tools for every agent listed in `FREYJA_A2A_AGENTS`, one to hand it a task and one to cancel a task, and reads each agent's card at startup. The full contract is in `specs/003-a2a-agent-delegation/contracts/agent-config.md`.
+The orchestrator can also hand work to agents that do their own reasoning, over the [A2A protocol](https://a2a-protocol.org). The service gives the orchestrator two tools for every agent, one to hand it a task and one to cancel a task, and reads each agent's card at startup. An agent is listed in `FREYJA_A2A_AGENTS`, or added while the service runs (see [Add an agent while the service runs](#add-an-agent-while-the-service-runs)). The full contract is in `specs/003-a2a-agent-delegation/contracts/agent-config.md`.
 
 ### Try it with the reference hello agent
 
@@ -233,6 +233,36 @@ Each entry has the `agent`, the `task_id`, the `message` it was started with, it
 When a pending task finishes, fails, needs input, or is canceled by the agent, its outcome is recorded in the thread exactly once, as Freyja's `check_agent_tasks` call followed by its result. Your next message gets it at the start of its run, ahead of what you wrote. If no message comes first, a **background run** delivers it as soon as the thread is free: no run in progress and no pending proposal. A background run is a run like any other, with the same gate, step limit, and run lease, so a proposal in it pauses it and you decide it through resume. Background runs do not hold up the checks of other pending tasks, and one service instance runs at most `FREYJA_BACKGROUND_RUN_CONCURRENCY` of them at once; further ones wait their turn. No client is told that a background run happened: read the thread state to see its reply or its pause. A background run that fails with a model or internal error is tried again after `FREYJA_BACKGROUND_RETRY_SECONDS`, up to `FREYJA_BACKGROUND_RUN_ATTEMPTS` attempts in all, without recording the outcome or sending any message twice.
 
 A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its start, is **given up**: the service stops watching it and reports that the agent may still be working on it. It sends no cancel by itself: ask for one, and the cancel goes through the gate like any message to that agent. A pending task whose agent was removed from the configuration is given up after the restart that applies the change.
+
+### Add an agent while the service runs
+
+An agent can be added without editing a file or restarting anything, from the Agents section of the [web console](#web-console) or with a request:
+
+```bash
+uv run python -m tests.a2a_stub --http 9998      # the stand-in agent, in another terminal
+curl -s -X POST localhost:8000/agents -H 'content-type: application/json' \
+  -d '{"name": "stub", "url": "http://127.0.0.1:9998"}'
+```
+
+The service reads the agent's card at the address first, within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` and at most twenty seconds, and sends the agent nothing else: no message and no task. An agent whose card can be used is saved in the database and answered with 201. The next run on every instance sharing the database has its two tools, and a run in progress finishes with the tools it started with. The agent is still there after a restart.
+
+Before it is used, know that:
+
+- **An added agent always requires approval.** Every hand-off, answer, and cancel to it pauses for a person's decision. `approval` accepts `required` only, which is also what it is when left out.
+- **A saved agent cannot be changed or removed yet.** Its name, address, and approval choice stay as they were added.
+- **Every instance has to run this version before the first agent is saved.** An instance on an earlier version knows no saved agent and gives up the tasks of an agent it does not know.
+
+A name is in the form the environment's agents use, and an address is `http` or `https` on this machine (`localhost` or a loopback IP address), with no user name, password, query, or fragment. It is kept in one form, such as `http://127.0.0.1:9998`. A request is refused, and nothing is saved, with:
+
+- 422 and the field's error when a value breaks a rule, never repeating the value;
+- 409 `name_taken` when another agent, a tool server, or a tool has the name, and `address_taken` when another agent is at the address, however this machine is written;
+- 409 `agent_limit` when twenty agents are saved, and `check_busy` while four card reads are under way on the instance;
+- 409 `agent_unusable` when the card cannot be used, with `reason` and the service's own sentence: nothing answered, no answer in time, no card, a card that cannot be read, a redirect, a card larger than one megabyte, or a card that requires authentication, accepts no text, or offers no JSON-RPC interface;
+- 403 `other_origin` when a browser marks the request as made by a page of another origin.
+
+`GET /agents` lists every agent. It and the answer to an add are the only answers of the service that hold a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where another agent's card names it.
+
+A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
 
 ### When an agent fails
 
@@ -352,7 +382,7 @@ pnpm dev                       # http://localhost:3000
 Open <http://localhost:3000>, by that name: in development Next.js serves its dev-only assets to `localhost` only, so the page does not load fully when opened as `127.0.0.1`. The address changes to `/llm`. A sidebar on the left lists the sections, LLM and Agents; on a screen narrower than 768 pixels it opens from a button. Like the API, the console has no authentication.
 
 - **LLM** shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
-- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. Nothing is managed from the section yet: it adds, changes, and removes no agent. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
+- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. **Add** saves a new agent by its name and address: the service reads the agent's card first and refuses an agent it cannot use, with the reason shown in the form. An agent added here always requires approval, and the form says so. A saved agent's card shows its address; a card has nothing to change or remove an agent with yet. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
 
 When the service cannot be reached, a section says so and offers to try again.
 
@@ -462,7 +492,7 @@ pnpm exec playwright install chromium firefox   # once per machine: downloads th
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, and `agents.spec.ts` for the Agents section as it is read. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, and `agents-manage.spec.ts` for adding an agent. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 

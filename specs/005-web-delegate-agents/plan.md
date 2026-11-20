@@ -566,3 +566,147 @@ What the implementation settled differently from the plan, or found out, phase b
   that names addresses and a reason taken from a library's error, and the failure test
   raises an error with a marker that is no address and looks for it in the answer and the
   log.
+
+### Phase 5
+
+- **The proposed-call rows were built and seen as a whole** (T062, research "Not verified").
+  On the orchestrator the model's node and the tools' node both give the empty namespace;
+  in the subagent both give `tools:<id>`, the delegating call's own, with no further
+  segment. The id in the model's reply is the id the tool receives, with a scripted model
+  and with a real one (`chatcmpl-tool-...`), and an edit decision keeps it. The row is in
+  the table before the run pauses, is still there while the message is on its way, and is
+  gone once the send is recorded. A rejected call never reaches its tool, so its row stays
+  until the next reply in its namespace replaces it, or the thread's next run with input
+  clears it. All of it was seen on Postgres 17.11 as well, in the opt-in tests and with
+  the real service.
+- **A call's row is compared by the saved agent's id alone**, as T062 says. The first
+  version compared the agent's name as well, and the independent review showed what that
+  broke: one tool call id used twice in a reply for two environment agents has one row,
+  naming the later call's agent, and the other call was then kept back, where both were
+  sent before this feature. Between two environment agents both ids are none, so a call
+  follows the tool's name, as it always has.
+- **The order inside a tool** is the send ledger, the task's ref for an answer or a cancel,
+  the card read when the link needs it, the conversation, the store's clock, and then the
+  row. Nothing is awaited between the row's check and the send's first write but that
+  write. Phase 7's check of the saved agent belongs at the same place.
+- **A run that starts with input clears the thread's rows just before the graph runs**, so
+  a run that is refused because no usable model is active clears nothing: a step that waits
+  for a background run's retry keeps its rows. A row that cannot be cleared ends the run
+  with `internal`, like a row that cannot be written.
+- **What the rows cost.** With at least one agent, every reply of the model writes: one
+  delete, and one insert per call of an agent's tool, in one transaction. With no agent
+  nothing is written at a reply. Every run with input makes one delete, with agents or
+  without.
+- **Known: two calls of one reply that share a tool call id have one row**, the later
+  call's. To environment agents both are sent, as before. To two saved agents only the one
+  the row names is sent; the other is kept back with the sentence for a removed agent. To
+  one saved agent both were sent when it was tried, because both read the row before
+  either finished; a second call that read after the first one's send was recorded would
+  find no row and be kept back. Each of these fails toward sending nothing.
+- **The address proof found a leak the first time it ran.** Card details were cleaned of
+  the addresses known when the card was read, and never again. An environment agent's
+  card, read at startup, or a saved agent's, kept in the database, that names an address
+  where an agent is saved later went on showing that address in the catalog, in the tool
+  description the model is given, and in the list's `card`. Details are now cleaned again
+  where they are used (`cleaned` in `delegates/agent_cards.py`): when an instance makes an
+  agent set, after every link of the set has told the scrubber its address, and in every
+  answer of the Agents routes. What stands in for an address can be a character longer
+  than the address was, so a text is cut again and marked as cut. A saved agent that is not
+  in use has no link to tell the scrubber its address, so making a set now tells it every
+  saved agent's address itself: the independent review found that such an agent's address
+  stayed in an environment agent's card text after a restart. Cleaning again costs
+  nothing for a text with no colon in it, which the scrubber skips, and 0.3 ms for a card
+  at every limit of FR-002. What a card says of an address is cleaned from the moment an
+  agent is saved there, not before: until then it is only what the card says. Research
+  R12's "a card that names another agent's address is cleaned too" now holds whichever of
+  the two came first.
+- **Phase 4's unit tests of `web/lib/agents.ts` were never committed.** The root
+  `.gitignore` ignores every `lib/` directory, a rule of the Python packaging template,
+  and excepted `web/lib/` only. `web/__tests__/lib/agents.test.ts` (T038) existed on the
+  machine that wrote it, passed there, and was in no commit, so CI never ran it. The
+  three other files of that directory are tracked, which is why the gap did not show. The
+  rule now excepts `web/__tests__/lib/` too, and the file is committed with this phase,
+  with T055's tests in it.
+- **The route's refusals are worded by the rule that found them.** A name or an address
+  the environment has is refused with the sentence the list already shows for a saved
+  agent that is not in use, from the same function (`AgentRegistry.overridden`). A value
+  that breaks a rule is refused with the rule's own sentence as the whole message, under
+  the error types `agent_name` and `agent_address`, with nothing of the validation
+  library's put before it. `approval` is a literal, so `none` is refused in the library's
+  words, "Input should be 'required'".
+- **Two failures the tasks do not name are answered with 500 `internal`**: the saved
+  agents cannot be read before the card is read, and the agent cannot be saved after it.
+  Each is logged by its kind only. An agent refused because its card cannot be used is
+  logged at INFO with the card problem's sentence.
+- **An add whose change this instance could not take up answers with the agent as not
+  tried.** The add stands, as T059 says; the answer cannot say that the agent is
+  reachable, since nothing on this instance holds its link yet.
+- **The card read for an add uses a client of its own**, made the way a link makes its
+  client (`agent_http_client`), so the two cannot come to differ: an explicit transport,
+  no redirect followed. The limit of twenty seconds is a constant beside the route.
+- **The shared error shape (`ErrorDetail`) did not gain the three new codes.** A test of
+  feature 004 holds that shape to 004's contract, and FR-031 keeps existing tests as they
+  are. No route uses the shape to build an answer; the codes are in this feature's
+  contract and in the route's tests.
+- **Known, and the same on the LLM routes: a request of another origin whose body is
+  marked as JSON and is not JSON is answered 422, not 403.** The framework reads the body
+  before it runs the rule. The answer repeats nothing and nothing is done; a browser
+  sends no JSON across origins without asking first, and is given no permission.
+- **The console's form is beside the list, not inside it** (T065). When a request got no
+  answer and the list then cannot be read either, the form stays, with what was typed and
+  the sentence that the outcome is not known. A refusal about one value is shown at that
+  value (a field error, a taken name, a taken address); every other refusal is shown
+  over the form, the card problem's sentence among them. The form checks only that both
+  values were entered; every rule is the service's. `addAgent` sends the name and the
+  address and nothing else, whatever it is handed.
+- **The end-to-end stand-in (`AgentService`) refuses in the service's own sentences**
+  (T066), keeps addresses in the service's form, and records every request with its body.
+  It has no limit and no busy refusal. The spec searches the requests for the address's
+  host and port and for a path marker, never for a bare port. One assertion of Phase 4's
+  spec changed: the section's buttons are now Refresh and Add. Chromium's permission for
+  requests to this machine was not needed: the page talks to its own origin only.
+- **A test that searches for a port looks for it as a number of its own** (`holds_port` in
+  `tests/conftest.py`). A bare search for four digits can find them in an id, written
+  plainly or in groups with hyphens between them, or in the fraction of a timestamp. The
+  first version of the helper let a group of a hyphenated id through; the review counted
+  about a hundred such ids in what the address proof searches, which would have failed it
+  by chance about once in sixty-five runs. One test of Phase 4 in `tests/test_agents_api.py` searched that
+  way over text that holds `checked_at`, and now uses the helper. The test of
+  `tests/test_catalog.py` that fails this way on `main` is left for a request of its own.
+- **An answer that arrives after its form was closed changes nothing in the form that is
+  open now.** Reading a card can take twenty seconds, and the form can be closed and
+  opened again meanwhile. The late answer has the list read again, when the agent was
+  saved and when no answer came, and is otherwise said to no one. The first version
+  closed the form that was open, with what was being typed in it; the review found it.
+  The LLM section's form, which this one is modelled on, behaves the earlier way and is
+  not changed in this phase.
+- **Known: a 422 names an unknown field by the name it was sent under.** A request that
+  sends an address as the name of a field gets that name back in `loc`. The validation
+  error keeps where and why and drops the value; the name of a field the shape does not
+  have is neither. The console sends two fields with fixed names. The same holds on the
+  LLM routes, whose guard this is, and it is left for a change of that guard.
+- **What the independent review found, and what was done.** It found no path that sends a
+  message without its decision, and none that sends a proposal to another agent under its
+  name. It found the two leaks and the two defects named above, that the checks of a
+  refused add's log line could not fail once an earlier test had saved the same port,
+  that three tests of the rows passed with the tools' deletion taken out, and that nothing
+  tested a row that cannot be read or rows that cannot be cleared. All were acted on, and
+  each test added or changed for a defect was seen to fail with its fix taken out: an add
+  that must be refused is now made at a port nothing ever saves, and the rows are looked
+  at as the next reply finds them.
+- **Seen by hand, with the real service, the console in a browser, and a real model**
+  (quickstart section 2). On an instance started with no agent, Add in the console saved
+  the stand-in entered as `HTTP://LocalHost:9998/`: its card shows `http://localhost:9998`,
+  "Requires approval", reachable, and the stand-in's own details. The stand-in's log shows
+  one `GET` for its card and no `POST`. The form opened empty the second time. Each
+  refusal of the quickstart left one card and kept what was typed: nothing answering, the
+  service's own address ("served no agent card"), the name again, the address again, and
+  the four addresses that break a rule, each at its field. A run then paused naming the
+  agent, with one row in `freyja_agent_calls` holding the agent's id; once approved the
+  stand-in received one `POST`, the run completed with its answer, and the table was
+  empty. After a restart the agent was listed with the same address, approval choice,
+  version, and card details, and reachable. A second agent was added by request as the
+  README shows. No line of the service's log held a port of either agent.
+- **Coverage of the service's lines went from 90.24% to 90.40%** as CI measures it,
+  without the Postgres tests. The Postgres half of the proposed calls, five methods, is
+  among the lines CI does not run; the floor of 88% is unchanged.

@@ -1,5 +1,6 @@
 // Agents as the service describes them (specs/005-web-delegate-agents/contracts/openapi.yaml).
 // A saved agent's address is in `url`; an environment agent's is in no field of any type here.
+// An address travels in a request's body and in no path or query.
 
 import { api } from "./api";
 
@@ -68,6 +69,18 @@ export const AGENTS_KEY = "/agents";
 
 export function listAgents(): Promise<AgentList> {
   return api<AgentList>(AGENTS_KEY);
+}
+
+/** What an operator enters to add an agent. */
+export type NewAgent = { name: string; url: string };
+
+/**
+ * Save a new agent. The service reads the agent's card at the address first and saves the
+ * agent only when it can be used; the agent is sent no message. Only the two values are
+ * sent: a saved agent requires approval, which the service decides and not this request.
+ */
+export function addAgent({ name, url }: NewAgent): Promise<Agent> {
+  return api<Agent>(AGENTS_KEY, { method: "POST", body: { name, url } });
 }
 
 /**

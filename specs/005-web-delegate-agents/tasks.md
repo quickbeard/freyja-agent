@@ -590,7 +590,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
 
 ### Tests for User Story 2
 
-- [ ] T050 [P] [US2] Extend `tests/test_agents_api.py`, part 2, `POST /agents`. A free name and
+- [X] T050 [P] [US2] Extend `tests/test_agents_api.py`, part 2, `POST /agents`. A free name and
       a stand-in's address give 201 with the agent: the address in the kept form, `approval`
       `required`, sent or left out, `state` `reachable`, the card's details, `version` 1; a log
       line names the agent and the approval choice and holds no address. The stand-in's
@@ -610,7 +610,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       they were (SC-007). A stand-in that never answers is refused as `timeout` within the
       lesser of the startup limit and twenty seconds (SC-012). No refusal and no log line holds
       the address (FR-005 to FR-008, FR-014, FR-016, FR-027 to FR-030)
-- [ ] T051 [P] [US2] Extend `tests/test_agents_apply.py`, part 2, through the route. After an
+- [X] T051 [P] [US2] Extend `tests/test_agents_apply.py`, part 2, through the route. After an
       add, with no restart: a hand-off to the agent pauses, and once approved the stand-in
       received exactly the proposed message, from the orchestrator, from its subagent, and in a
       background run; a run in progress finishes without the new agent and the next run on its
@@ -621,14 +621,14 @@ listens, and a name that is taken, are each refused with the reason and leave no
       the first has the agent. A service with no agent at all has, after its first add,
       `check_agent_tasks` and the list of pending tasks in the next run (FR-019, SC-001,
       SC-002, SC-013)
-- [ ] T052 [P] [US2] Extend the contract tests in `tests/test_agent_task_store.py` with the
+- [X] T052 [P] [US2] Extend the contract tests in `tests/test_agent_task_store.py` with the
       proposed calls, and add them by name to `tests/integration/test_a2a_tasks_postgres.py`:
       `replace_calls(thread_id, namespace, calls)` replaces the rows of that thread and
       namespace and no other; `get_call(thread_id, namespace, tool_call_id)` reads one;
       `list_calls(thread_id)` lists a thread's; `delete_call` removes one;
       `clear_calls(thread_id)` removes a thread's; two calls with one `tool_call_id` in two
       namespaces of a thread are two rows (R8, data-model.md "Proposed call")
-- [ ] T053 [P] [US2] Write `tests/test_agents_approval.py`, part 1, a call belongs to the agent
+- [X] T053 [P] [US2] Write `tests/test_agents_approval.py`, part 1, a call belongs to the agent
       it was proposed for. A proposed call has a row from the model's reply until its send is
       finished, on the orchestrator and on its subagent, written before the run pauses; a reply
       in the same namespace replaces the namespace's rows; a run that starts with input clears
@@ -644,7 +644,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       row that reaches a saved agent's tool, as one proposed for an environment agent before
       this feature was installed would, sends nothing and gives the same result. Each message
       kept back is in the log with the agent's name and the rule (FR-023, FR-030, R8)
-- [ ] T054 [P] [US2] Write `tests/test_agents_address_nowhere.py`, part 1, built like
+- [X] T054 [P] [US2] Write `tests/test_agents_address_nowhere.py`, part 1, built like
       `tests/test_llm_secrets_nowhere.py` and grown in every later phase. One saved agent on a
       port chosen to be recognizable and one environment agent on another. Drive what exists:
       `GET` and `POST /agents` with each refusal, a run that completes, one left paused, and
@@ -654,10 +654,10 @@ listens, and a name that is taken, are each refused with the reason and leave no
       reason, the Agents routes' included; and every log record at DEBUG, with its formatted
       traceback. The saved address is found only in `url` of an Agents answer; the environment
       agent's is found nowhere (FR-028, SC-008, R20)
-- [ ] T055 [P] [US2] Extend `web/__tests__/lib/agents.test.ts`, part 2: `addAgent({name, url})`
+- [X] T055 [P] [US2] Extend `web/__tests__/lib/agents.test.ts`, part 2: `addAgent({name, url})`
       posts the two values as JSON to `/api/agents` and returns the agent; the address is in
       the body and in no path or query
-- [ ] T056 [P] [US2] Write `web/__tests__/components/agents/agent-form.test.tsx`, part 1,
+- [X] T056 [P] [US2] Write `web/__tests__/components/agents/agent-form.test.tsx`, part 1,
       adding. The form opens with an empty name and an empty address, says that messages to the
       new agent will require approval, and has nothing left from an earlier use. Saving sends
       one request, and no confirmation is asked; a second press while it is under way sends
@@ -666,18 +666,18 @@ listens, and a name that is taken, are each refused with the reason and leave no
       service's sentence. When the request ends with the code `unreachable` the form says that
       the outcome is not known, never that it failed, and the list is read again. Once sent
       successfully or closed, the form keeps nothing (FR-004, FR-008)
-- [ ] T057 [P] [US2] Extend `web/__tests__/components/agents/agent-list.test.tsx`, part 2: the
+- [X] T057 [P] [US2] Extend `web/__tests__/components/agents/agent-list.test.tsx`, part 2: the
       Add button is there with agents and with none, opens the form, and after a successful add
       the list is read again and the new card is shown (FR-001)
 
 ### Implementation for User Story 2
 
-- [ ] T058 [US2] Add `AgentCreate` to `src/freyja_agent/api/schemas.py`: `name` in the form
+- [X] T058 [US2] Add `AgentCreate` to `src/freyja_agent/api/schemas.py`: `name` in the form
       `^[a-z][a-z0-9_-]{0,31}$`; `url` at most 2,000 characters, validated with
       `canonical_address` and kept in its form, every message the function's own; `approval`
       `required` only, which is also the default, until Phase 7 opens `none`; no other field
       (FR-006)
-- [ ] T059 [US2] Implement `POST /agents` in `src/freyja_agent/api/agents.py`, in this order:
+- [X] T059 [US2] Implement `POST /agents` in `src/freyja_agent/api/agents.py`, in this order:
       the name against the environment's agents, the tool servers, and the tool names that are
       taken; the destination against the environment's agents; the limit, the saved names, and
       the saved destinations; a slot of the four, from `Runtime.card_reads`; the address
@@ -687,13 +687,13 @@ listens, and a name that is taken, are each refused with the reason and leave no
       this instance with `registry.adopt(record, card)`, a step whose failure is logged and
       does not undo the add; the log line; 201 with the agent (FR-005 to FR-008, FR-014,
       FR-016, FR-030, R15, R16)
-- [ ] T060 [US2] Add the proposed calls to `src/freyja_agent/runtime/agent_tasks.py`:
+- [X] T060 [US2] Add the proposed calls to `src/freyja_agent/runtime/agent_tasks.py`:
       `ProposedCall` with the fields of data-model.md (`thread_id`, `namespace`,
       `tool_call_id`, `agent`, `agent_id` "the saved agent's id when the call was proposed;
       null for an environment agent", `gated`, `proposed_at`); the methods of T052 on the
       protocol and on both stores; and the table `freyja_agent_calls` with the primary key
       `(thread_id, namespace, tool_call_id)`, created with `CREATE TABLE IF NOT EXISTS` (R8)
-- [ ] T061 [US2] Record proposed calls in `src/freyja_agent/agent/agent_tasks.py`:
+- [X] T061 [US2] Record proposed calls in `src/freyja_agent/agent/agent_tasks.py`:
       `AgentTasksMiddleware` is given, per agent tool name, the agent's name, the saved agent's
       id or None, and whether the tool is gated, and after the model answered, in
       `awrap_model_call`, replaces the rows of this thread and namespace with one per call of
@@ -703,7 +703,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       link, and `build_agent` in `src/freyja_agent/agent/factory.py` builds the middleware's
       table from the delegate tools it is given, for the orchestrator and for its subagent
       (FR-023, R8)
-- [ ] T062 [US2] In every agent tool of `src/freyja_agent/delegates/a2a_tools.py`, an
+- [X] T062 [US2] In every agent tool of `src/freyja_agent/delegates/a2a_tools.py`, an
       environment agent's included, after `connect()` and before the send: read the call's row,
       and when it names another agent than the link's, by `agent_id`, a null on either side
       included, send nothing and give the error result of T053, logged with the agent's name. A
@@ -713,14 +713,14 @@ listens, and a name that is taken, are each refused with the reason and leave no
       starts with input clears the thread's proposed calls before the graph runs. Record in
       plan.md what the build showed of the rows as a whole (FR-023, FR-030, R8, research "Not
       verified")
-- [ ] T063 [P] [US2] Add `addAgent` to `web/lib/agents.ts`
-- [ ] T064 [US2] Create `web/components/agents/agent-form.tsx`, after
+- [X] T063 [P] [US2] Add `addAgent` to `web/lib/agents.ts`
+- [X] T064 [US2] Create `web/components/agents/agent-form.tsx`, after
       `web/components/llm/profile-form.tsx`, for adding: the two fields, the sentence about
       approval, the errors at their fields, the outcome that is not known, and nothing kept
       once sent or closed, as T056 asks (FR-004, R17)
-- [ ] T065 [US2] Add the Add button and the form to `web/components/agents/agent-list.tsx`; a
+- [X] T065 [US2] Add the Add button and the form to `web/components/agents/agent-list.tsx`; a
       successful add has the list read again
-- [ ] T066 [US2] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
+- [X] T066 [US2] Write the end-to-end tests of this story. `web/e2e/api.ts` gains
       `AgentService`, after `ProfileService`: a stand-in for the Agents routes that keeps what
       the page saved and records what it was asked. `web/e2e/agents-manage.spec.ts`, part 1:
       adding an agent shows its card with the address in the kept form and requiring approval;
@@ -728,7 +728,7 @@ listens, and a name that is taken, are each refused with the reason and leave no
       the sentence and what was typed stays; a taken name is refused at the name; a request
       that gets no answer says the outcome is not known and the list is read again; the address
       was sent in a request body and in no address the page asked for (FR-032, R21)
-- [ ] T067 [P] [US2] Update `README.md` with what now exists and matters before it is used: an
+- [X] T067 [P] [US2] Update `README.md` with what now exists and matters before it is used: an
       agent can be added from the Agents section and always requires approval for now; the
       table `freyja_agent_calls`; and that every instance has to run this version before the
       first agent is saved (plan.md "Rollout")

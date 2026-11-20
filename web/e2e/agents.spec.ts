@@ -56,9 +56,11 @@ test("two agents from the environment show as two cards, with nothing to change 
     await expect(shown.getByText("Address")).toHaveCount(0);
   }
   await expect(page.getByRole("main")).not.toContainText("127.0.0.1");
+  // The section's own controls read the list again and add an agent; neither is a card's.
   await expect(page.getByRole("main").getByRole("button")).toHaveText([
     /sidebar/i,
     "Refresh",
+    "Add",
   ]);
   await expect(alerts(page)).toHaveCount(0);
 });

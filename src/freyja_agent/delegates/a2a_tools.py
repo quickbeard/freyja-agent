@@ -8,9 +8,11 @@ describes the hand-off tool and never classifies it, and neither does whether it
 
 Before a tool sends anything it checks, in this order (005 research R7): the send ledger, so
 a step that runs again returns what it recorded; for an answer or a cancel, that the task
-belongs to the agent this tool was built for; and that the link holds a usable card, reading
-it when it does not. A message kept back by one of these is an error result that names the
-agent, the run continues, and nothing is sent.
+belongs to the agent this tool was built for; that the link holds a usable card, reading
+it when it does not; and that the call was proposed for the agent this tool was built for,
+which the row written at the model's reply says (005 FR-023, research R8). A message kept
+back by one of these is an error result that names the agent, the run continues, and nothing
+is sent.
 
 The argument models are pydantic, so an edit decision is validated by the existing model path
 and an unknown key is refused; ``task_id`` is pinned, so an answer or a cancel stays bound to its
@@ -53,6 +55,7 @@ from freyja_agent.runtime.agent_tasks import (
     AgentSend,
     AgentTaskRecord,
     AgentTaskStore,
+    call_namespace,
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +128,7 @@ def _delegate(
         tool=tool,
         agent=link.name,
         pinned_args=PINNED,
+        agent_id=link.agent_id,
     )
 
 
@@ -331,6 +335,40 @@ async def _connected(link: AgentLink) -> float | None:
     raise _failed(link, f"Agent '{link.name}' cannot be used: {sentence}")
 
 
+def proposed_for_another(agent: str) -> str:
+    """The result of a call that was not proposed for the agent its tool sends to (005 FR-023)."""
+    return (
+        f"Agent '{agent}': the agent this message was proposed for was removed; nothing was sent."
+    )
+
+
+async def _proposed_for(
+    link: AgentLink, store: AgentTaskStore, thread_id: str, step: str, tool_call_id: str
+) -> None:
+    """Keep back a call that was proposed for another agent than this tool's (005 FR-023).
+
+    A pause holds the tool's name and nothing about which agent had the name. The row written
+    when the model proposed the call does: the saved agent's id, or none for an agent named
+    in the environment. A call whose row has another id than this tool's agent is not sent,
+    none on either side included: a saved agent added under the name of an environment agent
+    that left, an environment agent that took a saved agent's name at a restart, or a saved
+    agent removed and added again. Two agents named in the environment both have none, so
+    between them a call follows the tool's name, as it always has.
+
+    A call with no row follows the name when this is an environment agent's tool, as every
+    call did before the rows existed. A saved agent's tool sends nothing for one: every call
+    proposed for a saved agent has a row, so a call without one was proposed for another
+    agent, or for no agent at all.
+    """
+    call = await store.get_call(thread_id, call_namespace(step), tool_call_id)
+    if call is None:
+        if link.source != "saved":
+            return
+    elif call.agent_id == link.agent_id:
+        return
+    raise _failed(link, proposed_for_another(link.name))
+
+
 def may_not_have_received(agent: str) -> str:
     """The result of a message whose sending started and was never confirmed (FR-017)."""
     return (
@@ -369,6 +407,9 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 raise _failed(link, given_up_with_its_agent(link.name, task_id))
         limit = await _connected(link)
         context_id = await store.get_context(thread_id, link.name)
+        sent_at = await store.now()
+        # The last check, with nothing between it and the send's first write (research R7).
+        await _proposed_for(link, store, thread_id, step, tool_call_id)
         a2a_message = Message(
             message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
             role=Role.ROLE_USER,
@@ -385,7 +426,7 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 kind=kind,
                 message_id=a2a_message.message_id,
                 request=request,
-                sent_at=await store.now(),
+                sent_at=sent_at,
             )
         )
         writer = _progress_writer()
@@ -402,6 +443,8 @@ def _handoff_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
             result=result,
             task_id=outcome.task.id if outcome.task is not None else None,
         )
+        # The send is finished and recorded: the call's row has done its work.
+        await store.delete_call(thread_id, call_namespace(step), tool_call_id)
         if not ok:
             raise _failed(link, result)
         return result
@@ -560,6 +603,8 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
         if task.state not in CANCELABLE:
             return f"Agent '{link.name}' task {task_id} already ended as {task.state}; nothing was sent."
         limit = await _connected(link)
+        sent_at = await store.now()
+        await _proposed_for(link, store, thread_id, step, tool_call_id)
         await store.start_send(
             AgentSend(
                 thread_id=thread_id,
@@ -569,12 +614,13 @@ def _cancel_coroutine(link: AgentLink, store: AgentTaskStore) -> Any:
                 kind="cancel",
                 message_id=f"freyja-cancel-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
                 request=request,
-                sent_at=await store.now(),
+                sent_at=sent_at,
                 task_id=task_id,
             )
         )
         result, ok = await _cancel(link, store, task, limit)
         await store.finish_send(thread_id, step, tool_call_id, result=result, task_id=task_id)
+        await store.delete_call(thread_id, call_namespace(step), tool_call_id)
         if not ok:
             raise _failed(link, result)
         return result

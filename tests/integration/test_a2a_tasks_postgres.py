@@ -15,10 +15,15 @@ from freyja_agent.runtime.agent_tasks import AgentTaskStore, PostgresAgentTaskSt
 from freyja_agent.runtime.persistence import open_persistence
 from tests.test_agent_task_store import (
     Advance,
+    a_call,
     a_send,
     a_task,
+    test_a_call_is_deleted_alone_and_a_thread_s_calls_are_cleared_together,
+    test_a_call_is_stored_under_the_thread_and_namespace_it_is_replaced_for,
     test_a_conversation_is_kept_by_its_first_context,
     test_a_pending_task_is_claimed_by_one_instance_until_the_claim_expires,
+    test_a_proposed_call_is_kept_as_it_was_proposed,
+    test_a_reply_replaces_the_calls_of_its_thread_and_namespace_and_no_other,
     test_a_send_is_recorded_once_and_finished,
     test_a_task_keeps_the_ref_of_the_agent_it_was_started_with,
     test_a_task_that_does_not_exist_is_left_alone,
@@ -26,6 +31,8 @@ from tests.test_agent_task_store import (
     test_an_unknown_column_is_refused,
     test_an_update_can_require_the_state_it_expects,
     test_follow_ups_are_set_and_cleared_per_thread,
+    test_one_tool_call_id_in_two_namespaces_of_a_thread_is_two_calls,
+    test_one_tool_call_id_twice_in_one_reply_keeps_the_later_call,
     test_pending_tasks_are_counted_by_agent_and_ref,
     test_pending_tasks_are_given_up_by_ref,
     test_ready_outcomes_wait_for_delivery_once,
@@ -37,8 +44,12 @@ from tests.test_agent_task_store import (
 
 # The contract's tests, collected here against Postgres.
 __all__ = [
+    "test_a_call_is_deleted_alone_and_a_thread_s_calls_are_cleared_together",
+    "test_a_call_is_stored_under_the_thread_and_namespace_it_is_replaced_for",
     "test_a_conversation_is_kept_by_its_first_context",
     "test_a_pending_task_is_claimed_by_one_instance_until_the_claim_expires",
+    "test_a_proposed_call_is_kept_as_it_was_proposed",
+    "test_a_reply_replaces_the_calls_of_its_thread_and_namespace_and_no_other",
     "test_a_send_is_recorded_once_and_finished",
     "test_a_task_keeps_the_ref_of_the_agent_it_was_started_with",
     "test_a_task_that_does_not_exist_is_left_alone",
@@ -46,6 +57,8 @@ __all__ = [
     "test_an_unknown_column_is_refused",
     "test_an_update_can_require_the_state_it_expects",
     "test_follow_ups_are_set_and_cleared_per_thread",
+    "test_one_tool_call_id_in_two_namespaces_of_a_thread_is_two_calls",
+    "test_one_tool_call_id_twice_in_one_reply_keeps_the_later_call",
     "test_pending_tasks_are_counted_by_agent_and_ref",
     "test_pending_tasks_are_given_up_by_ref",
     "test_ready_outcomes_wait_for_delivery_once",
@@ -89,10 +102,16 @@ async def other_store(settings: Settings) -> AsyncIterator[AgentTaskStore]:
         await persistence.close()
 
 
-TABLES = {"freyja_agent_conversations", "freyja_agent_sends", "freyja_agent_tasks"}
+TABLES = {
+    "freyja_agent_conversations",
+    "freyja_agent_sends",
+    "freyja_agent_tasks",
+    # Feature 005: the proposed calls (research R8).
+    "freyja_agent_calls",
+}
 
 
-async def test_the_three_tables_are_created_once_and_again_without_harm(
+async def test_the_tables_are_created_once_and_again_without_harm(
     store: AgentTaskStore, settings: Settings
 ) -> None:
     await store.setup()
@@ -151,3 +170,29 @@ async def test_sends_and_conversations_outlive_the_pool(
     finally:
         await persistence.close()
     assert send is not None and (send.result, send.task_id) == ("done", "t1")
+
+
+async def test_proposed_calls_outlive_the_pool_and_are_stamped_by_the_database(
+    store: AgentTaskStore, settings: Settings
+) -> None:
+    before = await store.now()
+    await store.replace_calls("th-1", "tools:x", [a_call("call-1", agent_id="0af3", gated=False)])
+    persistence = await open_persistence(settings)
+    try:
+        again = PostgresAgentTaskStore(persistence.pool)
+        call = await again.get_call("th-1", "tools:x", "call-1")
+    finally:
+        await persistence.close()
+    assert call is not None
+    assert (call.agent, call.agent_id, call.gated) == ("stub", "0af3", False)
+    assert call.proposed_at is not None and call.proposed_at >= before
+
+
+async def test_a_replacement_that_fails_leaves_the_earlier_calls_in_place(
+    store: AgentTaskStore,
+) -> None:
+    await store.replace_calls("th-1", "", [a_call("call-1")])
+    # A NUL cannot be stored: the second insert fails, and the delete before it is undone.
+    with pytest.raises(psycopg.Error):
+        await store.replace_calls("th-1", "", [a_call("call-2"), a_call("bad", agent="a\x00b")])
+    assert [call.tool_call_id for call in await store.list_calls("th-1")] == ["call-1"]

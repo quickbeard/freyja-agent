@@ -7,7 +7,8 @@ one of nine codes, each with a sentence the service words itself (FR-007, FR-016
 agent or a library said is in such a sentence, and neither is the address.
 
 ``card_details`` gives what is kept, shown, and used to describe an agent's tools: the card's
-texts, cut and with every known address removed (FR-002, FR-028).
+texts, cut and with every known address removed (FR-002, FR-028). ``cleaned`` removes from
+kept details an address that became known after they were read.
 """
 
 import asyncio
@@ -307,3 +308,47 @@ def card_details(card: AgentCard, scrub: Callable[[str], str]) -> AgentCardSumma
     return AgentCardSummary(
         summary.name, summary.description, summary.version, summary.skills, cut=cut
     )
+
+
+def cleaned(details: AgentCardSummary, scrub: Callable[[str], str]) -> AgentCardSummary:
+    """``details`` without any address ``scrub`` knows now, each text still within its limit.
+
+    Details are cleaned when a card is read, of the addresses known then. An address that
+    becomes an agent's later may stand in what another agent's card said, kept in the
+    database or read at startup. So details are cleaned again where they are used: when an
+    instance makes the set its tools are described from, and in what the Agents routes
+    return (FR-028).
+
+    What stands in for an address can be longer than the address was, so a text is cut again
+    when it grew past the limit. Returns ``details`` itself when nothing in it changed.
+    """
+    cut = details.cut
+    changed = False
+
+    def text(value: str) -> str:
+        nonlocal cut, changed
+        clean = scrub(value)
+        if clean == value:
+            return value
+        changed = True
+        if len(clean) > TEXT_LIMIT:
+            cut = True
+            return clean[:TEXT_LIMIT]
+        return clean
+
+    again = AgentCardSummary(
+        name=text(details.name),
+        description=text(details.description),
+        version=text(details.version),
+        skills=tuple(
+            SkillSummary(
+                text(skill.id),
+                text(skill.name),
+                text(skill.description),
+                tuple(text(tag) for tag in skill.tags),
+            )
+            for skill in details.skills
+        ),
+        cut=cut,
+    )
+    return again if changed else details

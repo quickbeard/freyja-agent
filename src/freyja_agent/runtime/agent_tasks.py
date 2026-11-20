@@ -13,7 +13,12 @@ the same state:
 
 Feature 005 adds which agent, at which address, a task was started with (``agent_ref``), so
 that a saved agent's tasks can be told from the tasks of another agent under its name
-(005 research R2, R10).
+(005 research R2, R10). It also adds a fourth record kind:
+
+- a proposed call is one call of an agent's tool that a model has proposed, kept from the
+  model's reply until the call's send is finished. A pause holds a tool's name and nothing
+  about which agent held the name then; the row does, so a proposal is never sent to
+  another agent that has the name by the time it is decided (005 FR-023, research R8).
 
 ``PostgresAgentTaskStore`` is the service's store and ``InMemoryAgentTaskStore`` the suite's.
 Both take every time they set or compare from their own clock: the database's ``now()`` and
@@ -133,6 +138,46 @@ class AgentTaskRecord:
         return not self.outcome_ready and self.state != "working"
 
 
+@dataclass(frozen=True)
+class ProposedCall:
+    """One call of an agent's tool that a model proposed (005 data-model.md "Proposed call").
+
+    The key is the thread, the namespace, and the tool call id, as the tool knows them when
+    it runs. The tool call id alone is the model provider's, and two subagents of one step
+    may be given the same one.
+    """
+
+    thread_id: str
+    # The graph namespace the model's node and the tool's node share (``call_namespace``).
+    namespace: str
+    tool_call_id: str
+    # The agent's name, and the saved agent's id when the call was proposed; None for an
+    # environment agent.
+    agent: str
+    agent_id: str | None
+    # Whether the call needed a person's decision when it was proposed.
+    gated: bool
+    # When it was proposed, on the store's clock. The store sets it.
+    proposed_at: datetime | None = None
+
+
+def call_namespace(checkpoint_ns: str) -> str:
+    """The namespace a proposed call is kept under: ``checkpoint_ns`` without its last segment.
+
+    LangGraph runs the model and each tool call as tasks of their own, each in a namespace
+    that ends in the node and the task's id. What the model that proposes a call and the
+    tool that carries it out share is what comes before: nothing on the orchestrator, where
+    they run in ``model:<id>`` and ``tools:<id>``, and the subagent's own namespace inside a
+    subagent, where they run in ``tools:<x>|model:<id>`` and ``tools:<x>|tools:<id>``.
+    """
+    return checkpoint_ns.rpartition("|")[0]
+
+
+def _latest(calls: Iterable[ProposedCall]) -> list[ProposedCall]:
+    """One call per tool call id: the later one, where a reply uses an id twice."""
+    return list({call.tool_call_id: call for call in calls}.values())
+
+
 # The columns an update may set; the key, the thread, and the agent a task was started with
 # never change.
 UPDATABLE = frozenset(
@@ -202,6 +247,20 @@ class AgentTaskStore(Protocol):
 
     async def pending_counts(self) -> dict[tuple[str, str | None], int]: ...
 
+    async def replace_calls(
+        self, thread_id: str, namespace: str, calls: Iterable[ProposedCall]
+    ) -> None: ...
+
+    async def get_call(
+        self, thread_id: str, namespace: str, tool_call_id: str
+    ) -> ProposedCall | None: ...
+
+    async def list_calls(self, thread_id: str) -> list[ProposedCall]: ...
+
+    async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None: ...
+
+    async def clear_calls(self, thread_id: str) -> None: ...
+
 
 def _check_columns(changes: dict[str, Any]) -> None:
     unknown = sorted(set(changes) - UPDATABLE)
@@ -217,6 +276,7 @@ class InMemoryAgentTaskStore:
         self._contexts: dict[tuple[str, str], str] = {}
         self._sends: dict[tuple[str, str, str], AgentSend] = {}
         self._tasks: dict[tuple[str, str], AgentTaskRecord] = {}
+        self._calls: dict[tuple[str, str, str], ProposedCall] = {}
 
     async def setup(self) -> None:
         return None
@@ -383,6 +443,38 @@ class InMemoryAgentTaskStore:
                 counts[key] = counts.get(key, 0) + 1
         return counts
 
+    async def replace_calls(
+        self, thread_id: str, namespace: str, calls: Iterable[ProposedCall]
+    ) -> None:
+        """Replace the calls kept for one thread and namespace by ``calls`` (005 research R8).
+
+        Each is kept under ``thread_id`` and ``namespace`` and stamped by the store's clock,
+        whatever it says of itself.
+        """
+        now = await self.now()
+        for key in [key for key in self._calls if key[:2] == (thread_id, namespace)]:
+            del self._calls[key]
+        for call in _latest(calls):
+            self._calls[(thread_id, namespace, call.tool_call_id)] = replace(
+                call, thread_id=thread_id, namespace=namespace, proposed_at=now
+            )
+
+    async def get_call(
+        self, thread_id: str, namespace: str, tool_call_id: str
+    ) -> ProposedCall | None:
+        return self._calls.get((thread_id, namespace, tool_call_id))
+
+    async def list_calls(self, thread_id: str) -> list[ProposedCall]:
+        calls = [call for call in self._calls.values() if call.thread_id == thread_id]
+        return sorted(calls, key=lambda call: (call.namespace, call.tool_call_id))
+
+    async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None:
+        self._calls.pop((thread_id, namespace, tool_call_id), None)
+
+    async def clear_calls(self, thread_id: str) -> None:
+        for key in [key for key in self._calls if key[0] == thread_id]:
+            del self._calls[key]
+
 
 # Every statement is one parameterized command; identifiers come from a fixed set.
 _CREATE = (
@@ -434,6 +526,20 @@ _CREATE = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS freyja_agent_tasks_thread ON freyja_agent_tasks (thread_id)",
+    # Feature 005, created with its first user (research R8). Every read and every delete is
+    # by the thread, or by the thread and the namespace, which the primary key serves.
+    """
+    CREATE TABLE IF NOT EXISTS freyja_agent_calls (
+        thread_id    text NOT NULL,
+        namespace    text NOT NULL,
+        tool_call_id text NOT NULL,
+        agent        text NOT NULL,
+        agent_id     text,
+        gated        boolean NOT NULL,
+        proposed_at  timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (thread_id, namespace, tool_call_id)
+    )
+    """,
 )
 
 # Feature 005 is the first to add a column to a table that exists in deployments. Adding a
@@ -449,6 +555,15 @@ LOCK_TIMEOUT = "5s"
 
 _TASK_COLUMNS = [f.name for f in fields(AgentTaskRecord)]
 _SEND_COLUMNS = [f.name for f in fields(AgentSend)]
+_CALL_COLUMNS = [f.name for f in fields(ProposedCall)]
+_INSERT_CALL = (
+    "INSERT INTO freyja_agent_calls (thread_id, namespace, tool_call_id, agent, agent_id, gated)"
+    " VALUES (%(thread_id)s, %(namespace)s, %(tool_call_id)s, %(agent)s, %(agent_id)s,"
+    " %(gated)s)"
+)
+_DELETE_CALLS = (
+    "DELETE FROM freyja_agent_calls WHERE thread_id = %(thread_id)s AND namespace = %(namespace)s"
+)
 
 
 # Gives pending tasks up with one of the ``GIVEN_UP_*`` templates as ``%(text)s``; the caller
@@ -475,11 +590,15 @@ def _send(row: dict[str, Any]) -> AgentSend:
     return AgentSend(**{name: row[name] for name in _SEND_COLUMNS})
 
 
+def _call(row: dict[str, Any]) -> ProposedCall:
+    return ProposedCall(**{name: row[name] for name in _CALL_COLUMNS})
+
+
 # Semgrep's rule for SQLAlchemy takes a statement composed with psycopg's ``sql`` module for
 # one built from strings, so each such statement below is marked ``nosemgrep`` for that rule.
 # Their parts are constants and identifiers of this file, and every value is a parameter.
 class PostgresAgentTaskStore:
-    """The service's store: three tables in the shared pool (research R8)."""
+    """The service's store: four tables in the shared pool (003 research R8, 005 research R8)."""
 
     def __init__(self, pool: AsyncConnectionPool) -> None:
         self._pool = pool
@@ -738,3 +857,60 @@ class PostgresAgentTaskStore:
             {},
         )
         return {(row["agent"], row["agent_ref"]): row["count"] for row in rows}
+
+    async def replace_calls(
+        self, thread_id: str, namespace: str, calls: Iterable[ProposedCall]
+    ) -> None:
+        """Replace the calls kept for one thread and namespace by ``calls`` (005 research R8).
+
+        One transaction: a replacement that fails leaves the earlier rows, and the model call
+        it was made for fails with it.
+        """
+        place = {"thread_id": thread_id, "namespace": namespace}
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute(_DELETE_CALLS, place)
+            for call in _latest(calls):
+                await conn.execute(
+                    _INSERT_CALL,
+                    {
+                        **place,
+                        "tool_call_id": call.tool_call_id,
+                        "agent": call.agent,
+                        "agent_id": call.agent_id,
+                        "gated": call.gated,
+                    },
+                )
+
+    async def get_call(
+        self, thread_id: str, namespace: str, tool_call_id: str
+    ) -> ProposedCall | None:
+        rows = await self._rows(
+            sql.SQL(
+                "SELECT {} FROM freyja_agent_calls WHERE thread_id = %(thread_id)s"
+                " AND namespace = %(namespace)s AND tool_call_id = %(tool_call_id)s"
+            ).format(_columns(_CALL_COLUMNS)),
+            {"thread_id": thread_id, "namespace": namespace, "tool_call_id": tool_call_id},
+        )
+        return _call(rows[0]) if rows else None
+
+    async def list_calls(self, thread_id: str) -> list[ProposedCall]:
+        rows = await self._rows(
+            sql.SQL(
+                "SELECT {} FROM freyja_agent_calls WHERE thread_id = %(thread_id)s"
+                " ORDER BY namespace, tool_call_id"
+            ).format(_columns(_CALL_COLUMNS)),
+            {"thread_id": thread_id},
+        )
+        return [_call(row) for row in rows]
+
+    async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None:
+        await self._execute(
+            _DELETE_CALLS + " AND tool_call_id = %(tool_call_id)s",
+            {"thread_id": thread_id, "namespace": namespace, "tool_call_id": tool_call_id},
+        )
+
+    async def clear_calls(self, thread_id: str) -> None:
+        await self._execute(
+            "DELETE FROM freyja_agent_calls WHERE thread_id = %(thread_id)s",
+            {"thread_id": thread_id},
+        )

@@ -47,7 +47,7 @@ The variable has no `NEXT_PUBLIC_` prefix, because the browser never learns the 
 ## Layout
 
 - `app/`: the pages. `layout.tsx` is the shell, the sidebar beside the page; `llm/page.tsx` and `agents/page.tsx` are the two sections.
-- `components/`: `app-sidebar.tsx`, the LLM section under `llm/` (the list, the card, the form that adds or changes a profile, the confirmations before a profile is activated or deleted, and how a test's result is shown), and the Agents section under `agents/` (the list and the card).
+- `components/`: `app-sidebar.tsx`, the LLM section under `llm/` (the list, the card, the form that adds or changes a profile, the confirmations before a profile is activated or deleted, and how a test's result is shown), and the Agents section under `agents/` (the list, the card, and the form that adds an agent).
 - `components/ui/`: the [shadcn/ui](https://ui.shadcn.com) components, generated and not edited by hand. `components.json` is shadcn's configuration.
 - `lib/`: `api.ts` is the one function that calls the service, always through `/api`, and its error type `ApiError`. `llm.ts` and `agents.ts` hold the types and the calls of their sections; `utils.ts` the `cn` helper.
 - `hooks/`: `use-mobile.ts`, the sidebar's width check.
@@ -98,7 +98,7 @@ pnpm test:e2e                  # playwright test
 
 Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included. Each test hands the page what the service would answer (`e2e/api.ts`), and the built app forwards `/api/...` to an address nothing listens on, so a test that hands a page no answer sees the console as it is with the service stopped.
 
-The tests are `*.spec.ts` files under `e2e/`: `smoke.spec.ts` for the first page, `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, and `agents.spec.ts` for the Agents section as it is read. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `playwright.config.ts`.
+The tests are `*.spec.ts` files under `e2e/`: `smoke.spec.ts` for the first page, `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, and `agents-manage.spec.ts` for adding an agent. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `playwright.config.ts`.
 
 The commit hook does not run these tests. CI does, when a file under `web/` changes.
 
