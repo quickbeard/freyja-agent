@@ -30,7 +30,8 @@ paths:
 
         Contacts no model, agent, or tool server and changes no thread. It reads one thread's
         state for each run that ended since the list was last read, however many, and keeps
-        what it found.
+        what it found. A thread whose state cannot be read is left out of `threads` and is
+        still counted in `total`; the others are answered.
       responses:
         "200":
           description: The list

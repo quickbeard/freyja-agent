@@ -1463,7 +1463,12 @@ def test_a_page_of_another_origin_cannot_start_or_resume_a_run(
         response = client.post(path, content=json.dumps(body), headers=headers)
         state = client.get("/threads/t-1/state")
 
-    assert response.status_code == 422, response.text
+    # Since feature 007 the thread routes turn such a request away as the LLM routes do, by
+    # what the browser says of it and before its body is looked at (007 FR-024). Until then
+    # it was the body's content type that refused it, with 422; a body that is not sent as
+    # JSON by a client that is no page still is (tests/test_threads_other_origins.py).
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "other_origin"
     assert not response.headers.get("content-type", "").startswith("text/event-stream")
     # No run started: the thread does not exist, and no model was asked anything.
     assert state.status_code == 404

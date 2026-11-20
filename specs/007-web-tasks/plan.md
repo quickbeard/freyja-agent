@@ -308,6 +308,75 @@ this plan had folded into the last phase. Each phase that changes a file is a pu
 | SC-001, SC-009 | by hand in the quickstart walk (tasks T073); 100 rows listed in `test_thread_index_api.py`, without a timing |
 | SC-006 | `test_unattended_runs.py`: a paused console run found and decided by a second runtime on the same store |
 
+## Implementation Notes
+
+What was built differently from the plan, phase by phase, and what a later phase should know.
+
+### Phases 1 and 2 as built (2026-11-20)
+
+The starting numbers (T001): 91.25% of the service's lines, with 1,437 tests passed and 108
+skipped; the web app at 97.44% of statements, 95.33% of branches, 97.32% of functions, and
+98.34% of lines, with 419 tests.
+
+- **A run's note is kept until a later run records a step, not until the next run starts.**
+  The data model had `noted` cleared when a lease is taken. A request that is refused after
+  it took the lease, such as a resume with nothing pending, takes and gives back the lease
+  without being a run; it would have wiped how the last run ended, and a thread that failed
+  with no usable model would have turned to done. The row has a column the plan did not
+  have, `noted_at`, written by the clock of the instance that ran the run. A note older than
+  the thread's last checkpoint is dropped when the row is settled. Nothing writes a note
+  before Phase 3; the column is there now because the table is made once.
+- **`settle` and `remove` name the number of runs the caller saw** (`runs`), a column the
+  plan did not have. That is the condition that refuses a late write, in the statement's
+  `WHERE`. The first version named the owner it saw, which the review found too weak.
+- **The statements are plain strings with bound parameters**, as `runtime/locks.py` has
+  them, and none is composed. So no statement needs the `# nosemgrep` mark, and Semgrep
+  reports nothing for the new files.
+- **`running` is read from the lease for every row the list returns**, one read each
+  (research R7). The in-memory lease makes that free in the suite; against Postgres it is
+  up to 100 small reads for a full list.
+- **A run that died with its instance is listed by what its thread's state says**, like any
+  ended run: `stopped` when it left steps to take, and what the thread was before when it
+  had recorded nothing. T006 has both cases; its sentence named only the first.
+- **`tests/integration/conftest.py` is not changed**: it drops every table after a test.
+- **The search for a key and an address (T017) finds nothing it could find yet.** The two
+  routes return how a first message begins and nothing else of a thread until Phase 3 notes
+  a run's error. The test is in place so that Phase 3 adds to it.
+- **Not written first.** The store's tests were written before the store and could only
+  fail on the import. The tests of the routes, the refusal of other origins, and the search
+  were written after the code they cover.
+
+**Read by a reviewer that had not written it**, before the pull request, as the tasks'
+standing rules ask. It found one high, three medium, and five low problems. Each was checked
+against the code before anything was changed, and every test added for one was shown to fail
+with its fix taken out (eleven such checks, none survived).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| High | A first message with a NUL character, or a lone surrogate, cannot be written to a text column. The settle of that one row failed at every reading, and one failed row failed the whole list, for every thread, until the row was mended by hand. The in-memory store takes any string, so the suite could not see it; with the cleaning taken out, the Postgres test fails with the database's own error. | Text is cleaned before it is kept, in both stores. A row that cannot be looked at is left out of the answer, logged, and tried again at the next request. |
+| Medium | A row that nobody had looked at since its run ended was shown with a status worked out from what the row held: a thread that had just paused was `done` and missing from the count for one reading. The window is one database round trip after every run's end, which is when a console reads again. | No status is shown for such a row. The routes settle it within the request, look again when a run started or ended meanwhile, and take the counts last. A settle no longer clears `run_owner`, so the late end of a run that was settled early finds its row and un-settles nothing. |
+| Medium | No test noticed when a read settled the row of a run in progress, which Phase 3 depends on: a note and a stop are written for the row's owner. | The test of a run in progress asserts that its row is left alone. |
+| Medium | The guard on a settle could not tell "no run since" from "a run started and ended since", so a slow reading could keep a status from before a run for good. | The row counts its runs, and a settle names the count it saw (`runs`). |
+| Low | A row kept wrong, after both of the index's writes for a run failed, stayed wrong after being opened, though FR-023 says opening puts it right. | The row route reads the thread's state again each time while no run is in progress. |
+| Low | The lease waited for the index without a limit, and a caller cancelled while the index was told kept a lease it did not know it held. | Five seconds at most (`INDEX_WRITE_SECONDS`), and the lease is given back before the cancellation goes on. |
+| Low | Three tests were weaker than the task they ticked: a late settle was never tried with a stale reading, "the first message" was only tried on threads with one, and "refused before a lease is taken" also held for a lease taken and given back. | Each now fails for the mistake it names. Cases added: a refused request on a paused thread, a pending agent task that waits for an answer. One test was renamed for what it asserts. |
+| Low | One list reading costs a lease read per row it returns, and two first readings after a long silence settle the same rows twice. | Not changed. One statement that joins the lease table would do it, at the price of reading a table that is another module's. Recorded here. |
+| Low | In `AGENTS.md` the new sentences stood between two sentences that belong together, and two tasks described the store as first planned. | Both corrected. |
+
+`INDEX_WRITE_SECONDS` is an eighth number fixed in the code. It is not a deployment's to set:
+it bounds how long a run can be held up by a list it does not need.
+
+**One existing test was changed**, `tests/test_llm_profiles_api.py`: it sent the thread
+routes a body that is not JSON from another origin and expected 422. The refusal of another
+origin now comes first, with 403. FR-027 names the test.
+
+**Checked by hand**, on a check instance on port 8020 with a database of its own and the
+stand-in model on 9977: an empty list; a run started with curl listed as `done` with its
+first message; the row's `changed_at` equal to the state's `updated_at`; 404 for a thread
+nobody ran and 422 for an id the service does not accept; `other_origin` for a request
+marked as cross-site and 422 for a body sent as text; the two rows in `freyja_threads`; and
+the same list after the service was restarted. The database was dropped afterwards.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

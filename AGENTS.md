@@ -59,6 +59,9 @@ Always go through uv. Never call python, pip, or pytest directly.
   3100 itself, so nothing needs to be running, the Freyja service included. `pnpm exec
   playwright install chromium firefox` downloads the two browsers once per machine. The commit
   hook does not run these tests; CI does.
+- The opt-in Postgres tests drop every table of the database they are given after each test.
+  Two sessions that run them at the same time each need a database of their own, such as
+  `freyja_test_tasks`, made once with `createdb` like `freyja_test`.
 - `docker compose up -d postgres` starts the local Postgres the service and the integration
   tests use; its credentials equal `FREYJA_DATABASE_URI` in `.env.example`.
 - `docker build -t freyja-agent .` and `docker build -t freyja-web web` build the two container
@@ -175,12 +178,29 @@ startup and exits with an error naming the connection when it is unreachable.
   built. `Runtime.environment` is the environment's profile as the list shows it, described
   once at startup. `Runtime.model_to_check` builds the model a profile's test asks, and
   `Runtime.checks` and `Runtime.environment_test` hold the tests in progress and the
-  environment's last result, in memory.
+  environment's last result, in memory. `thread_index.py` is the index of threads
+  (feature 007): the `ThreadIndex` store (`PostgresThreadIndex` with `freyja_threads`, and
+  `InMemoryThreadIndex`), one row per thread that has had a run; `IndexedRunLocks`, which
+  `Runtime.assemble` wraps the run lease in, so that every run that takes the lease and gives
+  it back is told to the index, whoever starts it, and whose own writes never fail the lease
+  and hold it up for `INDEX_WRITE_SECONDS` at most; and `settle_thread`, `open_thread`, and
+  `status_of`, which read a thread's state once, keep what a row needs of it, and turn a row
+  into its one status. `Runtime.threads` is the index. A write that is for one run names
+  that run's lease owner, and one made from a reading of a thread's state names the number
+  of runs the row had; either changes nothing once the row has moved on. Whether a run is in
+  progress is the lease's to say, never the row's. Text is cleaned of what a text column
+  does not take before it is kept.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
   `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
   learn whether the agents or the active profile changed, contacts nothing, and lists the
   agents;
+  `thread_index.py` the two routes that list threads (feature 007), `GET /threads` and
+  `GET /threads/{thread_id}`, in a router of their own under the same prefix, which settle
+  the rows whose run ended since they were last read, show no row a status nobody read for
+  it, leave out a row that cannot be read instead of failing the list, contact nothing, and
+  change no thread,
+  with their shapes in `thread_index_schemas.py`;
   `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
   agent's card and saves the agent when it can be used, requiring approval unless the request
@@ -350,6 +370,14 @@ startup and exits with an error naming the connection when it is unreachable.
   The `/llm` routes refuse such a request by what the browser says of it
   (`refuse_other_origins`); a new router that changes operator-managed configuration does the
   same.
+- The thread routes refuse a request that changes something when a browser marks it as made
+  by a page of another origin, as the `/llm` and `/agents` routes do: both thread routers are
+  made with `refuse_other_origins`. `tests/test_threads_other_origins.py` covers every thread
+  route; a new one is added to it.
+- The index of threads returns text from threads, so `tests/test_thread_index_nowhere.py`
+  searches its answers and the log for a recognizable key and a recognizable agent address,
+  with the helpers of the two proofs above. A new route of the index is added to it. The
+  three files are to be joined once feature 005 is done.
 - An end-to-end test of the web app is a `*.spec.ts` file under `web/e2e/`. It adds to the
   unit tests and does not replace them. It never needs the Freyja service: the service's
   answers are handed to the page in the browser, through `web/e2e/api.ts`.

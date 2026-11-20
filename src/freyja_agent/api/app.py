@@ -6,6 +6,7 @@ from fastapi import FastAPI
 
 from freyja_agent.api.agents import router as agents_router
 from freyja_agent.api.llm import router as llm_router
+from freyja_agent.api.thread_index import router as thread_index_router
 from freyja_agent.api.threads import router as threads_router
 from freyja_agent.api.tools import router as tools_router
 from freyja_agent.config import Settings, settings
@@ -50,6 +51,8 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
     app = FastAPI(title="Freyja Orchestrator", lifespan=lifespan)
 
     app.include_router(threads_router)
+    # Feature 007: the list of threads, beside the routes that run them.
+    app.include_router(thread_index_router)
     app.include_router(tools_router)
     app.include_router(llm_router)
     app.include_router(agents_router)
