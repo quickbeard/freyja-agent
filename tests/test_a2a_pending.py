@@ -416,6 +416,9 @@ def record_count(messages: list[dict[str, Any]], kind: str, name: str) -> int:
 # Part 2 (T049): cancels and give-ups.
 
 MAX_AGE = 100.0
+# The call limit of the test of a task's start, longer than LIMIT so that a delay before the
+# acknowledgment cannot eat the margin it checks.
+ACKNOWLEDGED_LIMIT = 2.0
 CANCELED = f"Agent 'stub' canceled task {TASK}."
 DELEGATE = AIMessage(
     content="",
@@ -682,14 +685,22 @@ def test_a_task_starts_when_the_agent_acknowledged_it(
 
     The stand-in acknowledges at once and the call then waits out its limit, so the start lies
     about one limit before the task was recorded, and the maximum age counts from there.
+
+    The limit is the call's, counted from the call's start, so whatever delays the
+    acknowledgment comes out of the time between it and the end of the call. With the
+    module's limit of 0.3 seconds a runner under load left less than the half this test
+    needs, now and then; this test's own limit leaves a whole second for such a delay.
     """
+    limit = ACKNOWLEDGED_LIMIT
     agent = stub()
     model = ScriptedChatModel(script=[handoff("hold: report")], final_text="Given up.")
     clock = RunningClock()
-    made = pending_app(
-        make_a2a_app,
+    made = make_a2a_app(
         model,
-        agent,
+        {"stub": {"read_only": True}},
+        stubs={"stub": agent},
+        a2a_call_timeout_seconds=limit,
+        a2a_poll_interval_seconds=INTERVAL,
         a2a_task_max_age_seconds=MAX_AGE,
         store=InMemoryAgentTaskStore(clock=clock.now),
     )
@@ -699,13 +710,13 @@ def test_a_task_starts_when_the_agent_acknowledged_it(
         listed = state(client, "c-8b")["agent_tasks"][0]
         # Short of the maximum age counted from the end of the call; past it counted from the
         # acknowledgment.
-        clock.advance(MAX_AGE - LIMIT / 2)
+        clock.advance(MAX_AGE - limit / 2)
         tick(client, made.runtime)
         given_up = record(client, made, TASK)
         agent.release()
 
     before_the_call_ended = (task.last_checked_at - task.started_at).total_seconds()
-    assert LIMIT / 2 <= before_the_call_ended < LIMIT + 1
+    assert limit / 2 <= before_the_call_ended < limit + 1
     assert datetime.fromisoformat(listed["started_at"]) == task.started_at
     assert given_up.state == "given_up"
     assert agent.record.cancels == []
