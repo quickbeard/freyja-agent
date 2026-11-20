@@ -1544,3 +1544,676 @@ describe("a task's page, a decision that was not applied, and another message", 
     answer.close();
   });
 });
+
+// Phase 8: leaving a run, coming back to it, and Stop (FR-021, FR-022, FR-022a).
+
+describe("a task's page and Stop", () => {
+  const STOPPING = "The run is stopping. The step under way completes first.";
+  const TOO_LATE =
+    "The run ended before the stop took effect. The task is shown as it ended.";
+  const NO_STOP = /^This run has no Stop: the console did not start it\./;
+  const ACCEPTED = { status: 202, json: { thread_id: "t-1", stopping: true } };
+  const STOPPED = sse("end", { status: "stopped" });
+  const stop = () => screen.queryByRole("button", { name: /^Stop/ });
+  const pause = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+  const stops = (asked: { method: string; path: string }[]) =>
+    asked.filter(({ path }) => path === "/threads/t-1/stop");
+
+  /**
+   * A run of this page on a new task: what it streams is the test's, and what the service
+   * holds once it has ended is `after`.
+   */
+  function ownRun(
+    after: () => {
+      row: Parameters<typeof summary>[0];
+      messages: ReturnType<typeof human>[];
+      pending?: PendingDecision;
+    },
+  ) {
+    const answer = openBody();
+    let over = false;
+    const asked = serve((method, path) => {
+      if (method === "POST") {
+        return ACCEPTED;
+      }
+      if (!over) {
+        return NOT_USED;
+      }
+      const { row, messages, pending } = after();
+      return path.endsWith("/state")
+        ? { json: state(messages, { pending: pending ?? null }) }
+        : { json: summary(row) };
+    });
+    begin("t-1", "List the files.", answer.stream);
+    renderView();
+    return {
+      asked,
+      answer,
+      end(...events: string[]) {
+        over = true;
+        answer.send(...events);
+        answer.close();
+      },
+    };
+  }
+
+  it("offers Stop for a run of this page once it has started, and shows the task as stopped when the run ends so", async () => {
+    const { asked, answer, end } = ownRun(() => ({
+      row: { status: "stopped" },
+      messages: [human("List the files."), ai("Here is the first")],
+    }));
+    // Not before the service has said that the run started.
+    expect(stop()).toBeNull();
+    answer.send(START, chunk("Here is the first"));
+    const button = await screen.findByRole("button", {
+      name: "Stop the run of the task: List the files.",
+    });
+    button.focus();
+    fireEvent.click(button);
+
+    expect(await screen.findByText(STOPPING)).toBeTruthy();
+    expect(stop()).toBeNull();
+    // The button is gone; the focus is on what the page says of the run.
+    expect(document.activeElement?.tagName).toBe("OUTPUT");
+    expect(document.activeElement?.textContent).toBe(STOPPING);
+    expect(stops(asked)).toEqual([
+      { method: "POST", path: "/threads/t-1/stop", body: undefined },
+    ]);
+    // Stopping, not stopped: the service has not said that the run has ended.
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(screen.queryByText("Stopped")).toBeNull();
+
+    end(STOPPED);
+    await waitFor(() => expect(screen.getByText("Stopped")).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(STOPPING)).toBeNull());
+    // What the run completed is kept, and the task takes another message.
+    expect(conversation()).toContain("Here is the first");
+    expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+    expect(screen.queryByRole("alert")).toBeNull();
+    fireEvent.change(followUp(), { target: { value: "Go on." } });
+    expect(sendMessage().disabled).toBe(false);
+    expect(stop()).toBeNull();
+  });
+
+  it.each([
+    [
+      "paused on a proposal",
+      sse("interrupt", PROPOSAL("int-1")),
+      {
+        row: { status: "needs_decision" as const },
+        messages: [human("List the files."), ASKED],
+        pending: PROPOSAL("int-1"),
+      },
+      "Needs your decision",
+    ],
+    [
+      "finished",
+      END,
+      {
+        row: { status: "done" as const },
+        messages: [human("List the files."), ai("All of them.")],
+      },
+      "Done",
+    ],
+    [
+      "failed",
+      sse("error", { code: "model_error", message: "The model failed." }),
+      {
+        row: {
+          status: "failed" as const,
+          error: { code: "model_error", message: "The model failed." },
+        },
+        messages: [human("List the files.")],
+      },
+      "Failed",
+    ],
+  ])("shows a run that %s after a stop was asked as it ended, and says the stop came too late", async (_how, last, after, status) => {
+    const { answer, end } = ownRun(() => after);
+    answer.send(START);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Stop the run of the task: List the files.",
+      }),
+    );
+    expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+    end(last);
+    await waitFor(() => expect(screen.getByText(status)).toBeTruthy());
+    expect(await screen.findByText(new RegExp(TOO_LATE))).toBeTruthy();
+    // Never as stopped, and no longer as stopping.
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText(STOPPING)).toBeNull();
+    expect(stop()).toBeNull();
+  });
+
+  it("stops saying that a stop came too late once another message is sent", async () => {
+    const { answer, end } = ownRun(() => ({
+      row: { status: "done" },
+      messages: [human("List the files."), ai("All of them.")],
+    }));
+    answer.send(START);
+    fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+    await screen.findByText(STOPPING);
+    end(END);
+    await screen.findByText(new RegExp(TOO_LATE));
+
+    // The next message's run is answered as a stream that stays open.
+    const next = openBody();
+    serve((method, path) =>
+      method === "POST"
+        ? { stream: next.stream }
+        : path.endsWith("/state")
+          ? { json: state([human("List the files."), ai("All of them.")]) }
+          : { json: summary() },
+    );
+    fireEvent.change(followUp(), { target: { value: "Thanks." } });
+    fireEvent.click(sendMessage());
+    await waitFor(() =>
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull(),
+    );
+    next.send(START, END);
+    next.close();
+  });
+
+  it("offers Stop for a console run it does not read, says stopping, and shows it stopped when the service does", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let step = 0;
+      const asked = serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          return ACCEPTED;
+        }
+        if (path.endsWith("/state")) {
+          return { json: state([human("Count slowly."), ai("One")]) };
+        }
+        const answer = {
+          json: summary({
+            first_message: "Count slowly.",
+            status: step < 2 ? "running" : "stopped",
+            stoppable: step < 2,
+            stopping: step === 1,
+          }),
+        };
+        // The reading made after the stop takes a moment to come.
+        return step === 1 ? later(60, answer) : answer;
+      });
+      const rows = () =>
+        asked.filter(({ path }) => path === "/threads/t-1").length;
+      renderView();
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Stop the run of the task: Count slowly.",
+        }),
+      );
+      await waitFor(() => expect(rows()).toBe(2));
+      // Stopping from the press on, before the row says so: no Stop to press meanwhile.
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+      expect(stop()).toBeNull();
+      expect(stops(asked)).toHaveLength(1);
+
+      // The step under way takes its time: the page still says stopping at the next reading.
+      await pause(100);
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(rows()).toBe(3));
+      await pause(100);
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+      expect(screen.getByText("Running")).toBeTruthy();
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(screen.getByText("Stopped")).toBeTruthy());
+      await waitFor(() => expect(screen.queryByText(STOPPING)).toBeNull());
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+      expect(stop()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says that a stop came too late for a run it followed by reading, which paused on a proposal", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let step = 0;
+      serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          return ACCEPTED;
+        }
+        if (path.endsWith("/state")) {
+          // While the run is in progress, the conversation's reading says so too. Once it
+          // has ended, the conversation's reading is answered after the row's, so the page
+          // holds for a moment a row that says paused beside a conversation that says a
+          // run is active.
+          const answer = {
+            json: state([human("Tell #ops."), ASKED], {
+              run_active: step < 2,
+              pending: step < 2 ? null : PROPOSAL("int-1"),
+            }),
+          };
+          return step < 2 ? answer : later(30, answer);
+        }
+        return {
+          json: summary({
+            first_message: "Tell #ops.",
+            status: step < 2 ? "running" : "needs_decision",
+            stoppable: step < 2,
+            stopping: step === 1,
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(screen.getByText("Needs your decision")).toBeTruthy(),
+      );
+      expect(await screen.findByText(new RegExp(TOO_LATE))).toBeTruthy();
+      expect(screen.queryByText(STOPPING)).toBeNull();
+      expect(screen.queryByText("Stopped")).toBeNull();
+      expect(
+        await screen.findByRole("button", {
+          name: "Approve send_notification",
+        }),
+      ).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says that a run is stopping when the stop was asked elsewhere", async () => {
+    serve((_method, path) =>
+      path.endsWith("/state")
+        ? { json: state([human("Count slowly.")]) }
+        : {
+            json: summary({
+              status: "running",
+              stoppable: true,
+              stopping: true,
+            }),
+          },
+    );
+    renderView();
+    expect(await screen.findByText(STOPPING)).toBeTruthy();
+    expect(stop()).toBeNull();
+  });
+
+  it("offers no Stop for a run in progress that the console did not start, and says why", async () => {
+    serve((_method, path) =>
+      path.endsWith("/state")
+        ? { json: state([human("Count slowly.")]) }
+        : { json: summary({ status: "running", stoppable: false }) },
+    );
+    renderView();
+    expect(await screen.findByText(NO_STOP)).toBeTruthy();
+    expect(stop()).toBeNull();
+  });
+
+  it.each([
+    ["done", {}],
+    ["stopped", {}],
+    ["needs_decision", { pending: PROPOSAL("int-1") }],
+  ] as const)("offers no Stop, and says nothing of one, for a task that is %s", async (status, values) => {
+    serve((_method, path) =>
+      path.endsWith("/state")
+        ? { json: state([human("Tell #ops."), ASKED], values) }
+        : // A row that says stoppable with no run in progress is not believed.
+          { json: summary({ status, stoppable: true }) },
+    );
+    renderView();
+    await waitFor(() => expect(conversation()).toContain("Tell #ops."));
+    expect(stop()).toBeNull();
+    expect(screen.queryByText(NO_STOP)).toBeNull();
+    expect(screen.queryByText(STOPPING)).toBeNull();
+  });
+
+  it("says that no run is in progress when the run ended as Stop was pressed, and shows the task as it is", async () => {
+    let pressed = false;
+    const asked = serve((method, path) => {
+      if (method === "POST") {
+        pressed = true;
+        return refusal(409, "no_run", "No run is in progress on this thread.");
+      }
+      if (path.endsWith("/state")) {
+        return {
+          json: state(
+            pressed
+              ? [human("Count slowly."), ai("One, two, three.")]
+              : [human("Count slowly.")],
+          ),
+        };
+      }
+      return {
+        json: summary({
+          status: pressed ? "done" : "running",
+          stoppable: !pressed,
+        }),
+      };
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /No run is in progress on this task any more, so nothing was stopped/,
+    );
+    await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+    await waitFor(() => expect(conversation()).toContain("One, two, three."));
+    expect(screen.queryByText("Stopped")).toBeNull();
+    expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+    expect(screen.queryByText(STOPPING)).toBeNull();
+    expect(stop()).toBeNull();
+    expect(stops(asked)).toHaveLength(1);
+  });
+
+  it("offers Stop again when the service says another run is in progress, not the one that was stopping", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let pressed = false;
+      serve((method, path) => {
+        if (method === "POST") {
+          pressed = true;
+          return ACCEPTED;
+        }
+        if (path.endsWith("/state")) {
+          return { json: state([human("Count slowly.")]) };
+        }
+        // After the stop the row is another run's: in progress, and nobody asked it to stop.
+        return {
+          json: summary({
+            status: "running",
+            stoppable: true,
+            stopping: false,
+            changed_at: pressed
+              ? "2026-11-20T08:05:00Z"
+              : "2026-11-20T08:00:04Z",
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      // The reading after the stop says the run in progress is not stopping.
+      await waitFor(() => expect(stop()).not.toBeNull());
+      expect(screen.queryByText(STOPPING)).toBeNull();
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// Phase 8, from the review: what the page holds from before says nothing of how a run ended.
+
+describe("a task's page, Stop, and readings that come late", () => {
+  const STOPPING = "The run is stopping. The step under way completes first.";
+  const TOO_LATE =
+    "The run ended before the stop took effect. The task is shown as it ended.";
+  const NO_STOP = /^This run has no Stop/;
+  const ACCEPTED = { status: 202, json: { thread_id: "t-1", stopping: true } };
+  const stop = () => screen.queryByRole("button", { name: /^Stop/ });
+  const pause = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  it.each([
+    [
+      "as stopped",
+      sse("end", { status: "stopped" }),
+      { status: "stopped" as const, pending: null },
+      false,
+    ],
+    [
+      "by pausing on a proposal",
+      sse("interrupt", PROPOSAL("int-1")),
+      { status: "needs_decision" as const, pending: PROPOSAL("int-1") },
+      true,
+    ],
+  ])("settles a stop on a run it reads by the run's last event, when the run ends %s and the row says running a moment longer", async (_how, last, after, late) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // 0: the run is in progress. 1: a stop was accepted. 2: the run's last event was
+      // sent, and the row still says running. 3: the row says how the run ended. 4: another
+      // run is in progress, which nobody asked to stop.
+      let phase = 0;
+      const answer = openBody();
+      serve((method, path) => {
+        if (method === "POST") {
+          phase = 1;
+          return ACCEPTED;
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state([human("List the files."), ASKED], {
+              run_active: phase < 3 || phase === 4,
+              pending: phase === 3 ? after.pending : null,
+            }),
+          };
+        }
+        return {
+          json: summary({
+            first_message: "List the files.",
+            status: phase === 3 ? after.status : "running",
+            stoppable: phase !== 3,
+            stopping: phase === 1 || phase === 2,
+          }),
+        };
+      });
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START);
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+      phase = 2;
+      answer.send(last);
+      answer.close();
+      // With the timer faked, a wait is woken by a change of the page, not by the store.
+      await pause(100);
+      expect(get("t-1")).toBeUndefined();
+      // The event said how this run ended; the row's "running" changes nothing of it.
+      expect(screen.queryByText(new RegExp(TOO_LATE)) !== null).toBe(late);
+
+      phase = 3;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(
+          screen.getByText(late ? "Needs your decision" : "Stopped"),
+        ).toBeTruthy(),
+      );
+      await pause(50);
+      expect(screen.queryByText(STOPPING)).toBeNull();
+      expect(screen.queryByText(new RegExp(TOO_LATE)) !== null).toBe(late);
+      expect(stop()).toBeNull();
+
+      // Another run starts elsewhere: what was said of the earlier one goes.
+      phase = 4;
+      fireEvent.focus(window);
+      await waitFor(() => expect(stop()).not.toBeNull());
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+      expect(screen.queryByText(STOPPING)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("offers no Stop from the row it held during its own run, between that run's end and the reading after it", async () => {
+    let over = false;
+    const answer = openBody();
+    serve((_method, path) => {
+      const reply = path.endsWith("/state")
+        ? {
+            json: state(
+              over
+                ? [human("List the files."), ai("All of them.")]
+                : [human("List the files.")],
+              { run_active: !over },
+            ),
+          }
+        : {
+            json: summary({
+              first_message: "List the files.",
+              status: over ? "done" : "running",
+              stoppable: !over,
+            }),
+          };
+      return over ? later(80, reply) : reply;
+    });
+    begin("t-1", "List the files.", answer.stream);
+    renderView();
+    answer.send(START);
+    expect(await screen.findByRole("button", { name: /^Stop/ })).toBeTruthy();
+
+    over = true;
+    answer.send(END);
+    answer.close();
+    await waitFor(() => expect(get("t-1")?.ended ?? null).not.toBeNull());
+    await pause(10);
+    // The run has ended; the row that says "running" is from before.
+    expect(stop()).toBeNull();
+    expect(screen.queryByText(NO_STOP)).toBeNull();
+    await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+    expect(stop()).toBeNull();
+  });
+
+  it("does not offer a recorded message again when a refused stop's readings took the place of the readings after the run", async () => {
+    // A follow-up runs; Stop is pressed; the run fails before the stop is answered, and the
+    // stop is refused, since no run is in progress any more. The readings asked for at the
+    // run's end are replaced by the ones asked for after the refusal, and are answered with
+    // what the page held: the conversation from before the run.
+    const NO_RUN = refusal(
+      409,
+      "no_run",
+      "No run is in progress on this thread.",
+    );
+    let posted = false;
+    let failed = false;
+    const run = openBody();
+    let accept: (value: typeof NO_RUN) => void = () => {};
+    serve((method, path) => {
+      if (method === "POST" && path.endsWith("/stop")) {
+        return new Promise<typeof NO_RUN>((resolve) => {
+          accept = resolve;
+        });
+      }
+      if (method === "POST") {
+        posted = true;
+        return { stream: run.stream };
+      }
+      const reply = path.endsWith("/state")
+        ? {
+            json: state(
+              failed
+                ? [
+                    human("Summarize the week."),
+                    ai("Here it is."),
+                    human("And the week before?", "h-2"),
+                  ]
+                : [human("Summarize the week."), ai("Here it is.")],
+            ),
+          }
+        : {
+            json: failed
+              ? summary({
+                  status: "failed",
+                  error: { code: "model_error", message: "The model failed." },
+                })
+              : summary({ status: posted ? "running" : "done" }),
+          };
+      return failed ? later(60, reply) : reply;
+    });
+    renderView();
+    await waitFor(() => expect(conversation()).toContain("Here it is."));
+    fireEvent.change(followUp(), { target: { value: "And the week before?" } });
+    fireEvent.click(sendMessage());
+    run.send(START);
+    fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+
+    failed = true;
+    run.send(
+      sse("error", { code: "model_error", message: "The model failed." }),
+    );
+    run.close();
+    await waitFor(() => expect(get("t-1")?.ended ?? null).not.toBeNull());
+    // The stop is answered while the readings made at the run's end are on their way.
+    await pause(10);
+    accept(NO_RUN);
+
+    await waitFor(() => expect(get("t-1")).toBeUndefined());
+    await waitFor(() => expect(screen.getByText("Failed")).toBeTruthy());
+    // The message is in the conversation, and is not put back in the box to be sent twice.
+    expect(conversation()).toContain("And the week before?");
+    expect(followUp().value).toBe("");
+  });
+
+  it("says nothing of Stop for a run only the conversation's reading knows of", async () => {
+    serve((_method, path) =>
+      path.endsWith("/state")
+        ? { json: state([human("Hand it over.")], { run_active: true }) }
+        : { json: summary({ status: "done", stoppable: false }) },
+    );
+    renderView();
+    expect(
+      await screen.findByText(
+        "A run is in progress. This page reads the task again until it ends.",
+      ),
+    ).toBeTruthy();
+    expect(stop()).toBeNull();
+    expect(screen.queryByText(NO_STOP)).toBeNull();
+  });
+
+  it("stops saying that a stop was refused once one is accepted", async () => {
+    let presses = 0;
+    serve((method, path) => {
+      if (method === "POST") {
+        presses += 1;
+        return presses === 1
+          ? refusal(409, "not_stoppable", "This run cannot be stopped yet.")
+          : ACCEPTED;
+      }
+      if (path.endsWith("/state")) {
+        return { json: state([human("Count slowly.")]) };
+      }
+      return {
+        json: summary({
+          status: "running",
+          stoppable: true,
+          stopping: presses > 1,
+        }),
+      };
+    });
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /The service did not stop this run/,
+    );
+
+    fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+    expect(await screen.findByText(STOPPING)).toBeTruthy();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+describe("a task's page that is left while its run streams", () => {
+  it("sends nothing, and leaves the run going", async () => {
+    const answer = openBody();
+    const asked = serve(() => NOT_USED);
+    begin("t-1", "List the files.", answer.stream);
+    const { unmount } = renderView();
+    answer.send(START, chunk("Here"));
+    await waitFor(() => expect(conversation()).toContain("Here"));
+    const before = asked.length;
+
+    unmount();
+    // No stop, no decision, no message: leaving is not a request (FR-021).
+    expect(asked.filter(({ method }) => method !== "GET")).toEqual([]);
+    expect(asked).toHaveLength(before);
+    // The run's stream is still read in this tab, for the page that shows it next.
+    expect(get("t-1")?.ended).toBeNull();
+    answer.send(chunk(" you are"), END);
+    answer.close();
+    await waitFor(() => expect(get("t-1")?.ended?.kind).toBe("event"));
+    expect(asked.filter(({ method }) => method !== "GET")).toEqual([]);
+  });
+});

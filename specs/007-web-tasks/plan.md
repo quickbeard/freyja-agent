@@ -706,6 +706,95 @@ failed until it was restarted.
 **Left for later**: what was typed into the box while a follow-up that recorded nothing
 failed (the table's last Low), and Stop, which is Phase 8's.
 
+### Phase 8 as built (2026-11-20)
+
+Built as research R12 to R14 describe. Leaving and coming back needed no code: since Phase 4
+the console starts every run as one that goes on without a reader, and since Phase 7 a page
+follows a run it does not read. This phase adds the tests that pin it, and Stop. The
+differences and additions:
+
+- **Where Stop is offered.** For a run of this tab, once its `start` event has arrived: the
+  service marks a run as one that can be stopped at that event, and the row the page holds
+  is from before the run. For a run the page follows by reading, when the row says
+  `stoppable`. With no run in progress there is no Stop whatever the row says, also not in
+  the moment between the end of the tab's own run and the reading after it. A run in
+  progress that the row does not call stoppable has no Stop and a sentence that says why;
+  a console run read in the instant before its first event shows that sentence until the
+  next reading, five seconds at most.
+- **"Stopping" is said from two sources**: the page's own memory of a stop the service
+  accepted, at once, and the row's `stopping`, which also covers a stop asked in another
+  window. The task is shown as stopped only when the row says so.
+- **How an asked stop is settled.** A page that reads the run's stream is told by the run's
+  last event, which is about this run and no other: `end` with `stopped`, or anything else,
+  which is "the run ended before the stop took effect" (FR-022a). A page that follows the
+  run by reading remembers how many readings of the row had been answered when the stop
+  was accepted, asks for one more, and is told by a later one: still stopping, wait;
+  another run in progress that nobody asked to stop, forget the stop and say nothing; ended
+  as stopped, nothing more to say; ended another way, say that the stop came too late.
+- **The "too late" sentence stays until the task's next run**: a decision or a message of
+  this page, or a run the row shows once it has said that the earlier one was over. Only
+  the page that asked says it, and a reload forgets it.
+- **Everything the page says of a run is in the one status element** Phase 7 made, "stopping"
+  and "too late" included, so that it is announced as a change and not as a new element.
+  The focus goes there when a stop is accepted, since the button goes away.
+- **Refusals** (`no_run`, `not_stoppable`, a thread the list does not know, no answer) are
+  said in the page's notice, in the console's words for the first two and for no answer
+  and in the service's otherwise, and the task is read again, as for a decision that was
+  not applied.
+- **The control's name** is "Stop the run of the task:" with how the task's first message
+  begins, 60 characters at most, and "Stop" on the screen (FR-012a).
+- **A run's end waits for a reading of the conversation made after it** (`readAfter`). The
+  readings of the row and of the conversation are both counted now. Found by the review:
+  a reading asked for meanwhile, as after a refused stop, takes the place of the one made
+  at the run's end, which is then answered with what the page already held.
+- **`TaskService`** (the end-to-end helper) answers a stop as the service rules it and keeps
+  each in `stops`; `runningTask` and `goesOn` make a run in progress and a run whose stream
+  stops while the run goes on, which is how a closed page is played.
+- **Found by the end-to-end run before the review**: for a run followed by reading, the
+  "too late" sentence was taken away at once by an older reading of the conversation that
+  still said a run was active. What ends the sentence is now the row alone.
+
+**Read by a reviewer that had not written it.** It found nothing of high severity, and no
+stop, decision, or message that is sent without a press: for opening, reloading, leaving,
+and Enter in a field. It found two races and some smaller gaps, and tests that let mutations
+through. Each was checked against the code, and each test added or tightened was shown to
+fail with its fix taken out (twenty-five checks for this phase).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium | "Too late" was read from the first reading that said no run was in progress, which can be of a later run: after a stop that was applied, a run started and ended elsewhere before the page read again, and the page said the stop came too late. | A page that reads the stream is told by the run's last event. For a page that follows by reading it is not changed: the row names no run. Recorded below. |
+| Medium, narrow | A refused stop's readings took the place of the readings made at a run's end. The page then took the conversation from before the run for the one after it, and for a follow-up that failed put the recorded message back in the box, to be sent twice. | A run's end waits for a reading of the conversation answered after it. |
+| Low | Pressing Stop dropped the focus to the top of the page, and "stopping" and "too late" stood in elements that appear with their text, which may not be announced. | Both are said in the one status element, which takes the focus. |
+| Low | Between the end of the tab's own run and the reading after it, Stop, or "has no Stop", was shown from the row held during the run. | Nothing of Stop is shown in that moment. |
+| Low | A stop asked for stayed remembered when this page then started another run. | It is forgotten at a decision and at a message. No test pins it: it needs a reading of the row that fails at the right moment. |
+| Not changed | A stop that got no answer and was in fact accepted is never followed by "too late"; the sentence is not shown on the two short pages that hold no conversation. | The row's `stopping` still says that the run is stopping. Recorded here. |
+| Test | The tests of the tab's own run answered every reading with "not found" until the run ended, where the service says running and stopping. A press before the page drew again, the name's length, "stopping" between the press and the next row, a run only the conversation's reading knows of, a refusal that stays after an accepted stop, and a wait that passed before its reading was answered all passed. | One test or assertion each; the own-run test now has a row that goes on saying "running" for a moment after the run's last event. |
+| Test | No browser test presses Stop on a page that reads the run's stream: the helper hands a page its stream whole. | Not changed. Unit tests cover it; only the stand-in of `stream.spec.ts` could, and it has no stop. Recorded here. |
+
+**What a page that follows by reading cannot know.** After a stop it asked for, such a page
+learns how the run ended from its next reading of the row, which names no run. If the run
+ended and another started and ended before that reading, which takes a hidden tab or a
+five-second gap, the page says the stop came too late when it did not. If a paused run was
+decided elsewhere before that reading, the page says nothing. Telling the two apart needs
+the row to carry the run it describes, which is the service's to add.
+
+**Checked by hand** on a check instance on port 8020 with a database of its own, the
+stand-in model on 9977 answering as `slow`, and the console on 3020, driven by a script in a
+real Chromium: a task sent and its page closed as soon as the run had started sent one
+request, the run's, and nothing at closing; the service showed the run as running and
+stoppable, and 26 seconds later, nobody watching, as done; the page opened again showed
+Done with both messages and no Stop. Stop, named "Stop the run of the task: Count slowly.",
+was followed 51 ms later by "The run is stopping", with no Stop meanwhile and the status
+still Running; the service's row said `stopping`; when the reply under way was complete,
+20 seconds later, the task was Done and the page said that the run ended before the stop
+took effect, and the follow-up could be sent. A run another client started and read itself
+had no Stop and the sentence that says why, and showed Done without a reload when it ended.
+The database was dropped afterwards. A task that ends as stopped needs a run with a step
+after the one under way, which the stand-in model, answering in text only, never has: that
+is the unit and end-to-end tests', and the service's own (`tests/test_unattended_stop.py`).
+
+**Left for later**: Phase 9 (the checks from another origin) and Phase 10 (polish).
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

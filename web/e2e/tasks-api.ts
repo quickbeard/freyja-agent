@@ -125,6 +125,8 @@ export class TaskService {
   readonly sent: { threadId: string; message: string }[] = [];
   /** Every decision the pages sent, in order. */
   readonly decided: ({ threadId: string } & DecisionBody)[] = [];
+  /** Every task the pages asked to stop a run of, in order, also when it was refused. */
+  readonly stops: string[] = [];
 
   constructor(
     private run: (threadId: string, message: string) => RunAnswer = finished(
@@ -232,6 +234,48 @@ export class TaskService {
       const body = request.postDataJSON() as DecisionBody;
       this.decided.push({ threadId, ...body });
       await this.respond(route, threadId, this.resume(threadId, body));
+      return;
+    }
+    if (request.method() === "POST" && tail === "stop") {
+      // Phase 8: the stop, as the service rules it. An accepted stop marks the row; the run
+      // ends when the test says so, as a step under way takes its time.
+      this.stops.push(threadId);
+      const running = this.tasks.get(threadId);
+      const refused: Refusal | null =
+        running === undefined
+          ? {
+              status: 404,
+              code: "thread_not_found",
+              message: "No run on this thread is known.",
+            }
+          : running.row.status !== "running"
+            ? {
+                status: 409,
+                code: "no_run",
+                message: "No run is in progress on this thread.",
+              }
+            : !running.row.stoppable
+              ? {
+                  status: 409,
+                  code: "not_stoppable",
+                  message:
+                    "This run was not started by the console, so it cannot be stopped from here: a client that reads its own stream stops it by closing the stream, and a run the service started ends by itself.",
+                }
+              : null;
+      if (refused !== null || running === undefined) {
+        await this.respond(route, threadId, {
+          refusal: refused as Refusal,
+        });
+        return;
+      }
+      this.tasks.set(threadId, {
+        ...running,
+        row: { ...running.row, stopping: true },
+      });
+      await route.fulfill({
+        status: 202,
+        json: { thread_id: threadId, stopping: true },
+      });
       return;
     }
     const task = this.tasks.get(threadId);
@@ -491,4 +535,42 @@ export function agentTask(values: Partial<AgentTask> = {}): AgentTask {
     outcome_delivered: false,
     ...values,
   };
+}
+
+// Phase 8: a run in progress, and a run whose page stops reading it.
+
+/** A task whose run is in progress, as the service holds it; a console run unless said. */
+export function runningTask(
+  threadId: string,
+  message: string,
+  written: string | null = null,
+  values: Partial<ThreadSummary> = {},
+): { row: ThreadSummary; state: ThreadState } {
+  return {
+    row: summary(threadId, {
+      first_message: message,
+      status: "running",
+      stoppable: true,
+      ...values,
+    }),
+    state: threadState(
+      threadId,
+      written === null ? [human(message)] : [human(message), ai(written)],
+      { run_active: true },
+    ),
+  };
+}
+
+/**
+ * A run that is accepted and goes on after its stream stops: the page gets the start of the
+ * reply and no last event, as when its connection is lost, and the service holds a run in
+ * progress.
+ */
+export function goesOn(
+  written: string,
+): (id: string, message: string) => RunAnswer {
+  return (id, message) => ({
+    events: [start(id), piece(written)],
+    after: runningTask(id, message, written),
+  });
 }
