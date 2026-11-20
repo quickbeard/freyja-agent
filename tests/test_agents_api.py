@@ -709,6 +709,35 @@ def test_an_address_that_leads_where_another_agent_s_does_is_refused_before_any_
     assert not holds_port(response.text, 9101) and not holds_port(response.text, 9999)
 
 
+# An environment entry written in a way the saved form refuses still leads to its port and
+# path, and no saved agent may be put there (005 Phase 11, T124).
+ENVIRONMENT_SPELLINGS = {
+    "with-a-query": "http://localhost:9620/a2a?token=x",
+    "with-a-user-name": "http://u:p@localhost:9620/a2a",
+    "with-a-fragment": "http://localhost:9620/a2a#f",
+    "with-an-encoded-path": "http://localhost:9620/a%32a",
+    "with-a-doubled-slash": "http://localhost:9620//a2a",
+    "with-dot-segments": "http://localhost:9620/x/../a2a/.",
+}
+
+
+@pytest.mark.parametrize("case", list(ENVIRONMENT_SPELLINGS))
+def test_an_address_where_an_environment_entry_the_saved_form_refuses_leads_is_refused(
+    make_a2a_app: Callable[..., A2aApp], case: str
+) -> None:
+    made = make_a2a_app(ScriptedChatModel(), {"desk": {"url": ENVIRONMENT_SPELLINGS[case]}})
+    with TestClient(made.app) as client:
+        before = what_exists(client)
+        response = add(client, url="http://127.0.0.1:9620/a2a")
+        after = what_exists(client)
+    assert refusal(response, 409, "address_taken") == {
+        "code": "address_taken",
+        "message": "An agent named in the environment is at this address.",
+    }
+    assert after == before
+    assert not holds_port(response.text, 9620)
+
+
 def test_the_twenty_first_agent_is_refused_before_any_card_is_read(
     make_a2a_app: Callable[..., A2aApp],
 ) -> None:

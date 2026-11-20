@@ -79,7 +79,7 @@ FREYJA_A2A_AGENTS='{"hello": {"url": "http://10.0.0.5:9999"}}'
 | Setting | Default | Meaning |
 |---|---|---|
 | `FREYJA_A2A_CALL_TIMEOUT_SECONDS` | `30` | How long a hand-off, answer, or cancel waits within a run. A task still working then becomes pending. |
-| `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` | `20` | Per agent, for reading its card at startup. |
+| `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` | `20` | Per agent, for reading its card at startup. Since feature 005 it also bounds the card read of an add, a move, and a check, which never takes longer than 20 seconds. |
 | `FREYJA_A2A_POLL_INTERVAL_SECONDS` | `10` | How often pending tasks are checked and outcomes delivered. |
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up. |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |

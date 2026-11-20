@@ -1402,3 +1402,37 @@ and 7 can proceed at the same time once Phase 5 is merged.
     data-model.md fixes.
   - `DelegateTool` gains `agent_id` (T061), so the middleware knows which saved agent a tool
     is for; the catalog's shape in `/tools` does not change.
+
+## Phase 11: Convergence
+
+- [X] T122 CRITICAL: Record a person's approve or edit decision on each proposed call of an
+      agent's tool when a resume is accepted (`decided` on the call's row, a column of
+      `freyja_agent_calls`), and have `_still_allowed` in `src/freyja_agent/delegates/a2a_tools.py`
+      treat a call as decided only when its row records that decision, in place of inferring it
+      from the row's `gated` and the tool; test the sequence that sends without a decision today
+      (proposed while the agent requires approval, the checkpoint after it fails, retried while
+      it runs without approval, the tool's step fails, retried after it requires approval again)
+      per Constitution I, FR-022 (contradicts)
+- [X] T123 Remove an environment agent's whole address from what the process logs: the query,
+      the fragment, the parameters, and the user info that follow or precede the host and port the
+      scrubber finds, in `src/freyja_agent/delegates/addresses.py`, with a test of httpx's request
+      line for an entry with a query per FR-028, FR-017 (partial)
+- [X] T124 Compare every environment entry's port and path with saved addresses, an entry the
+      saved form refuses included (a query, a user name, a fragment, an encoded or doubled path),
+      in `src/freyja_agent/delegates/agent_registry.py`, so that no saved agent is added or moved
+      where such an entry leads per FR-006, FR-017 (contradicts)
+- [X] T125 Say in the sidebar's visible text what its number is about, not only for assistive
+      technology, in `web/components/app-sidebar.tsx`, with its unit and end-to-end tests per
+      FR-001a, SC-017 (partial)
+- [X] T126 Say that the outcome is not known when a check gets no answer, and read the list
+      again, in `web/components/agents/agent-card.tsx` per FR-004 (partial)
+- [X] T127 Show the agent as the list has it now (address, approval choice, state, pending tasks)
+      in the removal confirmation, in `web/components/agents/remove-dialog.tsx` per FR-011
+      (partial)
+- [X] T128 Correct the documents: record in `plan.md` the renamed table test of
+      `tests/integration/test_a2a_tasks_postgres.py`, point the FR-027 row of the requirement to
+      test map at `tests/test_agents_startup.py` for the proxy, add the 422 for an id in neither
+      form and the 500 `internal` to the Agents routes in `README.md`, and say in `.env.example`
+      and `specs/003-a2a-agent-delegation/contracts/agent-config.md` that
+      `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` also bounds the card read of an add, a move, and a
+      check per T119, T115, plan: requirement to test map (partial)

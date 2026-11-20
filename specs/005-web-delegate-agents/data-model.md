@@ -145,6 +145,7 @@ One row per call of an agent's tool, saved or from the environment, that a model
 | `agent` | text | The agent's name. |
 | `agent_id` | text, null | The saved agent's id when the call was proposed; null for an environment agent. |
 | `gated` | boolean | Whether the call needed a decision when it was proposed. |
+| `decided` | boolean, default false | Whether a person approved or edited the call: set in a resume, right after the approval gate received the decisions (Phase 11). A tool that waits for a person sends only a call whose row says so. |
 | `proposed_at` | timestamptz | The database's clock. |
 
 Written when the model's reply holds the call, on the orchestrator and on its subagent: the
@@ -152,6 +153,14 @@ rows of the thread and namespace are replaced by the reply's. A row is deleted w
 has finished its send. A run that starts with input deletes whatever rows its thread still
 has. A row therefore lasts from the reply that proposed its call until the call was sent, the
 next reply in the same place, or the thread's next run with input, whichever comes first.
+`decided` is set only by the step that runs right after the gate's own in a resume, in the
+namespace of the gate whose interrupt the resume decides, for each call of the reply that
+gate paused on, by id, at the first run of that step in the namespace in the resume, that
+the person was shown in that interrupt and approved or edited,
+matched by name and arguments, and that the gate did not answer itself, as it answers a
+rejection. The column was added in Phase 11, to a
+table that existed without it, by `ALTER TABLE ... ADD COLUMN IF NOT EXISTS` under the same
+lock timeout as `agent_ref`.
 
 ## State transitions
 

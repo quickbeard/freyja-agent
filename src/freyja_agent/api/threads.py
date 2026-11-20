@@ -1,5 +1,6 @@
 """Thread endpoints: start a run, read state, resume a paused thread (contracts/openapi.yaml)."""
 
+import logging
 import uuid
 from typing import Annotated, Any
 
@@ -7,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
-from freyja_agent.api.decisions import build_resume_command
+from freyja_agent.api.decisions import build_resume_command, decided_calls
 from freyja_agent.api.guards import refuse_other_origins
 from freyja_agent.api.outcomes import (
     answer_in_flight,
@@ -26,6 +27,8 @@ from freyja_agent.api.schemas import (
 from freyja_agent.api.serialize import interrupt_to_pending, message_to_dict
 from freyja_agent.api.streaming import lease_owner, no_context_stream, run_stream, take_context
 from freyja_agent.runtime.runtime import RunContext, Runtime
+
+logger = logging.getLogger(__name__)
 
 # Feature 007: a request that changes something and that a browser marks as made by a page of
 # another origin is refused, as the LLM and Agents routes refuse it (007 research R9).
@@ -47,6 +50,28 @@ def _runtime(request: Request) -> Runtime:
 
 def _error(status: int, code: str, message: str) -> HTTPException:
     return HTTPException(status_code=status, detail={"code": code, "message": message})
+
+
+async def _paused_calls(runtime: Runtime, thread_id: str, namespace: str) -> list[str]:
+    """The ids of the calls of the reply a gate paused on: the rows of its namespace, which
+    each reply replaces, so a later reply of the same resume is not that reply (005 FR-022).
+
+    When they cannot be read the resume is refused with 500 and nothing runs: the proposal
+    stays pending, to be decided again, rather than run with no decision recorded.
+    """
+    try:
+        calls = await runtime.agent_tasks.list_calls(thread_id)
+    except Exception as exc:
+        logger.warning(
+            "The proposed calls of thread %s could not be read for its resume (%s); the "
+            "resume was refused",
+            thread_id,
+            type(exc).__name__,
+        )
+        raise _error(
+            500, "internal", "The proposed calls could not be read; nothing was resumed."
+        ) from None
+    return [call.tool_call_id for call in calls if call.namespace == namespace]
 
 
 async def _state(context: RunContext, thread_id: str) -> Any:
@@ -167,6 +192,10 @@ async def resume_run(
                 "decide the proposal it shows.",
             )
         command = build_resume_command(pending, body.decisions, context.catalog)
+        decided = decided_calls(snapshot.tasks, snapshot.interrupts[0], body.decisions)
+        if decided is not None:
+            decided["calls"] = await _paused_calls(runtime, thread_id, decided["namespace"])
+            decided["seen"] = []
     except BaseException:
         await context.release()
         await runtime.locks.release(thread_id, owner)
@@ -180,6 +209,7 @@ async def resume_run(
             mode="resume",
             debug=debug,
             run_id=run_id,
+            decided=decided,
         )
     )
 

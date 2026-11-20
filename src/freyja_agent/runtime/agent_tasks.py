@@ -157,6 +157,9 @@ class ProposedCall:
     agent_id: str | None
     # Whether the call needed a person's decision when it was proposed.
     gated: bool
+    # Whether a person approved or edited the call, as the approval gate received it in a
+    # resume (``AgentTasksMiddleware``). Only this lets a gated tool send it (005 FR-022).
+    decided: bool = False
     # When it was proposed, on the store's clock. The store sets it.
     proposed_at: datetime | None = None
 
@@ -258,6 +261,10 @@ class AgentTaskStore(Protocol):
     ) -> ProposedCall | None: ...
 
     async def list_calls(self, thread_id: str) -> list[ProposedCall]: ...
+
+    async def mark_decided(
+        self, thread_id: str, namespace: str, tool_call_ids: Collection[str]
+    ) -> None: ...
 
     async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None: ...
 
@@ -467,7 +474,7 @@ class InMemoryAgentTaskStore:
             del self._calls[key]
         for call in _latest(calls):
             self._calls[(thread_id, namespace, call.tool_call_id)] = replace(
-                call, thread_id=thread_id, namespace=namespace, proposed_at=now
+                call, thread_id=thread_id, namespace=namespace, decided=False, proposed_at=now
             )
 
     async def get_call(
@@ -478,6 +485,16 @@ class InMemoryAgentTaskStore:
     async def list_calls(self, thread_id: str) -> list[ProposedCall]:
         calls = [call for call in self._calls.values() if call.thread_id == thread_id]
         return sorted(calls, key=lambda call: (call.namespace, call.tool_call_id))
+
+    async def mark_decided(
+        self, thread_id: str, namespace: str, tool_call_ids: Collection[str]
+    ) -> None:
+        """Record that a person approved or edited each of these calls; a call with no row
+        stays without one."""
+        for tool_call_id in tool_call_ids:
+            key = (thread_id, namespace, tool_call_id)
+            if key in self._calls:
+                self._calls[key] = replace(self._calls[key], decided=True)
 
     async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None:
         self._calls.pop((thread_id, namespace, tool_call_id), None)
@@ -547,6 +564,7 @@ _CREATE = (
         agent        text NOT NULL,
         agent_id     text,
         gated        boolean NOT NULL,
+        decided      boolean NOT NULL DEFAULT false,
         proposed_at  timestamptz NOT NULL DEFAULT now(),
         PRIMARY KEY (thread_id, namespace, tool_call_id)
     )
@@ -557,11 +575,27 @@ _CREATE = (
 # nullable column rewrites nothing, but it takes a lock that waits behind any long reader of
 # the table, and every query on the table then waits behind it. So the column is looked for
 # first, and added only when it is missing, under a lock timeout (005 research R2).
-_HAS_AGENT_REF = (
+_HAS_COLUMN = (
     "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()"
-    " AND table_name = 'freyja_agent_tasks' AND column_name = 'agent_ref'"
+    " AND table_name = %(table)s AND column_name = %(column)s"
 )
-_ADD_AGENT_REF = "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS agent_ref text"
+# The columns added to tables that exist in deployments, with the statement that adds each:
+# a task's ``agent_ref`` (005 research R2), and a proposed call's ``decided``, which the
+# table created by 005's fifth phase lacks. A boolean with a constant default is added
+# without rewriting the table.
+_ADDED_COLUMNS = (
+    (
+        "freyja_agent_tasks",
+        "agent_ref",
+        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS agent_ref text",
+    ),
+    (
+        "freyja_agent_calls",
+        "decided",
+        "ALTER TABLE freyja_agent_calls ADD COLUMN IF NOT EXISTS decided boolean NOT NULL"
+        " DEFAULT false",
+    ),
+)
 LOCK_TIMEOUT = "5s"
 
 _TASK_COLUMNS = [f.name for f in fields(AgentTaskRecord)]
@@ -574,6 +608,10 @@ _INSERT_CALL = (
 )
 _DELETE_CALLS = (
     "DELETE FROM freyja_agent_calls WHERE thread_id = %(thread_id)s AND namespace = %(namespace)s"
+)
+_MARK_DECIDED = (
+    "UPDATE freyja_agent_calls SET decided = true WHERE thread_id = %(thread_id)s"
+    " AND namespace = %(namespace)s AND tool_call_id = ANY(%(tool_call_ids)s)"
 )
 
 
@@ -618,22 +656,23 @@ class PostgresAgentTaskStore:
         async with self._pool.connection() as conn:
             for statement in _CREATE:
                 await conn.execute(statement)
-            cursor = await conn.execute(_HAS_AGENT_REF)
-            if await cursor.fetchone() is not None:
-                return
-            try:
-                async with conn.transaction():
-                    # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-                    await conn.execute(
-                        sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT))
-                    )
-                    await conn.execute(_ADD_AGENT_REF)
-            except errors.LockNotAvailable:
-                raise AgentTaskSetupError(
-                    "The table freyja_agent_tasks needs a new column, agent_ref, and could not "
-                    f"be changed within {LOCK_TIMEOUT}: another session is holding the table. "
-                    "Start the service again once that session has ended."
-                ) from None
+            for table, column, add in _ADDED_COLUMNS:
+                cursor = await conn.execute(_HAS_COLUMN, {"table": table, "column": column})
+                if await cursor.fetchone() is not None:
+                    continue
+                try:
+                    async with conn.transaction():
+                        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                        await conn.execute(
+                            sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT))
+                        )
+                        await conn.execute(add)
+                except errors.LockNotAvailable:
+                    raise AgentTaskSetupError(
+                        f"The table {table} needs a new column, {column}, and could not be "
+                        f"changed within {LOCK_TIMEOUT}: another session is holding the table. "
+                        "Start the service again once that session has ended."
+                    ) from None
 
     async def _rows(self, query: sql.Composable | str, params: dict[str, Any]) -> list[Any]:
         async with self._pool.connection() as conn:
@@ -915,6 +954,20 @@ class PostgresAgentTaskStore:
             {"thread_id": thread_id},
         )
         return [_call(row) for row in rows]
+
+    async def mark_decided(
+        self, thread_id: str, namespace: str, tool_call_ids: Collection[str]
+    ) -> None:
+        if not tool_call_ids:
+            return
+        await self._execute(
+            _MARK_DECIDED,
+            {
+                "thread_id": thread_id,
+                "namespace": namespace,
+                "tool_call_ids": list(tool_call_ids),
+            },
+        )
 
     async def delete_call(self, thread_id: str, namespace: str, tool_call_id: str) -> None:
         await self._execute(

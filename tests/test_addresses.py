@@ -217,6 +217,44 @@ def test_the_path_of_an_address_goes_with_it_whatever_follows_in_the_sentence() 
         assert scrubber.scrub(text) == cleaned, text
 
 
+def test_an_environment_address_s_query_and_fragment_go_with_it() -> None:
+    """An environment agent's address may carry a credential in its query or its fragment
+    (FR-017); a library that requests it writes them after the path, or after the host and
+    port when there is no path, and the card's path after them (005 Phase 11, T123)."""
+    scrubber = AddressScrubber()
+    scrubber.mark_saved("http://localhost:9736/a2a?token=s3cret")
+    scrubber.mark_saved("http://localhost:9737?token=s3cret#frag")
+    scrubber.mark_saved("http://localhost:9738/a2a/#frag")
+    card = "/.well-known/agent-card.json"
+    for text, cleaned in [
+        (f"GET http://localhost:9736/a2a?token=s3cret{card}", f"GET {ADDRESS}{card}"),
+        ("GET http://localhost:9736/a2a?token=s3cret failed", f"GET {ADDRESS} failed"),
+        (f"GET http://localhost:9737?token=s3cret#frag{card}", f"GET {ADDRESS}{card}"),
+        ("reached localhost:9737?token=s3cret#frag.", f"reached {ADDRESS}."),
+        (f"GET http://localhost:9738/a2a/#frag{card}", f"GET {ADDRESS}{card}"),
+        # A query that is not the address's own is put back, as before.
+        ("GET http://localhost:9736/a2a?other=1", f"GET {ADDRESS}?other=1"),
+        # A client sends the query without the fragment, and may write either encoded.
+        (f"GET http://localhost:9737?token=s3cret{card}", f"GET {ADDRESS}{card}"),
+        (f"GET http://localhost:9737?token=s3cr%65t{card}", f"GET {ADDRESS}{card}"),
+        ("text localhost:9737#frag here", f"text {ADDRESS} here"),
+        ("GET http://localhost:9736/a2a/more?token=s3cret", f"GET {ADDRESS}/more?token=s3cret"),
+    ]:
+        assert scrubber.scrub(text) == cleaned, text
+
+
+def test_what_follows_an_address_without_a_path_is_put_back_whole() -> None:
+    """A query right after the host and port is not taken for a path (review of Phase 11)."""
+    scrubber = AddressScrubber()
+    scrubber.mark_saved("http://127.0.0.1:9998/a")
+    for text, cleaned in [
+        ("Is it http://127.0.0.1:9998?next=/a/b here", f"Is it {ADDRESS}?next=/a/b here"),
+        ("see 127.0.0.1:9998?q=/a", f"see {ADDRESS}?q=/a"),
+        ("see http://127.0.0.1:9998#a/a", f"see {ADDRESS}#a/a"),
+    ]:
+        assert scrubber.scrub(text) == cleaned, text
+
+
 def test_the_whole_address_goes_before_a_part_of_it() -> None:
     scrubber = AddressScrubber()
     scrubber.mark_saved("http://localhost:9998/agents/one")
@@ -373,6 +411,27 @@ def test_the_http_librarys_request_line_holds_no_address() -> None:
     line = record_of("httpx", 'HTTP Request: %s %s "%s %d %s"', "GET", url, "HTTP/1.1", 200, "OK")
     assert (
         line == f'httpx HTTP Request: GET {ADDRESS}/.well-known/agent-card.json "HTTP/1.1 200 OK"'
+    )
+
+
+def test_the_http_librarys_request_line_for_an_address_with_a_query_holds_none_of_it() -> None:
+    import httpx
+
+    scrubber = AddressScrubber()
+    scrubber.mark_saved("http://localhost:9736/a2a?token=s3cret")
+    before = logging.getLogRecordFactory()
+    logging.setLogRecordFactory(logging.LogRecord)
+    try:
+        install_log_scrubber(scrubber)
+        # How the agent library joins the card's path to an address that has a query.
+        url = httpx.URL("http://localhost:9736/a2a?token=s3cret/.well-known/agent-card.json")
+        line = record_of(
+            "httpx", 'HTTP Request: %s %s "%s %d %s"', "GET", url, "HTTP/1.1", 404, "Not Found"
+        )
+    finally:
+        logging.setLogRecordFactory(before)
+    assert line == (
+        f'httpx HTTP Request: GET {ADDRESS}/.well-known/agent-card.json "HTTP/1.1 404 Not Found"'
     )
 
 

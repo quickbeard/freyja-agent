@@ -447,18 +447,21 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
     name, which has another id, is not taken for this one. An agent named in the environment
     cannot change while the service runs: its choice is the one its tools were built with.
 
-    A person decided a call only when the call needed a decision when it was proposed, which
-    its row says, and its tool waits for one in this run. Neither is enough alone. A step
-    that passed the gate while its agent ran without approval can run again in a later run,
-    whose tools wait for a person: a background run that failed is tried again from its last
-    checkpoint, which lies after the gate. And a call that was proposed as needing a
-    decision can reach a tool that waits for none.
+    A person decided a call only when its row records it: the approval gate received an
+    approve or an edit for the call in a resume (``AgentTasksMiddleware.aafter_model``).
+    Nothing about the tool or the build is taken for a decision. A step that passed the gate
+    while its agent ran without approval can run again in a later run, whose tools wait for
+    a person: a background run that failed is tried again from its last checkpoint, which
+    lies after the gate, and the gate is not asked again. A row that says the call needed a
+    decision when it was proposed says nothing about whether one was made: the step that
+    would have asked may have failed, and a retry under another configuration let the call
+    through unasked.
 
     This is the last thing a tool awaits before the send's first write; a change committed
     after it is not recalled.
     """
     link = send.link
-    decided = send.gated and call is not None and call.gated
+    decided = call is not None and call.decided
     if send.saved is None:
         # A call with no row was proposed before the rows existed, and follows the tool.
         if send.gated and call is not None and not decided:

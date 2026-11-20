@@ -1201,12 +1201,18 @@ def test_a_blocked_resume_whose_calls_cannot_be_read_ends_as_it_did_before(
         proposal = interrupted(run(client, "p-15", sse_events))
         choose(client, made, made.saved["other"], read_only=False)
         monkeypatch.setattr(made.store, "list_calls", unreadable)
-        blocked = resume(client, "p-15", [{"type": "approve"}], sse_events)
+        refused = client.post(
+            "/threads/p-15/resume",
+            json={"interrupt_id": proposal["interrupt_id"], "decisions": [{"type": "approve"}]},
+        )
         monkeypatch.undo()
         still = pending(client, "p-15")
 
-    kind, data = blocked[-1]
-    assert (kind, data["code"]) == ("error", "internal")
+    # Since Phase 11 the resume reads the calls before anything runs, to know which of them
+    # the person decided, and is refused when it cannot: nothing runs, and the proposal is
+    # still there to be decided.
+    assert refused.status_code == 500
+    assert refused.json()["detail"]["code"] == "internal"
     assert still["interrupt_id"] == proposal["interrupt_id"]
     assert sent(made.transport_at(OTHER_URL)) == 0
 
@@ -1383,9 +1389,13 @@ def test_a_retry_after_a_restart_sends_nothing_to_an_environment_agent_that_lost
     assert f"Agent stub: {sentence}" in warnings(caplog, TOOLS)
 
 
-def test_a_call_proposed_as_needing_a_decision_is_not_sent_by_a_tool_that_waits_for_none(
+def test_a_call_a_person_approved_is_sent_when_its_agent_requires_approval_again_before_it(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    """Changed in Phase 11. A person approved the proposal while the agent ran without
+    approval, which allowed approve only; the agent then requires approval again before
+    the tool sends. A person decided this message, so it is sent (FR-022, FR-023). Until
+    Phase 11 the decision was inferred, and this message was refused."""
     model = ScriptedChatModel(script=[propose(TO_HELPER)])
     made = make_a2a_app(model, {}, saved=HELPER)
     with TestClient(made.app) as client:
@@ -1400,11 +1410,318 @@ def test_a_call_proposed_as_needing_a_decision_is_not_sent_by_a_tool_that_waits_
         before_the_send(made, monkeypatch, tighten)
         events = resume(client, "p-20", [{"type": "approve"}], sse_events)
 
-    # That the call needed a decision when it was proposed is not enough by itself: the run
-    # that carries it out has no gate for it. It fails toward sending nothing.
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["Summarize the week."]
+
+
+def test_a_call_nobody_was_shown_is_not_sent_when_its_agent_comes_to_require_approval(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One reply proposes a notification, which pauses, and a message to `helper`, which
+    runs without approval and is not shown. A person approves the notification; `helper`
+    requires approval before its tool sends. Nobody decided the message to `helper`
+    (found by the review of Phase 11: no test held the hook to what the person was shown)."""
+    notify = ("send_notification", {"recipient": "ops", "message": "hi"})
+    model = ScriptedChatModel(script=[propose(notify, TO_HELPER)])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    with TestClient(made.app) as client:
+        interrupted(run(client, "p-28", sse_events))
+        shown = [action["name"] for action in pending(client, "p-28")["action_requests"]]
+        record = made.saved["helper"]
+
+        async def tighten() -> None:
+            await made.saved_agents.change(record.id, record.version, read_only=False)
+
+        before_the_send(made, monkeypatch, tighten)
+        events = resume(client, "p-28", [{"type": "approve"}], sse_events)
+
+    assert shown == ["send_notification"]
     assert events[-1] == ("end", {"status": "completed"})
     (result,) = results(model, "handoff_to_helper")
     assert result.content == NOW_REQUIRES.format(agent="helper")
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+# Phase 11 (convergence): a decision is recorded when the gate receives it, never inferred.
+
+
+def test_a_retry_sends_nothing_when_the_step_that_would_have_asked_never_paused(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The gate's step never paused, the agent's choice flipped twice, and no one decided.
+
+    1. The agent requires approval. A background run's model proposes a hand-off, so the
+       call's row says it needed a decision; the checkpoint after the model's step cannot
+       be written, so the gate never asks.
+    2. The agent runs without approval. The retry continues from the model's step: the gate
+       lets the call through unasked, and the tool's step fails before anything is sent.
+    3. The agent requires approval again. The retry continues past the gate, with a tool
+       that waits for a person. The row says the call needed a decision, and nobody made one.
+    """
+    thread = "p-21"
+    made, model = one_helper(make_a2a_app, "handoff", "background", thread, read_only=False)
+    blipped: list[bool] = []
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        saver = made.runtime.agent.checkpointer
+        write = saver.aput
+
+        async def aput(*args: Any) -> Any:
+            # The first checkpoint written once the model proposed the call.
+            if not blipped and await made.store.list_calls(thread):
+                blipped.append(True)
+                raise RuntimeError("the database went away for a moment")
+            return await write(*args)
+
+        monkeypatch.setattr(saver, "aput", aput)
+        tick(client, made.runtime)
+        paused = client.get(f"/threads/{thread}/state").json()["pending"]
+        loosened = choose(client, made, made.saved["helper"], read_only=True)
+        failed = failing_once(made.store, "get_context", monkeypatch)
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        before = sent(made.transport_at(SAVED_URL))
+        # What the step carries into the last retry.
+        (row,) = rows(client, made, thread)
+        choose(client, made, loosened, read_only=False)
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        state = client.get(f"/threads/{thread}/state").json()
+
+    assert blipped == [True] and failed == [True]
+    # The gate never paused the run, so no person was ever shown the call.
+    assert paused is None and before == 0
+    assert (row.gated, row.decided) == (True, False)
+    assert texts(made) == []
+    assert sent(made.transport_at(SAVED_URL)) == 0
+    sentence = NOW_REQUIRES.format(agent="helper")
+    (result,) = results(model, "handoff_to_helper")
+    assert (result.status, result.content) == ("error", sentence)
+    assert state["pending"] is None
+    assert f"Agent helper: {sentence}" in kept_back_lines(caplog)
+
+
+@pytest.mark.parametrize("where", ["orchestrator", "subagent"])
+@pytest.mark.parametrize("decision", ["approve", "edit"])
+def test_a_call_a_person_approved_or_edited_is_recorded_as_decided_before_it_is_sent(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    where: str,
+    decision: str,
+) -> None:
+    thread = f"p-22-{where}-{decision}"
+    made, _model = one_helper(make_a2a_app, "handoff", where, thread, read_only=False)
+    seen = at_the_send(made, monkeypatch, thread)
+    chosen: dict[str, Any] = {"type": decision}
+    if decision == "edit":
+        chosen["args"] = {"message": "Summarize the month."}
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        (proposed,) = rows(client, made, thread)
+        events = resume(client, thread, [chosen], sse_events)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    # Undecided while it waited; decided, under its own namespace, when it was sent.
+    assert proposed.decided is False
+    (at_send,) = seen
+    (row,) = at_send
+    assert (row.namespace, row.tool_call_id) == (proposed.namespace, proposed.tool_call_id)
+    assert row.decided is True
+    expected = "Summarize the month." if decision == "edit" else "Summarize the week."
+    assert texts(made) == [expected]
+
+
+@pytest.mark.parametrize("where", ["orchestrator", "subagent"])
+def test_a_call_a_person_rejected_is_not_recorded_as_decided(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, where: str
+) -> None:
+    thread = f"p-23-{where}"
+    made, _model = one_helper(make_a2a_app, "handoff", where, thread, read_only=False)
+    marked: list[tuple[str, list[str]]] = []
+    mark = made.store.mark_decided
+
+    async def marking(thread_id: str, namespace: str, ids: Any) -> None:
+        marked.append((namespace, list(ids)))
+        await mark(thread_id, namespace, ids)
+
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        made.store.mark_decided = marking  # type: ignore[method-assign]
+        events = resume(client, thread, [{"type": "reject", "message": "Not now."}], sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    # The gate answered the call itself, so no row was marked, and nothing was sent.
+    assert marked == []
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_a_decision_that_cannot_be_recorded_leaves_the_call_unsent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    thread = "p-24"
+    made, _model = one_helper(make_a2a_app, "handoff", "orchestrator", thread, read_only=False)
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        failed = failing_once(made.store, "mark_decided", monkeypatch)
+        events = resume(client, thread, [{"type": "approve"}], sse_events)
+        (row,) = rows(client, made, thread)
+    assert failed == [True]
+    assert events[-1][0] == "error" and events[-1][1]["code"] == "internal"
+    assert row.decided is False
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_a_retry_that_resumes_after_the_gate_s_step_records_no_decision(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The gate's step completes unasked, and the checkpoint after it cannot be written.
+
+    The agent ran without approval, so the gate asked nothing. Once it requires approval, the
+    retry continues with the step that comes right after the gate's, in a build whose gate
+    would have asked. That step may only take a call for decided in a resume, which carries
+    the decisions; a background run carries none.
+    """
+    thread = "p-26"
+    made, model = one_helper(make_a2a_app, "handoff", "background", thread, read_only=True)
+    written: list[bool] = []
+    with TestClient(made.app) as client:
+        saver = made.runtime.agent.checkpointer
+        write = saver.aput
+
+        async def aput(*args: Any) -> Any:
+            if await made.store.list_calls(thread):
+                written.append(True)
+                # The first checkpoint is the model's, the second the gate's.
+                if len(written) == 2:
+                    raise RuntimeError("the database went away for a moment")
+            return await write(*args)
+
+        monkeypatch.setattr(saver, "aput", aput)
+        tick(client, made.runtime)
+        before = sent(made.transport_at(SAVED_URL))
+        choose(client, made, made.saved["helper"], read_only=False)
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+
+    assert len(written) >= 2 and before == 0
+    assert texts(made) == []
+    (result,) = results(model, "handoff_to_helper")
+    assert (result.status, result.content) == ("error", NOW_REQUIRES.format(agent="helper"))
+
+
+class TwoSubagents(ScriptedChatModel):
+    """The orchestrator starts two subagents in one reply. The first proposes a notification,
+    which pauses the run; the second proposes a message to `helper`. Each answers by the
+    task it was given, whatever order the two run in."""
+
+    def _generate(self, messages: list[Any], stop: Any = None, run_manager: Any = None, **kw: Any):
+        from langchain_core.messages import HumanMessage
+        from langchain_core.outputs import ChatGeneration, ChatResult
+
+        self.calls += 1
+        self.seen.append(list(messages))
+        humans = [message for message in messages if isinstance(message, HumanMessage)]
+        first = str(humans[0].content) if humans else ""
+        answered = any(message.type == "tool" for message in messages)
+        if answered:
+            reply = AIMessage(content="Done.")
+        elif "first-job" in first:
+            notify = {"recipient": "ops", "message": "hi"}
+            reply = AIMessage(
+                content="",
+                tool_calls=[{"id": "s1c", "name": "send_notification", "args": notify}],
+            )
+        elif "second-job" in first:
+            reply = AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "s2c", "name": "handoff_to_helper", "args": {"message": "UNSEEN"}}
+                ],
+            )
+        else:
+            delegate = {"subagent_type": "general-purpose"}
+            reply = AIMessage(
+                content="",
+                tool_calls=[
+                    {"id": "t1", "name": "task", "args": {"description": "first-job", **delegate}},
+                    {"id": "t2", "name": "task", "args": {"description": "second-job", **delegate}},
+                ],
+            )
+        return ChatResult(generations=[ChatGeneration(message=reply)])
+
+
+def test_a_resume_records_no_decision_for_a_sibling_subagent_s_calls(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found by the review of Phase 11. `helper` runs without approval. Two subagents run at
+    once: the first pauses on a notification; the second's gate lets its message to
+    `helper` through unasked, and the checkpoint after that gate's step cannot be written.
+    `helper` then requires approval, and a person approves the notification. The resume
+    continues both subagents, and only the first one's gate received a decision: the
+    second's message was never seen by anyone."""
+    thread = "p-27"
+    model = TwoSubagents(script=[])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    with TestClient(made.app) as client:
+        saver = made.runtime.agent.checkpointer
+        put, put_writes = saver.aput, saver.aput_writes
+        first_paused = asyncio.Event()
+        failed: list[str] = []
+
+        async def writes(config: Any, values: Any, task_id: str, task_path: str = "") -> Any:
+            interrupts = any(channel == "__interrupt__" for channel, _ in values)
+            if interrupts and not config["configurable"].get("checkpoint_ns"):
+                first_paused.set()
+            return await put_writes(config, values, task_id, task_path)
+
+        async def checkpoint(config: Any, saved: Any, metadata: Any, versions: Any) -> Any:
+            namespace = config["configurable"].get("checkpoint_ns", "")
+            messages = saved["channel_values"].get("messages") or []
+            last = next((m for m in reversed(messages) if isinstance(m, AIMessage)), None)
+            after_its_gate = any("AgentTasksMiddleware.after_model" in key for key in versions)
+            if (
+                not failed
+                and namespace
+                and last is not None
+                and last.tool_calls
+                and last.tool_calls[0]["name"] == "handoff_to_helper"
+                and after_its_gate
+            ):
+                failed.append(namespace)
+                # Once the first subagent has paused, so that the run ends paused on it.
+                await asyncio.wait_for(first_paused.wait(), 5)
+                raise RuntimeError("the database went away for a moment")
+            return await put(config, saved, metadata, versions)
+
+        monkeypatch.setattr(saver, "aput", checkpoint)
+        monkeypatch.setattr(saver, "aput_writes", writes)
+        run(client, thread, sse_events)
+        paused = pending(client, thread)
+        before = sent(made.transport_at(SAVED_URL))
+        marked: list[str] = []
+        mark = made.store.mark_decided
+
+        async def marking(thread_id: str, namespace: str, ids: Any) -> None:
+            marked.append(namespace)
+            await mark(thread_id, namespace, ids)
+
+        made.store.mark_decided = marking  # type: ignore[method-assign]
+        choose(client, made, made.saved["helper"], read_only=False)
+        resume(client, thread, [{"type": "approve"}], sse_events)
+
+    assert len(failed) == 1 and before == 0
+    assert [action["name"] for action in paused["action_requests"]] == ["send_notification"]
+    # The second subagent's calls are in a namespace of their own, and the resume decided
+    # nothing there.
+    assert failed[0] not in marked
+    assert texts(made) == []
     assert sent(made.transport_at(SAVED_URL)) == 0
 
 
@@ -1670,3 +1987,184 @@ def test_an_approved_continuation_sends_nothing_to_an_address_that_became_anothe
     (result,) = results(model, "handoff_to_helper")
     assert result.content == ELSEWHERE.format(agent="helper")
     assert first.record.messages == [] and moved["there"].record.messages == []
+
+
+def test_a_resume_names_no_namespace_for_an_interrupt_no_paused_task_holds() -> None:
+    """Nothing is then marked as decided (005 Phase 11)."""
+    from types import SimpleNamespace
+
+    from langgraph.types import Interrupt
+
+    from freyja_agent.api.decisions import decided_namespace
+
+    own = Interrupt.from_ns("value", "HumanInTheLoopMiddleware.after_model:t-1")
+    inner = Interrupt.from_ns("value", "tools:t-2|HumanInTheLoopMiddleware.after_model:t-3")
+    gate = SimpleNamespace(name="HumanInTheLoopMiddleware.after_model", id="t-1", interrupts=(own,))
+    tools = SimpleNamespace(name="tools", id="t-2", interrupts=(inner,))
+    assert decided_namespace([gate, tools], own.id) == ""
+    assert decided_namespace([gate, tools], inner.id) == "tools:t-2"
+    assert decided_namespace([gate, tools], "another") is None
+    assert decided_namespace([], own.id) is None
+
+
+def test_a_retried_resume_records_no_decision_for_a_call_its_person_was_not_shown(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Found by the second review of Phase 11. The subagent proposes a message to `helper`,
+    which runs without approval and is not shown, and a notification, which pauses. The
+    first resume approves; the gate's step completes and the checkpoint after it cannot be
+    written, so the same proposal is still pending. `helper` then requires approval, and
+    the second resume approves the notification again. It reuses the gate's step from the
+    first, whose build did not gate `helper`, and the step after the gate runs in the build
+    that does. Nobody was shown the message to `helper`."""
+    thread = "p-29"
+    notify = ("send_notification", {"recipient": "ops", "message": "hi"})
+    model = ScriptedChatModel(script=[DELEGATE, propose(TO_HELPER, notify, step="d")])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        shown = [action["name"] for action in pending(client, thread)["action_requests"]]
+        saver = made.runtime.agent.checkpointer
+        put = saver.aput
+        failed: list[Any] = []
+
+        async def checkpoint(*args: Any) -> Any:
+            if not failed:
+                failed.append(True)
+                raise RuntimeError("the database went away for a moment")
+            return await put(*args)
+
+        monkeypatch.setattr(saver, "aput", checkpoint)
+        first = resume(client, thread, [{"type": "approve"}], sse_events)
+        still = pending(client, thread)
+        choose(client, made, made.saved["helper"], read_only=False)
+        second = resume(client, thread, [{"type": "approve"}], sse_events)
+
+    assert shown == ["send_notification"] and failed == [True]
+    assert first[-1][0] == "error"
+    assert [action["name"] for action in still["action_requests"]] == ["send_notification"]
+    assert second[-1] == ("end", {"status": "completed"})
+    assert texts(made) == []
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_a_retry_across_two_restarts_sends_nothing_nobody_decided_to_an_environment_agent(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The first sequence of Phase 11, for an agent named in the environment, whose choice
+    changes only at a restart (found by the second review: nothing tested this branch).
+
+    `stub` requires approval; the checkpoint after the model's step cannot be written, so
+    the gate never asks. After a restart `stub` runs without approval: the retry passes the
+    gate unasked and its tool's step fails. After another restart `stub` requires approval
+    again, and the retry runs the tool past the gate. Nobody decided the message."""
+    thread = "p-30"
+    step = propose(("handoff_to_stub", {"message": "Summarize the week."}), step="b")
+    model = ScriptedChatModel(script=[step])
+    gated = {"hello": {"read_only": True}, "stub": {}}
+    first = make_a2a_app(model, gated)
+    seed_task(first, "hello", "task-1", thread=thread)
+    blipped: list[bool] = []
+    with TestClient(first.app) as client:
+        saver = first.runtime.agent.checkpointer
+        write = saver.aput
+
+        async def checkpoint(*args: Any) -> Any:
+            if not blipped and await first.store.list_calls(thread):
+                blipped.append(True)
+                raise RuntimeError("the database went away for a moment")
+            return await write(*args)
+
+        monkeypatch.setattr(saver, "aput", checkpoint)
+        tick(client, first.runtime)
+        (row,) = rows(client, first, thread)
+
+    loose = {"hello": {"read_only": True}, "stub": {"read_only": True}}
+    second = restart(make_a2a_app, first, model, loose, stubs=first.stubs)
+    with TestClient(second.app) as client:
+        failed = failing_once(second.store, "get_context", monkeypatch)
+        clock.advance(RETRY)
+        tick(client, second.runtime)
+        before = list(first.stubs["stub"].record.messages)
+
+    third = restart(make_a2a_app, first, model, gated, stubs=first.stubs)
+    with TestClient(third.app) as client:
+        clock.advance(RETRY)
+        tick(client, third.runtime)
+
+    assert blipped == [True] and failed == [True] and before == []
+    assert (row.agent, row.agent_id, row.gated, row.decided) == ("stub", None, True, False)
+    assert first.stubs["stub"].record.messages == []
+    (result,) = results(model, "handoff_to_stub")
+    assert result.content == NOW_REQUIRES.format(agent="stub")
+
+
+def test_a_later_reply_of_a_resume_that_proposes_the_approved_message_again_is_not_decided(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A person approves a message to `helper` while it runs without approval. In the same
+    resume the model proposes the same message again, which passes the gate unasked, and
+    `helper` requires approval before that second message is sent. The person decided the
+    first one only (found when Phase 11 was rebased on feature 007's segmented runs)."""
+    thread = "p-31"
+    model = ScriptedChatModel(script=[propose(TO_HELPER), propose(TO_HELPER, step="e")])
+    made = make_a2a_app(model, {}, saved=HELPER)
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        loosened = choose(client, made, made.saved["helper"], read_only=True)
+        get_call = made.store.get_call
+
+        async def tightening(thread_id: str, namespace: str, tool_call_id: str) -> Any:
+            if tool_call_id == "e1":
+                await made.saved_agents.change(loosened.id, loosened.version, read_only=False)
+            return await get_call(thread_id, namespace, tool_call_id)
+
+        monkeypatch.setattr(made.store, "get_call", tightening)
+        events = resume(client, thread, [{"type": "approve"}], sse_events)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    # The approved message was sent once; the second one, which nobody decided, was not.
+    assert texts(made) == ["Summarize the week."]
+    contents = [result.content for result in results(model, "handoff_to_helper")]
+    assert contents[-1] == NOW_REQUIRES.format(agent="helper")
+    assert len(contents) == 2
+
+
+def test_a_later_reply_that_gives_its_call_the_paused_call_s_id_is_not_decided(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """As the test before, with the later reply's call under the paused call's own id, as
+    a model server that numbers its calls from 0 in each reply gives it (found by the last
+    review of Phase 11)."""
+    thread = "p-32"
+    model = ScriptedChatModel(script=[propose(TO_HELPER), propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved=HELPER)
+    with TestClient(made.app) as client:
+        interrupted(run(client, thread, sse_events))
+        loosened = choose(client, made, made.saved["helper"], read_only=True)
+        get_call = made.store.get_call
+        seen: list[str] = []
+
+        async def tightening(thread_id: str, namespace: str, tool_call_id: str) -> Any:
+            seen.append(tool_call_id)
+            if len(seen) == 2:
+                await made.saved_agents.change(loosened.id, loosened.version, read_only=False)
+            return await get_call(thread_id, namespace, tool_call_id)
+
+        monkeypatch.setattr(made.store, "get_call", tightening)
+        events = resume(client, thread, [{"type": "approve"}], sse_events)
+
+    assert seen == ["c1", "c1"]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["Summarize the week."]
+    contents = [result.content for result in results(model, "handoff_to_helper")]
+    assert contents[-1] == NOW_REQUIRES.format(agent="helper")

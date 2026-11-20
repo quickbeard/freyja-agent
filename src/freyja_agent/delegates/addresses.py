@@ -41,10 +41,11 @@ _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 # The three shapes an address takes in text. A host is a name, an IPv4 address, or an IPv6
 # address in brackets. What follows it up to the next space or quote is looked at as a path:
-# only the part that is a known address's path is taken, and the rest is put back, so a full
-# stop or a bracket that ends a sentence is never taken for a part of the path.
+# only the part that is a known address's path is taken, and its query and fragment after
+# it, and the rest is put back, so a full stop or a bracket that ends a sentence is never
+# taken for a part of the path.
 _HOST = r"\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+"
-_PATH = r"(?:/[^\s\"'<>]*)?"
+_PATH = r"(?:[/?#][^\s\"'<>]*)?"
 # With its scheme: ``http://127.0.0.1:9998/a``, and ``http://localhost/a`` on a default port.
 _URL = re.compile(
     rf"(?P<scheme>https?)://(?:[^\s/@'\"<>]*@)?(?P<host>{_HOST})(?::(?P<port>\d{{1,5}}))?"
@@ -83,6 +84,22 @@ Place = tuple[str | None, int]
 Segments = tuple[str, ...]
 
 
+def _tails(url: str) -> tuple[str, str]:
+    """What follows the path of ``url``: its query and its fragment, each with its mark,
+    and empty when it has none.
+
+    Only an environment agent's address can have either; a saved one is refused with them
+    (FR-006). Either may carry a credential (FR-017). They are kept apart: a client sends
+    the query without the fragment, so an agent may write its address with the query alone.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return "", ""
+    query = f"?{parts.query}" if parts.query else ""
+    return query, f"#{parts.fragment}" if parts.fragment else ""
+
+
 def _place(url: str) -> tuple[Place, Segments] | None:
     """Where ``url`` leads and the segments of its path, or None when it is no address."""
     try:
@@ -99,6 +116,23 @@ def _place(url: str) -> tuple[Place, Segments] | None:
     return (None if is_local_host(host) else host, port), segments
 
 
+def _without(rest: str, known: tuple[str, ...]) -> str:
+    """``rest`` without the first of ``known`` it starts with, decoded, after a slash or not.
+
+    A text starts with a known value when its decoding does: the text is cut where its
+    decoded length reaches the value's, which only an encoded character can cross.
+    """
+    for value in known:
+        for lead in ("", "/"):
+            if not rest.startswith(lead):
+                continue
+            body = rest[len(lead) :]
+            for end in range(len(value), min(len(body), 3 * len(value)) + 1):
+                if unquote(body[:end]) == value:
+                    return body[end:]
+    return rest
+
+
 class AddressScrubber:
     """Every agent address the process was given, and their removal from text."""
 
@@ -109,6 +143,9 @@ class AddressScrubber:
         self._unsaved: OrderedDict[str, None] = OrderedDict()
         # Read by every log record, on any thread: replaced whole, never changed in place.
         self._places: dict[Place, tuple[Segments, ...]] = {}
+        # The queries and the fragments of the addresses at a place, decoded (``_tails``).
+        self._queries: dict[Place, tuple[str, ...]] = {}
+        self._fragments: dict[Place, tuple[str, ...]] = {}
         self._ports: frozenset[int] = frozenset()
 
     def register(self, url: str) -> None:
@@ -130,13 +167,26 @@ class AddressScrubber:
 
     def _rebuild(self) -> None:
         places: dict[Place, set[Segments]] = {}
+        queries: dict[Place, set[str]] = {}
+        fragments: dict[Place, set[str]] = {}
         for url in (*self._saved, *self._unsaved):
             found = _place(url)
             if found is not None:
                 places.setdefault(found[0], set()).add(found[1])
+                query, fragment = _tails(url)
+                if query:
+                    queries.setdefault(found[0], set()).add(unquote(query))
+                if fragment:
+                    fragments.setdefault(found[0], set()).add(unquote(fragment))
         # The longest path first, so the whole address goes before a part of it.
         self._places = {
             place: tuple(sorted(paths, key=len, reverse=True)) for place, paths in places.items()
+        }
+        self._queries = {
+            place: tuple(sorted(found, key=len, reverse=True)) for place, found in queries.items()
+        }
+        self._fragments = {
+            place: tuple(sorted(found, key=len, reverse=True)) for place, found in fragments.items()
         }
         self._ports = frozenset(port for _host, port in places)
 
@@ -172,7 +222,10 @@ class AddressScrubber:
         question mark, which is not taken; a letter or a digit after it makes it the
         segment of another path.
         """
-        raw = path.split("/")[1:] if path else []
+        if not path.startswith("/"):
+            # A query or a fragment right after the host and port: no path to take.
+            return 0
+        raw = path.split("/")[1:]
         decoded = [unquote(segment) for segment in raw]
         for known in self._places[place]:
             if not known or len(raw) < len(known):
@@ -188,14 +241,22 @@ class AddressScrubber:
                 return taken + len(known[before]) + 1
         return 0
 
+    def _rest(self, place: Place, path: str) -> str:
+        """What of ``path`` is put back after an address at ``place``: what its path does not
+        take, without a known query of the place at its start, and then without a known
+        fragment. Each is compared decoded, so a query a library wrote encoded goes too."""
+        rest = path[self._path_taken(place, path) :]
+        for known in (self._queries.get(place, ()), self._fragments.get(place, ())):
+            rest = _without(rest, known)
+        return rest
+
     def _url(self, match: re.Match[str]) -> str:
         scheme = match.group("scheme").lower()
         port = int(match.group("port") or _DEFAULT_PORTS[scheme])
         place = self._known(match.group("host"), port)
         if place is None:
             return match.group(0)
-        path = match.group("path")
-        return ADDRESS + path[self._path_taken(place, path) :]
+        return ADDRESS + self._rest(place, match.group("path"))
 
     def _host_and_port(self, match: re.Match[str]) -> str:
         token, path = match.group("host"), match.group("path")
@@ -203,7 +264,7 @@ class AddressScrubber:
         if found is None:
             return match.group(0)
         start, place = found
-        return token[:start] + ADDRESS + path[self._path_taken(place, path) :]
+        return token[:start] + ADDRESS + self._rest(place, path)
 
     def _pair(self, match: re.Match[str]) -> str:
         known = self._known(match.group("host"), int(match.group("port")))

@@ -117,12 +117,11 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
               <span>{label}</span>
             </SidebarMenuButton>
             {warned && (
-              <SidebarMenuBadge
-                id={warning}
-                className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive"
-              >
-                <span aria-hidden="true">{down}</span>
-                <span className="sr-only">
+              <SidebarMenuBadge className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive">
+                {/* What the number is about is said in words to the eye as well: the
+                    badge's colour alone says nothing (005 FR-001a). */}
+                <span aria-hidden="true">{down} cannot be used</span>
+                <span id={warning} className="sr-only">
                   {down === 1
                     ? "1 agent cannot be used"
                     : `${down} agents cannot be used`}
