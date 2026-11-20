@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
-import useSWR from "swr";
+import useSWR, { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
@@ -22,6 +22,7 @@ import {
   type StreamEvent,
   startRun,
   stateKey,
+  THREADS_KEY,
   type ThreadState,
   type ThreadSummary,
   threadKey,
@@ -170,6 +171,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     () => readState(threadId),
     { shouldRetryOnError: false },
   );
+  const { mutate: readListAgain } = useSWRConfig();
   const { mutate: readRowAgain } = row;
   const { mutate: readStateAgain } = state;
   const ended = run?.ended ?? null;
@@ -205,10 +207,12 @@ export function TaskView({ threadId }: { threadId: string }) {
         setReadFor(ended);
       }
     });
+    // The list and the sidebar's number follow at once, not at their next reading.
+    void readListAgain(THREADS_KEY);
     return () => {
       current = false;
     };
-  }, [ended, readRowAgain, readStateAgain]);
+  }, [ended, readRowAgain, readStateAgain, readListAgain]);
 
   const failed = runError(run);
   const noConversation = missing(state.error);

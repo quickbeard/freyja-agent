@@ -116,6 +116,12 @@ export function isTerminal(event: StreamEvent): boolean {
 /** The path of the list of tasks, and the one key its copy in the browser is kept under. */
 export const THREADS_KEY = "/threads";
 
+/**
+ * How often the list of tasks is read again while it is shown, by the Tasks section and by
+ * the sidebar, which reads it under the same key (FR-006).
+ */
+export const LIST_SECONDS = 15;
+
 function path(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}`;
 }

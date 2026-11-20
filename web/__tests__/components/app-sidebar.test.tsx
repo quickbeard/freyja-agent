@@ -1,11 +1,59 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig, useSWRConfig } from "swr";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { type Reply, stubFetch } from "@/__tests__/testing";
+import { type Reply, stubFetch as stubAll } from "@/__tests__/testing";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SidebarProvider, SidebarTrigger } from "@/components/ui/sidebar";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { AGENTS_KEY, type Agent, type AgentList } from "@/lib/agents";
+import { LIST_SECONDS, type ThreadList } from "@/lib/tasks";
+
+// Feature 007: the sidebar also reads the list of tasks, wherever it is shown. Its requests
+// are answered here, from `threadReplies` in order, the last one again and again, and they
+// are kept apart from the requests for the list of agents, which each test counts.
+const NO_TASKS: ThreadList = {
+  threads: [],
+  needs_decision: 0,
+  total: 0,
+  more: false,
+};
+let threadReplies: Reply[] = [{ json: NO_TASKS }];
+let threadAsks = 0;
+
+function answer(reply: Reply): Response {
+  if ("fails" in reply) {
+    throw new TypeError(reply.fails);
+  }
+  return "json" in reply
+    ? new Response(JSON.stringify(reply.json), {
+        status: reply.status ?? 200,
+        headers: { "content-type": "application/json" },
+      })
+    : new Response(reply.text || null, { status: reply.status });
+}
+
+/** The shared stub for the list of agents, with the list of tasks answered beside it. */
+function stubFetch(...replies: Reply[]) {
+  const agents = stubAll(...replies);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input) === "/api/threads") {
+        const reply =
+          threadReplies[Math.min(threadAsks, threadReplies.length - 1)];
+        threadAsks += 1;
+        return answer(reply);
+      }
+      return agents(input, init);
+    }),
+  );
+  return agents;
+}
+
+function waiting(count: number): Reply {
+  const json: ThreadList = { ...NO_TASKS, needs_decision: count, total: count };
+  return { json };
+}
 
 const navigation = vi.hoisted(() => ({ pathname: "/llm" }));
 vi.mock("next/navigation", () => ({
@@ -83,6 +131,8 @@ function described(): string | null {
 describe("AppSidebar", () => {
   beforeEach(() => {
     navigation.pathname = "/llm";
+    threadReplies = [{ json: NO_TASKS }];
+    threadAsks = 0;
     // The sidebar asks for the list of agents wherever it is shown.
     stubFetch(list(HELLO));
   });
@@ -277,6 +327,111 @@ describe("AppSidebar", () => {
       await waitFor(() => expect(badge()).not.toBeNull());
       expect(described()).toBe("1 agent cannot be used");
       unmount();
+    }
+  });
+});
+
+// Feature 007: the number of tasks that need a decision, on every section.
+
+describe("AppSidebar, the Tasks entry", () => {
+  const tasksLink = () => screen.getByRole("link", { name: "Tasks" });
+  const tasksBadge = () =>
+    tasksLink().parentElement?.querySelector(
+      '[data-slot="sidebar-menu-badge"]',
+    ) ?? null;
+  const tasksSaid = () => {
+    const id = tasksLink().getAttribute("aria-describedby");
+    return id === null
+      ? null
+      : (document.getElementById(id)?.textContent ?? null);
+  };
+
+  beforeEach(() => {
+    navigation.pathname = "/llm";
+    threadAsks = 0;
+    stubAll(list(HELLO));
+  });
+
+  it("says how many tasks need a decision, in words as well as in a number", async () => {
+    threadReplies = [waiting(3)];
+    stubFetch(list(HELLO));
+    renderSidebar();
+    await waitFor(() => expect(tasksBadge()?.textContent).toContain("3"));
+    expect(tasksBadge()?.textContent).toContain("3 to decide");
+    expect(tasksSaid()).toBe("3 tasks need a decision");
+  });
+
+  it("says one task in the singular", async () => {
+    threadReplies = [waiting(1)];
+    stubFetch(list(HELLO));
+    renderSidebar();
+    await waitFor(() => expect(tasksSaid()).toBe("1 task needs a decision"));
+  });
+
+  it("shows no number before the first answer, for none, and after a failed reading", async () => {
+    let answer: (reply: Response) => void = () => {};
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === "/api/threads"
+          ? new Promise<Response>((resolve) => {
+              answer = resolve;
+            })
+          : new Response(
+              JSON.stringify({ agents: [], limit: 20, unusable: 0 }),
+            ),
+      ),
+    );
+    const first = renderSidebar();
+    // Before the first answer.
+    expect(tasksBadge()).toBeNull();
+    expect(tasksLink().getAttribute("aria-describedby")).toBeNull();
+    answer(new Response(JSON.stringify(NO_TASKS)));
+    first.unmount();
+
+    for (const reply of [waiting(0), { fails: "Failed to fetch" } as Reply]) {
+      threadReplies = [reply];
+      threadAsks = 0;
+      stubFetch(list(HELLO));
+      const { unmount } = renderSidebar();
+      await waitFor(() => expect(threadAsks).toBe(1));
+      expect(tasksBadge()).toBeNull();
+      expect(tasksLink().getAttribute("aria-describedby")).toBeNull();
+      unmount();
+    }
+  });
+
+  it("drops the number once a later reading fails, and shows the next one", async () => {
+    threadReplies = [waiting(2), { fails: "Failed to fetch" }, waiting(1)];
+    stubFetch(list(HELLO));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderSidebar();
+      await waitFor(() => expect(tasksSaid()).toBe("2 tasks need a decision"));
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(tasksBadge()).toBeNull());
+      // The reading that failed did not end the following.
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(tasksSaid()).toBe("1 task needs a decision"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reads the list again by itself every fifteen seconds on another section", async () => {
+    threadReplies = [waiting(0), waiting(1)];
+    stubFetch(list(HELLO));
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      renderSidebar();
+      await waitFor(() => expect(threadAsks).toBe(1));
+      vi.advanceTimersByTime(LIST_SECONDS * 1000 - 1);
+      expect(threadAsks).toBe(1);
+      vi.advanceTimersByTime(1);
+      await waitFor(() => expect(tasksSaid()).toBe("1 task needs a decision"));
+      expect(threadAsks).toBe(2);
+    } finally {
+      vi.useRealTimers();
     }
   });
 });

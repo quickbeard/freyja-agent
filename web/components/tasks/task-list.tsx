@@ -1,0 +1,113 @@
+"use client";
+
+import Link from "next/link";
+import useSWR from "swr";
+import { Button } from "@/components/ui/button";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useEvery } from "@/hooks/use-every";
+import { ApiError } from "@/lib/api";
+import {
+  LIST_SECONDS,
+  listThreads,
+  THREADS_KEY,
+  type ThreadList,
+  type ThreadSummary,
+} from "@/lib/tasks";
+import { TaskStatus } from "./status";
+
+const WHEN = new Intl.DateTimeFormat("en", {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
+function Row({ task }: { task: ThreadSummary }) {
+  const begins = task.first_message ?? "";
+  return (
+    <li>
+      <Link
+        href={`/tasks/${encodeURIComponent(task.thread_id)}`}
+        className="flex flex-col gap-1 rounded-lg border p-3 hover:bg-muted/40 focus-visible:outline-2 sm:flex-row sm:items-center sm:gap-4"
+      >
+        {/* Plain text: how a message begins is never rendered as markup (FR-012). */}
+        <span className="min-w-0 flex-1 truncate text-sm">
+          {begins === "" ? `Task ${task.thread_id}` : begins}
+        </span>
+        <TaskStatus status={task.status} />
+        <time
+          dateTime={task.changed_at}
+          className="shrink-0 text-xs text-muted-foreground"
+        >
+          {WHEN.format(new Date(task.changed_at))}
+        </time>
+      </Link>
+    </li>
+  );
+}
+
+/**
+ * Every task, the ones that need a decision first, as the service orders them (FR-002 to
+ * FR-006). A reading that fails is said, with a way to try again, and no row is shown as if
+ * it were current.
+ */
+export function TaskList() {
+  const { data, error, isLoading, isValidating, mutate } = useSWR<
+    ThreadList,
+    unknown
+  >(THREADS_KEY, listThreads, { shouldRetryOnError: false });
+  useEvery(THREADS_KEY, LIST_SECONDS, () => {
+    void mutate();
+  });
+
+  if (error !== undefined) {
+    return (
+      <div
+        role="alert"
+        className="flex flex-col items-start gap-3 rounded-lg border border-destructive/40 p-4"
+      >
+        <p className="text-sm">
+          {error instanceof ApiError
+            ? error.message
+            : "The tasks could not be loaded."}
+        </p>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled={isValidating}
+          onClick={() => mutate()}
+        >
+          Try again
+        </Button>
+      </div>
+    );
+  }
+  if (isLoading || data === undefined) {
+    return (
+      <output className="flex flex-col gap-2">
+        <span className="sr-only">Loading tasks</span>
+        <Skeleton className="h-12" />
+        <Skeleton className="h-12" />
+      </output>
+    );
+  }
+  if (data.threads.length === 0) {
+    return (
+      <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+        There is no task yet. Press New task to hand Freyja one.
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      <ol aria-label="Tasks" className="flex flex-col gap-2">
+        {data.threads.map((task) => (
+          <Row key={task.thread_id} task={task} />
+        ))}
+      </ol>
+      {data.more && (
+        <p className="text-sm text-muted-foreground">
+          {`More tasks exist than are listed here: ${data.total} in all. Every task that needs a decision is listed, then the most recently changed of the others.`}
+        </p>
+      )}
+    </div>
+  );
+}
