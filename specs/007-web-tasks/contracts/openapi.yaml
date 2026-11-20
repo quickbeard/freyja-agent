@@ -23,13 +23,14 @@ paths:
       summary: List the threads and say how many need a decision
       description: >
         One row per thread that has had a run since this feature was installed, whichever
-        client started it. Every thread that needs a decision comes first, then the others
+        client started it, or that was opened through `GET /threads/{thread_id}` since. Every thread that needs a decision comes first, then the others
         with the most recently changed first, at most 100 rows in all; when every row needs a
         decision there can be more than 100. `needs_decision` counts every thread, listed or
         not.
 
         Contacts no model, agent, or tool server and changes no thread. It reads one thread's
-        state for each run that ended since the list was last read, and keeps what it found.
+        state for each run that ended since the list was last read, however many, and keeps
+        what it found.
       responses:
         "200":
           description: The list
@@ -214,9 +215,9 @@ paths:
         "409":
           description: >
             `no_run` (no run is in progress on the thread, also when it is paused on a
-            proposal) or `not_stoppable` (the run in progress was started by a client that
-            reads its own stream, or by the service to report an agent's outcome). Nothing
-            changed.
+            proposal) or `not_stoppable` (the run in progress was not started through
+            `runs/unattended` or `resume/unattended`: a client started it the earlier way, or
+            the service did, to report an agent's outcome). Nothing changed.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

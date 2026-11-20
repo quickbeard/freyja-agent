@@ -129,6 +129,13 @@ The fixes were not read by a reviewer other than the one that wrote them.
 | F19 | CHK015, CHK034, CHK040 | Three things were true and unsaid: instances on an earlier version run threads without listing them; a stopped task has one status whatever its cause; and a page that follows a task reads its whole conversation each time. | Stated in Assumptions. |
 | F20 | CHK025 | FR-021 said everything that holds for a run today holds without a reader, the step limit included, while an edge case the plan added lets the limit be reached two steps early. | FR-021 names the difference and points to the edge case. |
 
+**Corrected in the analysis step, 2026-11-20.** F1's finding says that a run with a reader
+is not cut by an ordinary stop today. That was taken from the README and is wrong: a run of
+the installed server and stream library showed an open stream cancelled 0.3 seconds after
+an ordinary stop. F1's resolution stands, and matters more than the finding thought: a
+console run is let finish its step where a run started the earlier way is cut. Research R17
+has the run and the corrected reasoning.
+
 **Items satisfied as written**: CHK001 to CHK005, CHK016, CHK020 to CHK022, CHK024, CHK026,
 CHK028 to CHK030, CHK032, CHK033, and CHK041 to CHK043. For CHK043: a tool that sends to an
 agent makes its own check before it sends, inside the step, so the check does not depend on

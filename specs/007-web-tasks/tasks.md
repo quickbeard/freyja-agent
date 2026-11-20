@@ -48,8 +48,7 @@ layout of the code it covers. End-to-end tests are `*.spec.ts` files under `web/
 - **Shared files get a small addition in a block of their own**, named under "Review focus"
   in the phase's pull request: `runtime/runtime.py`, `api/threads.py`, `api/app.py`,
   `web/lib/api.ts`, `web/components/app-sidebar.tsx` and its test, `web/e2e/console.spec.ts`,
-  `tests/conftest.py`, `tests/integration/conftest.py`, `README.md`, `AGENTS.md`,
-  `web/README.md`.
+  `tests/conftest.py`, `README.md`, `AGENTS.md`, `web/README.md`.
 - **Ask the owner first**: a dependency in either lock file, a CI file, `pyproject.toml`,
   `web/vitest.config.mts`, `.gitleaks.toml`, `web/playwright.config.ts`, the constitution.
   No task here needs any of them.
@@ -101,8 +100,8 @@ layout of the code it covers. End-to-end tests are `*.spec.ts` files under `web/
 - [ ] T002 [P] Create the database of this feature's opt-in tests once, in the Postgres
       container of the main checkout (`createdb -p 5434 -U freyja freyja_test_tasks`, through
       `docker compose --project-directory /home/minhnh71/works/freyja-agent exec postgres`),
-      and read `tests/integration/conftest.py` to learn how a test file there gets its pool
-      and how tables are cleaned between tests
+      and read `tests/integration/conftest.py` to learn how a test file there gets its pool;
+      it drops every table of the test database after each test, so it needs no change
 
 **Checkpoint**: both suites pass, unchanged.
 
@@ -119,33 +118,35 @@ origins on the thread routes.
 ### Tests
 
 - [ ] T003 [P] Write `tests/test_thread_index.py`, part 1, the store, against
-      `InMemoryThreadIndex` through a fixture that part 2 of T007 reuses for Postgres.
+      `InMemoryThreadIndex` through a fixture that T007 reuses for Postgres.
       `run_started(thread_id, owner)` makes the row when it is missing and sets `run_owner`,
       clears `stop_owner`, `noted`, `error_code`, `error_message`, and `settled`, sets
       `run_unattended` false and `changed_at` to now; `created_at` is set once.
       `mark_unattended(thread_id, first_message)` sets `run_unattended` and fills
-      `first_message` only when the row has none, cut to "the first 200 characters".
+      `first_message` only when the row has none, cut to "the first 200 characters"; it takes
+      no owner, since it is called while the run holds the thread's lease.
       `note(thread_id, owner, "failed", code, message)` and `note(..., "stopped")` write only
       while `owner` is the row's `run_owner`; `error_message` is cut to "at most 2,000
       characters". `run_ended(thread_id, owner)` clears `run_owner` only when it is this
-      run's. `settle(thread_id, owner, settled, changed_at, first_message, agents_pending)`
+      run's, and clears `settled` on a row that has no `run_owner`. `settle(thread_id, owner, settled, changed_at, first_message, agents_pending)`
       writes `paused`, `finished`, or `unfinished` and is refused, returning false, when a run
       has started meanwhile. `open(thread_id, ...)` makes a settled row for a thread that has
       none. `remove(thread_id)`. `request_stop(thread_id)` sets `stop_owner` to `run_owner`
       and returns the row, or None with no run; `stop_requested(thread_id, owner)` is true only
-      while `stop_owner` equals that owner. `unsettled(limit)` returns rows that ended and
-      were not looked at, and rows whose `run_owner` is set. `list(limit=100)` returns every
+      while `stop_owner` equals that owner. `unsettled()` returns every row that ended and
+      was not looked at, and every row whose `run_owner` is set. `list(limit=100)` returns every
       row with `settled = paused` first, then the others by `changed_at` descending, up to
       100 rows in all, and with 100 or more paused rows those and no other; `counts()`
       returns the number of paused rows and the total (data-model.md; FR-002, FR-005)
-- [ ] T004 [P] Write `tests/test_thread_index.py`, part 2, `IndexedRunLocks`: every call is
+- [ ] T004 Write `tests/test_thread_index.py`, part 2, `IndexedRunLocks`: every call is
       passed to the inner locks and its answer returned; `run_started` is written only when
       `acquire` returned true, and `run_ended` after `release`; an index whose write raises
       leaves the lease taken or released as the inner locks left it and logs a warning naming
       the thread; an attribute the wrapper does not define, such as the in-memory locks'
       `_rows`, is the inner object's; wrapping a wrapper wraps its inner locks once (R6)
-- [ ] T005 [P] Write `tests/test_thread_index.py`, part 3, `status_of` and `settle_thread`:
-      the six statuses in the order of data-model.md "Status", one case per row of that table
+- [ ] T005 Write `tests/test_thread_index.py`, part 3, `status_of` and `settle_thread`:
+      the six statuses in the order of data-model.md "Status", `running` by the lease alone,
+      whatever the row's `run_owner`, one case per row of that table
       and one per precedence (a proposal over a noted failure; a noted failure over
       `unfinished`; `stopped` over `agents_pending`); `stoppable` and `stopping`.
       `settle_thread` reads a thread's state once through a context: `paused` when it has a
@@ -162,20 +163,22 @@ origins on the thread routes.
       progress, with `stoppable` false; `waiting_for_agent` after a hand-off to the stand-in
       that stays working, and `done` once the delegation worker delivered its outcome
       (`worker.tick()`); no row for a run that recorded nothing. A row whose `run_owner` is
-      set and whose lease expired (advance the clock) is settled as `stopped`. A thread that
+      set and whose lease expired (advance the clock) is listed as `stopped`. A thread
+      opened while a run the index did not see start is in progress is `running`, and takes
+      its status from its state once that run has ended. Sixty runs that ended since the
+      list was last read are all settled by one reading, and all counted. A thread that
       ran before the index existed (make its state, then empty the index) answers 200 on
       `GET /threads/{id}` and is in the list afterwards; a thread with no state answers 404
       `thread_not_found`; an id the service does not accept answers 422. The list: the order
-      and the limit with seeded rows, `needs_decision` counting rows beyond those listed,
+      and the limit with seeded rows, 100 rows answered in one request, `needs_decision` counting rows beyond those listed,
       `total`, `more`, `first_message` cut to 200 characters, `error` null. The model and the
       stand-in saw no request because of either route, and no thread's state changed. An
       index whose read raises answers 500 `internal` (contracts/openapi.yaml; FR-002 to
-      FR-005, FR-023, SC-009)
-- [ ] T007 [P] Write `tests/integration/test_thread_index_postgres.py`: the store cases of
-      T003 against `PostgresThreadIndex`, `setup()` run twice, two indexes on one database
+      FR-005, FR-023, SC-009, SC-010)
+- [ ] T007 Write `tests/integration/test_thread_index_postgres.py`, after T003, whose
+      fixture it reuses: the store cases of T003 against `PostgresThreadIndex`, `setup()` run twice, two indexes on one database
       seeing each other's writes, and a late `settle` or `note` for an earlier owner changing
-      nothing. If `tests/integration/conftest.py` names the tables it cleans, add
-      `freyja_threads` there in a line of its own
+      nothing
 - [ ] T008 [P] Write `tests/test_threads_other_origins.py`: for `POST /threads/{id}/runs` and
       `POST /threads/{id}/resume`, a request with `Sec-Fetch-Site: cross-site`, and one whose
       `Origin` differs from `X-Forwarded-Host`, is refused with 403 `other_origin` before a
@@ -191,7 +194,8 @@ origins on the thread routes.
       of data-model.md "Thread record"), the `ThreadIndex` protocol with the methods T003
       names, the constants `FIRST_MESSAGE_LIMIT = 200`, `ERROR_MESSAGE_LIMIT = 2000`, and
       `LIST_LIMIT = 100`, and `InMemoryThreadIndex`. Every write that is for one run takes
-      that run's owner and changes nothing when it is not the row's `run_owner`
+      that run's owner and changes nothing when it is not the row's `run_owner`;
+      `mark_unattended` is the exception T003 names
 - [ ] T010 Add `PostgresThreadIndex` to `src/freyja_agent/runtime/thread_index.py`: the table
       `freyja_threads` with the columns of data-model.md and the index
       `(settled, changed_at DESC)`, made by `setup()` with `CREATE TABLE IF NOT EXISTS`; each
@@ -204,7 +208,8 @@ origins on the thread routes.
 - [ ] T012 Add `status_of(record, lease_active)` and
       `settle_thread(index, context, agent_tasks, locks, record)` to
       `src/freyja_agent/runtime/thread_index.py`, as T005 says. `settle_thread` reads the
-      state with `context.agent.aget_state`, as `api/threads.py` does
+      state with `context.agent.aget_state`, as `api/threads.py` does; `status_of` is given
+      whether the thread's lease is held, read with `RunLocks.is_active`
 - [ ] T013 Change `src/freyja_agent/runtime/runtime.py`, in a block of its own: a field
       `threads: ThreadIndex`, defaulting to an in-memory index; `assemble` takes
       `thread_index: ThreadIndex | None = None` and wraps the locks it was given in
@@ -215,9 +220,9 @@ origins on the thread routes.
 - [ ] T015 Create `src/freyja_agent/api/thread_index.py`: the router with the prefix
       `/threads` and `dependencies=[Depends(refuse_other_origins("Threads"))]`;
       `GET /threads` and `GET /threads/{thread_id}`. Each takes a context with
-      `runtime.begin_read()` and releases it, settles the rows that need it (at most 50 in
-      one request for the list; the one row for the row route, which also opens a thread the
-      index does not know), and answers from the index. A failure of the index is logged and
+      `runtime.begin_read()` and releases it, settles every row that needs it (all of them for
+      the list; the one row for the row route, which also opens a thread the index does not
+      know), reads the lease of each row it returns, and answers from the index. A failure of the index is logged and
       answered with 500 `internal`
 - [ ] T016 Change `src/freyja_agent/api/app.py` to include the new router after the thread
       router, and `src/freyja_agent/api/threads.py` to give its router
@@ -257,7 +262,8 @@ can be stopped between two steps. The existing routes are untouched.
       of actions that ran at the same time. A thread that is not armed is passed to the real
       `astream` with the arguments given, and yields what it yields. An error the graph
       raises comes out unchanged. With `recursion_limit` 9, the segmented run raises
-      `GraphRecursionError` at a boundary, having taken no more steps than the plain one. A
+      `GraphRecursionError` at a boundary, having taken no more steps than the plain one
+      and at most two fewer. A
       graph without a `model` node, or without a `tools` node, is refused with an error that
       names the node (R4; FR-021, FR-027, SC-011)
 - [ ] T020 [P] Write `tests/test_unattended_runs.py`, part 1, the two routes beside the
@@ -268,10 +274,12 @@ can be stopped between two steps. The existing routes are untouched.
       pauses, and each of approve, edit, and reject. On the unattended routes only: the
       answer has `Cache-Control: no-store, no-transform` and a ping interval of 10 seconds;
       the row has `run_unattended` true and `stoppable` true while the run is in progress;
-      `first_message` is the request's; the log says the run goes on without a reader. A
+      `first_message` is the request's; the log says the run goes on without a reader; a
+      request to either route that is marked as made by a page of another origin is refused
+      with 403 `other_origin` and takes no lease. A
       test pins that the handlers of `api/threads.py` return a response whose
-      `body_iterator` is an async iterator of events (R1, R3; FR-021, FR-027)
-- [ ] T021 [P] Write `tests/test_unattended_runs.py`, part 2, readers: a reader that leaves
+      `body_iterator` is an async iterator of events (R1, R3; FR-021, FR-024, FR-027, SC-002, SC-003, SC-005, SC-007)
+- [ ] T021 Write `tests/test_unattended_runs.py`, part 2, readers: a reader that leaves
       at the first `update` of a five-step script, and a request nobody reads at all, each
       end with the model's last reply in the thread's state, the lease released, and the
       context released; the same script through `POST /threads/{id}/runs` with the same
@@ -279,8 +287,12 @@ can be stopped between two steps. The existing routes are untouched.
       a row with `status` `failed` and the event's `code` and `message`, for a model error
       and for `no_usable_model` on a thread that has a state; `no_usable_model` on a new
       thread leaves no row. A reader with 1,000 events waiting is disconnected and the run
-      goes on. A proposal raised by a run nobody reads is counted in `needs_decision`
-      (R2, R7; FR-003, FR-008, FR-010, FR-021, SC-011)
+      goes on. A proposal raised by a run nobody reads is counted in `needs_decision`,
+      and a second runtime made on the same saver, locks, and index, as after a restart,
+      lists it and continues it through `resume/unattended`. An index whose
+      `mark_unattended` or `note` raises: the run goes on to the same end, the failure is
+      logged, and the row is not `stoppable`
+      (R2, R3, R7; FR-003, FR-008, FR-010, FR-021, FR-023, SC-006, SC-011)
 - [ ] T022 [P] Write `tests/test_unattended_stop.py`, `POST /threads/{thread_id}/stop`. A
       stop asked during a model call: that reply is recorded, the tool it asked for does not
       run, the stream ends with `end` and `stopped`, the row is `stopping` and then
@@ -290,7 +302,10 @@ can be stopped between two steps. The existing routes are untouched.
       and its result is in the state. A stop applied after an approval and before the action
       started: the action did not run, nothing is pending, and a new message runs. A stop
       asked twice answers 202 both times. A stop accepted while the reply under way then
-      asks for an action that needs approval: the row is `needs_decision`, never `stopped`.
+      asks for an action that needs approval: the row is `needs_decision`, never `stopped`;
+      the same for a run that finishes and for one that fails before the stop is applied:
+      `done` and `failed`. An index whose `stop_requested` raises between two steps: the run
+      goes on as if no stop had been asked, and the failure is logged.
       409 `no_run` with no run in progress and for a paused thread; 409 `not_stoppable` for
       a run through `POST /threads/{id}/runs` and for a background run of the delegation
       worker; 404 for a thread the index does not know; 403 `other_origin` for a request
@@ -298,10 +313,12 @@ can be stopped between two steps. The existing routes are untouched.
       runtimes that share the saver, the locks, and the index: a stop asked of the second
       ends the run on the first. With `FREYJA_MAX_STEPS` 9 a console run ends with
       `step_limit` and at most 9 steps. The log names each stop that was accepted and each
-      run that ended because of one (R4, R5; FR-022, FR-022a, FR-024, SC-012)
-- [ ] T023 [P] Write `tests/test_unattended_runs.py`, part 3, the service stopping: leaving
+      run that ended because of one (R4, R5; FR-022, FR-022a, FR-023, FR-024, SC-007, SC-012)
+- [ ] T023 Write `tests/test_unattended_runs.py`, part 3, the service stopping: leaving
       the runtime while a console run is in a held tool step waits for the step, which is
-      recorded; no further step starts; the lease is released; the thread is `stopped`
+      recorded; no further step starts; the lease is released; the thread is `stopped`; a
+      reader whose stream was cancelled first, as the server does when it stops, changes
+      none of it
       (R17; FR-021)
 - [ ] T024 [P] Extend `tests/test_thread_index_nowhere.py`, part 2: console runs that
       finish, pause, fail with an error that repeats the key, and are stopped; search every
@@ -322,13 +339,17 @@ can be stopped between two steps. The existing routes are untouched.
       it says so; every other attribute is the real graph's; the constructor refuses a graph
       without both nodes (R4)
 - [ ] T027 Add `UnattendedRuns` to `src/freyja_agent/runtime/unattended.py`:
-      `start(thread_id, owner, events)` arms the thread and drives the events in a task;
+      `start(thread_id, events)` arms the thread and drives the events in a task, and takes
+      the run's lease owner from the `run_id` of its first event, `start`, with
+      `lease_owner`;
       `subscribe(thread_id)` gives a reader its events, dropped when it leaves or when
       "1,000 events" wait for it; `should_stop` reads the index's stop mark for the run and
       the object's own closing flag, and remembers that it said yes; at the run's last event
       it notes `failed` with the code and message of an `error`, replaces `end` by
       `{"status": "stopped"}` and notes `stopped` when a stop was applied, and logs it;
-      `close()` sets the closing flag and waits for the runs (R2, R5, R17)
+      `close()` sets the closing flag and waits for the runs. A call of the index that raises,
+      in `note` or in the read of a stop, is logged and treated as nothing noted and no stop
+      asked (R2, R3, R5, R17; FR-023)
 - [ ] T028 Change `src/freyja_agent/runtime/runtime.py`, in the block T013 made: a field
       `unattended: UnattendedRuns`, made in `assemble` after the runtime and closed in its
       `finally` before the worker stops and the registry closes; `begin_run` returns the
@@ -338,14 +359,18 @@ can be stopped between two steps. The existing routes are untouched.
       `POST /threads/{thread_id}/runs/unattended` and
       `POST /threads/{thread_id}/resume/unattended`, each declaring the path, body, and
       query types of the existing route, calling `threads.start_run` or `threads.resume_run`,
-      taking `body_iterator` from the response, marking the row unattended, handing the
-      events to `runtime.unattended`, and answering with an `EventSourceResponse` of the
+      taking `body_iterator` from the response, marking the row unattended (a failure of
+      that write is logged and the run is driven all the same), logging that the run goes on
+      without a reader, handing the events to `runtime.unattended`, and answering with an `EventSourceResponse` of the
       reader's events with `Cache-Control: no-store, no-transform` and `ping=10`; and
-      `POST /threads/{thread_id}/stop`, which answers 202, 404, or 409 as the contract says
+      `POST /threads/{thread_id}/stop`, which answers 202, 404, or 409 as the contract says and logs each stop it accepts
       (R3, R5; contracts/openapi.yaml, contracts/sse-events.md)
 - [ ] T030 Add to `README.md` and `AGENTS.md` what Phase 3 added: the three routes, what
       differs in their stream, the stop's rule, that an ordinary stop of the service waits
-      for a console run's step under way, and `unattended.py` in the Layout. Record in
+      for a console run's step under way, and `unattended.py` in the Layout. Correct the
+      README's sentence that a clean stop waits for in-flight runs: with the installed
+      versions it ends every open stream at once (research R17); name the correction under
+      "Review focus", since the sentence is feature 001's. Record in
       plan.md what was built differently from the plan
 
 **Checkpoint**: `uv run pytest --cov` passes with every earlier test unchanged; quickstart
@@ -372,9 +397,11 @@ task's page, and reads the conversation again later.
       `newThreadId()` gives 32 characters the service's rule accepts and never the same
       twice; `listThreads`, `readThread`, and `readState` call `/api/threads`,
       `/api/threads/<id>`, and `/api/threads/<id>/state`; `startRun(id, message)` posts to
-      `/api/threads/<id>/runs/unattended`
-- [ ] T033 [P] [US1] Write `web/__tests__/lib/task-runs.test.ts`: `begin(threadId, body)`
-      holds the events as they arrive and tells its subscribers; the run ends with its last
+      `/api/threads/<id>/runs/unattended`; every call of the module goes through `api` or
+      `stream` to a path under `/threads`, and none carries a credential (FR-026)
+- [ ] T033 [P] [US1] Write `web/__tests__/lib/task-runs.test.ts`: `begin(threadId, message, body)`
+      holds the message the run was started with and the events as they arrive, and tells
+      its subscribers; the run ends with its last
       event, or as "connection ended" when the body ends without `end`, `interrupt`, or
       `error`; `get(threadId)` gives the run or nothing; `clear(threadId)` forgets it; a
       second `begin` for a thread whose run has not ended is refused
@@ -385,17 +412,23 @@ task's page, and reads the conversation again later.
       the service cannot be reached and keeps the text; on a 200 the page goes to
       `/tasks/<id>`. A message: a person's, Freyja's, and an action with its arguments and
       result, each as text, with markup and a link shown as characters. The status: each of
-      the six in words. The view: the reply grows as events arrive; when the run ends the
+      the six in words. The view: the run is shown as started when its `start` event arrives; the reply grows
+      as events arrive; when the run ends the
       conversation is the state's; an `error` shows the service's message and, for
       `no_usable_model`, a link to `/llm`; a stream that ends without its last event says the
-      connection ended and does not say the run failed; a thread with no state is "not
-      found" (FR-007 to FR-012a)
+      connection ended and does not say the run failed; a thread with no state and no run in the store is "not
+      found", and so is an id the service answers 422 for; a thread with no state whose run
+      in the store ended with `error` shows that error, with the link for
+      `no_usable_model`, and a box holding the message the run was started with, which
+      sends it again on the same id (FR-007 to FR-012a, SC-001; R12)
 - [ ] T035 [P] [US1] Write `web/__tests__/app/tasks/page.test.tsx` and
       `web/__tests__/app/tasks/task-page.test.tsx`: the list's page has the heading, the
       notice that the console has no users, and New task; the task's page hands the id from
       its address to the view
 - [ ] T036 [P] [US1] Extend `web/__tests__/components/app-sidebar.test.tsx`: the sidebar
-      lists LLM, Agents, and Tasks, and Tasks is current on `/tasks` and on `/tasks/<id>`
+      lists LLM, Agents, and Tasks, and Tasks is current on `/tasks` and on `/tasks/<id>`.
+      This changes the existing assertion on the list of sections, which FR-027 allows
+      (FR-001)
 
 ### Implementation for User Story 1
 
@@ -408,7 +441,8 @@ task's page, and reads the conversation again later.
       with `useSyncExternalStore`
 - [ ] T040 [US1] Create `web/components/tasks/status.tsx`, `message.tsx`, `task-view.tsx`,
       and `new-task.tsx` as T034 says; the view reads the row and the state with SWR and
-      reads them again once when a run it shows ends
+      reads them again once when a run it shows ends; for a run that ended with `error` on a
+      thread with no state it offers the stored message again (R12)
 - [ ] T041 [US1] Create `web/app/tasks/page.tsx` and `web/app/tasks/[id]/page.tsx`; the
       second reads its route parameter inside `<Suspense>` (R13)
 - [ ] T042 [US1] Add the Tasks entry to `web/components/app-sidebar.tsx`, without its number
@@ -416,14 +450,16 @@ task's page, and reads the conversation again later.
       for a page that starts runs, which keeps what the page sent and answers a run with a
       whole stream) and `web/e2e/tasks.spec.ts`, part 1: a new task from the list's page to a
       finished conversation; reload shows it again; a refused message keeps its text; a
-      stopped service; text with markup shown as characters. Change `web/e2e/console.spec.ts`
-      where it counts the sidebar's sections. Run the whole end-to-end suite, in both
-      browsers: every existing spec passes without an answer for `/api/threads`
+      new task sent while no usable model is active shows the reason and offers the text
+      again; an address with an id the service refuses shows "not found"; a
+      stopped service; text with markup shown as characters. Add the Tasks entry to the
+      sidebar test of `web/e2e/console.spec.ts`
 - [ ] T044 [US1] Add the Tasks section to `web/README.md`, `README.md` ("Web console"), and
       `AGENTS.md` (Layout), as far as this phase built it, with the sentence that the console
       has no users (FR-026a)
 
-**Checkpoint**: quickstart section 1 works.
+**Checkpoint**: quickstart section 1 works, apart from the sentence that there is no task
+yet and the `GET /threads` check, which are the list's and come with Phase 6.
 
 ---
 
@@ -464,7 +500,8 @@ approves, or rejects, and the continuation shows on the same page.
 - [ ] T050 [US2] Extend `web/e2e/tasks-api.ts` (a proposal, and what each decision answers)
       and write `web/e2e/tasks-decide.spec.ts`: approve, edit and approve, reject with a
       reason, an edit the service refuses, text that is not JSON, a proposal decided
-      elsewhere, two actions in one proposal, and Enter in a field
+      elsewhere, two actions in one proposal, Enter in a field, and a decision made with the
+      keyboard alone (FR-012a)
 - [ ] T051 [US2] Add the proposal card to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 2 works.
@@ -489,8 +526,9 @@ sidebar says how many wait, from every section.
 - [ ] T053 [P] [US3] Extend `web/__tests__/components/app-sidebar.test.tsx`: the Tasks entry
       shows `needs_decision` with words for whoever does not see the number ("1 task needs a
       decision", "3 tasks need a decision"); no number for zero, before the first answer,
-      and after a failed reading; the number follows a later reading; the list and the
-      sidebar ask `/api/threads` once between them
+      and after a failed reading; the number follows a later reading; on a section other than Tasks, with
+      fake timers, the sidebar reads the list again every 15 seconds by itself; the list and
+      the sidebar ask `/api/threads` once between them (FR-001, FR-006, SC-004)
 - [ ] T054 [P] [US3] Extend `web/__tests__/app/tasks/page.test.tsx`: the list stands under
       the notice
 
@@ -500,10 +538,15 @@ sidebar says how many wait, from every section.
       `THREADS_KEY` with a refresh every 15 seconds and no retry behind the person's back,
       and show it in `web/app/tasks/page.tsx`
 - [ ] T056 [US3] Add the number to the Tasks entry in `web/components/app-sidebar.tsx`, read
-      under the same key
+      under the same key, with a refresh every 15 seconds of the sidebar's own, since on
+      another section it is the only reader, and no retry behind the person's back
 - [ ] T057 [US3] Extend `web/e2e/tasks.spec.ts`, part 2: four tasks in four statuses in
       order; the sidebar's number on the LLM section; the number gone after a decision
-      without a reload; a stopped service; a thread started by another client as a row
+      without a reload; a stopped service; a thread started by another client as a row. It follows T050, whose
+      helper answers a decision. Then run the whole end-to-end suite, in both browsers: from
+      this phase on every page asks for `/api/threads`, and every existing spec, which hands
+      its page no answer for it, must still pass; if one does not, stop and tell the owner
+      which, since those specs are not this feature's to edit (R15)
 - [ ] T058 [US3] Add the list and the number to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 3 works.
@@ -576,7 +619,7 @@ task stands; Stop ends a run after the step under way.
 - [ ] T068 [US5] Extend `web/e2e/tasks-run.spec.ts`, part 2: a page closed during a run and
       opened again shows the finished task; a task found paused from the sidebar after its
       page was closed; Stop to stopped and a follow-up after it; a run that cannot be
-      stopped; a stop that came too late
+      stopped; a stop that came too late; Stop pressed with the keyboard alone (FR-012a)
 - [ ] T069 [US5] Add leaving, coming back, and Stop to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 5 works: a tab closed during a run, and Stop.
@@ -616,7 +659,9 @@ the section cannot be shown in another origin's frame.
 - [ ] T073 Walk through `specs/007-web-tasks/quickstart.md` from the first section to the
       last on a check instance (port 8020, a database `freyja_check_tasks` dropped
       afterwards, the stand-in agent on 9978, the console on 3020), with a model that calls
-      tools, and correct the quickstart where the built feature differs
+      tools, and correct the quickstart where the built feature differs. Time two things by
+      hand, since no test does: the page showing that a run started within two seconds of
+      sending (SC-001), and the list with 100 threads within two seconds (SC-009)
 - [ ] T074 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
       code: they describe only what exists, name every new file in the Layout, and say that
       the console has no users
@@ -645,8 +690,9 @@ the section cannot be shown in another origin's frame.
   and a console run is told from another by its row. Blocks every user story.
 - **User Story 1 (Phase 4)**: depends on Phase 3. The MVP.
 - **User Story 2 (Phase 5)**: depends on Phase 4: the card stands on the task's page.
-- **User Story 3 (Phase 6)**: depends on Phase 4 for the page and the library module. It
-  does not depend on Phase 5 and could be built before it.
+- **User Story 3 (Phase 6)**: depends on Phase 4 for the page and the library module. Its
+  unit tasks, T052 to T056, do not depend on Phase 5. Its end-to-end task, T057, decides a
+  proposal and follows T050.
 - **User Story 4 (Phase 7)**: depends on Phase 5, since the follow-up box and the card share
   the rule for a pending proposal.
 - **User Story 5 (Phase 8)**: depends on Phase 7: a page that follows a run by reading is
@@ -657,14 +703,15 @@ the section cannot be shown in another origin's frame.
 
 ### Within Phase 2
 
-- T003 to T008 have no dependency on each other; T003, T004, and T005 share a file and are
-  written in that order.
+- T003, T004, and T005 share a file and are written in that order. T006 and T008 depend on
+  none of them. T007 follows T003, whose fixture it reuses.
 - T009 before T010, T011, and T012 (same file, in that order). T013 after T011. T014 beside
   them. T015 after T012, T013, and T014. T016 after T015. T017 after T016. T018 last.
 
 ### Within Phase 3
 
-- T019 to T025 have no dependency on each other; T020, T021, and T023 share a file.
+- T020, T021, and T023 share a file and are written in that order. T019, T022, T024, and
+  T025 depend on none of them.
 - T026 before T027 (same file). T028 after T027. T029 after T028. T030 last.
 
 ### Within Each User Story
@@ -684,11 +731,11 @@ the section cannot be shown in another origin's frame.
 
 ### Parallel Opportunities
 
-- Phase 2: T006, T007, and T008 beside T003 to T005; T014 beside T009 to T013.
+- Phase 2: T006 and T008 beside T003 to T005; T014 beside T009 to T013.
 - Phase 3: T019, T022, T024, and T025 beside T020, T021, and T023.
 - Phase 4: T031 to T036 together; T038 and T039 beside T037.
 - Phase 5: T045, T046, and T047 together.
-- Phase 6: T052, T053, and T054 together. The whole phase beside Phase 5, by a second
+- Phase 6: T052, T053, and T054 together. T052 to T056 beside Phase 5, by a second
   person.
 - Phase 7: T059 and T060 together.
 - Phase 8: T064, T065, and T066 together.
@@ -752,7 +799,8 @@ share are named in the standing rules; a conflict in a document keeps both sides
 - 77 tasks: 2 of setup, 28 for the service's foundation (16 and 12), 14 for User Story 1, 7
   for User Story 2, 7 for User Story 3, 5 for User Story 4, 6 for User Story 5, 3 for User
   Story 6, and 5 of polish.
-- `[P]` tasks touch different files and depend on nothing unfinished.
+- `[P]` tasks touch different files and depend on nothing unfinished. Tasks that share a
+  file carry no `[P]` within a phase, whatever their order.
 - A test task lists the cases it must hold; a case that cannot be written as listed is
   recorded in plan.md with the reason, not dropped.
 - Commit after each task or each small group of tasks; the commit hook runs the suites.
