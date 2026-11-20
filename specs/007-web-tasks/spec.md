@@ -1,0 +1,306 @@
+# Feature Specification: Tasks Section of the Web Console
+
+**Feature Branch**: `007-web-tasks`
+
+**Created**: 2026-11-20
+
+**Status**: Draft
+
+**Input**: User description: "Tasks section of the web console. A Tasks entry in the sidebar, beside LLM and Agents, becomes the place where a person enters a task for Freyja, watches it run, decides the actions that need approval, and reads the result. Today Freyja receives work only as HTTP requests (POST /threads/{thread_id}/runs); the console manages LLM profiles and agents and cannot hand Freyja any work. The sidebar entry shows the number of tasks that wait for a decision. The section lists one row per task: its first message, its status (needs your decision, running, waiting for an agent, done, failed), and when it last changed, with tasks that need a decision first. "New task" opens one text box; sending it creates a thread and opens its page. A task's page is the thread: the conversation as it streams, a card for the proposed action when the run pauses (approve, edit the arguments, reject), any agent task still pending, and a box to send a follow-up on the same thread. The service already has the thread routes: start a run with a message, answered as a server-sent event stream (start, update, message, interrupt, error, end), resume with a decision for the pending proposal, and read a thread's state (messages, pending proposal, run_active, updated_at, agent_tasks). Missing today: no route lists threads, no route stops a run, and the thread routes do not turn away requests made by a page of another origin, which the /llm and /agents routes do. The console has never read an event stream; whether one passes the /api forwarding in both browsers is to be proven in the plan's research. Open decisions for clarification, not settled here: the section's name, since "task" already means a delegate agent's task in the code, the API, and the prompts; that the API has no users, so everyone who can open the console sees every task and can approve any pending action; one message per task or follow-ups on the same thread; and whether stopping a run is in the first version. The page offers approve, edit, and reject and adds no way around the approval gate; edits are checked by the service, not the page. The web app stays a client of the API and decides nothing the orchestrator does. Prefer the smallest version that works, and say what is left for later."
+
+## Clarifications
+
+### Session 2026-11-20
+
+- Q: What should the new section of the console, and the thing a person enters in it, be called, given that "task" already means a delegate agent's task in the code, the API, and the prompts? → A: Tasks. In the console a delegate agent's task is always written "agent task". The API and the code keep "thread" for a task and `agent_tasks` for the other kind; nothing is renamed.
+- Q: The API has no users, so everyone who can open the console sees every task and can decide any pending proposal. What does the first version do about that? → A: It accepts it, as features 001, 004, and 005 did for what they added. The service stays bound to this machine, the section and the README say what anyone who reaches the console can do, and nothing records who decided. Authentication is a later feature.
+- Q: Can a person send more messages on a task after the first, or is a task one message and its outcome? → A: Follow-ups. A task's page has a box that sends another message on the same task, usable when no run is in progress and no proposal is pending. It is also how a task whose run failed or stopped is continued.
+- Q: The service runs a thread only while a client reads its stream. What happens to a running task when the person closes or leaves its page? → A: It goes on. A run the console starts, with a message or with a decision, runs to its end whether or not any page is reading it, and the page shows where the task stands when the person comes back. A run started the way the API offers today keeps today's behavior. Keeping today's behavior for the console as well, with a warning on the page, was considered and not adopted.
+- Q: Since closing the page no longer ends a run, does the first version have a Stop control? → A: Yes, for runs the console started. Stop ends the run after the step under way; completed steps are kept, the task is listed as stopped, and a follow-up continues it. Runs started by other clients and the runs the service starts itself cannot be stopped yet. No Stop control, and a stop for every run, were considered and not adopted.
+
+## User Scenarios & Testing *(mandatory)*
+
+Three terms are used throughout. A **task** is one conversation with Freyja that a person started by handing it work: what the service calls a thread. An **agent task** is what a delegate agent works on for Freyja (feature 003); a task can have several. A **proposal** is one or more actions Freyja wants to take that need a person's approval; a task with a proposal is paused until a person decides it.
+
+Five decisions were the owner's and were taken in clarification on 2026-11-20: the section's name, that the console has no users, follow-ups, what happens to a run when its page is closed, and stopping a run. They are in Clarifications above and under Assumptions, "Decisions taken in clarification".
+
+### User Story 1 - Hand Freyja a task and read the result (Priority: P1)
+
+A person opens the Tasks section, presses New task, types what they want done into one text box, and sends it. The console opens the task's page. Freyja's reply appears as it is written, with each step Freyja takes shown as it completes. When Freyja has finished, the page shows the whole conversation, and the person reads the result.
+
+**Why this priority**: It is the reason for the feature: today the console cannot hand Freyja any work at all. A task that needs no approval can be entered, watched, and read with this story alone.
+
+**Independent Test**: With the service running and a usable model active, open the console, press New task, send a message that needs no approval, and watch the reply appear before the run has ended. Read the task's page again after reloading it: the same conversation is there. Repeat with no usable model active: the page says that no usable model is active and points to the LLM section, and the text that was typed is still there to send again.
+
+**Acceptance Scenarios**:
+
+1. **Given** the Tasks section, **When** the person presses New task, **Then** one empty text box opens, with nothing left from an earlier use of it.
+2. **Given** the text box with a message, **When** the person sends it, **Then** a new task is created, its page opens, and exactly one run starts with that message, also when Send was pressed twice.
+3. **Given** a run started from the task's page, **When** Freyja writes its reply, **Then** the reply appears on the page as it is written, before the run ends, and each step Freyja completes is shown as it completes.
+4. **Given** a run that finished, **When** the page shows the task, **Then** it shows the conversation as the service holds it: the person's message, Freyja's reply, and each action Freyja took with its arguments and its result, in order, and the status done.
+5. **Given** a task's page, **When** it is opened again later, in another browser, or after the service was restarted, **Then** it shows the same conversation.
+6. **Given** a run that ends with an error, **When** the page shows it, **Then** it says that the run failed and why, in the service's words, and when no usable model is active it points to the LLM section.
+7. **Given** a message the service refuses, for example one that is too long, **When** it is sent, **Then** the page shows the service's reason, keeps the text, and no task appears in the list.
+8. **Given** the service cannot be reached, **When** a message is sent, **Then** the page says so, keeps the text, and offers to try again.
+9. **Given** text written by the model, by a tool, or by an agent that contains markup or a link, **When** it is shown, **Then** it appears as plain text: nothing in it is rendered as markup, loaded, or followed.
+
+---
+
+### User Story 2 - Decide an action that needs approval (Priority: P2)
+
+Freyja wants to take an action with effects outside its workspace. The run pauses, and the task's page shows a card for the proposal: which action, where it goes, and its arguments in full. The person approves it as proposed, changes the arguments and approves, or rejects it with an optional reason. The run continues on the same page and Freyja reports what happened. The person can also come back hours later, or after a restart, and decide then.
+
+**Why this priority**: The constitution makes a person's approval non-negotiable, and until now a decision could only be sent as a hand-written request. This story is what makes the console usable for real work; it needs story 1 to have a task to pause.
+
+**Independent Test**: Send a task that leads Freyja to propose sending a notification. The page shows the card and nothing was sent. On three separate tasks, approve, edit the channel and approve, and reject with a reason: the service's log shows the notification as proposed, as edited, and not at all. Enter arguments the action cannot accept: the service refuses, the page shows why, the edit is kept, and the proposal is still there. Open a paused task in two windows and decide in one: the other is told that the proposal was already decided when it tries.
+
+**Acceptance Scenarios**:
+
+1. **Given** a run that proposes an action needing approval, **When** the run pauses, **Then** the action has not run and the page shows a card naming the action, the tool server or agent it goes to when there is one, its description, and every argument in full.
+2. **Given** a card, **When** the person presses Approve, **Then** the action runs once with the proposed arguments and the continuation streams on the same page.
+3. **Given** a card, **When** the person changes the arguments and approves, **Then** the action runs with the changed arguments, and the conversation shows both what was proposed and that a person changed it.
+4. **Given** a card with changed arguments the action cannot accept, **When** the person approves, **Then** the service refuses, the page shows the service's reason beside the edit, the edit is kept, nothing ran, and the proposal can still be decided.
+5. **Given** a card, **When** the person rejects, with or without a reason, **Then** the action never runs and Freyja continues and says that it was not taken, with the reason when one was given.
+6. **Given** a proposal with several actions, **When** the card is shown, **Then** each action has its own decision, and nothing is sent until every action has one.
+7. **Given** an action for which the service allows only some decisions, **When** its card is shown, **Then** only those are offered.
+8. **Given** a paused task, **When** the person opens it after any delay, also after the service and the browser were restarted, **Then** the card shows the same proposal and a decision is accepted.
+9. **Given** a card on a page that is no longer current, because the proposal was decided elsewhere or another proposal has taken its place, **When** the person decides, **Then** nothing runs because of it, the page says that the proposal is no longer the pending one, and it shows the task as it is now.
+10. **Given** a card, **When** the person presses Enter in one of its fields, presses a button twice, or sends a message, **Then** no decision is sent by the Enter or the message, and at most one by the two presses.
+11. **Given** a paused task, **When** the person looks for a way to send it a new message, to approve every later proposal at once, or to stop being asked, **Then** there is none.
+
+---
+
+### User Story 3 - See every task and which ones wait for a decision (Priority: P3)
+
+The person opens the Tasks section and sees one row per task: how its first message begins, its status, and when it last changed. Tasks that need a decision come first. From any section of the console, the Tasks entry of the sidebar shows how many tasks wait for a decision, so a paused task is not missed while the person looks at something else.
+
+**Why this priority**: Without the list a task can only be found again by its address, and a task that pauses while nobody watches, for example when an agent's outcome arrives hours later, would wait unseen. It comes after the first two stories because a single task can be entered and decided without it.
+
+**Independent Test**: Create four tasks so that one waits for a decision, one waits for an agent, one is done, and one failed. Open the Tasks section: four rows, the one that needs a decision first, each with the right status and time. Open the LLM section: the sidebar's Tasks entry shows 1. Decide the proposal; within fifteen seconds, without reloading, the number is gone and the row's status has changed. Stop the service: the section says it cannot be reached and shows no task and no number as if they were current.
+
+**Acceptance Scenarios**:
+
+1. **Given** tasks exist, **When** the person opens the Tasks section, **Then** it shows one row per task with the beginning of its first message, its status, and when it last changed, and each row opens the task's page.
+2. **Given** tasks in several statuses, **When** the list is shown, **Then** the tasks that need a decision come first, and the others follow with the most recently changed first.
+3. **Given** no task exists, **When** the person opens the Tasks section, **Then** the page says so and offers New task.
+4. **Given** one or more tasks need a decision, **When** the person opens the console on any section, **Then** the Tasks entry of the sidebar shows how many, in a way that does not rest on color alone; with none, it shows no number.
+5. **Given** the console is open on any section, **When** a task comes to need a decision or stops needing one, **Then** the number and the list follow within fifteen seconds, without the page being reloaded.
+6. **Given** a thread that another client started through the service's API, **When** the list is shown, **Then** it is a row like any other and can be opened and decided.
+7. **Given** the service cannot be reached, **When** the Tasks section is opened, **Then** it says so and offers to try again, and neither it nor the sidebar shows tasks or a number as if they were current.
+8. **Given** more tasks exist than the list shows, **When** the list is shown, **Then** it says so, every task that needs a decision is in it, and the sidebar's number counts all of them.
+
+---
+
+### User Story 4 - Continue a task (Priority: P4)
+
+A task is not over after one reply. The person sends a follow-up on the same task, and Freyja answers with the whole conversation in mind. When Freyja has handed work to a delegate agent and the agent is still working, the page lists that agent task as pending, and when its outcome arrives, the conversation shows it without the person doing anything.
+
+**Why this priority**: It makes a task a conversation and makes work handed to agents visible. It is last among the stories that add something to see because one message, one decision, and one result already work without it.
+
+**Independent Test**: Finish a task, send a follow-up that refers to the first message, and confirm the reply reflects it. Send a task that hands work to the stand-in agent and stays pending: the page lists the agent task as pending and the task's status is waiting for an agent. Let the agent finish: within fifteen seconds the page shows the outcome in the conversation and the agent task as ended, without a reload.
+
+**Acceptance Scenarios**:
+
+1. **Given** a task with no run in progress and no proposal pending, **When** the person sends a follow-up from its page, **Then** a run starts on the same task and the reply reflects the earlier conversation.
+2. **Given** a task with a run in progress or a proposal pending, **When** the person looks at the follow-up box, **Then** it cannot be sent and the page says why.
+3. **Given** a task with agent tasks, **When** its page is shown, **Then** each agent task is listed with its agent, its status, and the message it was started with, and the pending ones are marked.
+4. **Given** a task that waits for an agent, **When** the agent task's outcome arrives and the service records it, **Then** the page shows the new conversation and the agent task's final status within fifteen seconds, without a reload.
+
+---
+
+### User Story 5 - Leave a task running, come back to it, or stop it (Priority: P5)
+
+A task can take longer than a person wants to watch. They close the page, or the browser, and Freyja keeps working. When they come back, the task's page shows where it stands: still running, waiting for their decision, finished, or failed. When a task is going wrong, they press Stop: Freyja finishes the step it is on and takes no further one, and the task can be continued later with another message.
+
+**Why this priority**: A person hands over work so as not to sit beside it, and without a way to stop it a run that goes wrong would end only at the step limit. It is listed after the stories above because each of them can be shown with the page left open; it is still part of the first version, and it decides how the console starts every run.
+
+**Independent Test**: Send a task that takes several steps, with one that proposes an action. Close the page as soon as the run has started. Wait, then open the Tasks section: the task needs a decision, and the sidebar says so. Open it and approve; close the page again at once. Open it later: the action ran once and the task is done, with the same conversation a task has whose page stayed open. Send a task that takes many steps and press Stop: the step under way completes and is in the conversation, no further step starts, the task is listed as stopped, and a follow-up continues it.
+
+**Acceptance Scenarios**:
+
+1. **Given** a run the console started, with a message or with a decision, **When** the person closes, leaves, or reloads the page, or the connection is lost, **Then** the run goes on and ends as it would have with the page open: finished, paused on a proposal, or failed.
+2. **Given** a task whose run is in progress and whose page was just opened, in this window or another, **When** the page is shown, **Then** it says that a run is in progress, shows the conversation as far as the service holds it, follows it within five seconds without a reload, and offers no way to send a message or a decision until the run has ended.
+3. **Given** a run that went on without a page and paused on a proposal, **When** the person opens the console on any section, **Then** the sidebar counts the task among those that need a decision, and its page shows the card.
+4. **Given** a run the console started that is in progress, **When** the person presses Stop on the task's page, **Then** the step under way completes and is recorded, no further step starts, the page shows the task as stopped with everything the run completed, and the follow-up box can be used.
+5. **Given** a run that is under way on an action a person approved, **When** Stop is pressed, **Then** the action is not cut off: it completes and its result is in the conversation, and it is not proposed or run a second time because of the stop.
+6. **Given** a task that was stopped, **When** the person sends a follow-up, **Then** a run starts on the same task with the conversation as it was left.
+7. **Given** a run in progress that the console did not start, by another client or by the service when it reports an agent's outcome, **When** the task's page is shown, **Then** it offers no Stop and says why.
+8. **Given** a task with no run in progress, also one that is paused on a proposal, **When** its page is shown, **Then** there is no Stop; a proposal is declined by rejecting it.
+9. **Given** Stop was pressed just as the run ended by itself, or was pressed twice, or by two people, **When** the service answers, **Then** nothing else changes: the page shows the task as it is, and never as stopped when its run finished.
+
+---
+
+### User Story 6 - Another site cannot hand Freyja work or decide for the person (Priority: P6)
+
+The person has the console open and visits another web page in the same browser. That page can neither start a task, nor send a decision, nor stop a run, nor read the list of tasks or a conversation.
+
+**Why this priority**: The console turns approving into a press of a button, on a service that has no users. A page of another origin must not be able to press it. The rule adds no capability of its own, so it is listed last; it is still required before the section is released.
+
+**Independent Test**: From a page served from another origin, try to start a run, to send a decision, to stop a run, and to read the list and a task: nothing starts, nothing is decided, nothing stops, and no answer can be read. The same requests made by the console and by a client that is not a web page work as before.
+
+**Acceptance Scenarios**:
+
+1. **Given** a page served from another origin, **When** it tries to start a run, to send a decision, or to stop a run, in any form a page can send without asking the service first, **Then** the request is refused, nothing runs, and nothing stops.
+2. **Given** a page served from another origin, **When** it asks for the list of tasks or for a task, **Then** it can read no answer.
+3. **Given** a client that is not a web page, **When** it uses the service's API as before this feature, **Then** it is served as before.
+
+---
+
+### Edge Cases
+
+- **The person leaves a task's page while its run is in progress.** The run goes on (FR-021). Nothing about the task depends on a page being open: it finishes, pauses, or fails as it would have, and the list and the sidebar show where it stands.
+- **A run is in progress whose stream this page is not reading**: the page was opened or reloaded after the run started, or the run was started in another window, by another person, by another client, or by the service itself when it reports an agent's outcome. The page cannot join the stream. It shows what the service holds, says that a run is in progress, reads the task again until the run has ended, and offers nothing to send meanwhile. It offers Stop when the console started the run.
+- **Stop is pressed while an action is under way.** The step completes and is recorded before the run ends (FR-022). An action a person approved is therefore never left having taken effect without its result in the conversation, and never shown as still waiting for a decision after it ran.
+- **Stop is pressed while a step takes long**, such as a model that is slow to answer or an agent that is working. The page says that the run is stopping and shows it as stopped only once the service says the run has ended, which can take as long as that step is allowed to.
+- **A run the console did not start is in progress.** It has no Stop in the first version: a run another client started ends when that client stops reading, as today, and a run the service started to report an agent's outcome ends by itself.
+- **The service stops or fails while a run goes on without a page.** Steps already completed are kept, and nothing starts the run again by itself. Once the service no longer shows a run in progress, at once after a clean stop and when the run's marker expires after a failure, the task is listed as stopped, and a follow-up continues it.
+- **Many tasks are started at once.** Each runs to its end without anyone watching. No limit on how many run at the same time is added in the first version; each is bounded by the step limit, as today.
+- **Two people decide the same proposal.** The first decision is applied. The second is refused by the service, and that person's page says the proposal was already decided and shows the task as it is. Who decided is not recorded, since the service has no users.
+- **The answer to a decision never arrives**, for example because the connection dropped. The decision may or may not have been applied. The page says that the outcome is not known, never that it failed, reads the task again, and shows the proposal only when it is still pending.
+- **A run fails after the person's message was recorded.** The message is in the conversation and is not sent again by itself. The task is listed as failed with the reason, and the person may send another message.
+- **A new task's first run fails before anything was recorded**, as when no usable model is active. There is no conversation to show. The page shows the reason and keeps the text so that it can be sent again, and the list shows no task without a message.
+- **The step limit is reached.** The task is listed as failed with the service's reason, which names the limit; a follow-up continues it.
+- **A very long message or very large arguments.** The list shows only the beginning of a first message. A task's page shows everything, and stays usable.
+- **A proposal's action is no longer configured, or its agent was removed.** The card shows what the service says of it, and offers the decisions the service allows; what happens to the action then is the service's rule (features 002, 003, and 005).
+- **The service is restarted while a page reads a run's stream.** The stream ends without a result. The page says so, reads the task again, and shows it as the service has it: stopped, once no run is in progress.
+- **A thread from before this feature that has had no run since.** It may be missing from the list until its next run. It can still be opened by its address in the console and decided there.
+- **The same task is open in two windows.** Each shows what the service holds. A message sent from one while the other's run is in progress is refused by the service, and the page says a run is in progress.
+- **The Tasks section is opened in a narrow window.** Every control stays reachable, as in the LLM and Agents sections.
+
+## Requirements *(mandatory)*
+
+### Functional Requirements
+
+**The section and the list**
+
+- **FR-001**: The console MUST have a Tasks section, with an entry in the sidebar beside LLM and Agents. The entry MUST show the number of tasks that need a decision, in every section of the console, in words as well as in a number and never by color alone, and MUST show no number when there are none. The number counts every task of the service, not only the rows the list shows.
+- **FR-001a**: The console MUST call what a person hands Freyja a task, and what a delegate agent works on an agent task, in every place it names either: a heading, a status, a count, a message of its own. It MUST NOT call an agent task a task. What Freyja and the agents write themselves is shown as written. The service's API and its existing names are not changed by the console's choice of word: a task is a thread there.
+- **FR-002**: The section MUST list one row per task, with the beginning of the task's first message, its status (FR-003), and when it last changed, which is when the service last recorded a step of it. Tasks that need a decision MUST come first, then the others with the most recently changed first. A row MUST open the task's page. With no task, the section MUST say so. The section MUST have a New task control.
+- **FR-003**: A task has exactly one status, the first of these that holds:
+  1. **Running**: a run is in progress on it, on any service instance.
+  2. **Needs your decision**: a proposal is pending.
+  3. **Failed**: its most recent run ended with an error. The row and the page give the service's reason.
+  4. **Stopped**: its most recent run ended before Freyja finished and without an error: a person stopped it (FR-022), the service stopped while it ran, or, for a run another client started, that client stopped reading.
+  5. **Waiting for an agent**: its most recent run finished and one of its agent tasks is pending.
+  6. **Done**: its most recent run finished and nothing is pending.
+
+  The status follows the most recent run whoever started it: this console, another client, or the service itself when it reports an agent's outcome.
+- **FR-004**: Every thread of the service that has had a run since this feature was installed MUST be a task in the list, whichever client started the run. A thread whose last run was earlier MAY be missing from the list until its next run, and MUST still open by its address in the console.
+- **FR-005**: The list MUST show at most 100 rows: every task that needs a decision, however many, and beyond those the most recently changed. When more tasks exist than it shows, it MUST say so. The list MUST carry at most the first 200 characters of a first message.
+- **FR-006**: While the console is open, the list and the sidebar's number MUST follow a change made anywhere within fifteen seconds, without the page being reloaded. When the service cannot be reached, the section MUST say so and offer to try again, and neither the list nor the number MUST be shown as if it were current.
+
+**Starting a task**
+
+- **FR-007**: New task MUST open one text box, empty each time. Sending MUST create a task under an id the console chooses for it and has not used before, open the task's page, and start exactly one run with the text, also when the person presses Send more than once. The box MUST NOT send a message that is empty. Whether a message is acceptable is otherwise the service's decision.
+- **FR-008**: When the run cannot be started, because the service cannot be reached or refuses the message, the page MUST say why with the service's reason, MUST keep the text, and MUST NOT list a task for it.
+
+**A task's page**
+
+- **FR-009**: A task's page MUST show: the conversation in order, with the person's messages, Freyja's replies, and each action Freyja took with its arguments and its result; the task's status; the pending proposal when there is one (FR-014); and the task's agent tasks, each with its agent, its status, and the message it was started with, the pending ones marked. A task that does not exist MUST be shown as not found.
+- **FR-010**: A page that starts a run, with a message or with a decision, MUST show Freyja's reply as it is written and each step as it completes, for as long as the page stays open. When the run ends, in whichever way, the page MUST read the task again and show the conversation as the service holds it; what was shown while the run streamed is replaced by it.
+- **FR-011**: When a run ends with an error, the page MUST say that it failed and give the service's reason. When the reason is that no usable model is active, it MUST point to the LLM section. The task MUST stay usable: the person can send another message.
+- **FR-012**: All text that comes from the model, a tool, an agent, or a tool server, including action names, descriptions, arguments, results, and reasons, MUST be shown as plain text: nothing in it is rendered as markup, loaded, or followed as a link.
+- **FR-013**: A page that is not reading a run's stream, because it was opened or reloaded after the run started or because the run was started elsewhere, cannot join it in the first version. While such a run is in progress the page MUST say so, MUST show the conversation as far as the service holds it, MUST read the task again at least every five seconds until the run has ended, and MUST offer no way to send a message or a decision meanwhile. A page that shows a task with a pending agent task MUST read the task again at least every fifteen seconds.
+
+**Deciding a proposal**
+
+- **FR-014**: When a task has a pending proposal, its page MUST show a card with every proposed action: its name, the tool server or the agent it goes to when the service names one, its description, and all of its arguments in full. For each action it MUST offer the decisions the service lists as allowed for that action, and no other.
+- **FR-015**: The decisions are the service's three: approve, which runs the action as proposed; edit, which runs it with arguments the person entered in place of the proposed ones; and reject, with an optional reason of at most 4,000 characters. The page MUST send an edit as the person entered it. It MAY refuse to send arguments that are not well-formed; whether they are acceptable to the action MUST be decided by the service alone, and the service's refusal MUST be shown beside the edit, which is kept.
+- **FR-016**: A proposal with several actions MUST get one decision per action, in the order the service lists them, sent together; nothing is sent until every action has one.
+- **FR-017**: A decision MUST be sent only by a press of the control that names it. Pressing Enter in a field, opening or reloading a page, and sending a message MUST NOT send one, and a control pressed twice MUST send at most one. The console MUST NOT decide anything by itself and MUST offer no way to approve later proposals in advance, to stop being asked, or to send a new message to a task whose proposal is pending. It adds no way around the approval gate: every decision goes through the service's existing rules.
+- **FR-018**: A decision MUST name the proposal the page showed when the person decided. When the service refuses it because that proposal is no longer the pending one, because nothing is pending, or because a run is in progress, the page MUST say so, MUST NOT send it again, and MUST show the task as it is now. When no answer to a decision arrives, the page MUST say that the outcome is not known and read the task again.
+- **FR-019**: After a decision is accepted, the continuation MUST be shown on the same page as a run is (FR-010, FR-011), including when it pauses on another proposal.
+
+**Continuing, leaving, and stopping**
+
+- **FR-020**: A task's page MUST have a box to send another message on the same task. It MUST be usable when no run is in progress and no proposal is pending; otherwise it cannot be sent and the page says why.
+- **FR-021**: A run the console starts, with a message or with a decision, MUST go on to its end whether or not any page is reading it. Closing, leaving, or reloading the page, and losing the connection, MUST NOT end the run and MUST NOT change how it ends: finished, paused on a proposal, failed, or stopped by a person. Everything that holds for a run today MUST hold for it without a reader: one run per task on every service instance for as long as it runs, the step limit, the approval gate, and the record of each completed step. The service MUST offer this way of starting a run and of continuing one with a decision beside the way that exists today, which keeps its behavior (FR-027).
+- **FR-022**: While a run the console started is in progress, the task's page MUST offer Stop, whether or not the page is reading the run's stream. Stopping MUST let the step under way complete and be recorded, and MUST start no further step. In particular an action that a person approved, and that is under way when the run is stopped, MUST complete and have its result recorded: a stop MUST never leave an action having taken effect while its proposal still shows as pending, and MUST never cause an action to run a second time. The run then ends as stopped, the steps it completed are kept, and a follow-up continues the task (FR-020). While the step under way completes, the page MUST say that the run is stopping, and MUST show it as stopped only once the service says the run has ended. A stop MUST work whichever service instance runs the task.
+- **FR-022a**: A stop asked when no run is in progress, or when the run has just ended by itself, MUST change nothing, and the page MUST show the task as it is. A run the console did not start, by another client or by the service itself, MUST NOT have a Stop in the first version: the page says why, and a request to stop one sent straight to the service is refused. Stop MUST take a press of its own, like a decision (FR-017). The service MUST log each stop it accepts, naming the task.
+
+**The service**
+
+- **FR-023**: The service MUST give the console what it lacks today: the list of tasks with what FR-002 to FR-005 need, the number of tasks that need a decision, a run that goes on without a reader (FR-021), and the stop (FR-022). Answering the list or the number MUST contact no model, no agent, and no tool server, and MUST change no thread. The list MUST be the same from every service instance that shares the database and MUST survive a restart.
+- **FR-024**: A page served from another origin MUST NOT be able to start a run, send a decision, or stop a run, in any form of request a page can send without the service's permission, and MUST NOT be able to read the list, a task, or a run. The rule and its refusal are the ones the LLM and Agents routes already apply (feature 004, FR-003a; feature 005, FR-029). A client that is not a web page MUST be served as before.
+- **FR-025**: What the service returns for the list holds text from threads. A stored API key MUST NOT appear in it beyond its last four characters, and an agent's address MUST NOT appear in it, as in every other answer of the service (feature 004, FR-020; feature 005, FR-028). The searches that prove this for the existing routes MUST cover the new ones.
+- **FR-026**: The web app MUST reach tasks only through the service's API, on the origin it is served from, as the LLM and Agents sections do. It MUST hold no credential, call no model, agent, or tool itself, and decide nothing the orchestrator does.
+- **FR-026a**: The Tasks section MUST say, where a person reads it before they rely on it, that the console has no users: everyone who can open it sees every task and can decide every proposal. The README MUST say the same where it describes the section. The service records no name with a decision.
+
+**Compatibility and quality**
+
+- **FR-027**: Starting a run, reading a thread's state, and deciding a proposal, in the way the API offers them today, MUST behave for a client that is not a web page exactly as before this feature, including that such a run ends when its client stops reading. Every existing automated test MUST pass unchanged, apart from tests that gain setup because every page of the console now asks for the number of tasks that need a decision.
+- **FR-028**: The service's part and the web app's part MUST each be covered by automated tests that need no network, no model provider, and no agent installed or running. The console's part of every user story MUST also be covered by an end-to-end test in a browser, beside its unit tests. That a run's stream reaches the page through the console's own origin as it is produced, and not all at once when it ends, MUST be shown in both browsers the end-to-end tests use. The service's tests MUST show that a run goes on to the same end after its reader leaves, and that a stop pressed while an approved action is under way leaves that action run once and recorded.
+
+### Key Entities
+
+- **Task**: One conversation with Freyja, started by a person's message; the service's thread, under the name the console gives it. It has an id the client chose, a first message, a status, the time it last changed, a conversation, at most one pending proposal, and any number of agent tasks.
+- **Status**: One of six: running, needs your decision, failed, stopped, waiting for an agent, done (FR-003). It is read from what the service holds; the console keeps none.
+- **Run**: One turn of work on a task, started by a message or by a decision, or by the service when it reports an agent's outcome. It ends finished, paused on a proposal, failed, or stopped. As in feature 001; new here is that how the most recent run ended is part of a task's status, that a run the console starts goes on without a reader, and that a person can stop such a run.
+- **Proposal**: As in feature 001: one or more actions waiting for a person, each with a name, where it goes, arguments, and the decisions allowed for it.
+- **Decision**: As in feature 001: approve, edit with replacement arguments, or reject with an optional reason, one per proposed action. Who decided is not recorded.
+- **Agent task**: As in feature 003: what a delegate agent works on for a task. Shown on the task's page; not changed by this feature.
+
+## Success Criteria *(mandatory)*
+
+### Measurable Outcomes
+
+- **SC-001**: A person with the console open can hand Freyja a task and see the beginning of its reply in under one minute, without leaving the console and without writing a request by hand. The page shows that the run started within two seconds of sending.
+- **SC-002**: In the automated suite, 100% of actions that need approval and are proposed in a task started from the console pause and show a card, and zero run without an approve or edit that a person's press sent.
+- **SC-003**: Each of approve, edit, and reject, sent from the console, has the effect the service defines for it in 100% of automated runs, and an edit the action cannot accept changes nothing in 100% of them.
+- **SC-004**: While the console is open on any section, a task that comes to need a decision is announced on the sidebar within fifteen seconds, in 100% of automated runs.
+- **SC-005**: A decision sent from a page that no longer shows the pending proposal, or sent twice, runs nothing a second time, in 100% of automated runs.
+- **SC-006**: A task paused before the service and the browser were restarted can be found from the list alone and decided, with the same outcome as without the restart.
+- **SC-007**: A page served from another origin starts zero runs, sends zero decisions that are applied, stops zero runs, and reads zero answers about tasks.
+- **SC-008**: A recognizable stored API key and a recognizable agent address appear in nothing the service returns for the list of tasks, through tasks that finish, pause, and fail.
+- **SC-009**: With 100 tasks, the Tasks section shows its list within two seconds on the machine the service runs on.
+- **SC-010**: A deployment used only through the API behaves as before: every automated test that existed before this feature passes, changed only as FR-027 says.
+- **SC-011**: A task whose page is closed as soon as its run has started reaches the same end, with the same conversation, as one whose page stays open, in 100% of automated runs.
+- **SC-012**: After a stop is accepted, the step under way is recorded and zero further steps start, in 100% of automated runs; an approved action that was under way has run exactly once and is in the conversation with its result.
+
+## Assumptions
+
+**Decisions taken in clarification**
+
+Five decisions were the owner's. Each was asked on 2026-11-20; the first three confirmed the draft, and the last two changed it.
+
+1. **The section's name.** Decided on 2026-11-20: Tasks. "Task" already means a delegate agent's task in the code, the API, and the prompts (`agent_tasks`, `check_agent_tasks`), and Freyja's own replies speak of an agent's "task". The console keeps the two apart by always saying "agent task" for the second (FR-001a); the API and the code keep "thread" for the first, and nothing is renamed. Threads, Requests, and Conversations were considered and not adopted.
+2. **No users.** Decided on 2026-11-20: accepted for the first version. The service has no authentication, so everyone who can open the console sees every task with its conversation and can approve any pending action, and nothing records who decided, as in features 001, 004, and 005 for what they added, with the service bound to this machine. New with this feature: tasks can be listed, where until now a thread could only be read by someone who knew its id. The section and the README say so (FR-026a). Recording a name a person types with each decision, and waiting for authentication, were considered and not adopted.
+3. **Follow-ups.** Decided on 2026-11-20: a person can send more messages on the same task (FR-020), as the description's sketch has it and as the service already works. One message per task was considered and not adopted: a task that failed or stopped could then only be entered again.
+4. **A run and its page.** Not among the description's four, and found while writing: the service runs a thread only while a client reads its stream, so a task entered in the console would have stopped when its page was closed. Decided on 2026-11-20: a run the console starts goes on without a reader (FR-021). The draft had kept today's behavior, with a warning on the page; that was not adopted. It is the largest addition to the service in this feature.
+5. **Stopping a run.** Decided on 2026-11-20, after the decision above: the first version has Stop for runs the console started (FR-022). The draft had none, when closing the page still ended a run. A stop for every run, whoever started it, was considered and left for later.
+
+**Scope**
+
+- Out of scope for the first version, and left for later: authentication and a record of who decided; stopping a run that another client or the service itself started; reading the live stream of a run that is already in progress, from a page opened after it started, which follows the run by reading the task again instead (FR-013); a limit on how many tasks run at once; deleting, archiving, renaming, searching, filtering, and paging tasks; attachments and anything but plain text in a message; showing Freyja's text as formatted text; a form built from an action's own description of its arguments, in place of editing them as text; the debug stream; notifications outside the console; showing the files Freyja wrote in its workspace; and choosing a model or a set of agents per task.
+- Not changed: the approval gate, its three decisions and their rules; what a run does and what its stream carries; the three thread operations as the API offers them today; the thread's state; agent tasks and how their outcomes are reported; LLM profiles and the Agents section.
+- The console is in English and is used with a current desktop browser, as in features 004 and 005.
+
+**Behavior choices**
+
+- "Stopped" is a sixth status the description's sketch does not have. Without it, a task whose run a person stopped, or whose run ended because the service stopped, would be listed as done, which it is not, or as failed, which blames an error that did not happen.
+- A stop waits for the step under way (FR-022); the owner chose Stop, and this rule for it is the specification's. When the service ends a run today because its client stopped reading, the step under way is dropped, and feature 001 accepted that an action can then have taken effect while its proposal still shows as pending, because its one action only wrote a log line. Actions now reach tool servers and agents, and Stop would let a person cause that by pressing a button right after Approve. So a stop asked through the console is held to more than a client that goes away: it never cuts an action off (principle I). The page can therefore show "stopping" for as long as one step is allowed to take.
+- A run that the console starts goes on; a run another client starts the way the API offers today still ends when that client stops reading (FR-021, FR-027). Changing it for every client would change what feature 001 specifies and what its tests check.
+- No limit on how many tasks run at once is added. Before, a run needed an open connection; now a person can start many and leave. Each is bounded by the step limit, and anyone who can reach the service could already start as many as they kept connections open.
+- The order of FR-003 puts failed and stopped above waiting for an agent. A task whose last run did not finish needs the person; one that only waits for an agent does not.
+- A thread from before this feature may be missing from the list until its next run (FR-004). How a run ended was not recorded until now, so its status cannot be told. The plan may do better; the specification does not require it.
+- Edited arguments are entered as text, in the structured form the proposal shows them in (FR-015). The page checks at most that the text is well-formed, which decides nothing about the action. Everything else is the service's check, as today.
+- An approval is not confirmed a second time. The card shows the whole action and Approve is a press of its own (FR-017); a confirmation on top would be pressed without being read.
+- The console chooses a task's id (FR-007), since the service leaves a thread's id to its client. It is random and long enough that two tasks do not share one, and it says nothing about the task.
+- The page shows the service's state as the truth once a run has ended (FR-010). While a run streams, text written by a subagent cannot be told from Freyja's own (feature 001), so what streams is shown as work in progress, and the conversation read afterwards is what counts.
+- Limits chosen here: 100 rows in the list, 200 characters of a first message in a row, fifteen seconds for the list, the number, and a page that follows a task waiting for an agent, and five seconds for a page that follows a run whose stream it is not reading.
+- A message is never a decision, and a task whose proposal is pending takes no new message, as the service already rules (feature 001, FR-011).
+
+**Not proven**
+
+- The console has never read an event stream. That a run's stream passes the console's forwarding of `/api/...` as it is produced, in both browsers, is to be proven in the plan's research before anything is designed on it. Also to be measured there: how long the forwarding keeps a quiet stream open, since a run can spend a long time in one step; with FR-021 a stream that is cut no longer ends the run, and the page then follows the task by reading it again (FR-013). If a stream does not pass as it is produced, FR-010 is revisited before the plan goes on.
+- That the service can end a run after the step under way, and not in the middle of it (FR-022), is not proven either: today it ends a run only by dropping it when its client goes away. The plan's research shows how before Stop is designed. If it cannot be guaranteed, Stop goes back to the owner; it is not built with the gap.
+- Whether FR-021 and FR-022 can be built without changing files that the session building features 005 and 006 is working in is for the plan to find out. If they cannot, the owner is told which file and why before anything is changed.
+
+**Environment and dependencies**
+
+- The constitution needs no amendment. Principle I: the page offers the service's three decisions and adds no way around the gate; an edit is checked by the service; a run that goes on without a reader pauses for a decision exactly as one with a reader does, and stays resumable after any delay; and a stop never cuts off an approved action (FR-022). Principle III: the web app is a client of the API and decides nothing the orchestrator does. Principle VI: nothing here asks a model whether an action needs approval.
+- The service keeps binding to the local interface with no authentication. With this feature, anyone who can reach the console can read every task and decide every pending proposal with a press, where before they needed a thread's id and a hand-written request. That is acceptable for local use, is documented, and must be revisited before the service is bound more widely (decision 2 above; FR-026a). They can also stop a run the console started.
+- Several service instances may share one database, as before. The list and the number are the same from each (FR-023).
+- The existing thread operations, the approval gate, the run lease, the step limit, agent tasks, and the delegation worker are reused. This feature adds the list of tasks, the number, a run that goes on without a reader, the stop, the refusal of other origins on the thread operations, and the Tasks section.
+- Feature 005 is still being built and feature 006 follows it, by another session, on the same `main`. This feature changes nothing they specify.
+- The stand-in model and the stand-in agent play the model and every agent in the automated tests, as today.
