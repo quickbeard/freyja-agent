@@ -134,6 +134,18 @@ Clarifications under "Plan, 2026-11-20":
 Two edge cases are added: a stop that is applied before an approved action started, and the
 step limit of a run that goes on without a reader (R4).
 
+### Checklist review (2026-11-20)
+
+[checklists/approval-runs.md](checklists/approval-runs.md) was reviewed against the spec and
+this plan; its "Review record" lists 20 findings and what each changed. One changes the
+design: when the service is stopped in the ordinary way, a run nobody reads is no longer
+cancelled. It is asked to stop at its next boundary and waited for, so stopping the service
+cuts no action off ([research.md](research.md) R17). Four add behavior a client sees: a
+thread the index does not know gets its row when it is opened; a reader that does not keep up
+with a stream is disconnected; a list that cannot be read is an error; and a stop that comes
+too late is said to have come too late. The Constitution Check is unchanged by them:
+principle I is better served by the first.
+
 ## Project Structure
 
 ### Documentation (this feature)

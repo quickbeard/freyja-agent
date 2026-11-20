@@ -69,6 +69,10 @@ Index: `(settled, changed_at DESC)`, for the list's order and the count of pause
   `settled` is `paused` when it has a proposal, `finished` when it has no step left to take,
   and `unfinished` otherwise; `changed_at`, `first_message`, and `agents_pending` are filled.
   The write is refused when a run has started meanwhile.
+- **Opened** (the row route): a thread that has no row and has a state gets one, settled at
+  once, with `created_at` and `changed_at` from its last checkpoint. This is how a thread
+  from before this feature, or one whose row could not be written, comes into the list
+  (FR-004, FR-023).
 
 Every write names the `run_owner` it is for, so a late write for an earlier run changes
 nothing of a later one.
@@ -100,7 +104,8 @@ true when, besides, `stop_owner` equals `run_owner`.
 
 Not stored. `UnattendedRuns` holds, for each run it drives on this instance: the thread's id,
 the task that reads the run's events, and the queues of the readers that are connected. A
-reader that leaves is taken out; the task ends when the run's events end. The set of threads
+reader that leaves is taken out, and so is one with 1,000 events waiting for it; the task
+ends when the run's events end. The set of threads
 with such a run is what `SegmentedGraph` asks to decide whether a run is run in segments.
 
 ## What the web app holds

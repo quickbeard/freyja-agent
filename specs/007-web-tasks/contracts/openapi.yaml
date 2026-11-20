@@ -79,7 +79,9 @@ paths:
       summary: One thread's row
       description: >
         What the list holds of one thread, for a page that shows it. Read beside
-        `GET /threads/{thread_id}/state`. Contacts nothing and changes no thread.
+        `GET /threads/{thread_id}/state`. Contacts nothing and changes no thread. A thread
+        the index has no row for, and that has a state, is given its row by this request and
+        is in the list from then on.
       responses:
         "200":
           description: The row
@@ -88,9 +90,8 @@ paths:
               schema: { $ref: "#/components/schemas/ThreadSummary" }
         "404":
           description: >
-            `thread_not_found`: no run on this thread is known to the index. A thread from
-            before this feature that has had no run since answers this while its state can
-            still be read.
+            `thread_not_found`: the index has no row for the thread and the thread has no
+            state, the same threads `GET /threads/{thread_id}/state` answers 404 for.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

@@ -21,7 +21,8 @@ terminal event, which is then sent to nobody, and the thread's state and its row
 contract for these two routes.
 
 A stream can therefore end without a terminal event for a reason that is not the run's: the
-connection dropped, or something between the client and the service closed it. A client
+connection dropped, something between the client and the service closed it, or the client
+did not keep up and the service closed it with 1,000 events waiting. A client
 treats that as "not known" and reads the thread again; it never treats it as a failed run.
 
 ## `end` can say `stopped`
