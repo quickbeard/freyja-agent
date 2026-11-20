@@ -241,10 +241,10 @@ describe("AgentCard", () => {
     ).toBeNull();
   });
 
-  it("offers Check, and Edit for a saved agent, and nothing in the card itself that changes or removes the agent", () => {
+  it("offers Check, and Edit and Remove for a saved agent, and nothing in the card itself that changes or removes the agent", () => {
     for (const [shown, buttons] of [
       [HELLO, ["Check"]],
-      [STUB, ["Check", "Edit"]],
+      [STUB, ["Check", "Edit", "Remove"]],
     ] as const) {
       const { unmount } = render(<AgentCard agent={shown} />);
       expect(
@@ -335,7 +335,7 @@ describe("AgentCard, checking", () => {
         })}
       />,
     );
-    expect(screen.queryAllByRole("button")).toEqual([]);
+    expect(screen.queryByRole("button", { name: "Check" })).toBeNull();
   });
 
   it("asks the service to check this agent, by its id and with nothing else", async () => {
@@ -611,7 +611,6 @@ describe("AgentCard, Edit", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
-    expect(screen.queryAllByRole("button")).toEqual([]);
   });
 
   it("hands its agent to whoever opens the form, and asks the service nothing", () => {
@@ -626,5 +625,94 @@ describe("AgentCard, Edit", () => {
     // Nothing on the card itself changes the agent: the form does, behind a confirmation.
     expect(fetchStub).not.toHaveBeenCalled();
     expect(screen.queryByRole("dialog")).toBeNull();
+  });
+});
+
+// Part 4 (T102): Remove, and the number of pending tasks.
+
+describe("AgentCard, Remove and pending tasks", () => {
+  const NOT_IN_USE = agent({
+    state: "not_in_use",
+    checked_at: null,
+    reason: "An agent named in the environment has this name.",
+  });
+  const buttons = () =>
+    screen.queryAllByRole("button").map((button) => button.textContent);
+
+  it("has Remove on a saved agent's card, whatever was last found of it", () => {
+    for (const shown of [
+      STUB,
+      agent({ approval: "none" }),
+      agent({ state: "unreachable", reason: "Nothing answered." }),
+      agent({ state: "not_tried", checked_at: null }),
+    ]) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(buttons()).toEqual(["Check", "Edit", "Remove"]);
+      unmount();
+    }
+  });
+
+  it("has Remove and nothing else on the card of a saved agent that is not in use", () => {
+    render(<AgentCard agent={NOT_IN_USE} />);
+    expect(buttons()).toEqual(["Remove"]);
+  });
+
+  it("has no Remove on an environment agent's card", () => {
+    for (const shown of [
+      HELLO,
+      { ...HELLO, approval: "required" as const },
+      { ...HELLO, state: "unreachable" as const, card: null },
+    ]) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.queryByRole("button", { name: "Remove" })).toBeNull();
+      expect(buttons()).toEqual(["Check"]);
+      unmount();
+    }
+  });
+
+  it("hands its agent to whoever asks to confirm the removal, and asks the service nothing", () => {
+    const fetchStub = stubFetch(result());
+    const onRemove = vi.fn();
+    for (const shown of [agent({ version: 5, pending_tasks: 2 }), NOT_IN_USE]) {
+      const { unmount } = render(
+        <AgentCard agent={shown} onRemove={onRemove} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Remove" }));
+      expect(onRemove).toHaveBeenLastCalledWith(shown);
+      // Nothing on the card itself removes the agent: a dialog asks first.
+      expect(screen.queryByRole("alertdialog")).toBeNull();
+      unmount();
+    }
+    expect(onRemove).toHaveBeenCalledTimes(2);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [1, "1"],
+    [3, "3"],
+    [12, "12"],
+  ])("shows a saved agent's number of pending tasks when it is not zero: %i", (pending, shown) => {
+    render(<AgentCard agent={agent({ pending_tasks: pending })} />);
+    const label = screen.getByText("Pending tasks");
+    expect(label.nextElementSibling?.textContent).toBe(shown);
+  });
+
+  it("shows the number for a saved agent that is not in use, too", () => {
+    render(<AgentCard agent={{ ...NOT_IN_USE, pending_tasks: 2 }} />);
+    expect(
+      screen.getByText("Pending tasks").nextElementSibling?.textContent,
+    ).toBe("2");
+  });
+
+  it("says nothing of pending tasks when a saved agent has none, nor on an environment agent's card", () => {
+    for (const shown of [
+      STUB,
+      agent({ pending_tasks: 0, approval: "none" }),
+      { ...HELLO, pending_tasks: 4 },
+    ]) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.queryByText("Pending tasks")).toBeNull();
+      unmount();
+    }
   });
 });

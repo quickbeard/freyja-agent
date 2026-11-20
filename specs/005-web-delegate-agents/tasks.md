@@ -997,7 +997,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
 
 ### Tests for User Story 5
 
-- [ ] T096 [P] [US5] Extend `tests/test_agents_api.py`, part 4. `PATCH` with `url`, which the
+- [X] T096 [P] [US5] Extend `tests/test_agents_api.py`, part 4. `PATCH` with `url`, which the
       test of T080 that refused it is changed to accept: a move to a stand-in that can be used
       gives the agent with the new address in the kept form, the details read there, `version`
       one higher, and `given_up`; the new stand-in saw one `GET` and the earlier one nothing;
@@ -1014,7 +1014,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       at the earlier id. Both routes refuse a page of another origin, and each logs the agent,
       what changed, and how many tasks were given up, with no address (FR-009, FR-010, FR-012,
       FR-017, FR-024, FR-029, FR-030, SC-007, SC-012, SC-016)
-- [ ] T097 [P] [US5] Write `tests/test_agents_tasks.py`. With three tasks pending for an agent,
+- [X] T097 [P] [US5] Write `tests/test_agents_tasks.py`. With three tasks pending for an agent,
       the list reports 3; a move, and a removal, answers with `given_up` 3, each task is listed
       in its thread as `given_up` at once, a background run tells each thread exactly once, and
       by the stand-ins' records no cancel was sent and nothing about those tasks reached the
@@ -1034,7 +1034,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       thread is told once one is active. A removed agent's earlier tasks stay listed in their
       threads; a thread's conversation follows the name across a move and across a removal and
       a new add (FR-024 to FR-026, SC-010, R10, R13)
-- [ ] T098 [P] [US5] Extend `tests/test_agents_approval.py`, part 3, through the routes. After
+- [X] T098 [P] [US5] Extend `tests/test_agents_approval.py`, part 3, through the routes. After
       a removal: the next run has neither tool; a run in progress that started while the agent
       ran without approval and then hands off to it sends nothing, with the error result "Agent
       '<name>' was removed; nothing was sent."; a continuation that began before the removal
@@ -1049,10 +1049,10 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       progress finishes at the address it started with; when another agent was meanwhile added
       at that address, it sends nothing: "Agent '<name>': the address this run started with is
       another agent's now; nothing was sent." (FR-019, FR-022, FR-023, SC-003, SC-004, R7, R8)
-- [ ] T099 [P] [US5] Extend `web/__tests__/lib/agents.test.ts`, part 5: `changeAgent` with
+- [X] T099 [P] [US5] Extend `web/__tests__/lib/agents.test.ts`, part 5: `changeAgent` with
       `url` sends it in the body; `removeAgent(id, version)` sends a `DELETE` with the version
       as a query and returns how many tasks were given up
-- [ ] T100 [P] [US5] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 3,
+- [X] T100 [P] [US5] Extend `web/__tests__/components/agents/agent-form.test.tsx`, part 3,
       changing the address: the confirmation names the agent and says that the change applies
       from the next run, that a run in progress finishes at the earlier address, that a
       proposal already waiting for a decision will go to the new address once approved, how
@@ -1060,7 +1060,7 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       will be given up; an address and an approval choice changed together show both meanings;
       a refusal keeps what was typed and says why; after the change the form says how many
       tasks were given up (FR-011, FR-024)
-- [ ] T101 [P] [US5] Write `web/__tests__/components/agents/remove-dialog.test.tsx`, after the
+- [X] T101 [P] [US5] Write `web/__tests__/components/agents/remove-dialog.test.tsx`, after the
       profile deletion's tests: the dialog names the agent, says the removal holds at once,
       also for runs in progress, says how many tasks are pending as the list has it at that
       moment, and that they will be given up; nothing is sent before Confirm, and the second
@@ -1069,44 +1069,44 @@ first address. Move it to a second stand-in: the next run's hand-off reaches tha
       `agent_not_found` have the list read again; no answer says the outcome is not known; the
       dialog follows the live copy and closes when the agent is gone from the list (FR-004,
       FR-010 to FR-012, FR-024)
-- [ ] T102 [P] [US5] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 4: a
+- [X] T102 [P] [US5] Extend `web/__tests__/components/agents/agent-card.test.tsx`, part 4: a
       saved agent has Remove; a saved agent that is not in use has Remove and nothing else; an
       environment agent has none; a saved agent's card shows its number of pending tasks when
       it is not zero (FR-017, FR-024)
-- [ ] T103 [P] [US5] Extend `tests/test_agents_address_nowhere.py`, part 4: a move with each
+- [X] T103 [P] [US5] Extend `tests/test_agents_address_nowhere.py`, part 4: a move with each
       refusal, a removal, a task given up and reported in its thread, and a run refused because
       the address it started with is another agent's; the search of part 1 again (FR-028,
       SC-008)
 
 ### Implementation for User Story 5
 
-- [ ] T104 [US5] Extend `src/freyja_agent/delegates/a2a_tools.py`. One more rule in the check
+- [X] T104 [US5] Extend `src/freyja_agent/delegates/a2a_tools.py`. One more rule in the check
       before a send, after the two of T088: the tool's link is of an earlier address and
       another agent now has that destination, so nothing is sent, with the error result of
       T098, logged. A hand-off updates a task's row only while the task is still pending, where
       today an answer updates it whatever its state. A reply naming a task id the name already
       has under another ref is malformed (FR-022, FR-025, FR-030, R7, R10)
-- [ ] T105 [US5] Change `src/freyja_agent/delegates/delegation_worker.py` and `record_outcome`
+- [X] T105 [US5] Change `src/freyja_agent/delegates/delegation_worker.py` and `record_outcome`
       in `a2a_tools.py`: `record_outcome` takes the states it may write over, the worker
       passing the pending ones so a check never writes over a given-up task, and the cancel
       path keeping today's; a task the worker gives up because its ref is of an earlier address
       of an agent that still exists gets the text for a move (FR-024, FR-025, R10)
-- [ ] T106 [US5] Add `url` to `AgentUpdate` and `AgentRemoved` to
+- [X] T106 [US5] Add `url` to `AgentUpdate` and `AgentRemoved` to
       `src/freyja_agent/api/schemas.py`, and implement the move and `DELETE /agents/{agent_id}`
       in `src/freyja_agent/api/agents.py`: a `url` that is the saved form is no change;
       otherwise the checks and the card read of an add, taking one of the four slots only, then
       the store's move, then `registry.adopt` with the card, which makes a new link with a new
       client; a removal through the store; each taken up on this instance at once; the two log
       lines (FR-009, FR-010, FR-012, FR-014, FR-024, FR-030, R10, R15, R16)
-- [ ] T107 [P] [US5] Add `removeAgent` to `web/lib/agents.ts` and `url` to what `changeAgent`
+- [X] T107 [P] [US5] Add `removeAgent` to `web/lib/agents.ts` and `url` to what `changeAgent`
       sends
-- [ ] T108 [US5] Extend `web/components/agents/agent-form.tsx` with the address of a saved
+- [X] T108 [US5] Extend `web/components/agents/agent-form.tsx` with the address of a saved
       agent and its confirmation, as T100 asks
-- [ ] T109 [US5] Create `web/components/agents/remove-dialog.tsx`, after
+- [X] T109 [US5] Create `web/components/agents/remove-dialog.tsx`, after
       `web/components/llm/delete-dialog.tsx`; add Remove and the pending count to
       `web/components/agents/agent-card.tsx`; say how many tasks were given up from
       `web/components/agents/agent-list.tsx`
-- [ ] T110 [US5] Write the end-to-end tests of this story: extend
+- [X] T110 [US5] Write the end-to-end tests of this story: extend
       `web/e2e/agents-manage.spec.ts` and `AgentService`, part 4. A move shows the confirmation
       with the number of pending tasks, and once confirmed the card shows the new address and
       the console says how many were given up; a move to an address where nothing answers is

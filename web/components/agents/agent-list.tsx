@@ -15,11 +15,23 @@ import { ApiError } from "@/lib/api";
 import { AgentCard } from "./agent-card";
 import { AgentForm } from "./agent-form";
 import { AgentsWarning } from "./agents-warning";
+import { RemoveDialog } from "./remove-dialog";
 
 function reason(error: unknown): string {
   return error instanceof ApiError
     ? error.message
     : "The agents could not be loaded.";
+}
+
+/** How many pending tasks a move or a removal gave up, as the service counted them. */
+function givenUp(count: number): string {
+  if (count === 0) {
+    return "It had no pending task, so none was given up.";
+  }
+  if (count === 1) {
+    return "1 pending task was given up: its thread will be told.";
+  }
+  return `${count} pending tasks were given up: their threads will be told.`;
 }
 
 /**
@@ -43,9 +55,15 @@ export function AgentList() {
     open: boolean;
   } | null>(null);
 
+  // The agent whose removal is being asked about, as it was when Remove was pressed.
+  const [removing, setRemoving] = useState<Agent | null>(null);
+  // What the last move or removal came to: how many tasks it gave up, or that the agent
+  // was gone already (FR-024). It stays until another change is started.
+  const [outcome, setOutcome] = useState<string | null>(null);
+
   /**
-   * The agent being changed as the list has it now, for the form's confirmation: null when
-   * the list no longer has it, and undefined while the list is not known (FR-011).
+   * The agent being changed or removed as the list has it now, for a confirmation: null
+   * when the list no longer has it, and undefined while the list is not known (FR-011).
    */
   function live(agent: Agent): Agent | null | undefined {
     if (error !== undefined || data === undefined) {
@@ -96,7 +114,13 @@ export function AgentList() {
           >
             Refresh
           </Button>
-          <Button size="sm" onClick={() => setAdding(true)}>
+          <Button
+            size="sm"
+            onClick={() => {
+              setOutcome(null);
+              setAdding(true);
+            }}
+          >
             Add
           </Button>
         </div>
@@ -114,7 +138,14 @@ export function AgentList() {
                 agent={agent}
                 onChecked={() => mutate()}
                 onGone={() => mutate()}
-                onEdit={(chosen) => setEditing({ agent: chosen, open: true })}
+                onEdit={(chosen) => {
+                  setOutcome(null);
+                  setEditing({ agent: chosen, open: true });
+                }}
+                onRemove={(chosen) => {
+                  setOutcome(null);
+                  setRemoving(chosen);
+                }}
               />
             ))}
           </div>
@@ -125,6 +156,13 @@ export function AgentList() {
 
   return (
     <>
+      {/* A status that appears together with its text, as the result of a check does. It
+          is beside the list and not inside it, so it stays when the list cannot be read. */}
+      {outcome !== null && (
+        <output className="mb-4 block break-words rounded-lg border p-3 text-sm">
+          {outcome}
+        </output>
+      )}
       {list}
       {/* The form is beside the list and not inside it: when the list cannot be read after
           a request that got no answer, the form is still there to say that the outcome is
@@ -148,8 +186,33 @@ export function AgentList() {
           onSaved={() => mutate()}
           onUnknown={() => mutate()}
           onStale={() => mutate()}
+          onMoved={(moved, count) =>
+            setOutcome(`${moved.name} was moved. ${givenUp(count)}`)
+          }
         />
       )}
+      {/* The removal's confirmation follows the list's copy of its agent, and closes when
+          the list no longer has it. After a removal, after a refusal that says the agent is
+          no longer as the dialog has it, and after a request with no answer, the list is
+          read again. */}
+      <RemoveDialog
+        agent={removing}
+        live={removing === null ? null : live(removing)}
+        onClose={() => setRemoving(null)}
+        onRemoved={(removed, count) => {
+          setOutcome(`${removed.name} was removed. ${givenUp(count)}`);
+          mutate();
+        }}
+        onStale={() => mutate()}
+        onUnknown={() => mutate()}
+        onVanished={(vanished, unanswered) =>
+          setOutcome(
+            unanswered
+              ? `${vanished.name} is no longer in the list. The request to remove it got no answer, so how many of its pending tasks were given up is not known here.`
+              : `${vanished.name} is no longer in the list: it was removed elsewhere.`,
+          )
+        }
+      />
     </>
   );
 }

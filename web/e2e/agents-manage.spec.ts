@@ -613,16 +613,14 @@ test("switching an agent to run without approval asks first and says what is giv
   await page.goto("/agents");
   await openEdit(page);
 
-  // The form opens with the agent's values; its name and its address cannot be edited.
+  // The form opens with the agent's values; its name cannot be edited. Its address can,
+  // since moving an agent was added, and is left as it is here.
   const dialog = editForm(page);
   await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("stub");
   await expect(dialog.getByLabel("Name", { exact: true })).not.toBeEditable();
   await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue(
     "http://127.0.0.1:9998",
   );
-  await expect(
-    dialog.getByLabel("Address", { exact: true }),
-  ).not.toBeEditable();
   await expect(dialog.getByRole("radio", { name: REQUIRED })).toBeChecked();
 
   // Saved as it is, nothing is asked and nothing is sent.
@@ -871,15 +869,351 @@ test("an environment agent's card offers no way to change its approval choice, a
   await expect(card(page, "stub")).toBeVisible();
 
   await expect(card(page, "hello").getByRole("button")).toHaveText(["Check"]);
-  await expect(card(page, "shadowed").getByRole("button")).toHaveCount(0);
+  await expect(card(page, "shadowed").getByRole("button")).toHaveText([
+    "Remove",
+  ]);
   await expect(card(page, "stub").getByRole("button")).toHaveText([
     "Check",
     "Edit",
+    "Remove",
   ]);
   // Nothing on a card is a choice by itself: no radio, switch, or field.
   for (const role of ["radio", "switch", "textbox", "combobox"] as const) {
     await expect(page.getByRole("main").getByRole(role)).toHaveCount(0);
   }
+  expect(service.changes).toEqual([]);
+});
+
+// 005, User Story 5: move a saved agent, and remove one.
+
+const OTHER_TYPED = "HTTP://LocalHost:9996/agents/Recognizable-Other/";
+const OTHER_KEPT = "http://localhost:9996/agents/Recognizable-Other";
+const removal = (page: Page) => page.getByRole("alertdialog");
+const confirmRemoval = (page: Page) =>
+  removal(page).getByRole("button", { name: "Remove" }).click();
+const address = (page: Page, name = "stub") =>
+  editForm(page, name).getByLabel("Address", { exact: true });
+
+async function askToRemove(page: Page, name = "stub") {
+  await card(page, name).getByRole("button", { name: "Remove" }).click();
+  await expect(removal(page)).toBeVisible();
+}
+
+test("moving an agent asks first with its pending tasks, and once confirmed the card shows the new address and the console says how many were given up", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", { pending_tasks: 2 }),
+  ).serve(page);
+  await page.goto("/agents");
+  const shown = card(page, "stub");
+  // The card says how many tasks a move or a removal would give up.
+  await expect(shown.getByText("Pending tasks")).toBeVisible();
+  await openEdit(page);
+  const dialog = editForm(page);
+  await expect(address(page)).toHaveValue("http://127.0.0.1:9998");
+
+  await address(page).fill(OTHER_TYPED);
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  // Nothing is sent: the form says what the move means, with the tasks as the list has them.
+  await expect(asks(page)).toContainText(`Move stub to ${OTHER_TYPED}?`);
+  await expect(asks(page)).toContainText(
+    "The change applies from the next run: a run in progress finishes at the earlier address.",
+  );
+  await expect(asks(page)).toContainText(
+    "A proposal for stub that is already waiting for a decision will go to the new address once approved.",
+  );
+  await expect(asks(page)).toContainText(
+    "stub has 2 pending tasks now, and they will be given up",
+  );
+  expect(service.changes).toEqual([]);
+
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(dialog).toBeHidden();
+  // The card shows the address as the service keeps it, and the console says how many
+  // tasks were given up.
+  await expect(shown.getByText(OTHER_KEPT, { exact: true })).toBeVisible();
+  await expect(shown.getByText("Pending tasks")).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveText(
+    "stub was moved. 2 pending tasks were given up: their threads will be told.",
+  );
+  // One request, at the version the form opened with, with only the address, in its body.
+  expect(service.changes).toEqual([
+    {
+      method: "PATCH",
+      path: `/agents/${STUB_ID}`,
+      body: { version: 1, url: OTHER_TYPED.trim() },
+    },
+  ]);
+  expect(
+    service.asked.every(
+      ({ path }) => !path.toLowerCase().includes("recognizable"),
+    ),
+  ).toBe(true);
+  await expect(alerts(page)).toHaveCount(0);
+});
+
+test("a move to an address where nothing answers, or where another agent is, is refused and the card keeps its address", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    savedAgent("other", { id: "3".repeat(32), url: "http://127.0.0.1:9996" }),
+    savedAgent("stub", { pending_tasks: 1 }),
+  ).serve(page);
+  service.answersAt(9995, false);
+  await page.goto("/agents");
+  await openEdit(page);
+  const dialog = editForm(page);
+
+  // Nothing answers there: the service's sentence, over the form, and what was typed stays.
+  await address(page).fill("http://127.0.0.1:9995");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(dialog.getByRole("alert")).toHaveText(NOTHING_ANSWERED);
+  await expect(address(page)).toHaveValue("http://127.0.0.1:9995");
+  await expect(asks(page)).toHaveCount(0);
+
+  // Another agent is there: said at the address.
+  await address(page).fill("http://localhost:9996/");
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(address(page)).toHaveAttribute("aria-invalid", "true");
+  const described =
+    (await address(page).getAttribute("aria-describedby")) ?? "";
+  await expect(
+    page.locator(`[id="${described.split(" ").at(-1)}"]`),
+  ).toHaveText(AGENT_ADDRESS_TAKEN);
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  // Refused twice: the agent is where it was, with its task, and nothing was given up.
+  const shown = card(page, "stub");
+  await expect(
+    shown.getByText("http://127.0.0.1:9998", { exact: true }),
+  ).toBeVisible();
+  await expect(shown.getByText("Pending tasks")).toBeVisible();
+  await expect(page.getByRole("status")).toHaveCount(0);
+  expect(service.changes).toHaveLength(2);
+  expect(service.agents.find(({ name }) => name === "stub")?.version).toBe(1);
+});
+
+test("a removal names the agent and its pending tasks, sends nothing before it is confirmed, and once confirmed the card is gone", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", { pending_tasks: 1, version: 3 }),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(cards(page)).toHaveCount(2);
+
+  // A double press on Remove asks, and removes nothing.
+  await card(page, "stub").getByRole("button", { name: "Remove" }).dblclick();
+  const dialog = removal(page);
+  await expect(dialog).toBeVisible();
+  await expect(dialog.getByRole("heading")).toHaveText("Remove stub?");
+  await expect(dialog).toContainText(
+    "The removal holds at once, also for runs in progress",
+  );
+  await expect(dialog).toContainText(
+    "stub has 1 pending task now, and it will be given up",
+  );
+  expect(service.changes).toEqual([]);
+
+  // Canceled: no request, and the card is as it was.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  expect(service.changes).toEqual([]);
+  await expect(cards(page)).toHaveCount(2);
+
+  // Asked again and confirmed: one request, at the version the card had.
+  await askToRemove(page);
+  await confirmRemoval(page);
+  await expect(dialog).toBeHidden();
+  await expect(cards(page)).toHaveCount(1);
+  await expect(card(page, "hello")).toBeVisible();
+  await expect(page.getByRole("status")).toHaveText(
+    "stub was removed. 1 pending task was given up: its thread will be told.",
+  );
+  expect(service.changes).toEqual([
+    {
+      method: "DELETE",
+      path: `/agents/${STUB_ID}?version=3`,
+      body: undefined,
+    },
+  ]);
+  await expect(alerts(page)).toHaveCount(0);
+});
+
+test("a saved agent that is not in use can be removed, from the one control its card has", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("shadowed", {
+      id: "2".repeat(32),
+      state: "not_in_use",
+      checked_at: null,
+      reason: "An agent named in the environment has this name.",
+    }),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(card(page, "shadowed").getByRole("button")).toHaveText([
+    "Remove",
+  ]);
+  await askToRemove(page, "shadowed");
+  await expect(removal(page)).toContainText(
+    "shadowed has no pending task now, so none will be given up.",
+  );
+  await confirmRemoval(page);
+
+  await expect(cards(page)).toHaveCount(1);
+  await expect(agentsWarning(page)).toHaveCount(0);
+  await expect(page.getByRole("status")).toHaveText(
+    "shadowed was removed. It had no pending task, so none was given up.",
+  );
+  expect(service.changes.map(({ method, path }) => [method, path])).toEqual([
+    ["DELETE", `/agents/${"2".repeat(32)}?version=1`],
+  ]);
+});
+
+test("an agent removed elsewhere is reported as gone, and the list is read again", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await askToRemove(page);
+
+  // Removed by another operator, and this page has not read the list since.
+  service.removeElsewhere("stub");
+  const readBefore = service.reads;
+  const refused = page.waitForResponse((response) => response.status() === 404);
+  await confirmRemoval(page);
+  expect(await (await refused).json()).toEqual({
+    detail: { code: "agent_not_found", message: NO_SUCH_AGENT },
+  });
+
+  // The list was read again, the dialog went with its agent, and the console says so.
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  await expect(removal(page)).toBeHidden();
+  await expect(cards(page)).toHaveCount(1);
+  await expect(page.getByRole("status")).toHaveText(
+    "stub is no longer in the list: it was removed elsewhere.",
+  );
+});
+
+test("a removal, and a move, from values that are no longer current is refused, and the card shows the agent as it is now", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+
+  // A removal asked of the agent as it was.
+  await askToRemove(page);
+  service.changeElsewhere("stub", { approval: "none" });
+  let readBefore = service.reads;
+  let refused = page.waitForResponse((response) => response.status() === 409);
+  await confirmRemoval(page);
+  expect(await (await refused).json()).toEqual({
+    detail: { code: "agent_changed", message: AGENT_CHANGED_SINCE },
+  });
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  const dialog = removal(page);
+  await expect(dialog.getByRole("alert")).toHaveCount(1);
+  await expect(dialog.getByRole("alert")).toContainText(
+    "stub was changed elsewhere while this was open",
+  );
+  await expect(dialog.getByRole("button", { name: "Remove" })).toBeDisabled();
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  // Nothing was removed, and the card is the agent as it is now.
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  expect(service.agents.some(({ name }) => name === "stub")).toBe(true);
+
+  // A move asked of the agent as it was.
+  await openEdit(page);
+  const form = editForm(page);
+  await address(page).fill(OTHER_TYPED);
+  await form.getByRole("button", { name: "Save" }).click();
+  await expect(asks(page)).toBeVisible();
+  service.changeElsewhere("stub", { approval: "required" });
+  readBefore = service.reads;
+  refused = page.waitForResponse((response) => response.status() === 409);
+  await form.getByRole("button", { name: "Confirm" }).click();
+  expect((await (await refused).json()).detail.code).toBe("agent_changed");
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  await expect(form.getByRole("alert")).toContainText("changed elsewhere");
+  await expect(form.getByRole("button", { name: "Save" })).toBeDisabled();
+  await form.getByRole("button", { name: "Cancel" }).click();
+  await expect(form).toBeHidden();
+  const shown = card(page, "stub");
+  await expect(
+    shown.getByText("http://127.0.0.1:9998", { exact: true }),
+  ).toBeVisible();
+  await expect(shown.getByText(REQUIRED)).toBeVisible();
+  await expect(page.getByRole("status")).toHaveCount(0);
+});
+
+test("a removal that gets no answer says the outcome is not known, and the list is read again", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await askToRemove(page);
+  const readBefore = service.reads;
+
+  // The service removes the agent, and its answer never arrives.
+  service.loseNextAnswer();
+  await confirmRemoval(page);
+
+  // The list is read again and no longer has the agent: the dialog goes with it, and the
+  // console says what is known, never that the removal failed.
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  await expect(removal(page)).toBeHidden();
+  await expect(cards(page)).toHaveCount(1);
+  await expect(page.getByRole("status")).toHaveText(
+    "stub is no longer in the list. The request to remove it got no answer, so how many of its pending tasks were given up is not known here.",
+  );
+  await expect(page.getByRole("status")).not.toContainText(
+    /fail|could not|elsewhere/i,
+  );
+  expect(service.changes).toHaveLength(1);
+});
+
+test("there is no way to change a name, and none to move or remove an environment agent", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello", { approval: "none" }),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(card(page, "stub")).toBeVisible();
+
+  // An environment agent's card has Check and nothing else, and shows no address.
+  await expect(card(page, "hello").getByRole("button")).toHaveText(["Check"]);
+  await expect(card(page, "hello").getByText("Address")).toHaveCount(0);
+  // A saved agent's name is shown in its form and cannot be typed over; its address can.
+  await openEdit(page);
+  const dialog = editForm(page);
+  const name = dialog.getByLabel("Name", { exact: true });
+  await expect(name).toHaveValue("stub");
+  await expect(name).not.toBeEditable();
+  await expect(address(page)).toBeEditable();
+  await expect(dialog).toContainText("A name cannot be changed.");
+  await dialog.getByRole("button", { name: "Cancel" }).click();
   expect(service.changes).toEqual([]);
 });
 
@@ -903,5 +1237,23 @@ test.describe("in a short, narrow window", () => {
     }
     await form(page).getByRole("button", { name: "Cancel" }).click();
     await expect(form(page)).toBeHidden();
+  });
+
+  test("the removal's buttons can be reached, with its pending tasks said", async ({
+    page,
+  }) => {
+    await new AgentService(savedAgent("stub", { pending_tasks: 12 })).serve(
+      page,
+    );
+    await page.goto("/agents");
+    await askToRemove(page);
+    await expect(removal(page)).toContainText("stub has 12 pending tasks now");
+    for (const name of ["Remove", "Cancel"]) {
+      const button = removal(page).getByRole("button", { name });
+      await button.scrollIntoViewIfNeeded();
+      await expect(button).toBeInViewport();
+    }
+    await removal(page).getByRole("button", { name: "Cancel" }).click();
+    await expect(removal(page)).toBeHidden();
   });
 });

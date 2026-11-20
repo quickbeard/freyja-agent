@@ -1,5 +1,5 @@
 """005 FR-028, SC-008: an agent's address appears nowhere outside the Agents routes (parts 1
-to 3).
+to 4).
 
 Built like ``tests/test_llm_secrets_nowhere.py`` and grown in every phase that adds a route.
 One agent is saved on a recognizable port, one is named in the environment on another, and
@@ -21,6 +21,10 @@ another agent's.
 Part 3 does the same for the approval choice: an add that runs without approval, a change of
 the choice with each of its refusals, a run whose message the check before a send keeps back,
 and a resume that ends with ``approval_now_required``.
+
+Part 4 does the same for a move with each of its refusals, a removal with its refusals, a
+task given up and reported in its thread, and a run kept back because the address it started
+with is another agent's.
 """
 
 import json
@@ -41,7 +45,14 @@ from tests.conftest import A2aApp, holds_port
 from tests.fakes import ScriptedChatModel
 from tests.test_a2a_gate import propose
 from tests.test_a2a_handoff import DONE, handoff, tool_results
-from tests.test_agents_approval import BLOCKED, NOW_REQUIRES, before_the_send
+from tests.test_a2a_pending import tick
+from tests.test_agents_approval import (
+    BLOCKED,
+    ELSEWHERE,
+    NOW_REQUIRES,
+    InTheTool,
+    before_the_send,
+)
 from tests.test_llm_secrets_nowhere import Seen, kept
 
 # Ports nothing else in the suite uses. Each is searched for as a number of its own, and
@@ -554,7 +565,7 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
         assert change("env.counter", json=body).json()["detail"]["code"] == "agent_read_only"
         assert change("0" * 32, json=body).json()["detail"]["code"] == "agent_not_found"
         invalid = [
-            change(free, json={**body, "url": f"http://127.0.0.1:{FREE_PORT}/moved"}),
+            change(free, json={**body, "url": f"http://127.0.0.1:{FREE_PORT}/?moved=1"}),
             change(free, json={**body, "address": f"http://127.0.0.1:{GATE_PORT}"}),
             change(free, json={"approval": f"http://127.0.0.1:{COUNTER_PORT}"}),
             change(free, content=f"url={FREE_URL}", headers={"Content-Type": "text/plain"}),
@@ -641,3 +652,219 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     assert any(f"Agent free: {NOW_REQUIRES.format(agent='free')}" in line for line in logged)
     assert any("refused" in line and line.endswith("agents: free") for line in logged)
     nowhere(logged, *CHOICE_PORTS)
+
+
+# Part 4 (T103): moving and removing.
+
+ROAM_PORT = 9761
+NEXT_PORT = 9762
+DOWN_PORT = 9763
+FIXED_PORT = 9764
+LAST_PORT = 9765
+MOVING_PORTS = (ROAM_PORT, NEXT_PORT, DOWN_PORT, FIXED_PORT, LAST_PORT)
+ROAM_URL, NEXT_URL, DOWN_URL, FIXED_URL, LAST_URL = (
+    f"http://127.0.0.1:{port}" for port in MOVING_PORTS
+)
+
+
+def naming(*ports: int) -> str:
+    """What a card says: the addresses at ``ports``, in the forms an address takes. An answer
+    is cleaned of the addresses that are an agent's, or were asked for, when it is given, so
+    each card names only what is one by the time it is read."""
+    forms = ("http://127.0.0.1:{}/a2a", "localhost:{}", "[::1]:{}", "('127.0.0.1', {})")
+    return "Reach me at " + ", ".join(
+        forms[index % len(forms)].format(port) for index, port in enumerate(ports)
+    )
+
+
+def test_an_address_is_in_nothing_a_move_or_a_removal_returns_or_causes(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            # The background run that tells the thread its task was given up.
+            DONE,
+            handoff("Kept back: the address is another agent's.", agent="roam"),
+        ]
+    )
+    made = make_a2a_app(model, {})
+
+    def at(url: str, name: str, *ports: int) -> Naming:
+        card = stub_card(name, description=naming(*ports))
+        return put(made, url, make_stub(name, card=card))
+
+    fixed_transport = at(FIXED_URL, "fixed", FIXED_PORT)
+    roam_transport = at(ROAM_URL, "roam", ROAM_PORT, FIXED_PORT)
+    down = at(DOWN_URL, "roam", DOWN_PORT)
+    next_transport = at(NEXT_URL, "roam", NEXT_PORT, ROAM_PORT, FIXED_PORT, DOWN_PORT)
+    last_transport = at(LAST_URL, "roam", LAST_PORT, NEXT_PORT, ROAM_PORT, FIXED_PORT)
+    answers: list[Any] = []
+    refusals: list[str] = []
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        seen = Seen(client, sse_events)
+
+        def agents_route(method: str, path: str = "", **kwargs: Any) -> Any:
+            response = client.request(method, f"/agents{path}", **kwargs)
+            if response.is_success:
+                answers.append(response.json())
+            else:
+                refusals.append(f"{method} {path} -> {response.status_code} {response.text}")
+            return response
+
+        def add(name: str, url: str, **more: Any) -> Any:
+            return agents_route("POST", json={"name": name, "url": url, **more})
+
+        def move(agent_id: str, version: int, url: str, **kwargs: Any) -> Any:
+            return agents_route(
+                "PATCH", f"/{agent_id}", json={"version": version, "url": url}, **kwargs
+            )
+
+        def remove(agent_id: str, **kwargs: Any) -> Any:
+            return agents_route("DELETE", f"/{agent_id}", **kwargs)
+
+        fixed = add("fixed", FIXED_URL).json()["id"]
+        roam = add("roam", ROAM_URL, approval="none").json()["id"]
+        # A task of `roam` that is pending when it moves.
+        now = client.portal.call(made.store.now)
+        seed = {"agent": "roam", "task_id": "task-7", "thread_id": "n-7", "ref": f"{roam}:1"}
+        client.portal.call(_record_task, made, seed, now)
+
+        # Each refusal of a move.
+        down.down = True
+        assert move(roam, 1, DOWN_URL).json()["detail"]["reason"] == "no_answer"
+        down.down = False
+        made.at[destination(canonical_address(DOWN_URL))] = (
+            make_stub("roam"),
+            Naming(make_stub("roam", redirect_card_to=f"{ROAM_URL}/elsewhere").app),
+        )
+        assert move(roam, 1, DOWN_URL).json()["detail"]["reason"] == "redirect"
+        assert move(roam, 1, f"https://localhost:{FIXED_PORT}/").json()["detail"]["code"] == (
+            "address_taken"
+        )
+        assert move(roam, 9, NEXT_URL).json()["detail"]["code"] == "agent_changed"
+        assert move(roam, 1, f"http://user:pass@127.0.0.1:{NEXT_PORT}").status_code == 422
+        assert move(roam, 1, f"http://127.0.0.1:{NEXT_PORT}/?x=1").status_code == 422
+        elsewhere = move(roam, 1, NEXT_URL, headers={"Sec-Fetch-Site": "cross-site"})
+        assert elsewhere.json()["detail"]["code"] == "other_origin"
+        slots = made.runtime.card_reads
+        for _ in range(4):
+            slots.take(None)
+        assert move(roam, 1, NEXT_URL).json()["detail"]["code"] == "check_busy"
+        for _ in range(4):
+            slots.release(None)
+
+        async def failing(*_args: Any, **_values: Any) -> Any:
+            raise RuntimeError(f"connection failed while writing {NEXT_URL}")
+
+        monkeypatch.setattr(made.saved_agents, "change", failing)
+        assert move(roam, 1, NEXT_URL).status_code == 500
+        monkeypatch.undo()
+
+        # The move, which gives the task up; the worker's round tells its thread.
+        moved = move(roam, 1, f"HTTP://LocalHost:{NEXT_PORT}/")
+        assert moved.status_code == 200 and moved.json()["given_up"] == 1
+        assert "<address>" in moved.json()["agent"]["card"]["description"]
+        tick(client, made.runtime)
+        told = seen.state("n-7")
+
+        # A run kept back because the address it started with is another agent's: while
+        # its tool is on its way to sending, `roam` is moved on and another agent is
+        # saved where it was.
+        def moved_on() -> None:
+            assert move(roam, 2, LAST_URL).status_code == 200
+            assert add("squatter", NEXT_URL).status_code == 201
+
+        tool = InTheTool(made, monkeypatch)
+        kept_back = tool.during(
+            lambda: seen.stream("/threads/n-8/runs", {"message": "hello"}, debug="true"),
+            moved_on,
+        )
+        monkeypatch.undo()
+        seen.state("n-8")
+
+        # A removal, and each refusal of one.
+        assert remove(roam, params={"version": 1}).json()["detail"]["code"] == "agent_changed"
+        assert remove(roam).status_code == 422
+        other_origin = remove(
+            roam, params={"version": 3}, headers={"Origin": "http://elsewhere.example"}
+        )
+        assert other_origin.json()["detail"]["code"] == "other_origin"
+
+        async def unremovable(*_args: Any) -> Any:
+            raise RuntimeError(f"connection failed while removing {LAST_URL}")
+
+        monkeypatch.setattr(made.saved_agents, "remove", unremovable)
+        assert remove(roam, params={"version": 3}).status_code == 500
+        monkeypatch.undo()
+        removed = remove(roam, params={"version": 3})
+        assert removed.status_code == 200 and removed.json() == {"given_up": 0}
+
+        seen.call("GET", "/tools")
+        listed = agents_route("GET").json()
+        in_threads = kept(made.runtime.agent.checkpointer)
+
+    # What was driven happened.
+    report = [m for m in told["messages"] if m["name"] == "check_agent_tasks"]
+    assert len(report) == 1 and "which was moved to another address" in report[0]["content"]
+    (result,) = tool_results(kept_back, "handoff_to_roam")
+    assert result["content"] == ELSEWHERE.format(agent="roam")
+    assert [agent["name"] for agent in listed["agents"]] == ["fixed", "squatter"]
+    assert fixed in {agent["id"] for agent in listed["agents"]}
+    # No agent was sent anything but requests for its card.
+    for transport in (roam_transport, next_transport, fixed_transport, last_transport):
+        assert {request.method for request in transport.requests} <= {"GET"}
+    assert len(refusals) == 13 and len(answers) == 7
+
+    # Outside the Agents routes: every response, every stream with its debug events, and
+    # every thread as the checkpointer keeps it.
+    assert any("handoff_to_roam" in text for text in seen.texts)
+    nowhere(seen.texts, *MOVING_PORTS)
+    assert any("moved to another address" in text for text in in_threads)
+    nowhere(in_threads, *MOVING_PORTS)
+
+    # Every refusal of a move and of a removal, the ones for a failing store included.
+    nowhere(refusals, *MOVING_PORTS)
+
+    # An answer of the Agents routes holds a saved agent's address in `url` and nowhere else.
+    kept_urls = {
+        ROAM_URL,
+        FIXED_URL,
+        NEXT_URL,
+        LAST_URL,
+        f"http://localhost:{NEXT_PORT}",
+    }
+    assert any(addresses(answer) for answer in answers)
+    for answer in answers:
+        assert set(addresses(answer)) <= kept_urls
+        nowhere(strings(answer, but="url"), *MOVING_PORTS)
+
+    # Every log record at every level, with its arguments and its traceback.
+    logged = [record.getMessage() for record in caplog.records]
+    logged += [caplog.handler.format(record) for record in caplog.records]
+    assert any("Agent roam was not moved" in line for line in logged)
+    assert any("Agent changed: roam" in line and "1 task was given up" in line for line in logged)
+    assert any("gave up" not in line and "Agent removed: roam" in line for line in logged)
+    assert any(f"Agent roam: {ELSEWHERE.format(agent='roam')}" in line for line in logged)
+    nowhere(logged, *MOVING_PORTS)
+
+
+async def _record_task(made: A2aApp, seed: dict[str, Any], now: Any) -> None:
+    from freyja_agent.runtime.agent_tasks import AgentTaskRecord
+
+    await made.store.record_task(
+        AgentTaskRecord(
+            agent=seed["agent"],
+            task_id=seed["task_id"],
+            thread_id=seed["thread_id"],
+            context_id="ctx",
+            message="Compile the report.",
+            state="working",
+            started_at=now,
+            last_checked_at=now,
+            agent_ref=seed["ref"],
+        )
+    )
