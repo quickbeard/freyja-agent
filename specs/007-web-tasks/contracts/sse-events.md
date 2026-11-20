@@ -11,7 +11,7 @@ This feature changes nothing in the streams of `POST /threads/{thread_id}/runs` 
 `POST /threads/{thread_id}/resume`. It adds two routes that answer with the same stream,
 `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`
 ([openapi.yaml](openapi.yaml)). Their events are the existing ones, made by the same code.
-Four things differ, and all four are about these two routes only.
+Five things differ, and all five are about these two routes only.
 
 ## The run does not depend on the stream
 
@@ -31,8 +31,11 @@ treats that as "not known" and reads the thread again; it never treats it as a f
 {"status": "stopped"}
 ```
 
-Sent in place of `{"status": "completed"}` when the run ended because a stop was asked for
-(`POST /threads/{thread_id}/stop`) and applied. The step that was under way is in the
+Sent in place of `{"status": "completed"}` when the run ended because a stop was applied:
+one a client asked for (`POST /threads/{thread_id}/stop`), or the service's own when it is
+stopped in the ordinary way. In the second case a connected client usually does not see the
+event, because the server ends open streams when it stops; the thread's row says `stopped`
+once the service is back. The step that was under way is in the
 thread's state; no later step started. A run that finished, paused, or failed before the stop
 was applied ends with the event it would have had.
 

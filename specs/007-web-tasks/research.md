@@ -114,6 +114,13 @@ an `EventSourceResponse` whose `body_iterator` is the `run_stream` generator, no
 and take the generator out of the response it returns. Every refusal is the existing one,
 raised by the existing code. `api/threads.py` is not changed for this.
 
+The handler makes the run's id itself and does not return it. The new route needs the run's
+lease owner, to write to the row only for this run (R6). It takes it from the run's first
+event: `start` carries `run_id`, and the owner is the instance's id and that id
+(`lease_owner`). `start` is sent before the graph is called, so the owner is known before
+anything asks for it. Marking the row as a console run needs no owner: the route does it
+while this run holds the thread's lease, when no other run can.
+
 **Run**: a route built this way answered an empty message with the same 422 as the existing
 route, and streamed the same events for a run that completed, for one that paused, and for a
 proposal raised inside the subagent.
@@ -205,9 +212,9 @@ the run it was asked for. The instance that runs the thread reads it between seg
 stop asked of any instance reaches the run (FR-022). A mark for a run that has ended is
 ignored, because its owner is no longer the row's.
 
-`POST /threads/{thread_id}/stop` answers 202 once the mark is set. It answers 409 `no_run`
-when no run is in progress and 409 `not_stoppable` when the run was not started through the
-new routes. A second stop of the same run answers 202 again and changes nothing (FR-022a).
+`POST /threads/{thread_id}/stop` answers 202 once the mark is set. It answers 404 for a
+thread the index does not know, 409 `no_run` when no run is in progress, and 409
+`not_stoppable` when the run was not started through the new routes. A second stop of the same run answers 202 again and changes nothing (FR-022a).
 
 When a run ends because of the mark, `run_stream` sees the graph end and sends `end` with
 `completed`. `UnattendedRuns` knows the stop was applied and sends `end` with `stopped` in
@@ -243,8 +250,13 @@ not be written, gets its row when it is opened: `GET /threads/{thread_id}` reads
 and, when the thread has one, makes the row settled (FR-004, FR-023).
 
 So the list is one query on one table, plus one read of a thread's state for each run that
-ended since the list was last asked for. The number of threads that need a decision is a
-count over the same table (FR-001).
+ended since the list was last asked for, and one read of the lease for each row it returns
+(R7). The number of threads that need a decision is a count over the same table (FR-001).
+
+Every row that ended is settled before the list is answered, with no limit on how many: a
+row that was not looked at has no status, and the number must count every thread. When
+nobody has read the list for a long time, the first reading is slow. Each row's result is
+kept as it is read, so a reading that is cut short is continued by the next.
 
 **Rationale**: the lease is the one place every run passes, so runs started by another
 client and by the worker are listed without changing either. Settling on read keeps the
@@ -299,7 +311,7 @@ console says "task"; the API keeps "thread" (spec, Clarifications). Shapes are i
 
 | Route | What it does |
 |---|---|
-| `GET /threads` | The list: at most 100 rows, the number that need a decision, and whether there are more. |
+| `GET /threads` | The list: every thread that needs a decision and then the others up to 100 rows, the number that need a decision, and whether there are more. |
 | `GET /threads/{thread_id}` | One row, for a task's page: status, error, whether the run can be stopped, whether a stop is under way. |
 | `POST /threads/{thread_id}/runs/unattended` | Start a run that goes on without a reader. Same body, refusals, and events as `POST /threads/{thread_id}/runs`. |
 | `POST /threads/{thread_id}/resume/unattended` | Decide a proposal; the continuation goes on without a reader. Same body, refusals, and events as `POST /threads/{thread_id}/resume`. |
@@ -366,6 +378,14 @@ with `useSyncExternalStore`. Sending a new task starts the request, waits for th
 answer, and only then goes to `/tasks/<id>`; a refusal is shown in the box, which keeps its
 text (FR-008). The task's page finds the run in the store and shows it as it arrives.
 
+One failure is not a refusal: `no_usable_model` and an internal error before the graph is
+called come as an `error` event in an accepted stream, when the page has already gone to the
+task and the thread has no state. So the store also keeps the message a run was started
+with. For a thread that has no state and whose run in the store ended with `error`, the
+task's page shows the error, with the link to the LLM section for `no_usable_model`, and a
+box holding that message, which sends it again as a new run on the same id. The error wins
+over "not found" there. A thread with no state and no run in the store is "not found".
+
 A page that finds no run in the store for a thread that is running, after a reload or in
 another tab, follows it by reading (FR-013).
 
@@ -379,7 +399,9 @@ for a thread id allows.
   docs, `dynamic-routes.md`, "With Cache Components"); the page does that and hands the id to
   a Client Component.
 - The list and the sidebar read `GET /threads` under one SWR key, as the Agents section and
-  the sidebar share one, with a refresh every 15 seconds (FR-006).
+  the sidebar share one, with a refresh every 15 seconds (FR-006). The sidebar's own reading
+  asks for the refresh, since on another section it is the only one; nothing in the console
+  refreshes by itself today.
 - A task's page reads `GET /threads/{id}` and `GET /threads/{id}/state` together. It reads
   them again every 5 seconds while a run it is not reading is in progress, every 15 seconds
   while an agent task is pending, and once when a stream it is reading ends (FR-010, FR-013).
@@ -431,7 +453,8 @@ Existing end-to-end tests are handed no answer for `GET /api/threads`. Their pag
 error from the web app's server for it, and the sidebar then shows no number (FR-006). No
 existing spec fails on a request that got an error (*verified*: only `smoke.spec.ts` listens
 for page errors, and a refused request is not one). Whether they all still pass is checked
-by running them before the first web pull request.
+by running them in the phase that makes the sidebar ask, which is the one that adds its
+number.
 
 ## R16. What is changed outside this feature's own files
 
@@ -451,7 +474,7 @@ Shared files, each with a small addition in a block of its own:
 | `web/lib/api.ts` | The `stream` function (R11). |
 | `web/components/app-sidebar.tsx` and its test | The Tasks entry and its number. |
 | `web/e2e/console.spec.ts` | The sidebar now lists three sections. |
-| `tests/conftest.py` | Only if a fixture needs the index handed in; none is planned. |
+| `tests/conftest.py` | Only if a fixture needs the index handed in; none is planned. `tests/integration/conftest.py` drops every table of the test database after a test, so it needs nothing for the new one. |
 | `README.md`, `AGENTS.md`, `web/README.md` | Paragraphs of this feature's own. |
 
 No setting is added, so `config.py` and `.env.example` are not changed. No dependency is
@@ -465,27 +488,39 @@ existing suite's scenarios through it to show nothing differs.
 
 ## R17. When the service stops
 
+**What happens today** (*run*, in the analysis step): a small app with one event stream was
+served by uvicorn with the installed sse-starlette 3.6.0 and sent an ordinary stop while a
+client read the stream. The stream's generator was cancelled 0.3 seconds later, and the
+application's shutdown began right after. sse-starlette watches for the server's stop and
+ends its streams (`enable_automatic_graceful_drain`, on by default). So an ordinary stop of
+the service ends every run that is read through the existing routes at once, in the middle
+of its step. The README says a clean stop waits for runs in progress; with these versions
+that is not so.
+
 **Decision** (changed in the checklist review, finding F1): `UnattendedRuns.close` asks every
 run it is driving to stop, by a flag of its own that `SegmentedGraph` reads between segments
 beside the stop a person asks for, and waits for them. Each run ends at its next boundary:
 the step under way completes and is recorded, `run_stream` releases the lease, and the
-thread is settled as `stopped` (R7). `close` runs before the agents' links close and before
-the database pool does.
+thread is listed as stopped (R7). `close` runs when the application shuts down, before the
+agents' links close and before the database pool does. A reader of such a run has its
+stream ended by the library at the stop, like any stream; the run does not depend on it.
 
-So an ordinary stop of the service cuts no action off (FR-021). It waits for one step of
-each such run and no longer; until now it waited for every run with a connected reader to
-finish, since uvicorn's graceful shutdown has no time limit by default (README). Someone who
-cannot wait for a step ends the process, which is the next case.
+So an ordinary stop of the service cuts no action of a console run off (FR-021), and waits
+for one step of each such run and no longer. Someone who cannot wait for a step ends the
+process, which is the next case.
 
 A service that is killed or fails ends a run wherever it is. An action under way can then
 have taken effect without its result being recorded, as feature 001 accepts for any run. The
-run's lease expires and its thread is settled as `stopped`.
+run's lease expires and its thread is listed as stopped.
 
 **Alternatives considered**: cancelling the runs, as the delegation worker cancels its
-deliveries, which was this plan's first decision. A run with a reader is not cut by an
-ordinary stop today; a run without one must not be the worse for having no reader, and a
-deploy would otherwise be the commonest way to cut an approved action off. A time limit on
-the wait: it would need a setting, and it would turn a slow step into a cut one.
+deliveries, which was this plan's first decision. A deploy would then be the commonest way
+to cut an approved action off. A time limit on the wait: it would need a setting, and it
+would turn a slow step into a cut one.
+
+The checklist review gave another reason, that a run with a reader is not cut by an ordinary
+stop today. That was taken from the README and is wrong, as the run above shows. The
+decision does not rest on it.
 
 ## Not verified
 
@@ -508,3 +543,8 @@ the wait: it would need a setting, and it would turn a slow step into a cut one.
 - No limit is set on how many runs go on at once (spec, Assumptions).
 - A page opened after a run started does not read its stream (FR-013).
 - An automated proof in a browser that a stream arrives as it is produced (R15).
+- SC-001's two seconds and SC-009's two seconds are checked by hand in the quickstart walk,
+  not by a timed test: a timing in the suite would measure the machine that runs it.
+- A list that nobody read for a long time is slow at its first reading (R6).
+- The README's sentence about a clean stop is wrong for every run started the existing way
+  (R17). Phase 3 corrects the sentence; it does not change what those runs do.

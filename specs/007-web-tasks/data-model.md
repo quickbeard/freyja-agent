@@ -7,7 +7,8 @@ agent tasks, is the thread's state as features 001 and 003 keep it, and is not c
 
 ## Thread record
 
-One row per thread that has had a run since this feature was installed (FR-004). Kept by
+One row per thread that has had a run since this feature was installed, or was opened since
+(FR-004). Kept by
 `ThreadIndex` (`runtime/thread_index.py`): `PostgresThreadIndex` in the table
 `freyja_threads`, and `InMemoryThreadIndex` for the suite.
 
@@ -63,18 +64,23 @@ Index: `(settled, changed_at DESC)`, for the list's order and the count of pause
 - **Noted** (`UnattendedRuns`, at the run's last event): `noted` and the error, for a run
   that ended with `error` or was stopped.
 - **Lease given back** (`IndexedRunLocks.release`): `run_owner` is cleared when it is this
-  run's.
+  run's. A row with no `run_owner`, whose run the index did not see start, has `settled`
+  cleared, so that it is looked at again.
 - **Settled** (the list and the row routes): for a row with no `run_owner` and no `settled`,
   and for a row whose `run_owner` holds no lease any more, the thread's state is read once.
   `settled` is `paused` when it has a proposal, `finished` when it has no step left to take,
   and `unfinished` otherwise; `changed_at`, `first_message`, and `agents_pending` are filled.
   The write is refused when a run has started meanwhile.
 - **Opened** (the row route): a thread that has no row and has a state gets one, settled at
-  once, with `created_at` and `changed_at` from its last checkpoint. This is how a thread
+  once, with `created_at` and `changed_at` from its last checkpoint. When the thread's lease
+  is held at that moment, the row is made without `settled`: it is `running` by the lease,
+  and is settled once the lease is gone. This is how a thread
   from before this feature, or one whose row could not be written, comes into the list
   (FR-004, FR-023).
 
-Every write names the `run_owner` it is for, so a late write for an earlier run changes
+Every write that is for one run names the `run_owner` it is for, except the mark that a run
+is a console run, which is written while that run holds the thread's lease. So a late write
+for an earlier run changes
 nothing of a later one.
 
 ### Several instances
@@ -90,14 +96,15 @@ First match:
 
 | Order | Status | When |
 |---|---|---|
-| 1 | `running` | `run_owner` is set and holds the lease. |
+| 1 | `running` | The thread's lease is held, on any instance. |
 | 2 | `needs_decision` | `settled` is `paused`. |
 | 3 | `failed` | `noted` is `failed`. |
 | 4 | `stopped` | `noted` is `stopped`, or `settled` is `unfinished`. |
 | 5 | `waiting_for_agent` | `agents_pending` is true. |
 | 6 | `done` | Otherwise. |
 
-`stoppable` is true when the status is `running` and `run_unattended` is true. `stopping` is
+`stoppable` is true when the status is `running`, `run_owner` is set, and `run_unattended`
+is true. `stopping` is
 true when, besides, `stop_owner` equals `run_owner`.
 
 ## Unattended run (in memory)

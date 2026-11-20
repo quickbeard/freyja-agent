@@ -86,3 +86,7 @@
   and SC-011, added FR-012a, five edge cases, two terms, and a section on the earlier
   requirements this feature replaces (see `approval-runs.md`, "Review record"). 16 of 16
   items still pass: no marker was added, and the new text names no implementation.
+- Read again on 2026-11-20 after `/speckit-analyze`, which changed FR-008, FR-022a, and
+  FR-027, two assumptions, one edge case, and the list of limits (see the spec's
+  Clarifications, "Analysis, 2026-11-20", and plan.md, "Analysis"). 16 of 16 items still
+  pass: no marker was added, and the new text names no implementation.
