@@ -252,7 +252,9 @@ startup and exits with an error naming the connection when it is unreachable.
   middleware's sentence, which `tests/test_a2a_gate.py` pins),
   and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
   records pending tasks' outcomes in their thread exactly once and answers messages to agents
-  that a stop left in flight; `decisions.py` resume validation, and what a resume tells the step after the gate
+  that a stop left in flight; `decisions.py` resume validation, the decisions a subagent's gate already took
+  when a resume's run stopped after it (`decisions_taken`, which the route refuses others
+  against with 409 `already_decided`), and what a resume tells the step after the gate
   (`decided_calls`: the gate's namespace and the calls the person approved or edited),
   including edits checked against
   a server tool's JSON Schema and pinned arguments; `schemas.py` and `serialize.py` the request,

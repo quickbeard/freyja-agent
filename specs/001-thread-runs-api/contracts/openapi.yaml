@@ -14,7 +14,8 @@ info:
 
     Order of checks. Path, query, and body validation come first (422). Then, for runs:
     `run_active`, `decision_pending`. For resume: `run_active`, `thread_not_found`,
-    `nothing_pending`, `proposal_mismatch`, and last the decisions themselves (422).
+    `nothing_pending`, `proposal_mismatch`, the decisions themselves (422), and last
+    `already_decided`.
 
     Compatibility. Fields, event kinds, and error codes may be added without notice; a
     client ignores what it does not recognize. Removing or changing a documented one is a
@@ -92,9 +93,11 @@ paths:
         "409":
           description: >
             A run is active (code `run_active`); the thread has no pending decision (code
-            `nothing_pending`); or `interrupt_id` is not the id of the pending proposal
-            (code `proposal_mismatch`). In the last case no action runs and the pending
-            decision is unchanged.
+            `nothing_pending`); `interrupt_id` is not the id of the pending proposal
+            (code `proposal_mismatch`); or the proposal was already decided by an earlier
+            resume whose run stopped after the decision was taken, and the decisions differ
+            from those (code `already_decided`). In the last two cases no action runs and the
+            pending decision is unchanged.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ErrorResponse" }
@@ -315,7 +318,7 @@ components:
           properties:
             code:
               type: string
-              enum: [run_active, decision_pending, nothing_pending, proposal_mismatch, thread_not_found, internal]
+              enum: [run_active, decision_pending, nothing_pending, proposal_mismatch, already_decided, thread_not_found, internal]
             message: { type: string }
     ValidationError:
       type: object
