@@ -5,6 +5,7 @@
 import type { Page, Route } from "@playwright/test";
 import type {
   ActionRequest,
+  AgentTask,
   Message,
   PendingDecision,
   ThreadList,
@@ -120,7 +121,7 @@ export class TaskService {
     string,
     { row: ThreadSummary; state: ThreadState }
   >();
-  /** Every run the pages started, in order. */
+  /** Every message the pages sent to start a run, in order, also one that was refused. */
   readonly sent: { threadId: string; message: string }[] = [];
   /** Every decision the pages sent, in order. */
   readonly decided: ({ threadId: string } & DecisionBody)[] = [];
@@ -203,7 +204,28 @@ export class TaskService {
     if (request.method() === "POST" && tail === "runs/unattended") {
       const { message } = request.postDataJSON() as { message: string };
       this.sent.push({ threadId, message });
-      await this.respond(route, threadId, this.run(threadId, message));
+      // Phase 7: as the service, no message is taken by a task whose run is in progress or
+      // whose proposal is pending (001 FR-011).
+      const held = this.tasks.get(threadId);
+      const busy: Refusal | null =
+        held?.row.status === "running" || held?.state.run_active
+          ? {
+              status: 409,
+              code: "run_active",
+              message: "A run is already active on this thread.",
+            }
+          : held !== undefined && held.state.pending !== null
+            ? {
+                status: 409,
+                code: "decision_pending",
+                message: "This thread has a pending decision.",
+              }
+            : null;
+      await this.respond(
+        route,
+        threadId,
+        busy === null ? this.run(threadId, message) : { refusal: busy },
+      );
       return;
     }
     if (request.method() === "POST" && tail === "resume/unattended") {
@@ -404,4 +426,69 @@ export async function answerThreads(
       await route.fulfill({ status, json: { detail: { code, message } } });
     }
   });
+}
+
+// Phase 7: follow-ups and agent tasks.
+
+/** A follow-up on `task` that answers `reply` and finishes: the conversation grows by both. */
+export function followedUp(
+  task: { row: ThreadSummary; state: ThreadState },
+  message: string,
+  reply: string,
+): RunAnswer {
+  const threadId = task.row.thread_id;
+  const turn = task.state.messages.length;
+  return {
+    events: [start(threadId), piece(reply, `ai-${turn}`), END],
+    after: {
+      row: { ...task.row, status: "done", error: null },
+      state: {
+        ...task.state,
+        messages: [
+          ...task.state.messages,
+          human(message, `h-${turn}`),
+          ai(reply, `ai-${turn}`),
+        ],
+      },
+    },
+  };
+}
+
+/**
+ * An agent's outcome as the service records it in a conversation: Freyja's call of
+ * `check_agent_tasks`, its result, and what Freyja says of it (feature 003).
+ */
+export function outcome(result: string, reply: string): Message[] {
+  return [
+    {
+      id: "ai-check",
+      type: "ai",
+      content: "",
+      name: null,
+      tool_calls: [{ id: "call-check", name: "check_agent_tasks", args: {} }],
+    },
+    {
+      id: "tool-check",
+      type: "tool",
+      content: result,
+      name: "check_agent_tasks",
+      tool_call_id: "call-check",
+    },
+    ai(reply, "ai-outcome"),
+  ];
+}
+
+/** An agent task as the service gives it; pending unless the test says otherwise. */
+export function agentTask(values: Partial<AgentTask> = {}): AgentTask {
+  return {
+    agent: "stub",
+    task_id: "a-1",
+    message: "slow 40",
+    status: "working",
+    started_at: "2026-11-20T08:00:02Z",
+    last_checked_at: "2026-11-20T08:00:03Z",
+    ended_at: null,
+    outcome_delivered: false,
+    ...values,
+  };
 }

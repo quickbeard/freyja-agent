@@ -604,6 +604,108 @@ with the service stopped the section said that it cannot be reached and offered 
 and showed no row and no number. A number above zero needs a pause, which the stand-in model
 cannot make: it is the end-to-end tests'. The database was dropped afterwards.
 
+### Phase 7 as built (2026-11-20)
+
+Built as research R12 and R13 describe; the differences and additions:
+
+- **The follow-up box is always there under a conversation, and says why it cannot be
+  sent.** While a run is in progress or a proposal is pending, the box still takes text and
+  its Send is off, with the reason beside it and as the box's description. The text stays
+  through the wait, so a message typed while an agent's outcome is being recorded is not
+  lost. Phase 5's unit test asserted that a paused task has no text box; it now asserts a
+  box that cannot be sent (FR-017 and FR-020 both hold: nothing is sent to a task whose
+  proposal is pending). `send-box.tsx` gained the reason (`blocked`); New task and the box
+  that sends a failed first message again pass none.
+- **What the page knows is said; the service rules.** The box is blocked by what the page
+  last read. A message the service refuses with `run_active` or `decision_pending` keeps its
+  text, shows the service's sentence, and has the task read again, so the box then says why.
+  The same reading follows a message that got no answer, since the service may have
+  accepted it.
+- **A follow-up whose run failed before its message was recorded gets its text back.** As
+  when no usable model is active: the run is turned away before the graph, and the
+  service's own sentence says to send the message again. The rule is a fixed one: after the
+  failed run was read again, the conversation holds no more messages of a person than
+  before it. A message that was recorded is never put back, so nothing is sent twice by a
+  press of Send. This is FR-008's rule for a new task, kept for a follow-up; the spec does
+  not ask for it.
+- **One timer, two periods.** The view's own timer reads the row and the state every five
+  seconds while a run it does not read is in progress (Phase 4's following) and every
+  fifteen while it waits for an agent. Waiting for an agent is: the row says so, or an agent
+  task is pending, or an agent task has ended and its outcome is not in the conversation
+  yet (`outcome_delivered` false). The third case is the time between an agent's answer and
+  the service's background run that records it; without it the page stopped reading just
+  before the outcome arrived. While no usable model is active, or while a proposal is
+  pending, the service starts no such run, and the page goes on reading every fifteen
+  seconds for as long as it is open.
+- **Nothing is read while the page is hidden**, for both periods, as the list's timer
+  (Phase 6). SWR reads again when the page is shown.
+- **The conversation is read once more when a run the page followed has ended.** The hand
+  check found it: the reading that shows the end is asked for together with the
+  conversation's, and the service can answer the conversation's from before the run's last
+  step. The page then showed Done with the reply missing until the next reading, which,
+  with nothing pending, never came.
+- **One status element, always there.** What the page says of a run ("Starting the run…",
+  "A run is in progress…", that it reads again while an agent task is awaited) is one
+  `<output>` that is never taken away. It takes the focus when a message or a decision is
+  accepted and keeps it when the run ends; it then says, for assistive technology only,
+  that the run has ended or has paused for a decision. Before, the element went away with
+  the run and the focus fell to the top of the page, also after a decision (Phase 5).
+- **Agent tasks** are listed under the conversation and the proposal card, oldest first as
+  the service lists them, each with its agent, its status in words, a "Pending" mark, and
+  the message it was started with, all as text. An ended one whose outcome is not in the
+  conversation yet says so. The section is absent for a task that handed nothing to an
+  agent. The console's own words say "agent task" throughout (FR-001a); a test counts them.
+- **The end-to-end spec moves the page's clock** (`page.clock`) in place of waiting five and
+  fifteen seconds; the clock goes on by itself too, so a period is bounded by the jump plus
+  the wait of an assertion, not measured. No change to `web/playwright.config.ts`.
+  `TaskService` now refuses a message for a task whose run is in progress or whose proposal
+  is pending, as the service does.
+- **No hand check of an agent task or of the box on a paused task.** The stand-in model
+  answers in text only: it cannot propose an action or hand work to an agent. Both are the
+  unit and end-to-end tests'. The stand-in also gives every reply the same message id
+  (`resp_stub`), so in the service's state a second reply takes the place of the first: a
+  task with a follow-up holds three messages there, not four, and the page showed those
+  three. `tests/llm_stub.py` is feature 004's and is not changed here.
+
+**Read by a reviewer that had not written it.** It found no way for a message to act as a
+decision or to pass one: the button and the form both check the block, Enter in the box
+sends nothing, and a stale page ends in the service's refusal. It found three real defects
+in the view and some smaller ones, and mutations the tests let through. Each was
+checked against the code, and each test added for one was shown to fail with its fix taken
+out (nineteen checks; with the nine of this phase's own behavior, twenty-eight).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium | A follow-up whose stream was cut was not said to be cut, and with the service unreachable was not followed: the cut was cleared by the row the page held from before the run, which said done. The same held for a continuation after a decision (Phase 5); a new task has no earlier row, so Phase 4 did not meet it. | A cut is cleared only by a reading of the row answered after it. |
+| Medium | A follow-up that ended well went from the page when the reading after it failed: the earlier conversation was shown, without the message and the reply, with a box that could be sent, which invites sending the message a second time. | What the stream brought stays, and the box stays blocked, until the task could be read; the page reads again every five seconds until it can. |
+| Medium-low | The row and the conversation are two requests. A row answered before the service's own run took the task (`done`) beside a conversation answered after it (`run_active` true, the outcome delivered) left nothing to wait for: the page stopped reading and never showed Freyja's reply. | `run_active` of the conversation's reading counts as a run in progress, for following and for the box. |
+| Low | The focus fell to the top of the page when a run ended. | One status element that stays; see above. |
+| Low | A refusal stayed beside the box after the task had moved on and the box could be sent again. | It goes when the reason the box cannot be sent changes. |
+| Low | The sentence about waiting for an agent was wrong while a proposal was pending, when the outcome is recorded only after the decision, and for an agent that asks for input. | It says what the page does and when, which holds in every case. |
+| Low | The box read a pending proposal from the conversation's reading only; with that reading failed and the row saying `needs_decision`, Send was on. The service refuses such a message, so nothing was passed. | The row's word blocks the box too. |
+| Low | A message that got no answer did not have the task read again. | It does. |
+| Low | A follow-up's text put back in the box replaces what was typed meanwhile. | Not changed. The text is put back only for a run that recorded nothing, which the service turns away at once; there is no time to type in between. Recorded here. |
+| Test | The focus was asserted on text the page's body also holds; the periods were read from the constants they test; "no box before the task was read" passed through an earlier return; and a restored text sent again, a reading of the conversation after a refusal, a refusal that is the message's own, a notice left after a message, a count of all messages for a count of a person's, the outcome's note on a pending agent task, and a message taken between a run's end and its reading all passed. | One test or assertion each. |
+| Test | The end-to-end helper took a message for a task with a run in progress or a pending proposal; the task "running elsewhere" said `run_active` false; the agent's outcome arrived in one step, as a plain reply. | The helper refuses as the service does; the spec goes through "ended, outcome not recorded", the service's run, and the outcome as the `check_agent_tasks` call and its result. |
+| Not changed | A refused read of the row while a run is followed costs one more reading of the conversation. | Harmless; no test pins it. |
+
+**Checked by hand** on a check instance on port 8020 with a database of its own, the
+stand-in model on 9977 answering as `slow`, and the console on 3020, driven by a script in a
+real Chromium: a run started with curl was shown as in progress on a page opened after it,
+with the box taking text and its Send off and the reason beside it; twenty seconds later,
+without a reload, the page showed Done and both messages, the typed text was still in the
+box, and Send was on; the follow-up showed Running 39 ms after Send, the earlier
+conversation once above it, an emptied box, and Send off; when it ended the page showed
+what the service holds, at the same address, and the same after a reload; no agent tasks
+section for a task without one; and no request for the task in 31 idle seconds. The database
+was dropped afterwards. One thing the reviewer did by accident is recorded for whoever
+meets it: running the unit tests from a copy of `web/` whose `node_modules` pointed at this
+worktree's relinked the packages while the console was served from it, and the dev server
+failed until it was restarted.
+
+**Left for later**: what was typed into the box while a follow-up that recorded nothing
+failed (the table's last Low), and Stop, which is Phase 8's.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are
