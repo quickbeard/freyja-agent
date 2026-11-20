@@ -75,24 +75,61 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
   if (response.ok) {
     return payload as T;
   }
-  const refused = refusal(response.status, payload);
+  throw failure(response.status, payload);
+}
+
+/** What an answer that is not a success says, as the error a caller is given. */
+function failure(status: number, payload: unknown): ApiError {
+  const refused = refusal(status, payload);
   if (refused !== null) {
-    throw refused;
+    return refused;
   }
   // A server error with no JSON body is the web app's server saying it could not pass the
   // request on, which is what it answers while the service is down.
-  if (payload === undefined && response.status >= 500) {
-    throw new ApiError(UNREACHABLE, response.status, "unreachable");
+  if (payload === undefined && status >= 500) {
+    return new ApiError(UNREACHABLE, status, "unreachable");
   }
   // Anything else is an answer: something is there, and it said no in words of its own.
   const detail = (payload as { detail?: unknown } | undefined)?.detail;
-  throw new ApiError(
+  return new ApiError(
     typeof detail === "string" && detail !== ""
-      ? `The Freyja service answered with an error (${response.status}): ${detail}`
-      : `The Freyja service answered with an error (${response.status}).`,
-    response.status,
+      ? `The Freyja service answered with an error (${status}): ${detail}`
+      : `The Freyja service answered with an error (${status}).`,
+    status,
     "error",
   );
+}
+
+// Feature 007: a run's answer is a stream of server-sent events, read as it arrives.
+
+/**
+ * Post `body` as JSON to `path` and return the answer's body, unread, for a caller to read
+ * as it arrives. A refusal, refused values, and no answer raise the `ApiError` `api` raises.
+ */
+export async function stream(
+  path: string,
+  body: unknown,
+): Promise<ReadableStream<Uint8Array>> {
+  let response: Response;
+  try {
+    response = await fetch(`/api${path}`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch {
+    throw new ApiError(UNREACHABLE, 0, "unreachable");
+  }
+  if (response.ok && response.body !== null) {
+    return response.body;
+  }
+  let payload: unknown;
+  try {
+    payload = await response.json();
+  } catch {
+    payload = undefined;
+  }
+  throw failure(response.status, payload);
 }
 
 /** Whether a request was refused because the profile or the agent it names no longer exists. */

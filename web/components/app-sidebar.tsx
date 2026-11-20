@@ -1,9 +1,9 @@
 "use client";
 
-import { BotIcon, CpuIcon } from "lucide-react";
+import { BotIcon, CpuIcon, ListTodoIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useId } from "react";
+import { Suspense, useId } from "react";
 import useSWR from "swr";
 import {
   Sidebar,
@@ -28,6 +28,8 @@ import {
 const SECTIONS = [
   { href: "/llm", label: "LLM", icon: CpuIcon },
   { href: "/agents", label: "Agents", icon: BotIcon },
+  // Feature 007: where a person hands Freyja work.
+  { href: "/tasks", label: "Tasks", icon: ListTodoIcon },
 ] as const;
 
 const AGENTS = "/agents";
@@ -50,10 +52,6 @@ function useAgentsDown(): number {
 }
 
 export function AppSidebar() {
-  const pathname = usePathname();
-  const { setOpenMobile } = useSidebar();
-  const down = useAgentsDown();
-  const warning = useId();
   return (
     // The generated sidebar draws its edge in the page's border color; the sidebar's own is
     // the one that shows against it.
@@ -67,52 +65,73 @@ export function AppSidebar() {
         <SidebarGroup>
           <SidebarGroupContent>
             <nav aria-label="Sections">
-              <SidebarMenu>
-                {SECTIONS.map(({ href, label, icon: Icon }) => {
-                  const active =
-                    pathname === href || pathname.startsWith(`${href}/`);
-                  const warned = href === AGENTS && down > 0;
-                  return (
-                    <SidebarMenuItem key={href}>
-                      <SidebarMenuButton
-                        isActive={active}
-                        render={
-                          <Link
-                            href={href}
-                            aria-current={active ? "page" : undefined}
-                            // The entry keeps its name; what the number means is said
-                            // beside it, for whoever does not see where the number stands.
-                            aria-describedby={warned ? warning : undefined}
-                            // In a narrow window the sidebar is a sheet over the page:
-                            // choosing a section closes it, or it would hide the page.
-                            onClick={() => setOpenMobile(false)}
-                          />
-                        }
-                      >
-                        <Icon aria-hidden="true" />
-                        <span>{label}</span>
-                      </SidebarMenuButton>
-                      {warned && (
-                        <SidebarMenuBadge
-                          id={warning}
-                          className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive"
-                        >
-                          <span aria-hidden="true">{down}</span>
-                          <span className="sr-only">
-                            {down === 1
-                              ? "1 agent cannot be used"
-                              : `${down} agents cannot be used`}
-                          </span>
-                        </SidebarMenuBadge>
-                      )}
-                    </SidebarMenuItem>
-                  );
-                })}
-              </SidebarMenu>
+              {/* Feature 007: a page below a route with a parameter, a task's, knows its
+                  address only when it is asked for, so the links that mark the current
+                  section wait for it, and are shown unmarked until then (Next.js docs,
+                  use-pathname.md, "Cache Components"). */}
+              <Suspense fallback={<SectionLinks pathname={null} />}>
+                <CurrentSectionLinks />
+              </Suspense>
             </nav>
           </SidebarGroupContent>
         </SidebarGroup>
       </SidebarContent>
     </Sidebar>
+  );
+}
+
+function CurrentSectionLinks() {
+  return <SectionLinks pathname={usePathname()} />;
+}
+
+/** The sections, with the one `pathname` is in marked; none while it is not known. */
+function SectionLinks({ pathname }: { pathname: string | null }) {
+  const { setOpenMobile } = useSidebar();
+  const down = useAgentsDown();
+  const warning = useId();
+  return (
+    <SidebarMenu>
+      {SECTIONS.map(({ href, label, icon: Icon }) => {
+        const active =
+          pathname !== null &&
+          (pathname === href || pathname.startsWith(`${href}/`));
+        const warned = href === AGENTS && down > 0;
+        return (
+          <SidebarMenuItem key={href}>
+            <SidebarMenuButton
+              isActive={active}
+              render={
+                <Link
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  // The entry keeps its name; what the number means is said
+                  // beside it, for whoever does not see where the number stands.
+                  aria-describedby={warned ? warning : undefined}
+                  // In a narrow window the sidebar is a sheet over the page:
+                  // choosing a section closes it, or it would hide the page.
+                  onClick={() => setOpenMobile(false)}
+                />
+              }
+            >
+              <Icon aria-hidden="true" />
+              <span>{label}</span>
+            </SidebarMenuButton>
+            {warned && (
+              <SidebarMenuBadge
+                id={warning}
+                className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive"
+              >
+                <span aria-hidden="true">{down}</span>
+                <span className="sr-only">
+                  {down === 1
+                    ? "1 agent cannot be used"
+                    : `${down} agents cannot be used`}
+                </span>
+              </SidebarMenuBadge>
+            )}
+          </SidebarMenuItem>
+        );
+      })}
+    </SidebarMenu>
   );
 }

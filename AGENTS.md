@@ -268,6 +268,19 @@ startup and exits with an error naming the connection when it is unreachable.
   used (`agents-warning.tsx`). The sidebar reads the same
   list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
   every page asks for `/api/agents` once.
+  `web/app/tasks/` is the Tasks section (feature 007) and `web/app/tasks/[id]/` one task, whose
+  id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
+  sidebar's section links are read inside one too, or the build fails for that route.
+  `web/lib/tasks.ts` holds the task types, the calls, and `events`, which reads a run's
+  stream as it arrives; `web/lib/api.ts` has `stream` beside `api` for that answer.
+  `web/lib/task-runs.ts` holds the runs this browser tab started, outside React, so that a
+  run started by New task on the list's page is shown on the task's page as it arrives
+  (`useRun`); nothing is stored. `web/components/tasks/` holds New task (`new-task.tsx`),
+  the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
+  run as it streams and the service's conversation once it ended, a message
+  (`message.tsx`), and the status in words (`status.tsx`). All text of a task is put in
+  text nodes and never rendered as markup. The console has no users, and the section says
+  so above its list.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
   (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmations before a
   profile is activated (`activate-dialog.tsx`) and deleted (`delete-dialog.tsx`), and how a test's
@@ -290,11 +303,18 @@ startup and exits with an error naming the connection when it is unreachable.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
-  agent, checking one, changing one's approval choice, moving one, and removing one; `api.ts`
+  agent, checking one, changing one's approval choice, moving one, and removing one;
+  `tasks.spec.ts` the Tasks section, with `tasks-api.ts` (`TaskService`, which answers a
+  page's requests for tasks and keeps what its runs left, and `answerThreads`); and
+  `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
+  to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
+  forwards to), to see a run's events arrive as they are produced. It runs in projects of
+  its own, `stream-chromium` and then `stream-firefox`, after every other spec; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
   what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
-  hands a page no answer sees the console as it is with the service stopped.
+  hands a page no answer sees the console as it is with the service stopped; only
+  `stream.spec.ts` listens there, in its own projects.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
   `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
