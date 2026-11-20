@@ -161,6 +161,59 @@ export function startRun(
   return stream(`${path(threadId)}/runs/unattended`, { message });
 }
 
+// Phase 5: deciding a proposal (FR-014 to FR-019).
+
+/** One decision, as the service takes it, one per proposed action and in its order. */
+export type DecisionSent =
+  | { type: "approve" }
+  | { type: "edit"; args: Record<string, unknown> }
+  | { type: "reject"; message?: string };
+
+/** The most a reason for a rejection may hold (001 contracts). */
+export const REJECT_REASON_LIMIT = 4000;
+
+/**
+ * Send the decisions for the proposal `interruptId` names. The continuation goes on whether
+ * or not its stream is read; the answer's body is its events. Every check of a decision is
+ * the service's: a refusal is raised as an `ApiError`.
+ */
+export function decide(
+  threadId: string,
+  interruptId: string,
+  decisions: DecisionSent[],
+): Promise<ReadableStream<Uint8Array>> {
+  return stream(`${path(threadId)}/resume/unattended`, {
+    interrupt_id: interruptId,
+    decisions,
+  });
+}
+
+/**
+ * Edited arguments, read from the text a person entered: a set of named arguments, the
+ * structured form a proposal shows them in. Nothing else is checked here; whether the
+ * action accepts them is the service's decision (FR-015).
+ */
+export function parseArguments(
+  text: string,
+): { args: Record<string, unknown> } | { error: string } {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return {
+      error:
+        'This is not valid JSON. Enter the arguments as a JSON object, such as {"name": "value"}.',
+    };
+  }
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return {
+      error:
+        'The arguments must be a JSON object, with a name for each argument, such as {"name": "value"}.',
+    };
+  }
+  return { args: value as Record<string, unknown> };
+}
+
 function decode(data: string[]): unknown {
   const text = data.join("\n");
   if (text === "") {

@@ -19,6 +19,7 @@ import {
 } from "@/__tests__/tasks-testing";
 import { FOLLOW_SECONDS, TaskView } from "@/components/tasks/task-view";
 import { begin, clear, get } from "@/lib/task-runs";
+import type { PendingDecision } from "@/lib/tasks";
 
 const NOT_USED = refusal(
   404,
@@ -37,7 +38,13 @@ afterEach(() => {
 
 function renderView(threadId = "t-1") {
   return render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        focusThrottleInterval: 0,
+      }}
+    >
       <TaskView threadId={threadId} />
     </SWRConfig>,
   );
@@ -326,5 +333,307 @@ describe("a task's page", () => {
     await waitFor(() =>
       expect(conversation()).toContain("Freyja asked to run ls"),
     );
+  });
+});
+
+// Phase 5: a task paused on a proposal.
+
+const PROPOSAL = (id: string): PendingDecision => ({
+  interrupt_id: id,
+  action_requests: [
+    {
+      name: "send_notification",
+      server: null,
+      agent: null,
+      args: { channel: "#ops", message: "Ready." },
+      description: "Send a notification to a channel.",
+      allowed_decisions: ["approve", "edit", "reject"],
+    },
+  ],
+  allowed_decisions: ["approve", "edit", "reject"],
+});
+
+const ASKED = {
+  ...ai("", "ai-1"),
+  tool_calls: [
+    {
+      id: "n1",
+      name: "send_notification",
+      args: { channel: "#ops", message: "Ready." },
+    },
+  ],
+};
+
+describe("a task's page with a proposal", () => {
+  it("shows the proposal's card, and no box for a new message", async () => {
+    service({
+      row: () => ({ json: summary({ status: "needs_decision" }) }),
+      state: () => ({
+        json: state([human("Tell #ops."), ASKED], {
+          pending: PROPOSAL("int-1"),
+        }),
+      }),
+    });
+    renderView();
+    expect(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Needs your decision")).toBeTruthy();
+    expect(screen.queryAllByRole("textbox")).toHaveLength(0);
+  });
+
+  it("shows the continuation of a decision as a run, also when it pauses again", async () => {
+    let step = 0;
+    const continuation = openBody();
+    const asked = serve((method, path) => {
+      if (method === "POST") {
+        step = 1;
+        return { stream: continuation.stream };
+      }
+      const paused = step === 0 ? "int-1" : "int-2";
+      if (path.endsWith("/state")) {
+        return {
+          json: state(
+            step === 0
+              ? [human("Tell #ops."), ASKED]
+              : [
+                  human("Tell #ops."),
+                  ASKED,
+                  {
+                    id: "t1",
+                    type: "tool",
+                    content: "Notification to #ops recorded.",
+                    name: "send_notification",
+                  },
+                  { ...ASKED, id: "ai-2" },
+                ],
+            {
+              pending: PROPOSAL(paused),
+            },
+          ),
+        };
+      }
+      return { json: summary({ status: "needs_decision" }) };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+
+    // The continuation streams below the conversation as it was when the person decided.
+    continuation.send(START, chunk("Sending it again.", "ai-2"));
+    await waitFor(() => expect(conversation()).toContain("Sending it again."));
+    expect(conversation()).toContain("Tell #ops.");
+    expect(
+      screen
+        .getByRole("list", { name: "Conversation" })
+        .querySelectorAll(":scope > li"),
+    ).toHaveLength(3);
+    // The focus is not lost with the card: it is on the run's status.
+    await waitFor(() => expect(document.activeElement?.tagName).toBe("OUTPUT"));
+    expect(document.activeElement?.textContent).toMatch(/The run has started/);
+    expect(screen.getByText("Running")).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Approve send_notification" }),
+    ).toBeNull();
+
+    continuation.send(sse("interrupt", PROPOSAL("int-2")));
+    continuation.close();
+    await waitFor(() =>
+      expect(conversation()).toContain("Notification to #ops recorded."),
+    );
+    expect(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    ).toBeTruthy();
+    expect(asked.filter(({ method }) => method === "POST")).toEqual([
+      {
+        method: "POST",
+        path: "/threads/t-1/resume/unattended",
+        body: { interrupt_id: "int-1", decisions: [{ type: "approve" }] },
+      },
+    ]);
+  });
+
+  it("says that a proposal decided elsewhere is no longer the pending one, and reads the task again", async () => {
+    let reads = 0;
+    serve((method, path) => {
+      if (method === "POST") {
+        return refusal(
+          409,
+          "proposal_mismatch",
+          "The interrupt_id is not the pending proposal's.",
+        );
+      }
+      if (path.endsWith("/state")) {
+        reads += 1;
+        return reads === 1
+          ? {
+              json: state([human("Tell #ops."), ASKED], {
+                pending: PROPOSAL("int-1"),
+              }),
+            }
+          : { json: state([human("Tell #ops."), ASKED, ai("Sent.", "ai-2")]) };
+      }
+      return {
+        json: summary({ status: reads > 1 ? "done" : "needs_decision" }),
+      };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /no longer the pending one/,
+    );
+    await waitFor(() => expect(conversation()).toContain("Sent."));
+    expect(
+      screen.queryByRole("button", { name: "Approve send_notification" }),
+    ).toBeNull();
+  });
+});
+
+describe("a task's page with a proposal, further", () => {
+  const paused = (
+    id: string,
+    args = { channel: "#ops", message: "Ready." },
+  ) => ({
+    json: state([human("Tell #ops."), ASKED], {
+      pending: {
+        ...PROPOSAL(id),
+        action_requests: [{ ...PROPOSAL(id).action_requests[0], args }],
+      },
+    }),
+  });
+
+  it("opens a new proposal as a new card, with nothing of the one decided elsewhere", async () => {
+    let reads = 0;
+    serve((method, path) => {
+      if (method === "POST") {
+        return refusal(409, "proposal_mismatch", "Not the pending proposal.");
+      }
+      if (path.endsWith("/state")) {
+        reads += 1;
+        return reads === 1
+          ? paused("int-1")
+          : paused("int-2", { channel: "#dev", message: "Other." });
+      }
+      return { json: summary({ status: "needs_decision" }) };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit the arguments of send_notification",
+      }),
+    );
+    fireEvent.change(
+      screen.getByLabelText("Arguments for send_notification, as JSON"),
+      { target: { value: '{"channel": "#mine", "message": "Mine."}' } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Approve send_notification with these arguments",
+      }),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("article", {
+          name: "Proposed action send_notification",
+        }).textContent,
+      ).toContain('"channel": "#dev"'),
+    );
+    // The new card starts closed: the edit made for the earlier proposal is gone.
+    expect(
+      screen.queryByLabelText("Arguments for send_notification, as JSON"),
+    ).toBeNull();
+    expect(screen.getByRole("alert").textContent).toMatch(
+      /no longer the pending one/,
+    );
+  });
+
+  it("drops the notice once the task has moved on from the proposal it was about", async () => {
+    let reads = 0;
+    let decided = false;
+    serve((method, path) => {
+      if (method === "POST") {
+        return refusal(409, "run_active", "A run is already active.");
+      }
+      if (path.endsWith("/state")) {
+        reads += 1;
+        return decided
+          ? { json: state([human("Tell #ops."), ASKED, ai("Sent.", "ai-2")]) }
+          : paused("int-1");
+      }
+      return { json: summary({ status: decided ? "done" : "needs_decision" }) };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /A run is in progress/,
+    );
+    await waitFor(() => expect(reads).toBeGreaterThan(1));
+
+    decided = true;
+    fireEvent.focus(window);
+    await waitFor(() => expect(conversation()).toContain("Sent."));
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it("offers no decision while a run is in progress on the task", async () => {
+    serve((_method, path) =>
+      path.endsWith("/state")
+        ? paused("int-1")
+        : { json: summary({ status: "running" }) },
+    );
+    renderView();
+    expect(
+      await screen.findByText(
+        "A run is in progress. This page reads the task again until it ends.",
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: "Approve send_notification" }),
+    ).toBeNull();
+  });
+
+  it("keeps the reason a continuation failed beside the proposal that is still pending", async () => {
+    serve((method, path) => {
+      if (method === "POST") {
+        return {
+          stream: body(
+            START,
+            sse("error", {
+              code: "approval_now_required",
+              message:
+                "This step cannot continue: the agent now requires approval.",
+            }),
+          ),
+        };
+      }
+      return path.endsWith("/state")
+        ? paused("int-1")
+        : { json: summary({ status: "needs_decision" }) };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+    expect(
+      await screen.findByText(
+        "This step cannot continue: the agent now requires approval.",
+      ),
+    ).toBeTruthy();
+    // Read again, the task still waits on the proposal; the reason stays beside it.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("button", { name: "Approve send_notification" }),
+      ).toBeTruthy(),
+    );
+    expect(
+      screen.getByText(
+        "This step cannot continue: the agent now requires approval.",
+      ),
+    ).toBeTruthy();
   });
 });

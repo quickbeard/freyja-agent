@@ -278,7 +278,11 @@ startup and exits with an error naming the connection when it is unreachable.
   (`useRun`); nothing is stored. `web/components/tasks/` holds New task (`new-task.tsx`),
   the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
   run as it streams and the service's conversation once it ended, a message
-  (`message.tsx`), and the status in words (`status.tsx`). All text of a task is put in
+  (`message.tsx`), the status in words (`status.tsx`), and the proposal card
+  (`proposal-card.tsx`), which offers each proposed action only the decisions the service
+  lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
+  no more than that edited arguments are a JSON object (`parseArguments`), and has its
+  buttons outside any form, so that Enter in a field sends no decision. All text of a task is put in
   text nodes and never rendered as markup. The console has no users, and the section says
   so above its list.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
@@ -304,8 +308,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
-  `tasks.spec.ts` the Tasks section, with `tasks-api.ts` (`TaskService`, which answers a
-  page's requests for tasks and keeps what its runs left, and `answerThreads`); and
+  `tasks.spec.ts` the Tasks section and `tasks-decide.spec.ts` deciding a proposal, with
+  `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
+  its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
+  its decision, and `answerThreads`); and
   `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
   to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
   forwards to), to see a run's events arrive as they are produced. It runs in projects of

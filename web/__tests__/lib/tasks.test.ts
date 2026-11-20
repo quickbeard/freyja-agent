@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import { body } from "@/__tests__/tasks-testing";
 import { stubFetch } from "@/__tests__/testing";
 import {
+  decide,
   events,
   isTerminal,
   listThreads,
   newThreadId,
+  parseArguments,
   readState,
   readThread,
   type StreamEvent,
@@ -156,5 +158,51 @@ describe("the calls", () => {
       expect(headers.get("authorization")).toBeNull();
       expect(init?.credentials).toBeUndefined();
     }
+  });
+});
+
+// Phase 5: deciding a proposal.
+
+describe("decide", () => {
+  it("sends the proposal's id and the decisions in order, for a continuation without a reader", async () => {
+    const fetchStub = stubFetch({ status: 200, text: ": ping\r\n\r\n" });
+    await decide("t-1", "int-7", [
+      { type: "approve" },
+      { type: "edit", args: { channel: "#ops-staging" } },
+      { type: "reject", message: "Not now." },
+    ]);
+    const [url, init] = fetchStub.mock.calls[0];
+    expect(url).toBe("/api/threads/t-1/resume/unattended");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(String(init?.body))).toEqual({
+      interrupt_id: "int-7",
+      decisions: [
+        { type: "approve" },
+        { type: "edit", args: { channel: "#ops-staging" } },
+        { type: "reject", message: "Not now." },
+      ],
+    });
+    expect(init?.credentials).toBeUndefined();
+  });
+});
+
+describe("parseArguments", () => {
+  it("gives the object for text that is a JSON object", () => {
+    expect(parseArguments('{"channel": "#ops", "n": [1, 2]}')).toEqual({
+      args: { channel: "#ops", n: [1, 2] },
+    });
+    expect(parseArguments("{}")).toEqual({ args: {} });
+  });
+
+  it.each([
+    ["not JSON", "channel: #ops"],
+    ["an array", '["#ops"]'],
+    ["a number", "42"],
+    ["a string", '"#ops"'],
+    ["null", "null"],
+    ["nothing", ""],
+  ])("gives a reason for %s", (_what, text) => {
+    const parsed = parseArguments(text);
+    expect("error" in parsed && parsed.error).toMatch(/JSON/);
   });
 });
