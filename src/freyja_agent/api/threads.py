@@ -3,11 +3,12 @@
 import uuid
 from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException, Path, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
 from freyja_agent.api.decisions import build_resume_command
+from freyja_agent.api.guards import refuse_other_origins
 from freyja_agent.api.outcomes import (
     answer_in_flight,
     mark_delivered,
@@ -26,7 +27,13 @@ from freyja_agent.api.serialize import interrupt_to_pending, message_to_dict
 from freyja_agent.api.streaming import lease_owner, no_context_stream, run_stream, take_context
 from freyja_agent.runtime.runtime import RunContext, Runtime
 
-router = APIRouter(prefix="/threads", tags=["threads"])
+# Feature 007: a request that changes something and that a browser marks as made by a page of
+# another origin is refused, as the LLM and Agents routes refuse it (007 research R9).
+router = APIRouter(
+    prefix="/threads",
+    tags=["threads"],
+    dependencies=[Depends(refuse_other_origins("Threads"))],
+)
 
 ThreadIdPath = Annotated[
     str, Path(min_length=1, max_length=THREAD_ID_MAX_LENGTH, pattern=THREAD_ID_PATTERN)

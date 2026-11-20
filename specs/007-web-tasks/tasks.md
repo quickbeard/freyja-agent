@@ -93,11 +93,11 @@ layout of the code it covers. End-to-end tests are `*.spec.ts` files under `web/
 
 **Purpose**: know the starting point. No file changes.
 
-- [ ] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
+- [X] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
       created from `main`, and note the two coverage numbers for the description of Phase 2's
       pull request; they are what the floors in `pyproject.toml` and `web/vitest.config.mts`
       are compared with at the end
-- [ ] T002 [P] Create the database of this feature's opt-in tests once, in the Postgres
+- [X] T002 [P] Create the database of this feature's opt-in tests once, in the Postgres
       container of the main checkout (`createdb -p 5434 -U freyja freyja_test_tasks`, through
       `docker compose --project-directory /home/minhnh71/works/freyja-agent exec postgres`),
       and read `tests/integration/conftest.py` to learn how a test file there gets its pool;
@@ -117,20 +117,22 @@ origins on the thread routes.
 
 ### Tests
 
-- [ ] T003 [P] Write `tests/test_thread_index.py`, part 1, the store, against
+- [X] T003 [P] Write `tests/test_thread_index.py`, part 1, the store, against
       `InMemoryThreadIndex` through a fixture that T007 reuses for Postgres.
-      `run_started(thread_id, owner)` makes the row when it is missing and sets `run_owner`,
-      clears `stop_owner`, `noted`, `error_code`, `error_message`, and `settled`, sets
-      `run_unattended` false and `changed_at` to now; `created_at` is set once.
+      `run_started(thread_id, owner)` makes the row when it is missing, sets `run_owner`,
+      counts the run in `runs`, clears `stop_owner` and `settled`, sets `run_unattended` false
+      and `changed_at` to now, and leaves the note of an earlier run; `created_at` is set once.
       `mark_unattended(thread_id, first_message)` sets `run_unattended` and fills
       `first_message` only when the row has none, cut to "the first 200 characters"; it takes
       no owner, since it is called while the run holds the thread's lease.
       `note(thread_id, owner, "failed", code, message)` and `note(..., "stopped")` write only
       while `owner` is the row's `run_owner`; `error_message` is cut to "at most 2,000
       characters". `run_ended(thread_id, owner)` clears `run_owner` only when it is this
-      run's, and clears `settled` on a row that has no `run_owner`. `settle(thread_id, owner, settled, changed_at, first_message, agents_pending)`
+      run's, and clears `settled` on a row that has no `run_owner`. `settle(thread_id, seen_runs, settled, changed_at, first_message, agents_pending)`
       writes `paused`, `finished`, or `unfinished` and is refused, returning false, when a run
-      has started meanwhile. `open(thread_id, ...)` makes a settled row for a thread that has
+      has started since the row had `seen_runs` runs, also one that has ended again; it
+      leaves `run_owner` and drops a note older than `changed_at`. Text that a text column
+      does not take, a NUL character or a lone surrogate, is taken out before it is kept. `open(thread_id, ...)` makes a settled row for a thread that has
       none. `remove(thread_id)`. `request_stop(thread_id)` sets `stop_owner` to `run_owner`
       and returns the row, or None with no run; `stop_requested(thread_id, owner)` is true only
       while `stop_owner` equals that owner. `unsettled()` returns every row that ended and
@@ -138,13 +140,13 @@ origins on the thread routes.
       row with `settled = paused` first, then the others by `changed_at` descending, up to
       100 rows in all, and with 100 or more paused rows those and no other; `counts()`
       returns the number of paused rows and the total (data-model.md; FR-002, FR-005)
-- [ ] T004 Write `tests/test_thread_index.py`, part 2, `IndexedRunLocks`: every call is
+- [X] T004 Write `tests/test_thread_index.py`, part 2, `IndexedRunLocks`: every call is
       passed to the inner locks and its answer returned; `run_started` is written only when
       `acquire` returned true, and `run_ended` after `release`; an index whose write raises
       leaves the lease taken or released as the inner locks left it and logs a warning naming
       the thread; an attribute the wrapper does not define, such as the in-memory locks'
       `_rows`, is the inner object's; wrapping a wrapper wraps its inner locks once (R6)
-- [ ] T005 Write `tests/test_thread_index.py`, part 3, `status_of` and `settle_thread`:
+- [X] T005 Write `tests/test_thread_index.py`, part 3, `status_of` and `settle_thread`:
       the six statuses in the order of data-model.md "Status", `running` by the lease alone,
       whatever the row's `run_owner`, one case per row of that table
       and one per precedence (a proposal over a noted failure; a noted failure over
@@ -155,7 +157,7 @@ origins on the thread routes.
       type `human`, a non-text one kept as an empty string; `agents_pending` is true when
       `AgentTaskStore.list_tasks` holds a task that is `working` or `input_required`; a
       thread with no state has its row removed (R7; FR-003, FR-008)
-- [ ] T006 [P] Write `tests/test_thread_index_api.py`, `GET /threads` and
+- [X] T006 [P] Write `tests/test_thread_index_api.py`, `GET /threads` and
       `GET /threads/{thread_id}`, on apps assembled the production way (`make_mcp_app`,
       `make_a2a_app`). Runs through the existing routes give: `done` after a reply;
       `needs_decision` after a pause, and `done` again after its approval; `stopped` for a
@@ -175,11 +177,11 @@ origins on the thread routes.
       stand-in saw no request because of either route, and no thread's state changed. An
       index whose read raises answers 500 `internal` (contracts/openapi.yaml; FR-002 to
       FR-005, FR-023, SC-009, SC-010)
-- [ ] T007 Write `tests/integration/test_thread_index_postgres.py`, after T003, whose
+- [X] T007 Write `tests/integration/test_thread_index_postgres.py`, after T003, whose
       fixture it reuses: the store cases of T003 against `PostgresThreadIndex`, `setup()` run twice, two indexes on one database
       seeing each other's writes, and a late `settle` or `note` for an earlier owner changing
       nothing
-- [ ] T008 [P] Write `tests/test_threads_other_origins.py`: for `POST /threads/{id}/runs` and
+- [X] T008 [P] Write `tests/test_threads_other_origins.py`: for `POST /threads/{id}/runs` and
       `POST /threads/{id}/resume`, a request with `Sec-Fetch-Site: cross-site`, and one whose
       `Origin` differs from `X-Forwarded-Host`, is refused with 403 `other_origin` before a
       lease is taken (the thread is not `run_active`, no row is made); with `same-origin`,
@@ -190,52 +192,52 @@ origins on the thread routes.
 
 ### Implementation
 
-- [ ] T009 Create `src/freyja_agent/runtime/thread_index.py` with `ThreadRecord` (the fields
+- [X] T009 Create `src/freyja_agent/runtime/thread_index.py` with `ThreadRecord` (the fields
       of data-model.md "Thread record"), the `ThreadIndex` protocol with the methods T003
       names, the constants `FIRST_MESSAGE_LIMIT = 200`, `ERROR_MESSAGE_LIMIT = 2000`, and
       `LIST_LIMIT = 100`, and `InMemoryThreadIndex`. Every write that is for one run takes
       that run's owner and changes nothing when it is not the row's `run_owner`;
       `mark_unattended` is the exception T003 names
-- [ ] T010 Add `PostgresThreadIndex` to `src/freyja_agent/runtime/thread_index.py`: the table
+- [X] T010 Add `PostgresThreadIndex` to `src/freyja_agent/runtime/thread_index.py`: the table
       `freyja_threads` with the columns of data-model.md and the index
       `(settled, changed_at DESC)`, made by `setup()` with `CREATE TABLE IF NOT EXISTS`; each
       method one statement, so that two instances cannot interleave inside it; the
       conditions on `run_owner` in the statement's `WHERE`
-- [ ] T011 Add `IndexedRunLocks` to `src/freyja_agent/runtime/thread_index.py`: it holds the
+- [X] T011 Add `IndexedRunLocks` to `src/freyja_agent/runtime/thread_index.py`: it holds the
       inner `RunLocks` and the index, passes `setup`, `acquire`, `renew`, `release`, and
       `is_active` on, writes `run_started` and `run_ended` as T004 says inside a `try` that
       logs and goes on, and passes any other attribute to the inner object
-- [ ] T012 Add `status_of(record, lease_active)` and
-      `settle_thread(index, context, agent_tasks, locks, record)` to
+- [X] T012 Add `status_of(record, lease_active)` and
+      `settle_thread(index, context, agent_tasks, thread_id, seen_runs)`, with `open_thread`, to
       `src/freyja_agent/runtime/thread_index.py`, as T005 says. `settle_thread` reads the
       state with `context.agent.aget_state`, as `api/threads.py` does; `status_of` is given
       whether the thread's lease is held, read with `RunLocks.is_active`
-- [ ] T013 Change `src/freyja_agent/runtime/runtime.py`, in a block of its own: a field
+- [X] T013 Change `src/freyja_agent/runtime/runtime.py`, in a block of its own: a field
       `threads: ThreadIndex`, defaulting to an in-memory index; `assemble` takes
       `thread_index: ThreadIndex | None = None` and wraps the locks it was given in
       `IndexedRunLocks` before the runtime is made; `open` makes a `PostgresThreadIndex` on
       the pool, runs its `setup()`, and hands it over
-- [ ] T014 [P] Create `src/freyja_agent/api/thread_index_schemas.py`: `ThreadStatus`,
+- [X] T014 [P] Create `src/freyja_agent/api/thread_index_schemas.py`: `ThreadStatus`,
       `ThreadSummary`, `ThreadList`, and `StopAnswer` as in contracts/openapi.yaml
-- [ ] T015 Create `src/freyja_agent/api/thread_index.py`: the router with the prefix
+- [X] T015 Create `src/freyja_agent/api/thread_index.py`: the router with the prefix
       `/threads` and `dependencies=[Depends(refuse_other_origins("Threads"))]`;
       `GET /threads` and `GET /threads/{thread_id}`. Each takes a context with
       `runtime.begin_read()` and releases it, settles every row that needs it (all of them for
       the list; the one row for the row route, which also opens a thread the index does not
       know), reads the lease of each row it returns, and answers from the index. A failure of the index is logged and
       answered with 500 `internal`
-- [ ] T016 Change `src/freyja_agent/api/app.py` to include the new router after the thread
+- [X] T016 Change `src/freyja_agent/api/app.py` to include the new router after the thread
       router, and `src/freyja_agent/api/threads.py` to give its router
       `dependencies=[Depends(refuse_other_origins("Threads"))]`: one line each, plus the
       imports
-- [ ] T017 Write `tests/test_thread_index_nowhere.py`, part 1: with a saved LLM profile whose
+- [X] T017 Write `tests/test_thread_index_nowhere.py`, part 1: with a saved LLM profile whose
       key is recognizable (a value `.gitleaks.toml` lets through) and a saved agent on a
       recognizable port, run threads that finish, pause, and fail with a model error that
       repeats the key, and search every answer of `GET /threads` and `GET /threads/{id}` and
       the log for the key and, with `holds_port`, for the port. Reuse the helpers of
       `tests/test_llm_secrets_nowhere.py` and `tests/test_agents_address_nowhere.py` by
       import; change neither file (R10; FR-025, SC-008)
-- [ ] T018 Add to `README.md` ("Use the API") and `AGENTS.md` (Commands, Layout, Conventions)
+- [X] T018 Add to `README.md` ("Use the API") and `AGENTS.md` (Commands, Layout, Conventions)
       paragraphs of this feature's own for what Phase 2 added: the two routes, the table, the
       lease wrapper, the refusal of other origins on the thread routes, and the opt-in test
       database. Record in plan.md what was built differently from the plan

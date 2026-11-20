@@ -68,6 +68,14 @@ from freyja_agent.runtime.saved_agents import (
     SavedAgentStore,
 )
 
+# Feature 007: the index of threads, kept through the run lease.
+from freyja_agent.runtime.thread_index import (
+    IndexedRunLocks,
+    InMemoryThreadIndex,
+    PostgresThreadIndex,
+    ThreadIndex,
+)
+
 logger = logging.getLogger(__name__)
 
 # The two refusals of a card read that cannot start now (005 FR-014, research R15).
@@ -203,6 +211,9 @@ class Runtime:
     environment_secrets: tuple[str, ...] = ()
     checks: CheckSlots = field(default_factory=CheckSlots)
     environment_test: LastCheck | None = None
+    # Which threads have run and where each stands (feature 007, research R6). A runtime
+    # put together by hand has an index nothing writes to: its lease is not wrapped.
+    threads: ThreadIndex = field(default_factory=InMemoryThreadIndex)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -321,6 +332,7 @@ class Runtime:
         llm_profiles: LlmProfileStore | None = None,
         model_factory: ModelFactory | None = None,
         saved_agents: SavedAgentStore | None = None,
+        thread_index: ThreadIndex | None = None,
     ) -> AsyncIterator["Runtime"]:
         """Connect the tool servers and the agents, build the agent with their tools, and yield.
 
@@ -348,7 +360,13 @@ class Runtime:
         raises here; an agent whose card cannot be read or used no longer does (005 FR-018,
         FR-020). The orchestrator is built for the registry's set, and built again when the
         set changes.
+
+        Feature 007 keeps an index of threads: ``thread_index``, or one in memory. The
+        lease it is given is wrapped so that every run that takes it and gives it back is
+        told to the index, whoever starts the run (007 research R6).
         """
+        index = thread_index if thread_index is not None else InMemoryThreadIndex()
+        locks = IndexedRunLocks(locks, index)
         async with open_tool_servers(
             settings.mcp_servers,
             connect=connect,
@@ -459,6 +477,7 @@ class Runtime:
                     locks=locks,
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
+                    threads=index,
                 )
                 # At startup, each profile that is not usable, with the reason (FR-024).
                 if described.unusable_reason is not None:
@@ -515,6 +534,8 @@ class Runtime:
             await llm_profiles.setup()
             saved_agents = PostgresSavedAgentStore(persistence.pool)
             await saved_agents.setup()
+            thread_index = PostgresThreadIndex(persistence.pool)
+            await thread_index.setup()
             logger.info("Persistence ready: checkpointer, store, and run-lock table")
             async with cls.assemble(
                 settings,
@@ -528,6 +549,7 @@ class Runtime:
                 agent_transport=agent_transport,
                 llm_profiles=llm_profiles,
                 saved_agents=saved_agents,
+                thread_index=thread_index,
             ) as runtime:
                 yield runtime
         finally:
