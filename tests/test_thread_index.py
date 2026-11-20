@@ -100,8 +100,8 @@ async def test_a_row_is_made_when_a_run_starts_and_cleared_for_the_next_one(
     assert first.first_message is None
     assert first.created_at == first.changed_at
 
-    await index.mark_unattended("t-1", "Do it.")
-    assert await index.request_stop("t-1") is not None
+    assert await index.mark_unattended("t-1", A, "Do it.") is True
+    assert await index.request_stop("t-1", A) is not None
     await index.run_ended("t-1", A)
     assert first.runs == 1
     assert await index.settle(
@@ -120,16 +120,37 @@ async def test_a_row_is_made_when_a_run_starts_and_cleared_for_the_next_one(
 
 async def test_the_first_message_is_kept_once_and_cut(index: ThreadIndex) -> None:
     await index.run_started("t-1", A)
-    await index.mark_unattended("t-1", "x" * (FIRST_MESSAGE_LIMIT + 50))
+    await index.mark_unattended("t-1", A, "x" * (FIRST_MESSAGE_LIMIT + 50))
     assert (await row(index, "t-1")).first_message == "x" * FIRST_MESSAGE_LIMIT
     assert (await row(index, "t-1")).run_unattended is True
 
-    await index.mark_unattended("t-1", "another")
+    await index.mark_unattended("t-1", A, "another")
     assert (await row(index, "t-1")).first_message == "x" * FIRST_MESSAGE_LIMIT
 
     # A thread nobody ran is not made by the mark.
-    await index.mark_unattended("never-ran", "hello")
+    assert await index.mark_unattended("never-ran", A, "hello") is False
     assert await index.get("never-ran") is None
+
+
+async def test_a_follow_up_is_never_kept_as_the_first_message(index: ThreadIndex) -> None:
+    # The thread's first run went the earlier way and was not looked at yet: the row does
+    # not know how the thread began. A follow-up through the console is not how it began.
+    await index.run_started("t-1", A)
+    await index.run_ended("t-1", A)
+    await index.run_started("t-1", B)
+    assert await index.mark_unattended("t-1", B, "And another thing.") is True
+    marked = await row(index, "t-1")
+    assert (marked.first_message, marked.run_unattended) == (None, True)
+
+
+async def test_a_late_mark_never_makes_a_later_run_a_console_run(index: ThreadIndex) -> None:
+    await index.run_started("t-1", A)
+    await index.run_ended("t-1", A)
+    # The next run, another client's, holds the row when the first run's mark lands.
+    await index.run_started("t-1", B)
+    assert await index.mark_unattended("t-1", A, "Do it.") is False
+    assert (await row(index, "t-1")).run_unattended is False
+    assert await index.request_stop("t-1", B) is None
 
 
 async def test_a_note_is_kept_only_for_the_run_it_is_for(index: ThreadIndex) -> None:
@@ -260,7 +281,7 @@ async def test_text_that_a_column_does_not_take_is_cleaned_before_it_is_kept(
     # encoded. A person can send both in a message; the row must still be written.
     nul, surrogate = "a\x00b", "c\ud800d"
     await index.run_started("marked", A)
-    await index.mark_unattended("marked", nul + surrogate)
+    await index.mark_unattended("marked", A, nul + surrogate)
     assert (await row(index, "marked")).first_message == "abc?d"
     assert await index.note("marked", A, "failed", "model_error", nul + surrogate, at=AT)
     assert (await row(index, "marked")).error_message == "abc?d"
@@ -329,20 +350,26 @@ async def test_a_row_is_opened_once_and_removed_only_while_no_run_started(
 
 
 async def test_a_stop_is_marked_for_the_run_in_progress_only(index: ThreadIndex) -> None:
-    assert await index.request_stop("no-such-thread") is None
+    assert await index.request_stop("no-such-thread", A) is None
     await index.run_started("t-1", A)
+    # Only a console run can be stopped.
+    assert await index.request_stop("t-1", A) is None
+    await index.mark_unattended("t-1", A, "Do it.")
     assert await index.stop_requested("t-1", A) is False
 
-    marked = await index.request_stop("t-1")
+    marked = await index.request_stop("t-1", A)
     assert marked is not None and marked.stop_owner == A
     assert await index.stop_requested("t-1", A) is True
     assert await index.stop_requested("t-1", B) is False
     # Asked again, it is the same mark.
-    assert (await index.request_stop("t-1")) == marked
+    assert (await index.request_stop("t-1", A)) == marked
 
     await index.run_ended("t-1", A)
-    assert await index.request_stop("t-1") is None
+    assert await index.request_stop("t-1", A) is None
     await index.run_started("t-1", B)
+    await index.mark_unattended("t-1", B, None)
+    # A stop asked for the run that ended does not land on the next one.
+    assert await index.request_stop("t-1", A) is None
     assert await index.stop_requested("t-1", B) is False
     assert await index.stop_requested("t-1", A) is False
 

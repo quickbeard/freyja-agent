@@ -11,7 +11,7 @@ This feature changes nothing in the streams of `POST /threads/{thread_id}/runs` 
 `POST /threads/{thread_id}/resume`. It adds two routes that answer with the same stream,
 `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`
 ([openapi.yaml](openapi.yaml)). Their events are the existing ones, made by the same code.
-Five things differ, and all five are about these two routes only.
+Six things differ, and all six are about these two routes only.
 
 ## The run does not depend on the stream
 
@@ -63,3 +63,11 @@ two pings fall inside every such window.
 A run through these routes reports `step_limit` at the last pause between steps inside
 `FREYJA_MAX_STEPS`, which can be up to two steps earlier than the same run through the
 existing routes. The limit is never exceeded (research R4).
+
+## Debug events
+
+With `?debug=true`, a run through these routes sends one more `debug` event of type
+`checkpoint` at each pause between two steps, where the run is cut into segments (research
+R4): for a run with one tool call, 35 debug events where the existing route sends 32. The
+other events are the same. Debug events never change the run and are not part of what the
+console reads.

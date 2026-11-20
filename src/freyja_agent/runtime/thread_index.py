@@ -112,9 +112,10 @@ class ThreadIndex(Protocol):
     async def run_started(self, thread_id: str, owner: str) -> None:
         """A run took the thread's lease: make the row if it is missing, and start it over."""
 
-    async def mark_unattended(self, thread_id: str, first_message: str) -> None:
-        """The run in progress goes on without a reader. Called while that run holds the
-        thread's lease, so it names no owner."""
+    async def mark_unattended(self, thread_id: str, owner: str, first_message: str | None) -> bool:
+        """The run of ``owner`` goes on without a reader; False when the row has moved on to
+        another run. ``first_message`` fills a row that has none, and only at the thread's
+        first run: a follow-up's text is not the thread's first message."""
 
     async def note(
         self,
@@ -164,8 +165,10 @@ class ThreadIndex(Protocol):
     async def remove(self, thread_id: str, seen_runs: int) -> bool:
         """Forget a thread that has no state, unless a run has started meanwhile."""
 
-    async def request_stop(self, thread_id: str) -> ThreadRecord | None:
-        """Mark the run in progress to be stopped. None when the row names no run."""
+    async def request_stop(self, thread_id: str, owner: str) -> ThreadRecord | None:
+        """Mark the console run of ``owner`` to be stopped. None when the row has moved on
+        to another run, or its run is not a console run: a stop asked for a run that has just
+        ended must not land on the next one."""
 
     async def stop_requested(self, thread_id: str, owner: str) -> bool: ...
 
@@ -208,14 +211,15 @@ class InMemoryThreadIndex:
             settled=None,
         )
 
-    async def mark_unattended(self, thread_id: str, first_message: str) -> None:
+    async def mark_unattended(self, thread_id: str, owner: str, first_message: str | None) -> bool:
         row = self._rows.get(thread_id)
-        if row is None:
-            return
+        if row is None or row.run_owner != owner:
+            return False
         kept = row.first_message
-        if kept is None:
+        if kept is None and row.runs == 1:
             kept = _cut(first_message, FIRST_MESSAGE_LIMIT)
         self._rows[thread_id] = replace(row, run_unattended=True, first_message=kept)
+        return True
 
     async def note(
         self,
@@ -304,9 +308,9 @@ class InMemoryThreadIndex:
         del self._rows[thread_id]
         return True
 
-    async def request_stop(self, thread_id: str) -> ThreadRecord | None:
+    async def request_stop(self, thread_id: str, owner: str) -> ThreadRecord | None:
         row = self._rows.get(thread_id)
-        if row is None or row.run_owner is None:
+        if row is None or row.run_owner != owner or not row.run_unattended:
             return None
         self._rows[thread_id] = replace(row, stop_owner=row.run_owner)
         return self._rows[thread_id]
@@ -374,8 +378,9 @@ ON CONFLICT (thread_id) DO UPDATE
 _MARK_UNATTENDED = """
 UPDATE freyja_threads
    SET run_unattended = true,
-       first_message = COALESCE(first_message, %(first_message)s)
- WHERE thread_id = %(thread_id)s
+       first_message = CASE WHEN runs = 1 THEN COALESCE(first_message, %(first_message)s)
+                            ELSE first_message END
+ WHERE thread_id = %(thread_id)s AND run_owner = %(owner)s
 """
 
 _NOTE = """
@@ -424,7 +429,7 @@ DELETE FROM freyja_threads
 _REQUEST_STOP = """
 UPDATE freyja_threads
    SET stop_owner = run_owner
- WHERE thread_id = %(thread_id)s AND run_owner IS NOT NULL
+ WHERE thread_id = %(thread_id)s AND run_owner = %(owner)s AND run_unattended
 RETURNING *
 """
 
@@ -503,11 +508,13 @@ class PostgresThreadIndex:
     async def run_started(self, thread_id: str, owner: str) -> None:
         await self._execute(_RUN_STARTED, {"thread_id": thread_id, "owner": owner})
 
-    async def mark_unattended(self, thread_id: str, first_message: str) -> None:
-        await self._execute(
-            _MARK_UNATTENDED,
-            {"thread_id": thread_id, "first_message": _cut(first_message, FIRST_MESSAGE_LIMIT)},
-        )
+    async def mark_unattended(self, thread_id: str, owner: str, first_message: str | None) -> bool:
+        params = {
+            "thread_id": thread_id,
+            "owner": owner,
+            "first_message": _cut(first_message, FIRST_MESSAGE_LIMIT),
+        }
+        return await self._execute(_MARK_UNATTENDED, params) == 1
 
     async def note(
         self,
@@ -578,8 +585,8 @@ class PostgresThreadIndex:
         params = {"thread_id": thread_id, "seen_runs": seen_runs}
         return await self._execute(_REMOVE, params) == 1
 
-    async def request_stop(self, thread_id: str) -> ThreadRecord | None:
-        rows = await self._rows(_REQUEST_STOP, {"thread_id": thread_id})
+    async def request_stop(self, thread_id: str, owner: str) -> ThreadRecord | None:
+        rows = await self._rows(_REQUEST_STOP, {"thread_id": thread_id, "owner": owner})
         return _record(rows[0]) if rows else None
 
     async def stop_requested(self, thread_id: str, owner: str) -> bool:

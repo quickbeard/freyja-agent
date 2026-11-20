@@ -34,6 +34,7 @@ from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore, SavedAgentRecord
+from freyja_agent.runtime.thread_index import ThreadIndex
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
 from tests.asgi_stream import StreamingASGITransport
@@ -168,6 +169,8 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
         saver: InMemorySaver | None = None,
         store: InMemoryStore | None = None,
         locks: InMemoryRunLocks | None = None,
+        # Feature 007: an index shared with an earlier app, for a second instance.
+        thread_index: ThreadIndex | None = None,
         **overrides: Any,
     ) -> McpApp:
         settings = Settings(workspace_dir=str(workspace), mcp_servers=servers, **overrides)
@@ -192,6 +195,7 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
                 instance_id=instance_id,
                 connect=connect,
                 run_worker=False,
+                thread_index=thread_index,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime

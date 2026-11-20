@@ -5,18 +5,25 @@ differs. Times a test does not give come from the database here.
 """
 
 from collections.abc import AsyncIterator
+from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 from psycopg_pool import AsyncConnectionPool
 
+from freyja_agent.api.app import create_app
 from freyja_agent.config import Settings
 from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import PostgresThreadIndex, ThreadIndex
+from tests.fakes import LabelledChatModel, ScriptedChatModel
 from tests.test_thread_index import (
     AT,
     A,
     B,
     row,
+    test_a_follow_up_is_never_kept_as_the_first_message,
+    test_a_late_mark_never_makes_a_later_run_a_console_run,
     test_a_late_write_for_an_earlier_run_changes_nothing,
     test_a_note_is_kept_only_for_the_run_it_is_for,
     test_a_note_is_kept_until_a_later_run_records_a_step,
@@ -30,9 +37,13 @@ from tests.test_thread_index import (
     test_the_list_puts_paused_rows_first_and_stops_at_the_limit,
     test_unsettled_rows_are_the_ones_nobody_looked_at,
 )
+from tests.test_thread_index_nowhere import ls_call
+from tests.unattended_helpers import Reader, idle
 
 # The contract's tests, collected here against Postgres.
 __all__ = [
+    "test_a_follow_up_is_never_kept_as_the_first_message",
+    "test_a_late_mark_never_makes_a_later_run_a_console_run",
     "test_a_late_write_for_an_earlier_run_changes_nothing",
     "test_a_note_is_kept_only_for_the_run_it_is_for",
     "test_a_note_is_kept_until_a_later_run_records_a_step",
@@ -85,8 +96,8 @@ async def test_two_instances_on_one_database_see_each_others_writes(
 
         # A run on one instance; the other marks it to be stopped and reads the mark back.
         await here.run_started("t-1", A)
-        await here.mark_unattended("t-1", "Do it.")
-        marked = await there.request_stop("t-1")
+        await here.mark_unattended("t-1", A, "Do it.")
+        marked = await there.request_stop("t-1", A)
         assert marked is not None and marked.stop_owner == A
         assert await here.stop_requested("t-1", A) is True
 
@@ -119,3 +130,32 @@ async def test_two_instances_on_one_database_see_each_others_writes(
         assert (after.noted, after.settled, after.runs) == (None, None, seen + 1)
     finally:
         await other.close()
+
+
+def test_a_console_run_on_one_instance_is_stopped_through_another(settings: Settings) -> None:
+    """Phase 3, T025: the stop is a mark in the shared table, read between two steps."""
+    model = LabelledChatModel(script=[ls_call("l1")], final_text="Listed.")
+
+    def service(chat: Any, instance_id: str) -> Any:
+        return create_app(
+            open_runtime=lambda _s: Runtime.open(settings, model=chat, instance_id=instance_id)
+        )
+
+    with (
+        TestClient(service(model, "instance-a")) as first,
+        TestClient(service(ScriptedChatModel(), "instance-b")) as second,
+    ):
+        model.hold()
+        reader = Reader(first, "/threads/pg-stop/runs/unattended", {"message": "List."})
+        reader.start()
+        with model.held():
+            asked = second.post("/threads/pg-stop/stop")
+            assert asked.status_code == 202, asked.text
+            assert second.get("/threads/pg-stop").json()["stopping"] is True
+        events = reader.finish()
+        idle(first, "pg-stop")
+        after = second.get("/threads/pg-stop").json()
+
+    assert events[-1] == ("end", {"status": "stopped"})
+    assert after["status"] == "stopped"
+    assert model.calls == 1

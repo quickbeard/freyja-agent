@@ -65,9 +65,10 @@ Index: `(settled, changed_at DESC)`, for the list's order and the count of pause
   `run_unattended` is false, and `changed_at` is now. The note of an earlier run stays: a
   request that took the lease and was refused, such as a resume with nothing pending, is no
   run, and must not wipe how the last run ended.
-- **Marked unattended** (the unattended routes, once the existing handler has accepted the
-  run): `run_unattended` is true, and `first_message` is filled from the request when the row
-  has none.
+- **Marked unattended** (`UnattendedRuns`, at the run's first event, which names its owner):
+  `run_unattended` is true, for that owner's run only, and `first_message` is filled from the
+  request when the row has none and this is the thread's first run (`runs = 1`), so that a
+  follow-up's text is never kept as the first message.
 - **Noted** (`UnattendedRuns`, at the run's last event): `noted` and the error, for a run
   that ended with `error` or was stopped.
 - **Lease given back** (`IndexedRunLocks.release`): `run_owner` is cleared when it is this
@@ -94,10 +95,10 @@ A row with no `settled` and no lease held has no status, and none is shown for i
 routes settle it within the request, look again when a run started or ended meanwhile, and
 leave the row out of the answer when that does not succeed.
 
-Every write that is for one run names the `run_owner` it is for, except the mark that a run
-is a console run, which is written while that run holds the thread's lease. So a late write
-for an earlier run changes
-nothing of a later one.
+Every write that is for one run names the `run_owner` it is for: the mark that a run is a
+console run, its note, and a stop, which names the run the stop route read and is refused
+for a run that is not a console run. So a late write for an earlier run changes nothing of a
+later one.
 
 ### Several instances
 
