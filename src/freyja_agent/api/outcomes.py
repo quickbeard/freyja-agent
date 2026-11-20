@@ -94,15 +94,20 @@ async def take_undelivered(
     waiting: list[AgentTaskRecord] = []
     for task in await store.ready_outcomes(thread_id):
         if outcome_id(task) in recorded:
-            await store.mark_delivered(task.agent, task.task_id)
+            await store.mark_delivered(task.agent, task.task_id, task.outcome)
         else:
             waiting.append(task)
     return outcome_messages(waiting), waiting
 
 
 async def mark_delivered(store: AgentTaskStore, tasks: Sequence[AgentTaskRecord]) -> None:
+    """Record that each task's outcome, as it was when the run took it, is in its thread.
+
+    A task whose outcome changed since, such as one given up when its agent was moved or
+    removed, is left as it is: its new outcome is still to be delivered (005 FR-024).
+    """
     for task in tasks:
-        await store.mark_delivered(task.agent, task.task_id)
+        await store.mark_delivered(task.agent, task.task_id, task.outcome)
 
 
 async def answer_in_flight(

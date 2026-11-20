@@ -32,7 +32,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from freyja_agent.delegates import delegation_worker
 from freyja_agent.runtime.agent_tasks import AgentTaskRecord, ProposedCall
-from tests.a2a_stub import make_stub, stub_card
+from tests.a2a_stub import StubAgent, make_stub, stub_card
 from tests.conftest import A2aApp, saved_card
 from tests.fakes import FakeClock, LabelledChatModel, ScriptedChatModel
 from tests.test_a2a_background import RETRY, FlakyChatModel, follow_up, ready_outcome, retry_app
@@ -1406,3 +1406,267 @@ def test_a_call_proposed_as_needing_a_decision_is_not_sent_by_a_tool_that_waits_
     (result,) = results(model, "handoff_to_helper")
     assert result.content == NOW_REQUIRES.format(agent="helper")
     assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+# Part 3 (Phase 8): removing and moving, through the routes.
+
+ELSEWHERE = (
+    "Agent '{agent}': the address this run started with is another agent's now; nothing was sent."
+)
+
+
+def helper_of(client: TestClient) -> dict[str, Any]:
+    (agent,) = [a for a in client.get("/agents").json()["agents"] if a["name"] == "helper"]
+    return agent
+
+
+def remove_helper(client: TestClient) -> None:
+    agent = helper_of(client)
+    response = client.delete(f"/agents/{agent['id']}", params={"version": agent["version"]})
+    assert response.status_code == 200, response.text
+
+
+def move_helper(client: TestClient, made: A2aApp, url: str = OTHER_URL) -> StubAgent:
+    """Move `helper` through the route to a stand-in of its own at ``url``."""
+    there = make_stub("helper")
+    made.add_stub(url, there)
+    agent = helper_of(client)
+    response = client.patch(
+        f"/agents/{agent['id']}", json={"version": agent["version"], "url": url}
+    )
+    assert response.status_code == 200, response.text
+    return there
+
+
+class InTheTool:
+    """Holds an agent's tool where it is about to look at its call's row: after its run, or
+    its continuation, began, and before anything is checked or sent. The event loop stays
+    free, so a request made meanwhile is served."""
+
+    def __init__(self, made: A2aApp, monkeypatch: pytest.MonkeyPatch) -> None:
+        self.reached = threading.Event()
+        self.release = threading.Event()
+        get_call = made.store.get_call
+
+        async def waiting(*args: Any) -> Any:
+            if not self.reached.is_set():
+                self.reached.set()
+                await asyncio.get_running_loop().run_in_executor(None, self.release.wait, 10)
+            return await get_call(*args)
+
+        monkeypatch.setattr(made.store, "get_call", waiting)
+
+    def during(self, work: Callable[[], Any], then: Callable[[], Any]) -> Any:
+        """Run ``work`` in a thread; once its tool waits, do ``then`` and let it go on."""
+        result: dict[str, Any] = {}
+        running = threading.Thread(target=lambda: result.update(value=work()))
+        running.start()
+        try:
+            assert self.reached.wait(10), "no tool reached its check"
+            then()
+        finally:
+            self.release.set()
+        running.join(10)
+        assert not running.is_alive()
+        return result["value"]
+
+
+def test_after_a_removal_the_next_run_has_neither_of_the_agent_s_tools(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    with TestClient(made.app) as client:
+        before = set(tools(client))
+        remove_helper(client)
+        after = set(tools(client))
+        events = run(client, "q-1", sse_events)
+
+    assert {"handoff_to_helper", "cancel_helper_task"} <= before
+    assert not {"handoff_to_helper", "cancel_helper_task"} & after
+    (result,) = tool_results(events, "handoff_to_helper")
+    assert "not a valid tool" in result["content"]
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+@pytest.mark.parametrize("read_only", [True, False])
+def test_a_run_under_way_when_its_agent_is_removed_through_the_route_sends_nothing(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    read_only: bool,
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": read_only}})
+    transport = made.transport_at(SAVED_URL)
+    with TestClient(made.app) as client:
+        if read_only:
+            # The run started while the agent ran without approval.
+            tool = InTheTool(made, monkeypatch)
+            events = tool.during(
+                lambda: run(client, "q-2", sse_events), lambda: remove_helper(client)
+            )
+        else:
+            # A person approved the hand-off, and its continuation began before the removal.
+            interrupted(run(client, "q-2", sse_events))
+            tool = InTheTool(made, monkeypatch)
+            events = tool.during(
+                lambda: resume(client, "q-2", [{"type": "approve"}], sse_events),
+                lambda: remove_helper(client),
+            )
+        at_the_removal = list(transport.requests)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    (result,) = results(model, "handoff_to_helper")
+    assert (result.status, result.content) == ("error", REMOVED.format(agent="helper"))
+    # By the stand-in's record nothing of any kind reached it once the removal was answered.
+    assert sent(transport) == 0 and transport.requests == at_the_removal
+    record = made.stub_at(SAVED_URL).record
+    assert record.messages == [] and record.cancels == []
+
+
+@pytest.mark.parametrize("decision", ["approve", "reject"])
+def test_a_paused_proposal_decided_after_its_agent_was_removed_is_never_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, decision: str
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)], final_text="That agent is gone.")
+    made = make_a2a_app(model, {}, saved=HELPER)
+    decisions = {"approve": {"type": "approve"}, "reject": {"type": "reject", "message": "no"}}
+    with TestClient(made.app) as client:
+        proposal = interrupted(run(client, "q-3", sse_events))
+        remove_helper(client)
+        now = pending(client, "q-3")
+        events = resume(client, "q-3", [decisions[decision]], sse_events)
+
+    assert now["interrupt_id"] == proposal["interrupt_id"]
+    (action,) = now["action_requests"]
+    # No agent has the tool any more: the proposal can be approved or rejected, and either
+    # way nothing is sent.
+    assert (action["agent"], action["allowed_decisions"]) == (None, ["approve", "reject"])
+    assert events[-1] == ("end", {"status": "completed"})
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+@pytest.mark.parametrize(
+    ("approval", "decision"),
+    [("required", "approve"), ("required", "reject"), ("none", "approve")],
+)
+def test_a_proposal_for_a_removed_agent_is_not_sent_to_one_added_under_its_name_by_the_route(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, approval: str, decision: str
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)], final_text="Understood.")
+    made = make_a2a_app(model, {}, saved=HELPER)
+    again = make_stub("helper")
+    decisions = {"approve": {"type": "approve"}, "reject": {"type": "reject", "message": "no"}}
+    with TestClient(made.app) as client:
+        interrupted(run(client, "q-4", sse_events))
+        remove_helper(client)
+        made.add_stub(OTHER_URL, again)
+        added = client.post(
+            "/agents", json={"name": "helper", "url": OTHER_URL, "approval": approval}
+        )
+        assert added.status_code == 201, added.text
+        (action,) = pending(client, "q-4")["action_requests"]
+        events = resume(client, "q-4", [decisions[decision]], sse_events)
+
+    # The proposal accepts what the tool under that name allows now.
+    allowed = ["approve", "edit", "reject"] if approval == "required" else ["approve"]
+    assert (action["agent"], action["allowed_decisions"]) == ("helper", allowed)
+    assert events[-1] == ("end", {"status": "completed"})
+    # Whatever is decided, nothing is sent: not to the agent that was removed, and not to
+    # the one that has its name.
+    assert sent(made.transport_at(SAVED_URL)) == 0 and again.record.messages == []
+    if decision == "approve":
+        (result,) = results(model, "handoff_to_helper")
+        assert result.content == KEPT_BACK.format(agent="helper")
+
+
+def test_a_paused_proposal_approved_after_its_agent_was_moved_goes_to_the_current_address(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(ScriptedChatModel(script=[propose(TO_HELPER)]), {}, saved=HELPER)
+    with TestClient(made.app) as client:
+        proposal = interrupted(run(client, "q-5", sse_events))
+        there = move_helper(client, made)
+        now = pending(client, "q-5")
+        events = resume(client, "q-5", [{"type": "approve"}], sse_events)
+
+    assert now["interrupt_id"] == proposal["interrupt_id"]
+    assert now["action_requests"][0]["allowed_decisions"] == ["approve", "edit", "reject"]
+    assert events[-1] == ("end", {"status": "completed"})
+    # The proposal names its agent, never an address: it went where the agent is now.
+    assert [message.text for message in there.record.messages] == ["Summarize the week."]
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+@pytest.mark.parametrize("taken", [False, True])
+def test_a_run_in_progress_finishes_at_its_address_unless_that_is_another_agent_s_now(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    taken: bool,
+) -> None:
+    model = LabelledChatModel(script=[handoff("From the run in progress.", agent="helper")])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    first = made.stub_at(SAVED_URL)
+    streamed: dict[str, Events] = {}
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        model.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "q-6", sse_events))
+        )
+        running.start()
+        with model.held():
+            # The run has reached its model, with the tool of the first address.
+            there = move_helper(client, made)
+            if taken:
+                # Another agent, which requires approval, is saved where this one was.
+                added = client.post("/agents", json={"name": "other", "url": SAVED_URL})
+                assert added.status_code == 201, added.text
+            before = sent(made.transport_at(SAVED_URL))
+        running.join(10)
+        assert not running.is_alive()
+
+    events = streamed["events"]
+    assert events[-1] == ("end", {"status": "completed"})
+    (result,) = tool_results(events, "handoff_to_helper")
+    assert there.record.messages == []
+    if taken:
+        # Nothing reaches an address that has become another agent's, unseen.
+        sentence = ELSEWHERE.format(agent="helper")
+        assert result["content"] == sentence
+        assert first.record.messages == [] and sent(made.transport_at(SAVED_URL)) == before
+        assert kept_back_lines(caplog) == [f"Agent helper: {sentence}"]
+    else:
+        # The run finished at the address it started with.
+        assert result["content"].startswith("Agent 'helper' completed task ")
+        assert [message.text for message in first.record.messages] == ["From the run in progress."]
+
+
+def test_an_approved_continuation_sends_nothing_to_an_address_that_became_another_agent_s(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved=HELPER)
+    first = made.stub_at(SAVED_URL)
+    moved: dict[str, StubAgent] = {}
+
+    def moved_and_taken() -> None:
+        moved["there"] = move_helper(client, made)
+        added = client.post("/agents", json={"name": "other", "url": SAVED_URL})
+        assert added.status_code == 201, added.text
+
+    with TestClient(made.app) as client:
+        interrupted(run(client, "q-7", sse_events))
+        # A person approved the hand-off. Its continuation has begun, with the tool of the
+        # first address, when the agent is moved and another is saved where it was.
+        tool = InTheTool(made, monkeypatch)
+        events = tool.during(
+            lambda: resume(client, "q-7", [{"type": "approve"}], sse_events), moved_and_taken
+        )
+
+    assert events[-1] == ("end", {"status": "completed"})
+    (result,) = results(model, "handoff_to_helper")
+    assert result.content == ELSEWHERE.format(agent="helper")
+    assert first.record.messages == [] and moved["there"].record.messages == []

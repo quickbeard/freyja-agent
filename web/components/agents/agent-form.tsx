@@ -125,19 +125,45 @@ function described(id: string, error?: string) {
 }
 
 /**
- * What confirming means (FR-011). It names the agent, and for a saved agent shows it as the
- * list has it at that moment. Every value is a text node.
+ * How many of the agent's tasks are pending and what a move does with them (FR-011, FR-024):
+ * as the list has it now, or as the form opened while the list is not known.
+ */
+function pendingMeans(name: string, count: number, fromList: boolean): string {
+  if (!fromList) {
+    const had =
+      count === 0
+        ? "no pending task"
+        : count === 1
+          ? "1 pending task"
+          : `${count} pending tasks`;
+    return `${name} had ${had} when this form opened. Every task that is pending when the change is made will be given up.`;
+  }
+  if (count === 0) {
+    return `${name} has no pending task now, so none will be given up.`;
+  }
+  if (count === 1) {
+    return `${name} has 1 pending task now, and it will be given up: Freyja stops waiting for it and tells its thread. No cancel is sent.`;
+  }
+  return `${name} has ${count} pending tasks now, and they will be given up: Freyja stops waiting for them and tells their threads. No cancel is sent.`;
+}
+
+/**
+ * What confirming means (FR-011). It names the agent, says what each change means, and for
+ * a saved agent shows it as the list has it at that moment. Every value is a text node.
  */
 function Confirmation({
   name,
   to,
+  movedTo,
   listed,
   fromList,
   noticeRef,
 }: {
   name: string;
-  /** The choice that is about to be saved. */
-  to: Approval;
+  /** The choice that is about to be saved; none when the choice is not being changed. */
+  to?: Approval;
+  /** The address a saved agent is about to be moved to; none when it stays where it is. */
+  movedTo?: string;
   /** The saved agent that is being changed, as it is shown; none when adding. */
   listed?: Agent;
   /** Whether `listed` is the list's copy, or the form's own while the list is not known. */
@@ -152,6 +178,17 @@ function Confirmation({
       tabIndex={-1}
       className="grid gap-2 break-words rounded-lg border border-amber-500/50 p-3 text-sm outline-none"
     >
+      {listed !== undefined && movedTo !== undefined && (
+        <>
+          <p>
+            Move {name} to {movedTo}? The change applies from the next run: a
+            run in progress finishes at the earlier address. A proposal for{" "}
+            {name} that is already waiting for a decision will go to the new
+            address once approved.
+          </p>
+          <p>{pendingMeans(name, listed.pending_tasks, fromList)}</p>
+        </>
+      )}
       {listed === undefined ? (
         <p>
           Add {name} to run without approval? Nothing Freyja sends to {name}{" "}
@@ -164,14 +201,14 @@ function Confirmation({
           {name} that is already waiting for a decision can then only be
           approved.
         </p>
-      ) : (
+      ) : to === "required" ? (
         <p>
           Require approval for {name}? This holds at once, also for runs in
           progress. A paused step that holds a message to {name} that needed no
           approval cannot be continued until the choice is changed back or the
           agent is removed.
         </p>
-      )}
+      ) : null}
       {listed !== undefined && (
         <p className="text-muted-foreground">
           {fromList
@@ -193,6 +230,7 @@ function Fields({
   onSaved,
   onUnknown,
   onStale,
+  onMoved,
 }: {
   /** The saved agent this form changes; none for a form that adds one. */
   agent?: Agent;
@@ -206,6 +244,8 @@ function Fields({
   onSaved: (agent: Agent, shown: boolean) => void;
   onUnknown: () => void;
   onStale?: () => void;
+  /** Told that the agent has another address now, and how many tasks that gave up. */
+  onMoved?: (agent: Agent, givenUp: number) => void;
 }) {
   const id = useId();
   // The agent as it was when this form opened. Its fields are filled from it once, and the
@@ -247,6 +287,10 @@ function Fields({
   // is taken back. What the form learned this way it keeps until it is closed: a later
   // reading of the list that fails makes the list unknown, not the agent as it was.
   const [found, setFound] = useState<"gone" | "later" | null>(null);
+  // A change asked from this form got no answer. When the list then shows the agent at a
+  // later version, that request may be what changed it: the form does not say that the
+  // agent was changed elsewhere.
+  const [unanswered, setUnanswered] = useState(false);
   const seen =
     opened === undefined || live === undefined
       ? null
@@ -276,6 +320,7 @@ function Fields({
     return (value: string) => {
       set(value);
       setConfirming(false);
+      setUnchanged(false);
       setErrors(({ [field]: _gone, ...rest }) => rest);
     };
   }
@@ -284,6 +329,11 @@ function Fields({
     setApproval(value);
     setConfirming(false);
     setUnchanged(false);
+  }
+
+  /** The field a refusal is said at: a saved agent's name is not this form's to change. */
+  function shownField(field: FieldName | undefined): FieldName | undefined {
+    return opened !== undefined && field === "name" ? undefined : field;
   }
 
   /** What went wrong with the request, put where it belongs: at a field, or over the form. */
@@ -296,6 +346,7 @@ function Fields({
     if (!answered) {
       // No answer came back. The list is what says whether the agent is there, and how.
       onUnknown();
+      if (shown.current) setUnanswered(true);
     } else if (notAsItWas) {
       // The service says the agent is not what this form has: the list says what it is.
       onStale?.();
@@ -313,15 +364,14 @@ function Fields({
           : OUTCOME_NOT_KNOWN.changed;
     } else if (error.code === "invalid") {
       for (const { field, message } of error.fields) {
-        // A saved agent's name and address are not this form's to change.
-        const at = opened === undefined ? FIELD_OF[field] : undefined;
+        const at = shownField(FIELD_OF[field]);
         if (at) {
           told[at] = message;
         } else {
           other = message;
         }
       }
-    } else if (opened === undefined && FIELD_OF_CODE[error.code]) {
+    } else if (shownField(FIELD_OF_CODE[error.code])) {
       told[FIELD_OF_CODE[error.code]] = error.message;
     } else {
       // The service's own sentence: the agent cannot be used, the limit, a busy instance,
@@ -345,12 +395,26 @@ function Fields({
     return Object.keys(found).length > 0 ? null : values;
   }
 
+  // What a saved agent's form would change: its address, when what is typed is another
+  // than the one the form opened with, and its approval choice. What surrounds a typed
+  // address, as a pasted one may have, is not part of it.
+  const typed = url.trim();
+  const movedTo =
+    opened !== undefined && typed !== opened.url ? typed : undefined;
+  const choice =
+    opened !== undefined && approval !== opened.approval ? approval : undefined;
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (inFlight.current || stale) return;
     if (opened !== undefined) {
       setRefusal(null);
-      if (approval === opened.approval) {
+      if (typed === "") {
+        setErrors({ url: "Enter the address." });
+        return;
+      }
+      setErrors({});
+      if (movedTo === undefined && choice === undefined) {
         // Nothing is sent for nothing.
         setUnchanged(true);
         return;
@@ -375,13 +439,20 @@ function Fields({
     // place. That was not a decision; a press of its own is.
     if (event.detail > 1 || inFlight.current || stale) return;
     if (opened !== undefined) {
-      // The version the fields were filled from, and only the value that changed.
-      const { id: agentId, version } = opened;
+      // The version the fields were filled from, and only the values that changed.
+      const { id: agentId, version, url: from } = opened;
       await send(async () => {
         const answer = await changeAgent(agentId, {
           version: version ?? 0,
-          approval,
+          ...(movedTo === undefined ? {} : { url: movedTo }),
+          ...(choice === undefined ? {} : { approval: choice }),
         });
+        if (answer.agent.url !== from) {
+          // The agent has another address now: its pending tasks were given up, and whoever
+          // holds the list says how many. An address that is the saved one in another
+          // spelling moved nothing.
+          onMoved?.(answer.agent, answer.given_up);
+        }
         return answer.agent;
       });
       return;
@@ -420,12 +491,12 @@ function Fields({
         </DialogTitle>
         <DialogDescription>
           {editing
-            ? "Whether messages to this agent need a person's approval. Changing it sends the agent nothing."
+            ? "The agent's address, and whether messages to it need a person's approval. Changing the choice sends the agent nothing; changing the address reads its card at the new address, and sends it no message."
             : "An agent Freyja can hand work to. Its card is read at the address before it is saved; the agent is sent no message."}
         </DialogDescription>
       </DialogHeader>
 
-      {refusal && !(stale && refusedAsStale) && (
+      {refusal && !(stale && (refusedAsStale || unanswered)) && (
         <p
           role="alert"
           className="break-words rounded-lg border border-destructive/40 p-3 text-sm"
@@ -441,7 +512,9 @@ function Fields({
         >
           {gone
             ? `${opened?.name} is no longer in the list: it was removed elsewhere while this form was open. Nothing can be saved from this form.`
-            : `${opened?.name} was changed elsewhere while this form was open, so nothing can be saved from it. Close the form and open it again to change the agent as it is now.`}
+            : unanswered
+              ? `${opened?.name} is no longer as this form has it. The request got no answer, so it is not known whether that request is what changed ${opened?.name}: close the form and look at the agent in the list.`
+              : `${opened?.name} was changed elsewhere while this form was open, so nothing can be saved from it. Close the form and open it again to change the agent as it is now.`}
         </p>
       )}
 
@@ -474,7 +547,7 @@ function Fields({
         label="Address"
         hint={
           editing
-            ? "The address as the service keeps it. It is not changed in this form."
+            ? "A web address on this machine. Changing it moves the agent: its card is read at the new address first, and its pending tasks are given up."
             : "A web address on this machine, such as http://localhost:9998."
         }
         error={errors.url}
@@ -482,10 +555,7 @@ function Fields({
         <Input
           id={`${id}-url`}
           value={url}
-          readOnly={editing}
-          onChange={(event) => {
-            if (!editing) changing("url", setUrl)(event.target.value);
-          }}
+          onChange={(event) => changing("url", setUrl)(event.target.value)}
           autoComplete="off"
           autoCapitalize="none"
           spellCheck={false}
@@ -528,7 +598,8 @@ function Fields({
       {asking && (
         <Confirmation
           name={editing ? opened.name : name.trim()}
-          to={approval}
+          to={editing ? choice : approval}
+          movedTo={movedTo}
           listed={editing ? listed : undefined}
           fromList={live != null}
           noticeRef={notice}
@@ -567,8 +638,8 @@ function Fields({
 }
 
 /**
- * The dialog that adds an agent, or changes the approval choice of the saved `agent` it is
- * given. It keeps nothing once it is sent or closed (FR-004).
+ * The dialog that adds an agent, or changes the address and the approval choice of the saved
+ * `agent` it is given. It keeps nothing once it is sent or closed (FR-004).
  */
 export function AgentForm({
   open,
@@ -576,6 +647,7 @@ export function AgentForm({
   onSaved,
   onUnknown,
   onStale,
+  onMoved,
   agent,
   live,
 }: {
@@ -586,6 +658,11 @@ export function AgentForm({
   onUnknown: () => void;
   /** Told when the service says the agent being changed is no longer as the form has it. */
   onStale?: () => void;
+  /**
+   * Told when a change gave the agent another address, with how many of its pending tasks
+   * that gave up, so that whoever holds the list says so (FR-024).
+   */
+  onMoved?: (agent: Agent, givenUp: number) => void;
   /** The saved agent to change, as it is when its form is opened. None to add an agent. */
   agent?: Agent;
   /**
@@ -623,6 +700,7 @@ export function AgentForm({
           }}
           onUnknown={onUnknown}
           onStale={onStale}
+          onMoved={onMoved}
         />
       </DialogContent>
     </Dialog>

@@ -149,14 +149,16 @@ function Claim({ card }: { card: AgentClaim }) {
  * An agent that is in use can be checked from its card: the service reads its card again
  * and says whether the agent can be used. `onChecked` is told when the list should be read
  * again. A saved agent that is in use has Edit, which hands the agent to whoever opens the
- * form; an environment agent cannot be changed, and a saved agent that is not in use can
- * only be removed (FR-017).
+ * form, and every saved agent has Remove, which hands it to whoever asks to confirm the
+ * removal. An environment agent can be neither changed nor removed, and a saved agent that
+ * is not in use can only be removed (FR-017).
  */
 export function AgentCard({
   agent,
   onChecked,
   onGone,
   onEdit,
+  onRemove,
 }: {
   agent: Agent;
   /** Told after any result of a check, and when a check got no answer. */
@@ -165,11 +167,14 @@ export function AgentCard({
   onGone?: () => void;
   /** Told that the operator asked to change this agent. */
   onEdit?: (agent: Agent) => void;
+  /** Told that the operator asked to remove this agent. */
+  onRemove?: (agent: Agent) => void;
 }) {
   const down = agent.state === "unreachable" || agent.state === "not_in_use";
   // A saved agent the environment overrides has no link to check (FR-013).
   const inUse = agent.state !== "not_in_use";
-  const editable = agent.source === "saved" && inUse;
+  const saved = agent.source === "saved";
+  const editable = saved && inUse;
   // What the last check from this card found, or why it was refused. Either stays until the
   // next check starts: the result carries the time the service gave it.
   const [checked, setChecked] = useState<AgentCheck | null>(null);
@@ -240,9 +245,13 @@ export function AgentCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
-        {agent.url !== null && (
+        {(agent.url !== null || (saved && agent.pending_tasks > 0)) && (
           <dl className="grid gap-3">
-            <Value label="Address">{agent.url}</Value>
+            {agent.url !== null && <Value label="Address">{agent.url}</Value>}
+            {/* What a move or a removal would give up, so only where there is some. */}
+            {saved && agent.pending_tasks > 0 && (
+              <Value label="Pending tasks">{String(agent.pending_tasks)}</Value>
+            )}
           </dl>
         )}
         <State agent={agent} />
@@ -268,21 +277,33 @@ export function AgentCard({
           </p>
         )}
       </CardContent>
-      {inUse && (
+      {(inUse || saved) && (
         <CardFooter className="mt-auto flex-wrap gap-2">
           {/* Reading the card can take a while: the button says so and takes no press. */}
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={checking}
-            aria-busy={checking}
-            onClick={check}
-          >
-            {checking ? "Checking…" : "Check"}
-          </Button>
+          {inUse && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={checking}
+              aria-busy={checking}
+              onClick={check}
+            >
+              {checking ? "Checking…" : "Check"}
+            </Button>
+          )}
           {editable && (
             <Button variant="outline" size="sm" onClick={() => onEdit?.(agent)}>
               Edit
+            </Button>
+          )}
+          {/* Nothing is removed from here: a dialog asks first. */}
+          {saved && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => onRemove?.(agent)}
+            >
+              Remove
             </Button>
           )}
         </CardFooter>

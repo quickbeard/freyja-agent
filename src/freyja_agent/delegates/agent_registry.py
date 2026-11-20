@@ -289,15 +289,19 @@ class AgentRegistry:
                 await self._replace(made)
         return self.current
 
-    async def adopt(self, record: SavedAgentRecord, card: AgentCard) -> AgentSet:
+    async def adopt(
+        self, record: SavedAgentRecord, card: AgentCard, *, limit: float | None = None
+    ) -> AgentSet:
         """Take up a change this instance just made, with the card it just read.
 
         The agent's link is connected with ``card``, so the card is not read a second time.
+        ``limit`` is the most this waits for another caller that is reading the card through
+        the same link; the startup limit when none is given.
         """
         made = await self.refresh()
         link = made.link(record.name)
         if link is not None and link.ref == record.ref:
-            await link.connect(card, limit=self._startup_timeout)
+            await link.connect(card, limit=self._startup_timeout if limit is None else limit)
         return made
 
     def mark_changed(self) -> None:
