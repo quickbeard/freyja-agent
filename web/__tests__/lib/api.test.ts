@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { stubFetch } from "@/__tests__/testing";
-import { ApiError, api, isGone } from "@/lib/api";
+import { ApiError, api, isGone, stream } from "@/lib/api";
 
 async function refusal(run: Promise<unknown>): Promise<ApiError> {
   try {
@@ -156,5 +156,86 @@ describe("isGone", () => {
   it("is false for what is no refusal of the service at all", () => {
     expect(isGone(new Error("agent_not_found"))).toBe(false);
     expect(isGone(undefined)).toBe(false);
+  });
+});
+
+// Feature 007: a run's answer is a stream of events, read as it arrives.
+
+describe("stream", () => {
+  it("posts JSON to the web app's own origin and returns the answer's body", async () => {
+    const fetchStub = stubFetch({
+      status: 200,
+      text: "event: start\r\ndata: {}\r\n\r\n",
+    });
+    const body = await stream("/threads/t-1/runs/unattended", {
+      message: "hi",
+    });
+    const [url, init] = fetchStub.mock.calls[0];
+    expect(url).toBe("/api/threads/t-1/runs/unattended");
+    expect(init?.method).toBe("POST");
+    expect(init?.body).toBe('{"message":"hi"}');
+    expect(new Headers(init?.headers).get("content-type")).toBe(
+      "application/json",
+    );
+    expect(await new Response(body).text()).toBe(
+      "event: start\r\ndata: {}\r\n\r\n",
+    );
+  });
+
+  it("raises a refusal as api does", async () => {
+    stubFetch({
+      status: 409,
+      json: {
+        detail: {
+          code: "run_active",
+          message: "A run is already active on this thread.",
+        },
+      },
+    });
+    const error = await refusal(
+      stream("/threads/t-1/runs/unattended", { message: "hi" }),
+    );
+    expect([error.status, error.code, error.message]).toEqual([
+      409,
+      "run_active",
+      "A run is already active on this thread.",
+    ]);
+  });
+
+  it("raises refused values with each field's message", async () => {
+    stubFetch({
+      status: 422,
+      json: {
+        detail: [
+          {
+            loc: ["body", "message"],
+            msg: "String should have at least 1 character",
+          },
+        ],
+      },
+    });
+    const error = await refusal(
+      stream("/threads/t-1/runs/unattended", { message: "" }),
+    );
+    expect(error.code).toBe("invalid");
+    expect(error.fields).toEqual([
+      { field: "message", message: "String should have at least 1 character" },
+    ]);
+  });
+
+  it("says the service cannot be reached when no answer comes", async () => {
+    stubFetch({ fails: "connection refused" });
+    const error = await refusal(
+      stream("/threads/t-1/runs/unattended", { message: "hi" }),
+    );
+    expect([error.status, error.code]).toEqual([0, "unreachable"]);
+  });
+
+  it("says so too when the web app's server could not pass the request on", async () => {
+    stubFetch({ status: 500, text: "Internal Server Error" });
+    const error = await refusal(
+      stream("/threads/t-1/runs/unattended", { message: "hi" }),
+    );
+    expect([error.status, error.code]).toEqual([500, "unreachable"]);
   });
 });

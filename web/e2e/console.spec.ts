@@ -30,6 +30,10 @@ test("the console opens on the LLM section", async ({ page }) => {
   const agents = sections(page).getByRole("link", { name: "Agents" });
   await expect(llm).toHaveAttribute("aria-current", "page");
   await expect(agents).not.toHaveAttribute("aria-current");
+  // Feature 007: the third section.
+  const tasks = sections(page).getByRole("link", { name: "Tasks" });
+  await expect(tasks).toHaveAttribute("href", "/tasks");
+  await expect(tasks).not.toHaveAttribute("aria-current");
 });
 
 test("the sidebar leads to the Agents section, which lists the agents", async ({

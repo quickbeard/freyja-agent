@@ -390,10 +390,10 @@ task's page, and reads the conversation again later.
 
 ### Tests for User Story 1
 
-- [ ] T031 [P] [US1] Extend `web/__tests__/lib/api.test.ts`: `stream(path, body)` posts JSON
+- [X] T031 [P] [US1] Extend `web/__tests__/lib/api.test.ts`: `stream(path, body)` posts JSON
       to `/api<path>`, returns the response's body for a 200, and raises the same `ApiError`
       as `api` for a refusal, for refused values, and for no answer
-- [ ] T032 [P] [US1] Write `web/__tests__/lib/tasks.test.ts`, part 1: the stream parser
+- [X] T032 [P] [US1] Write `web/__tests__/lib/tasks.test.ts`, part 1: the stream parser
       yields `{event, data}` for each event, with an event split over two chunks, two events
       in one chunk, a `: ping` line, and a last event with no blank line after it;
       `newThreadId()` gives 32 characters the service's rule accepts and never the same
@@ -401,13 +401,13 @@ task's page, and reads the conversation again later.
       `/api/threads/<id>`, and `/api/threads/<id>/state`; `startRun(id, message)` posts to
       `/api/threads/<id>/runs/unattended`; every call of the module goes through `api` or
       `stream` to a path under `/threads`, and none carries a credential (FR-026)
-- [ ] T033 [P] [US1] Write `web/__tests__/lib/task-runs.test.ts`: `begin(threadId, message, body)`
+- [X] T033 [P] [US1] Write `web/__tests__/lib/task-runs.test.ts`: `begin(threadId, message, body)`
       holds the message the run was started with and the events as they arrive, and tells
       its subscribers; the run ends with its last
       event, or as "connection ended" when the body ends without `end`, `interrupt`, or
       `error`; `get(threadId)` gives the run or nothing; `clear(threadId)` forgets it; a
       second `begin` for a thread whose run has not ended is refused
-- [ ] T034 [P] [US1] Write `web/__tests__/components/tasks/new-task.test.tsx`,
+- [X] T034 [P] [US1] Write `web/__tests__/components/tasks/new-task.test.tsx`,
       `message.test.tsx`, `status.test.tsx`, and `task-view.test.tsx`, part 1. New task: one
       empty text box each time it opens; an empty text cannot be sent; two presses of Send
       start one run; a refusal shows the service's reason and keeps the text; no answer says
@@ -423,32 +423,32 @@ task's page, and reads the conversation again later.
       in the store ended with `error` shows that error, with the link for
       `no_usable_model`, and a box holding the message the run was started with, which
       sends it again on the same id (FR-007 to FR-012a, SC-001; R12)
-- [ ] T035 [P] [US1] Write `web/__tests__/app/tasks/page.test.tsx` and
+- [X] T035 [P] [US1] Write `web/__tests__/app/tasks/page.test.tsx` and
       `web/__tests__/app/tasks/task-page.test.tsx`: the list's page has the heading, the
       notice that the console has no users, and New task; the task's page hands the id from
       its address to the view
-- [ ] T036 [P] [US1] Extend `web/__tests__/components/app-sidebar.test.tsx`: the sidebar
+- [X] T036 [P] [US1] Extend `web/__tests__/components/app-sidebar.test.tsx`: the sidebar
       lists LLM, Agents, and Tasks, and Tasks is current on `/tasks` and on `/tasks/<id>`.
       This changes the existing assertion on the list of sections, which FR-027 allows
       (FR-001)
 
 ### Implementation for User Story 1
 
-- [ ] T037 [US1] Add `stream` to `web/lib/api.ts`, in a block of its own beside `api`,
+- [X] T037 [US1] Add `stream` to `web/lib/api.ts`, in a block of its own beside `api`,
       sharing its refusal handling
-- [ ] T038 [P] [US1] Create `web/lib/tasks.ts`: the types of contracts/openapi.yaml and of
+- [X] T038 [P] [US1] Create `web/lib/tasks.ts`: the types of contracts/openapi.yaml and of
       the thread state, the parser, `newThreadId`, `listThreads`, `readThread`, `readState`,
       `startRun`, and `THREADS_KEY`
-- [ ] T039 [P] [US1] Create `web/lib/task-runs.ts`: the store of T033, read by components
+- [X] T039 [P] [US1] Create `web/lib/task-runs.ts`: the store of T033, read by components
       with `useSyncExternalStore`
-- [ ] T040 [US1] Create `web/components/tasks/status.tsx`, `message.tsx`, `task-view.tsx`,
+- [X] T040 [US1] Create `web/components/tasks/status.tsx`, `message.tsx`, `task-view.tsx`,
       and `new-task.tsx` as T034 says; the view reads the row and the state with SWR and
       reads them again once when a run it shows ends; for a run that ended with `error` on a
       thread with no state it offers the stored message again (R12)
-- [ ] T041 [US1] Create `web/app/tasks/page.tsx` and `web/app/tasks/[id]/page.tsx`; the
+- [X] T041 [US1] Create `web/app/tasks/page.tsx` and `web/app/tasks/[id]/page.tsx`; the
       second reads its route parameter inside `<Suspense>` (R13)
-- [ ] T042 [US1] Add the Tasks entry to `web/components/app-sidebar.tsx`, without its number
-- [ ] T043 [US1] Create `web/e2e/tasks-api.ts` (`answerThreads` for the list, `TaskService`
+- [X] T042 [US1] Add the Tasks entry to `web/components/app-sidebar.tsx`, without its number
+- [X] T043 [US1] Create `web/e2e/tasks-api.ts` (`answerThreads` for the list, `TaskService`
       for a page that starts runs, which keeps what the page sent and answers a run with a
       whole stream) and `web/e2e/tasks.spec.ts`, part 1: a new task from the list's page to a
       finished conversation; reload shows it again; a refused message keeps its text; a
@@ -456,7 +456,7 @@ task's page, and reads the conversation again later.
       again; an address with an id the service refuses shows "not found"; a
       stopped service; text with markup shown as characters. Add the Tasks entry to the
       sidebar test of `web/e2e/console.spec.ts`
-- [ ] T044 [US1] Add the Tasks section to `web/README.md`, `README.md` ("Web console"), and
+- [X] T044 [US1] Add the Tasks section to `web/README.md`, `README.md` ("Web console"), and
       `AGENTS.md` (Layout), as far as this phase built it, with the sentence that the console
       has no users (FR-026a)
 

@@ -8,7 +8,12 @@ const BASE_URL = `http://localhost:${PORT}`;
 // Where the built app forwards /api/...: an address nothing listens on. The tests hand a
 // page the service's answers themselves (e2e/api.ts), and the ones about a stopped service
 // let the request through to find nothing there, whatever runs on this machine's port 8000.
-const ABSENT_SERVICE = "http://127.0.0.1:9";
+// Feature 007: only e2e/stream.spec.ts puts a stand-in for the service there, to see a run's
+// stream pass the forwarding as it is produced. It runs in projects of its own, after every
+// other spec, so that nothing answers at this address while the others run.
+export const STAND_IN_PORT = 3109;
+const ABSENT_SERVICE = `http://127.0.0.1:${STAND_IN_PORT}`;
+const STREAM_SPEC = "**/stream.spec.ts";
 
 /**
  * See https://playwright.dev/docs/test-configuration.
@@ -43,11 +48,29 @@ export default defineConfig({
     {
       name: "chromium",
       use: { ...devices["Desktop Chrome"] },
+      testIgnore: STREAM_SPEC,
     },
 
     {
       name: "firefox",
       use: { ...devices["Desktop Firefox"] },
+      testIgnore: STREAM_SPEC,
+    },
+
+    // Feature 007: the stream through the forwarding, in each browser, one after the other,
+    // once the specs that need the forwarding's address empty have run.
+    {
+      name: "stream-chromium",
+      use: { ...devices["Desktop Chrome"] },
+      testMatch: STREAM_SPEC,
+      dependencies: ["chromium", "firefox"],
+    },
+
+    {
+      name: "stream-firefox",
+      use: { ...devices["Desktop Firefox"] },
+      testMatch: STREAM_SPEC,
+      dependencies: ["stream-chromium"],
     },
   ],
 

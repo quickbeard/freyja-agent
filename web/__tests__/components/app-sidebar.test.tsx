@@ -90,11 +90,30 @@ describe("AppSidebar", () => {
   it("lists the console's sections as links", () => {
     renderSidebar();
     const links = screen.getAllByRole("link");
-    expect(links.map((link) => link.textContent)).toEqual(["LLM", "Agents"]);
+    // Feature 007 adds the Tasks section (its FR-027 names this change).
+    expect(links.map((link) => link.textContent)).toEqual([
+      "LLM",
+      "Agents",
+      "Tasks",
+    ]);
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/llm",
       "/agents",
+      "/tasks",
     ]);
+  });
+
+  it.each([
+    "/tasks",
+    "/tasks/5f1c0a9e",
+  ])("marks Tasks as the section in use on %s", (path) => {
+    navigation.pathname = path;
+    renderSidebar();
+    const current = screen
+      .getAllByRole("link")
+      .filter((link) => link.getAttribute("aria-current") === "page")
+      .map((link) => link.textContent);
+    expect(current).toEqual(["Tasks"]);
   });
 
   it("marks the section in use and no other", () => {

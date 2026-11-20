@@ -442,6 +442,73 @@ the service, sent SIGTERM, waited 16 seconds for the reply and recorded it; and 
 whose reader left after four seconds ended `done` where the same run through the existing
 route ended `stopped`. The database was dropped afterwards.
 
+### Phase 4 as built (2026-11-20)
+
+Built as research R11 to R13 describe; the differences and additions:
+
+- **The automated proof that a stream arrives as it is produced is in this phase** (R15).
+  The owner answered the plan's question, after Phase 3, with yes, and the change to
+  `web/playwright.config.ts` it needs. The app under test forwards `/api/...` to port
+  3109 in place of port 9, where nothing listens; `e2e/stream.spec.ts` puts a stand-in for
+  the service there, which sends the start of a reply and holds the run open until the page
+  shows it. It runs in two projects of its own, `stream-chromium` and then `stream-firefox`,
+  which depend on the two others, so that nothing answers on that port while they run. With
+  `no-transform` taken out of the stand-in's answer the test fails in both browsers: the
+  forwarding then holds the reply back. T076's question is answered.
+- **A dynamic route made the sidebar's links wait.** With Cache Components, a page under a
+  route with a parameter, `/tasks/[id]`, knows its address only when it is asked for, and
+  `usePathname` in the shared layout then fails the build. The links that mark the current
+  section are read inside `<Suspense>`, with the same links unmarked as the fallback, as the
+  bundled docs advise (`use-pathname.md`, "Cache Components"). Every other route still
+  prerenders its shell.
+- **`send-box.tsx`**, a component the tasks did not name, is the one text box with its Send
+  button: New task and the box that sends a failed first message again use it, and the
+  follow-up box of Phase 7 will.
+- **Following a run** is done by a timer of the view's own, every five seconds, and not by
+  SWR's `refreshInterval`, which skips a reading while the last one failed: one failed
+  reading would have ended the following for good (review finding below). The view follows
+  while the row says a run is in progress, and after its own stream was cut until the
+  service says where the run stands. This is FR-013's following, built here because a cut
+  stream needs it; Phase 8 adds Stop to it.
+- **A run this tab started is forgotten once its end has been read again.** Until then the
+  streamed view stays on the page, so that a new task does not flash "not found" between
+  its last event and the reading after it. A first run that failed before anything was
+  recorded is kept, for its message to be offered again (FR-008).
+- **While a run streams, only what the stream brought is shown**, not the conversation read
+  before it. For a new task that is everything there is. Phase 7, whose follow-ups run on a
+  thread with a conversation, shows the earlier conversation above what streams.
+- **Unit tests' helpers** for this section are `web/__tests__/tasks-testing.ts` (a fetch stub
+  that answers by path, streams built from events, and the service's shapes); the shared
+  `testing.ts` is not changed.
+- **Next.js announces a route change with an element of role `alert`**, so the end-to-end
+  specs look for the page's alerts without it.
+
+**Read by a reviewer that had not written it.** It found no defect in the parser, the guard
+against a second send, the rendering as text, or FR-026, and confirmed that the stream
+proof would fail if the forwarding held the stream back. It found one real defect and some
+smaller ones. Each was checked against the code, and each test added for one was shown to
+fail with its fix taken out (nine checks).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| Medium | SWR skips a timed reading while the last one failed, and the page did not retry on error: a page that followed a run stopped reading at the first reading that failed, as while the service restarts, and showed the error in place of the conversation (FR-010, FR-013). | A timer of the view's own reads the task again whatever the last reading did; a reading that fails is said above the conversation, which stays. |
+| Low | How a run of this tab ended stayed on the page for as long as the tab was open, also once the task had moved on. | The run is forgotten once its end has been read again; the cut is said until the service says the run is no longer in progress. |
+| Low | A stream cut before the run's first checkpoint showed "Task not found" for a run in progress, and stopped there. | While the row says a run is in progress the page says nothing is recorded yet and follows. |
+| Low | A run ended only when its stream's body did, not at its last event. | It ends at its last event, and the connection is let go. |
+| Low | The headings of messages went from `h1` to `h3`. | `h2`. |
+| Test | A character split over two pieces, data on several lines, the guard against a second submit, the five seconds, and no credential on a run's request were not checked. | One test each. |
+| Not changed | The parser yields a last event that no blank line follows, which the SSE standard discards. | T032 asks for it; a cut `message` shows nothing and a cut last event is what the run sent. |
+| Not changed | Port 3109 is fixed: two checkouts that run the end-to-end tests at the same time would answer each other's stand-in. Stream projects are skipped, not failed, when a spec they depend on fails. | Recorded here. Before `pnpm test:e2e`, port 3100 is checked anyway, which keeps two runs apart. |
+
+**Checked by hand** on a check instance on port 8020 with a database of its own, the stand-in
+model on 9977, and the console built against it on 3020, driven by a script in a real
+Chromium and Firefox: quickstart section 1, a new task from the list's page to a finished
+conversation and the status Done, the same after a reload, and the row in `GET /threads`
+with its first message; with the stand-in's `slow` model, the page said that the run had
+started 0.9 seconds after Send (SC-001), and the run went on to done after the browser was
+closed. The database was dropped afterwards. The page without a usable model was checked by
+the unit and end-to-end tests only.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are
