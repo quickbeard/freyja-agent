@@ -83,7 +83,10 @@ drives it with `async for _event in stream: pass` for its background runs
 **Decision**: a new object of the runtime, `UnattendedRuns` (`runtime/unattended.py`), drives
 a run's events in a task of its own and hands a copy of each event to whoever is reading. A
 reader that leaves is dropped; the task goes on to the generator's end, where `run_stream`
-releases the lease and the context as it always does. The lease heartbeat, the step limit,
+releases the lease and the context as it always does. A reader that does not keep up is
+dropped as well, once 1,000 events are waiting for it, so that a stalled connection cannot
+make the service hold a run's whole output in memory; its page follows the task by reading
+(FR-010). The lease heartbeat, the step limit,
 the gate, and the checkpoints are inside `run_stream` and are untouched (FR-021).
 
 **Run**: with a model scripted for five tool calls and a reader that left at the first
@@ -234,6 +237,10 @@ has ended and has not been looked at yet is **settled** by one read of the threa
 of its agent tasks, and the result is kept in the row. The read uses the same code a state
 read uses today. A row whose run's owner still stands while the lease is gone belongs to a
 run that died with its instance; it is settled the same way.
+
+A thread the index has no row for, from before this feature or from a run whose row could
+not be written, gets its row when it is opened: `GET /threads/{thread_id}` reads its state
+and, when the thread has one, makes the row settled (FR-004, FR-023).
 
 So the list is one query on one table, plus one read of a thread's state for each run that
 ended since the list was last asked for. The number of threads that need a decision is a
@@ -458,16 +465,27 @@ existing suite's scenarios through it to show nothing differs.
 
 ## R17. When the service stops
 
-`UnattendedRuns.close` cancels the runs it is driving and waits for them, as the delegation
-worker does with its deliveries; it runs before the agents' links close. Each cancelled run
-releases its lease in `run_stream`. Its thread is then settled as `stopped` (R7).
+**Decision** (changed in the checklist review, finding F1): `UnattendedRuns.close` asks every
+run it is driving to stop, by a flag of its own that `SegmentedGraph` reads between segments
+beside the stop a person asks for, and waits for them. Each run ends at its next boundary:
+the step under way completes and is recorded, `run_stream` releases the lease, and the
+thread is settled as `stopped` (R7). `close` runs before the agents' links close and before
+the database pool does.
 
-This is the one place where a run of this feature is cut in the middle of a step, and an
-action can then have taken effect without its result being recorded, as feature 001 accepted
-for any run when the service stops. A stop asked by a person never does this (R4).
+So an ordinary stop of the service cuts no action off (FR-021). It waits for one step of
+each such run and no longer; until now it waited for every run with a connected reader to
+finish, since uvicorn's graceful shutdown has no time limit by default (README). Someone who
+cannot wait for a step ends the process, which is the next case.
 
-Until now a clean stop of the service waited for runs in progress, because their readers'
-connections were open. A run nobody reads holds no connection, so it is cancelled.
+A service that is killed or fails ends a run wherever it is. An action under way can then
+have taken effect without its result being recorded, as feature 001 accepts for any run. The
+run's lease expires and its thread is settled as `stopped`.
+
+**Alternatives considered**: cancelling the runs, as the delegation worker cancels its
+deliveries, which was this plan's first decision. A run with a reader is not cut by an
+ordinary stop today; a run without one must not be the worse for having no reader, and a
+deploy would otherwise be the commonest way to cut an approved action off. A time limit on
+the wait: it would need a setting, and it would turn a slow step into a cut one.
 
 ## Not verified
 
@@ -485,7 +503,8 @@ connections were open. A run nobody reads holds no connection, so it is cancelle
 
 - A run that another client or the delegation worker started and that failed is not listed
   as failed (R7).
-- A run cut by the service stopping can leave an action without its result (R17).
+- A run cut by the service being killed or failing can leave an action without its result
+  (R17). An ordinary stop of the service does not.
 - No limit is set on how many runs go on at once (spec, Assumptions).
 - A page opened after a run started does not read its stream (FR-013).
 - An automated proof in a browser that a stream arrives as it is produced (R15).

@@ -81,3 +81,8 @@
   research" (see the spec's Clarifications, "Plan, 2026-11-20"). 16 of 16 items still pass:
   no marker was added, and the new text names no implementation beyond the existing words
   this checklist already allows.
+- Read again on 2026-11-20 after the approval and runs checklist review, which changed
+  FR-004, FR-005, FR-009, FR-010, FR-012, FR-015, FR-021, FR-022a, FR-023, FR-024, FR-026a,
+  and SC-011, added FR-012a, five edge cases, two terms, and a section on the earlier
+  requirements this feature replaces (see `approval-runs.md`, "Review record"). 16 of 16
+  items still pass: no marker was added, and the new text names no implementation.
