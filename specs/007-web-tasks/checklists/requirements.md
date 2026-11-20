@@ -76,3 +76,8 @@
   proven"): that a stream passes the console's forwarding as it is produced, that the
   service can end a run after the step under way, and that FR-021 and FR-022 can be built
   without changing files another session is working in.
+- Read again on 2026-11-20 after `/speckit-plan`, which changed FR-002, FR-003, and FR-028,
+  added two edge cases, and replaced the Assumptions' "Not proven" with "Proven in the plan's
+  research" (see the spec's Clarifications, "Plan, 2026-11-20"). 16 of 16 items still pass:
+  no marker was added, and the new text names no implementation beyond the existing words
+  this checklist already allows.

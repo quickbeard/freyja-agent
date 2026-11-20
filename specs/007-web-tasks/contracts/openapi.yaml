@@ -1,0 +1,325 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.7.0
+  description: >
+    Additions made by feature 007, the Tasks section of the web console. Every path here is
+    new. The console calls a thread a task; the API keeps the word thread. The three thread
+    routes of feature 001 keep their shapes and their behavior; see
+    ../../001-thread-runs-api/contracts/. The conversation, the pending proposal, and the
+    agent tasks of a thread are still read from `GET /threads/{thread_id}/state`. No
+    authentication in this increment; bind to a local interface. Everyone who can reach the
+    service can list every thread, read it, decide its proposal, and stop its run.
+
+    The service sends no cross-origin headers, so a page from another origin can neither read
+    a response nor send a JSON body; a body that is not sent as JSON is refused with 422. A
+    request that changes something (POST) and that a browser marks as made by a page of
+    another origin is refused with 403 and the code `other_origin`, on every path here and,
+    from this feature on, on the thread routes of feature 001, before anything else is looked
+    at, by the rule the LLM and Agents routes apply (feature 004, contracts/openapi.yaml).
+paths:
+  /threads:
+    get:
+      summary: List the threads and say how many need a decision
+      description: >
+        One row per thread that has had a run since this feature was installed, whichever
+        client started it. Every thread that needs a decision comes first, then the others
+        with the most recently changed first, at most 100 rows in all; when every row needs a
+        decision there can be more than 100. `needs_decision` counts every thread, listed or
+        not.
+
+        Contacts no model, agent, or tool server and changes no thread. It reads one thread's
+        state for each run that ended since the list was last read, and keeps what it found.
+      responses:
+        "200":
+          description: The list
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadList" }
+              example:
+                needs_decision: 1
+                total: 3
+                more: false
+                threads:
+                  - thread_id: 5f1c0a9e2b7d4c3e8a6f0b1d2c3e4f5a
+                    first_message: "Tell #ops that the nightly report is ready."
+                    status: needs_decision
+                    error: null
+                    created_at: "2026-11-20T08:00:00Z"
+                    changed_at: "2026-11-20T08:00:04Z"
+                    stoppable: false
+                    stopping: false
+                  - thread_id: 0b6d4e2f8a1c4f7e9d3b5a7c9e1f2a4b
+                    first_message: Summarize what changed in the workspace this week.
+                    status: running
+                    error: null
+                    created_at: "2026-11-20T08:10:00Z"
+                    changed_at: "2026-11-20T08:10:00Z"
+                    stoppable: true
+                    stopping: false
+                  - thread_id: demo-1
+                    first_message: Summarize what you can do.
+                    status: failed
+                    error: { code: no_usable_model, message: "No usable model is active. Activate a usable LLM profile, then send the message again." }
+                    created_at: "2026-11-19T16:00:00Z"
+                    changed_at: "2026-11-19T16:02:11Z"
+                    stoppable: false
+                    stopping: false
+        "500":
+          description: >
+            `internal`: the index could not be read. The list never answers with an earlier
+            one.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /threads/{thread_id}:
+    parameters:
+      - $ref: "#/components/parameters/ThreadId"
+    get:
+      summary: One thread's row
+      description: >
+        What the list holds of one thread, for a page that shows it. Read beside
+        `GET /threads/{thread_id}/state`. Contacts nothing and changes no thread.
+      responses:
+        "200":
+          description: The row
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadSummary" }
+        "404":
+          description: >
+            `thread_not_found`: no run on this thread is known to the index. A thread from
+            before this feature that has had no run since answers this while its state can
+            still be read.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Invalid" }
+  /threads/{thread_id}/runs/unattended:
+    parameters:
+      - $ref: "#/components/parameters/ThreadId"
+      - $ref: "#/components/parameters/Debug"
+    post:
+      summary: Start a run that goes on when its reader leaves
+      description: >
+        The same request, the same refusals, and the same events as
+        `POST /threads/{thread_id}/runs` (feature 001), from the same code. Two things
+        differ. The run goes on to its end whether or not anyone reads the stream: a client
+        that disconnects, or never reads, changes nothing about how the run ends. And the run
+        can be stopped with `POST /threads/{thread_id}/stop`. See sse-events.md for the
+        stream.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [message]
+              properties:
+                message: { type: string, minLength: 1, maxLength: 32000 }
+      responses:
+        "200":
+          description: The run's events
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store, no-transform" }
+          content:
+            text/event-stream: {}
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "409":
+          description: >
+            `run_active` or `decision_pending`, as for the existing route. Nothing was
+            started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Invalid" }
+  /threads/{thread_id}/resume/unattended:
+    parameters:
+      - $ref: "#/components/parameters/ThreadId"
+      - $ref: "#/components/parameters/Debug"
+    post:
+      summary: Decide the pending proposal; the continuation goes on when its reader leaves
+      description: >
+        The same request, the same refusals, and the same events as
+        `POST /threads/{thread_id}/resume` (feature 001), from the same code: the proposal's
+        id, one decision per proposed action, and every check of a decision are the existing
+        ones. The continuation goes on without a reader and can be stopped, as a run started
+        through `runs/unattended`.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              description: The `ResumeRequest` of feature 001.
+              type: object
+              required: [interrupt_id, decisions]
+              properties:
+                interrupt_id: { type: string }
+                decisions:
+                  type: array
+                  minItems: 1
+                  items: { type: object }
+      responses:
+        "200":
+          description: The continuation's events
+          headers:
+            Cache-Control:
+              schema: { type: string, const: "no-store, no-transform" }
+          content:
+            text/event-stream: {}
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "404":
+          description: "`thread_not_found`, as for the existing route."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >
+            `run_active`, `nothing_pending`, or `proposal_mismatch`, as for the existing
+            route. Nothing ran and a pending proposal is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Invalid" }
+  /threads/{thread_id}/stop:
+    parameters:
+      - $ref: "#/components/parameters/ThreadId"
+    post:
+      summary: Ask the run in progress to stop
+      description: >
+        Takes no body. The run ends after the step that is under way: a model call or a tool
+        step that has started completes and is recorded, and no further step starts. An
+        action that is under way is never cut off; an action that had not started is not
+        started, also when it was approved. The answer says the stop was asked for, not that
+        the run has ended: the thread's row shows `stopping` until it has, and `stopped`
+        after. Works whichever service instance runs the thread.
+
+        Only a run started through `runs/unattended` or `resume/unattended` can be stopped.
+        A second request for the same run answers the same and changes nothing. A run that
+        ends by itself before the stop is applied ends as it would have.
+      responses:
+        "202":
+          description: The stop was asked for
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StopAnswer" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "404":
+          description: "`thread_not_found`: no run on this thread is known to the index."
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "409":
+          description: >
+            `no_run` (no run is in progress on the thread, also when it is paused on a
+            proposal) or `not_stoppable` (the run in progress was started by a client that
+            reads its own stream, or by the service to report an agent's outcome). Nothing
+            changed.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "422": { $ref: "#/components/responses/Invalid" }
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      description: As in feature 001. 1 to 128 of letters, digits, hyphen, underscore, and dot; not only dots.
+      schema: { type: string, minLength: 1, maxLength: 128, pattern: "^[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*$" }
+    Debug:
+      name: debug
+      in: query
+      required: false
+      description: As in feature 001. Adds debug events; never changes the run.
+      schema: { type: boolean, default: false }
+  responses:
+    OtherOrigin:
+      description: >
+        `other_origin`: a browser marked the request as made by a page of another origin.
+        Nothing was looked at and nothing changed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Invalid:
+      description: A value was refused, or the body was not sent as JSON. FastAPI's shape.
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              detail: { type: array, items: { type: object } }
+  schemas:
+    ThreadStatus:
+      type: string
+      description: >
+        Worked out by the service, first match: `running` (a run holds the thread's lease, on
+        any instance); `needs_decision` (a proposal is pending); `failed` (the last run was
+        started through the unattended routes and ended with an error); `stopped` (the last
+        run was stopped, or ended with steps still to take: the service stopped, its client
+        stopped reading, or it failed where nobody recorded why); `waiting_for_agent` (an
+        agent task of the thread was pending when its last run ended); `done`.
+      enum: [running, needs_decision, failed, stopped, waiting_for_agent, done]
+    ThreadSummary:
+      type: object
+      required: [thread_id, first_message, status, error, created_at, changed_at, stoppable, stopping]
+      properties:
+        thread_id: { type: string }
+        first_message:
+          type: [string, "null"]
+          maxLength: 200
+          description: The beginning of the thread's first message from a person. Null until it is known.
+        status: { $ref: "#/components/schemas/ThreadStatus" }
+        error:
+          description: With `failed`, the code and the message of the run's `error` event, as they were sent. Null otherwise.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [code, message]
+              properties:
+                code: { type: string }
+                message: { type: string, maxLength: 2000 }
+        created_at: { type: string, format: date-time }
+        changed_at:
+          type: string
+          format: date-time
+          description: While a run is in progress, when it started. Otherwise the time of the thread's last recorded step.
+        stoppable:
+          type: boolean
+          description: True when the status is `running` and the run was started through the unattended routes.
+        stopping:
+          type: boolean
+          description: True when a stop was asked for the run in progress and the run has not ended yet.
+    ThreadList:
+      type: object
+      required: [threads, needs_decision, total, more]
+      properties:
+        threads:
+          type: array
+          items: { $ref: "#/components/schemas/ThreadSummary" }
+        needs_decision:
+          type: integer
+          description: How many threads need a decision, among all threads.
+        total:
+          type: integer
+          description: How many threads the index holds.
+        more:
+          type: boolean
+          description: True when `total` is greater than the number of rows returned.
+    StopAnswer:
+      type: object
+      required: [thread_id, stopping]
+      properties:
+        thread_id: { type: string }
+        stopping: { type: boolean, const: true }
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }

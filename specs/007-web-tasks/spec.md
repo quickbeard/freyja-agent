@@ -18,6 +18,16 @@
 - Q: The service runs a thread only while a client reads its stream. What happens to a running task when the person closes or leaves its page? → A: It goes on. A run the console starts, with a message or with a decision, runs to its end whether or not any page is reading it, and the page shows where the task stands when the person comes back. A run started the way the API offers today keeps today's behavior. Keeping today's behavior for the console as well, with a warning on the page, was considered and not adopted.
 - Q: Since closing the page no longer ends a run, does the first version have a Stop control? → A: Yes, for runs the console started. Stop ends the run after the step under way; completed steps are kept, the task is listed as stopped, and a follow-up continues it. Runs started by other clients and the runs the service starts itself cannot be stopped yet. No Stop control, and a stop for every run, were considered and not adopted.
 
+### Plan, 2026-11-20
+
+Changes made while planning, where the research found that the spec asked for more than can be known or shown ([plan.md](plan.md), "Changes to the spec"). None was asked of the owner; each is named in the plan's pull request.
+
+- The reason of a failed run (FR-003) is given for a run started through the console. How a run ended is known only to whoever read its stream; a run another client or the service itself started, and that failed, is listed as stopped ([research.md](research.md) R7).
+- When a task last changed (FR-002) is, while a run is in progress, when that run started (R7).
+- That a stream reaches the page as it is produced (FR-028) was shown by hand in both browsers (R1). It holds only when the service's answer says that it must not be transformed and stays active, which automated tests of the service pin; the end-to-end tests do not repeat the proof.
+- Two edge cases were added: a stop applied before an approved action started, and the step limit of a run that goes on without a reader (R4).
+- The three things listed as not proven are settled (Assumptions, "Proven in the plan's research").
+
 ## User Scenarios & Testing *(mandatory)*
 
 Three terms are used throughout. A **task** is one conversation with Freyja that a person started by handing it work: what the service calls a thread. An **agent task** is what a delegate agent works on for Freyja (feature 003); a task can have several. A **proposal** is one or more actions Freyja wants to take that need a person's approval; a task with a proposal is paused until a person decides it.
@@ -151,6 +161,7 @@ The person has the console open and visits another web page in the same browser.
 - **The person leaves a task's page while its run is in progress.** The run goes on (FR-021). Nothing about the task depends on a page being open: it finishes, pauses, or fails as it would have, and the list and the sidebar show where it stands.
 - **A run is in progress whose stream this page is not reading**: the page was opened or reloaded after the run started, or the run was started in another window, by another person, by another client, or by the service itself when it reports an agent's outcome. The page cannot join the stream. It shows what the service holds, says that a run is in progress, reads the task again until the run has ended, and offers nothing to send meanwhile. It offers Stop when the console started the run.
 - **Stop is pressed while an action is under way.** The step completes and is recorded before the run ends (FR-022). An action a person approved is therefore never left having taken effect without its result in the conversation, and never shown as still waiting for a decision after it ran.
+- **Stop is applied before an action that was just approved has started.** The action does not start. The decision is spent, no proposal is pending, and the conversation shows the action as not carried out once the task is continued. Nothing ran without approval and nothing ran twice; the person who pressed Stop gets what Stop says.
 - **Stop is pressed while a step takes long**, such as a model that is slow to answer or an agent that is working. The page says that the run is stopping and shows it as stopped only once the service says the run has ended, which can take as long as that step is allowed to.
 - **A run the console did not start is in progress.** It has no Stop in the first version: a run another client started ends when that client stops reading, as today, and a run the service started to report an agent's outcome ends by itself.
 - **The service stops or fails while a run goes on without a page.** Steps already completed are kept, and nothing starts the run again by itself. Once the service no longer shows a run in progress, at once after a clean stop and when the run's marker expires after a failure, the task is listed as stopped, and a follow-up continues it.
@@ -159,7 +170,7 @@ The person has the console open and visits another web page in the same browser.
 - **The answer to a decision never arrives**, for example because the connection dropped. The decision may or may not have been applied. The page says that the outcome is not known, never that it failed, reads the task again, and shows the proposal only when it is still pending.
 - **A run fails after the person's message was recorded.** The message is in the conversation and is not sent again by itself. The task is listed as failed with the reason, and the person may send another message.
 - **A new task's first run fails before anything was recorded**, as when no usable model is active. There is no conversation to show. The page shows the reason and keeps the text so that it can be sent again, and the list shows no task without a message.
-- **The step limit is reached.** The task is listed as failed with the service's reason, which names the limit; a follow-up continues it.
+- **The step limit is reached.** The task is listed as failed with the service's reason, which names the limit; a follow-up continues it. A run that goes on without a reader reaches the limit at a pause between two steps, which can be up to two steps earlier than the same run through the API as it is today; the limit is never exceeded.
 - **A very long message or very large arguments.** The list shows only the beginning of a first message. A task's page shows everything, and stays usable.
 - **A proposal's action is no longer configured, or its agent was removed.** The card shows what the service says of it, and offers the decisions the service allows; what happens to the action then is the service's rule (features 002, 003, and 005).
 - **The service is restarted while a page reads a run's stream.** The stream ends without a result. The page says so, reads the task again, and shows it as the service has it: stopped, once no run is in progress.
@@ -175,12 +186,12 @@ The person has the console open and visits another web page in the same browser.
 
 - **FR-001**: The console MUST have a Tasks section, with an entry in the sidebar beside LLM and Agents. The entry MUST show the number of tasks that need a decision, in every section of the console, in words as well as in a number and never by color alone, and MUST show no number when there are none. The number counts every task of the service, not only the rows the list shows.
 - **FR-001a**: The console MUST call what a person hands Freyja a task, and what a delegate agent works on an agent task, in every place it names either: a heading, a status, a count, a message of its own. It MUST NOT call an agent task a task. What Freyja and the agents write themselves is shown as written. The service's API and its existing names are not changed by the console's choice of word: a task is a thread there.
-- **FR-002**: The section MUST list one row per task, with the beginning of the task's first message, its status (FR-003), and when it last changed, which is when the service last recorded a step of it. Tasks that need a decision MUST come first, then the others with the most recently changed first. A row MUST open the task's page. With no task, the section MUST say so. The section MUST have a New task control.
+- **FR-002**: The section MUST list one row per task, with the beginning of the task's first message, its status (FR-003), and when it last changed, which is when the service last recorded a step of it and, while a run is in progress, when that run started. Tasks that need a decision MUST come first, then the others with the most recently changed first. A row MUST open the task's page. With no task, the section MUST say so. The section MUST have a New task control.
 - **FR-003**: A task has exactly one status, the first of these that holds:
   1. **Running**: a run is in progress on it, on any service instance.
   2. **Needs your decision**: a proposal is pending.
-  3. **Failed**: its most recent run ended with an error. The row and the page give the service's reason.
-  4. **Stopped**: its most recent run ended before Freyja finished and without an error: a person stopped it (FR-022), the service stopped while it ran, or, for a run another client started, that client stopped reading.
+  3. **Failed**: its most recent run was started through the console and ended with an error. The row and the page give the service's reason.
+  4. **Stopped**: its most recent run ended before Freyja finished: a person stopped it (FR-022), the service stopped while it ran, or a run the console did not start, by another client or by the service itself, ended with steps still to take, because its client stopped reading or because it failed. The reason such a run failed went to whoever read its stream and is not known to the list.
   5. **Waiting for an agent**: its most recent run finished and one of its agent tasks is pending.
   6. **Done**: its most recent run finished and nothing is pending.
 
@@ -229,7 +240,7 @@ The person has the console open and visits another web page in the same browser.
 **Compatibility and quality**
 
 - **FR-027**: Starting a run, reading a thread's state, and deciding a proposal, in the way the API offers them today, MUST behave for a client that is not a web page exactly as before this feature, including that such a run ends when its client stops reading. Every existing automated test MUST pass unchanged, apart from tests that gain setup because every page of the console now asks for the number of tasks that need a decision.
-- **FR-028**: The service's part and the web app's part MUST each be covered by automated tests that need no network, no model provider, and no agent installed or running. The console's part of every user story MUST also be covered by an end-to-end test in a browser, beside its unit tests. That a run's stream reaches the page through the console's own origin as it is produced, and not all at once when it ends, MUST be shown in both browsers the end-to-end tests use. The service's tests MUST show that a run goes on to the same end after its reader leaves, and that a stop pressed while an approved action is under way leaves that action run once and recorded.
+- **FR-028**: The service's part and the web app's part MUST each be covered by automated tests that need no network, no model provider, and no agent installed or running. The console's part of every user story MUST also be covered by an end-to-end test in a browser, beside its unit tests. That a run's stream reaches the page through the console's own origin as it is produced, and not all at once when it ends, was shown in the plan's research in both browsers the end-to-end tests use; the two properties of the service's answer that it rests on MUST be pinned by automated tests of the service. The service's tests MUST show that a run goes on to the same end after its reader leaves, and that a stop pressed while an approved action is under way leaves that action run once and recorded.
 
 ### Key Entities
 
@@ -290,11 +301,13 @@ Five decisions were the owner's. Each was asked on 2026-11-20; the first three c
 - Limits chosen here: 100 rows in the list, 200 characters of a first message in a row, fifteen seconds for the list, the number, and a page that follows a task waiting for an agent, and five seconds for a page that follows a run whose stream it is not reading.
 - A message is never a decision, and a task whose proposal is pending takes no new message, as the service already rules (feature 001, FR-011).
 
-**Not proven**
+**Proven in the plan's research**
 
-- The console has never read an event stream. That a run's stream passes the console's forwarding of `/api/...` as it is produced, in both browsers, is to be proven in the plan's research before anything is designed on it. Also to be measured there: how long the forwarding keeps a quiet stream open, since a run can spend a long time in one step; with FR-021 a stream that is cut no longer ends the run, and the page then follows the task by reading it again (FR-013). If a stream does not pass as it is produced, FR-010 is revisited before the plan goes on.
-- That the service can end a run after the step under way, and not in the middle of it (FR-022), is not proven either: today it ends a run only by dropping it when its client goes away. The plan's research shows how before Stop is designed. If it cannot be guaranteed, Stop goes back to the owner; it is not built with the gap.
-- Whether FR-021 and FR-022 can be built without changing files that the session building features 005 and 006 is working in is for the plan to find out. If they cannot, the owner is told which file and why before anything is changed.
+The three things this section listed as not proven when the spec was written were settled on 2026-11-20, before anything was designed on them ([research.md](research.md)):
+
+- A run's stream does not pass the console's forwarding of `/api/...` as it is produced when the service answers as it does today: the forwarding compresses it and delivers it whole at the end, in both browsers. It passes event by event when the answer says it must not be transformed, and the forwarding ends a stream that is silent for 30 seconds unless the service keeps it active. The routes the console uses do both (R1). A stream that is cut anyway does not end the run (FR-021); the page then follows the task by reading it again (FR-013).
+- The service can end a run after the step under way and not in the middle of it (FR-022): a run the console starts is run in parts that end before each model call and each tool step, and a stop is applied only between two parts. Such a run was shown to leave the same thread as a run in one piece (R4).
+- FR-021 and FR-022 are built without changing a file that the session building features 005 and 006 is working in (R16).
 
 **Environment and dependencies**
 
