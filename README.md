@@ -76,6 +76,8 @@ The tool runs only after a recorded approve or edit. An edit keeps the action an
 
 The `interrupt_id` ties a decision to one proposal: a request that names any other id is `409` with code `proposal_mismatch`, so a decision sent twice cannot approve a later proposal. Resume on a thread with nothing pending is `409` with code `nothing_pending`. A malformed decision is `422`. In each of these cases nothing runs and a pending proposal stays decidable.
 
+A decision that was taken stands. When a resume decides a proposal of the subagent and its run then fails before it ends, the thread can still show that proposal, because the step that runs the subagent did not complete. A resume after that is `409` with code `already_decided` when it sends other decisions than the earlier ones, which the message names by type, and nothing runs; the same decisions continue the thread.
+
 **List the threads.** `GET /threads` answers with one row per thread that has had a run, whichever client started it, and `GET /threads/{thread_id}` with one row. They are the service's side of the Tasks section the web console is getting (feature 007); the console calls a thread a task, and the API keeps the word thread.
 
 ```bash

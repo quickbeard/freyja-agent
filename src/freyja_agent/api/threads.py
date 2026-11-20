@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from langchain_core.messages import HumanMessage
 from sse_starlette import EventSourceResponse
 
-from freyja_agent.api.decisions import build_resume_command, decided_calls
+from freyja_agent.api.decisions import build_resume_command, decided_calls, decisions_taken
 from freyja_agent.api.guards import refuse_other_origins
 from freyja_agent.api.outcomes import (
     answer_in_flight,
@@ -72,6 +72,43 @@ async def _paused_calls(runtime: Runtime, thread_id: str, namespace: str) -> lis
             500, "internal", "The proposed calls could not be read; nothing was resumed."
         ) from None
     return [call.tool_call_id for call in calls if call.namespace == namespace]
+
+
+async def _not_decided_otherwise(
+    context: RunContext,
+    thread_id: str,
+    decided: dict[str, Any] | None,
+    interrupt_id: str,
+    command: Any,
+) -> None:
+    """Refuse decisions other than those the proposal's gate already took.
+
+    A resume whose run failed after the gate's step completed, inside a subagent, leaves the
+    proposal shown although it was decided: the next resume continues past the gate with the
+    earlier decisions, whatever it sends (``decisions_taken``). The same decisions continue
+    the thread; any others are refused, and nothing runs.
+    """
+    if decided is None:
+        return
+    earlier = await decisions_taken(
+        context.agent.checkpointer, thread_id, decided["namespace"], interrupt_id
+    )
+    if earlier is None or earlier == [command.resume[interrupt_id]]:
+        return
+    taken = [
+        str(decision.get("type"))
+        for value in earlier
+        if isinstance(value, dict)
+        for decision in value.get("decisions") or []
+        if isinstance(decision, dict)
+    ]
+    raise _error(
+        409,
+        "already_decided",
+        "This proposal was already decided by an earlier resume, whose run stopped after the "
+        f"decision was taken ({', '.join(taken) or 'no decision'}). That decision stands: "
+        "send the same decisions to continue the thread.",
+    )
 
 
 async def _state(context: RunContext, thread_id: str) -> Any:
@@ -193,6 +230,7 @@ async def resume_run(
             )
         command = build_resume_command(pending, body.decisions, context.catalog)
         decided = decided_calls(snapshot.tasks, snapshot.interrupts[0], body.decisions)
+        await _not_decided_otherwise(context, thread_id, decided, pending["interrupt_id"], command)
         if decided is not None:
             decided["calls"] = await _paused_calls(runtime, thread_id, decided["namespace"])
             decided["seen"] = []

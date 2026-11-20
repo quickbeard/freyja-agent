@@ -101,6 +101,50 @@ def build_resume_command(
     return Command(resume={pending["interrupt_id"]: {"decisions": payload}})
 
 
+# What a task writes that is not a result of its own: the interrupt it raised, the decisions
+# it was resumed with, and an error. A task that wrote anything else has completed.
+_NOT_A_RESULT = frozenset({"__interrupt__", "__resume__", "__error__"})
+
+
+async def decisions_taken(
+    checkpointer: Any, thread_id: str, namespace: str, interrupt_id: str
+) -> list[Any] | None:
+    """The decisions the gate that raised ``interrupt_id`` already took, or None.
+
+    A resume runs the gate's step with the person's decisions, and LangGraph keeps the step's
+    writes as it completes. When a later step of the same run then fails, inside a subagent,
+    the orchestrator's step that runs the subagent has not completed, so the thread still
+    shows the proposal. A resume after that continues from the subagent's checkpoint: the
+    gate's step is not run again, and its writes, made with the earlier decisions, are used
+    whatever the new resume says. Those decisions are the step's ``__resume__`` write.
+
+    None when the gate's step has not completed: its decisions are then the next resume's.
+    """
+    config = {"configurable": {"thread_id": thread_id, "checkpoint_ns": namespace}}
+    found = await checkpointer.aget_tuple(config)
+    if found is None:
+        return None
+    writes = list(found.pending_writes or [])
+    raised = {
+        task
+        for task, channel, value in writes
+        if channel == "__interrupt__"
+        and any(getattr(item, "id", None) == interrupt_id for item in value or [])
+    }
+    for task in raised:
+        channels = {channel for written, channel, _ in writes if written == task}
+        if channels - _NOT_A_RESULT:
+            return next(
+                (
+                    value
+                    for written, channel, value in writes
+                    if (written, channel) == (task, "__resume__")
+                ),
+                None,
+            )
+    return None
+
+
 def decided_calls(
     tasks: Sequence[Any], interrupt: Any, decisions: Sequence[AnyDecision]
 ) -> dict[str, Any] | None:
