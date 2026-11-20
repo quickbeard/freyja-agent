@@ -27,6 +27,8 @@ import {
   type ThreadSummary,
   threadKey,
 } from "@/lib/tasks";
+import { AgentTasks, awaited } from "./agent-tasks";
+import { type Blocked, FollowUp } from "./follow-up";
 import { MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
@@ -35,6 +37,10 @@ import { TaskStatus } from "./status";
 // How often a page that does not read a run's stream reads the task again while that run is
 // in progress (FR-013).
 export const FOLLOW_SECONDS = 5;
+
+// How often a page reads a task again while one of its agent tasks is pending, or has ended
+// with its outcome not yet in the conversation (FR-013).
+export const AGENT_SECONDS = 15;
 
 const NO_USABLE_MODEL = "no_usable_model";
 
@@ -57,6 +63,11 @@ function missing(error: unknown): boolean {
   return (
     error instanceof ApiError && (error.status === 404 || error.status === 422)
   );
+}
+
+/** How many of the messages a person sent. */
+function fromPeople(messages: readonly Message[]): number {
+  return messages.filter((message) => message.type === "human").length;
 }
 
 /** A step the run completed, in words; the middleware's own steps are not shown. */
@@ -161,10 +172,20 @@ function Conversation({ messages }: { messages: Message[] }) {
 export function TaskView({ threadId }: { threadId: string }) {
   const run = useRun(threadId);
   const streaming = run !== undefined && run.ended === null;
+  // How many readings of the row have been answered, so that a reading can be told from
+  // the one the page already held when something happened.
+  const [rowReads, setRowReads] = useState(0);
+  const rowReadsNow = useRef(0);
   const row = useSWR<ThreadSummary, unknown>(
     threadKey(threadId),
     () => readThread(threadId),
-    { shouldRetryOnError: false },
+    {
+      shouldRetryOnError: false,
+      onSuccess: () => {
+        rowReadsNow.current += 1;
+        setRowReads(rowReadsNow.current);
+      },
+    },
   );
   const state = useSWR<ThreadState, unknown>(
     stateKey(threadId),
@@ -189,9 +210,15 @@ export function TaskView({ threadId }: { threadId: string }) {
   // that the focus is not lost with the card the person pressed.
   const [focusStatus, setFocusStatus] = useState(false);
   const statusRef = useRef<HTMLOutputElement>(null);
-  // Whether this page's stream was cut before the run's last event. It is said, and the
-  // task is followed, until the service says the run is no longer in progress (FR-010).
-  const [cut, setCut] = useState(false);
+  // Set when this page's stream was cut before the run's last event, to the number of
+  // readings of the row answered until then. The cut is said, and the task is followed,
+  // until a reading made after it says the run is no longer in progress (FR-010): the row
+  // the page held before, as for a follow-up, says nothing of this run.
+  const [cut, setCut] = useState<number | null>(null);
+  // The follow-up box: another box, holding `text`, each time `box` changes. It changes when
+  // a follow-up's run failed before its message was recorded, so that the text is offered
+  // again (FR-008's rule for a new task, kept for a follow-up).
+  const [draft, setDraft] = useState({ box: 0, text: "" });
 
   // When a run this page shows ends, in whichever way, the task is read again once.
   useEffect(() => {
@@ -199,7 +226,7 @@ export function TaskView({ threadId }: { threadId: string }) {
       return;
     }
     if (ended.kind === "connection_ended") {
-      setCut(true);
+      setCut(rowReadsNow.current);
     }
     let current = true;
     void Promise.allSettled([readRowAgain(), readStateAgain()]).then(() => {
@@ -229,10 +256,16 @@ export function TaskView({ threadId }: { threadId: string }) {
   // to need approval since: its reason stays beside the card it is about (005 FR-023).
   const failedOnProposal =
     failed !== null && (state.data?.pending ?? null) !== null;
-  // What the stream brought stays on the page until the task has been read again after it.
+  // What the stream brought stays on the page until the task has been read again after it,
+  // also when that reading failed: the conversation the page held before lacks what the run
+  // added, and would look as if the message had never been sent.
   const showLive =
-    run !== undefined && (streaming || (ended !== null && readFor !== ended));
+    run !== undefined &&
+    (streaming ||
+      (ended !== null && (readFor !== ended || readError !== undefined)));
   const settled = run !== undefined && ended !== null && readFor === ended;
+  const failedCode = failed?.code ?? null;
+  const recorded = state.data?.messages;
 
   // Once the end of a run has been read, what the service holds is what the page shows: the
   // run is forgotten, so that how it ended is not shown later as if it were current.
@@ -243,9 +276,30 @@ export function TaskView({ threadId }: { threadId: string }) {
       !failedOnProposal &&
       readError === undefined
     ) {
+      // A follow-up that failed and left no message of a person's in the conversation, as
+      // when no usable model is active: nothing of it was recorded, and its text goes back
+      // into the box. A message that was recorded is never offered again.
+      const text = run?.message ?? null;
+      if (
+        failedCode !== null &&
+        text !== null &&
+        recorded !== undefined &&
+        fromPeople(recorded) <= fromPeople(run?.before ?? [])
+      ) {
+        setDraft((current) => ({ box: current.box + 1, text }));
+      }
       clear(threadId);
     }
-  }, [settled, offerAgain, failedOnProposal, readError, threadId]);
+  }, [
+    settled,
+    offerAgain,
+    failedOnProposal,
+    readError,
+    threadId,
+    failedCode,
+    recorded,
+    run,
+  ]);
 
   // A notice about a decision that was not applied goes once the task's proposal is another,
   // or there is none any more, than the one the task had when the notice was given.
@@ -273,27 +327,60 @@ export function TaskView({ threadId }: { threadId: string }) {
   // end the following (FR-013).
   // The status last read counts while a read fails: following stops when the service says
   // the run has ended, not when it cannot be reached.
+  // The conversation's own reading can say a run is in progress when the row's, asked for
+  // at the same time and answered first, does not yet: both count.
+  const runActive =
+    state.error === undefined && state.data?.run_active === true;
+  const inProgress = rowRunning || runActive;
+  const cutUnread =
+    cut !== null && (row.data === undefined || readError !== undefined);
+  // A run of this page ended and the task could not be read after it.
+  const endUnread =
+    run !== undefined && ended !== null && readError !== undefined;
   const following =
     !streaming &&
-    (row.data?.status === "running" ||
-      (cut && (row.data === undefined || readError !== undefined)));
+    (row.data?.status === "running" || runActive || cutUnread || endUnread);
+  // Waiting for an agent: one of the task's agent tasks is pending, or ended with its
+  // outcome not yet in the conversation. The service records the outcome in a run of its
+  // own, which this page does not read, once no proposal is pending; the task is read
+  // again until it has (FR-013).
+  const waiting =
+    !streaming &&
+    (row.data?.status === "waiting_for_agent" ||
+      (state.data?.agent_tasks ?? []).some(awaited));
+  const period = following ? FOLLOW_SECONDS : waiting ? AGENT_SECONDS : null;
   useEffect(() => {
-    if (!following) {
+    if (period === null) {
       return;
     }
     const timer = setInterval(() => {
+      // Nothing is read while the page is hidden: SWR reads again when it is shown.
+      if (document.visibilityState === "hidden") {
+        return;
+      }
       void readRowAgain();
       void readStateAgain();
-    }, FOLLOW_SECONDS * 1000);
+    }, period * 1000);
     return () => clearInterval(timer);
-  }, [following, readRowAgain, readStateAgain]);
+  }, [period, readRowAgain, readStateAgain]);
+  // A run this page followed has ended: the conversation is read once more. The reading that
+  // showed the end was asked for together with the conversation's, and the service may have
+  // answered that one before the run recorded its last step.
+  const followed = useRef(false);
+  const rowRead = row.data !== undefined && row.error === undefined;
   useEffect(() => {
-    if (cut && row.error === undefined && row.data?.status !== undefined) {
-      if (row.data.status !== "running") {
-        setCut(false);
-      }
+    if (inProgress) {
+      followed.current = true;
+    } else if (followed.current && rowRead) {
+      followed.current = false;
+      void readStateAgain();
     }
-  }, [cut, row.error, row.data?.status]);
+  }, [inProgress, rowRead, readStateAgain]);
+  useEffect(() => {
+    if (cut !== null && rowReads > cut && rowRead && !inProgress) {
+      setCut(null);
+    }
+  }, [cut, rowReads, rowRead, inProgress]);
 
   // A decision goes through the service's own checks; its continuation is shown as a run
   // is, below the conversation as it was when the person decided (FR-019).
@@ -395,7 +482,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     return (
       <section className="flex flex-col gap-4">
         <Header />
-        {cut && <CutNotice />}
+        {cut !== null && <CutNotice />}
         {unread}
       </section>
     );
@@ -414,30 +501,59 @@ export function TaskView({ threadId }: { threadId: string }) {
       : null;
   // A proposal is decided only on a page that is not showing a run in progress.
   const pending =
-    !showLive && !rowRunning && state.error === undefined
+    !showLive && !inProgress && state.error === undefined
       ? (state.data?.pending ?? null)
       : null;
+  // Another message is sent only when no run is in progress and no proposal is pending
+  // (FR-020). The service rules the same; this is what the page knows of it, said beside
+  // the box. A proposal counts also when it is read from an earlier, older reading, and
+  // when only the row says so.
+  const blocked: Blocked =
+    showLive || following
+      ? "run"
+      : (state.data?.pending ?? null) !== null ||
+          row.data?.status === "needs_decision"
+        ? "proposal"
+        : null;
+  // What the page says of the run, in one place that is always there: it takes the focus
+  // when a message or a decision was accepted, and keeps it when the run ends, where an
+  // element that went away would drop the focus to the top of the page. That a run of this
+  // page has ended is said for whoever does not see the status change (FR-012a).
+  const last = ended ?? readFor;
+  const said = streaming
+    ? started
+      ? "The run has started. Freyja's reply appears as it is written."
+      : "Starting the run…"
+    : inProgress
+      ? "A run is in progress. This page reads the task again until it ends."
+      : waiting
+        ? "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet."
+        : null;
+  const over =
+    last?.kind !== "event"
+      ? ""
+      : last.event.event === "interrupt"
+        ? "The run has paused: a proposal waits for a decision."
+        : "The run has ended.";
+  const agentTasks = noConversation ? [] : (state.data?.agent_tasks ?? []);
+  // The box stands under a conversation, once the task has been read.
+  const conversed =
+    live !== null ||
+    (state.data !== undefined && !noConversation && row.data !== undefined);
 
   return (
     <section className="flex flex-col gap-4">
       <Header status={status} />
-      {streaming && (
-        <output
-          ref={statusRef}
-          tabIndex={-1}
-          className="block text-sm text-muted-foreground"
-        >
-          {started
-            ? "The run has started. Freyja's reply appears as it is written."
-            : "Starting the run…"}
-        </output>
-      )}
-      {!streaming && rowRunning && (
-        <output className="block text-sm text-muted-foreground">
-          A run is in progress. This page reads the task again until it ends.
-        </output>
-      )}
-      {cut && <CutNotice />}
+      <output
+        ref={statusRef}
+        tabIndex={-1}
+        className={
+          said === null ? "sr-only" : "block text-sm text-muted-foreground"
+        }
+      >
+        {said ?? over}
+      </output>
+      {cut !== null && <CutNotice />}
       {unread}
       {notice !== null && (
         <p
@@ -483,6 +599,24 @@ export function TaskView({ threadId }: { threadId: string }) {
           pending={pending}
           send={(decisions) => decideNow(pending.interrupt_id, decisions)}
           onStale={stale}
+        />
+      )}
+      <AgentTasks tasks={agentTasks} />
+      {conversed && (
+        <FollowUp
+          key={draft.box}
+          threadId={threadId}
+          before={state.data?.messages ?? []}
+          blocked={blocked}
+          initial={draft.text}
+          onSent={() => {
+            setNotice(null);
+            setFocusStatus(true);
+          }}
+          onMoved={() => {
+            void readRowAgain();
+            void readStateAgain();
+          }}
         />
       )}
     </section>

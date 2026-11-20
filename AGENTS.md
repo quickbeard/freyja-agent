@@ -293,7 +293,14 @@ startup and exits with an error naming the connection when it is unreachable.
   (`proposal-card.tsx`), which offers each proposed action only the decisions the service
   lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
   no more than that edited arguments are a JSON object (`parseArguments`), and has its
-  buttons outside any form, so that Enter in a field sends no decision. All text of a task is put in
+  buttons outside any form, so that Enter in a field sends no decision. It also holds the
+  follow-up box (`follow-up.tsx`), which sends another message on a task through the same
+  `send-box.tsx` and is given why it cannot be sent, a run in progress or a pending
+  proposal, by the view, and the list of a task's agent tasks (`agent-tasks.tsx`), whose
+  `awaited` says whether a task still waits for one. The view reads its task again by one
+  timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
+  every `AGENT_SECONDS` while an agent task is awaited, and never while the page is hidden.
+  All text of a task is put in
   text nodes and never rendered as markup. The console has no users, and the section says
   so above its list.
   `web/components/llm/` holds the list, the card, the dialog that adds a profile or changes one
@@ -319,10 +326,13 @@ startup and exits with an error naming the connection when it is unreachable.
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
-  `tasks.spec.ts` the Tasks section and `tasks-decide.spec.ts` deciding a proposal, with
+  `tasks.spec.ts` the Tasks section, `tasks-decide.spec.ts` deciding a proposal, and
+  `tasks-run.spec.ts` follow-ups, agent tasks, and a run the page does not read (it moves
+  the page's clock with `page.clock` in place of waiting five or fifteen seconds), with
   `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
   its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
-  its decision, and `answerThreads`); and
+  its decision, `followedUp` and `agentTask` for a follow-up and an agent task, and
+  `answerThreads`); and
   `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
   to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
   forwards to), to see a run's events arrive as they are produced. It runs in projects of

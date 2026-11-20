@@ -2,7 +2,12 @@
 // sends them, and the shapes it answers with. No test reaches the service.
 
 import { vi } from "vitest";
-import type { Message, ThreadState, ThreadSummary } from "@/lib/tasks";
+import type {
+  AgentTask,
+  Message,
+  ThreadState,
+  ThreadSummary,
+} from "@/lib/tasks";
 
 /** A body that arrives in the given pieces, as a network delivers it. */
 export function body(...chunks: string[]): ReadableStream<Uint8Array> {
@@ -88,6 +93,21 @@ export function state(
   };
 }
 
+/** An agent task as the service gives it; pending unless the test says otherwise. */
+export function agentTask(values: Partial<AgentTask> = {}): AgentTask {
+  return {
+    agent: "stub",
+    task_id: "a-1",
+    message: "slow 40",
+    status: "working",
+    started_at: "2026-11-20T08:00:02Z",
+    last_checked_at: "2026-11-20T08:00:03Z",
+    ended_at: null,
+    outcome_delivered: false,
+    ...values,
+  };
+}
+
 export function summary(values: Partial<ThreadSummary> = {}): ThreadSummary {
   return {
     thread_id: "t-1",
@@ -109,9 +129,12 @@ export type Answer =
 
 /**
  * Replace `fetch` with one that answers by the request: `answer` is given the method and the
- * path under `/api`, and says what the service would. Every request is kept.
+ * path under `/api`, and says what the service would, at once or later. Every request is
+ * kept.
  */
-export function serve(answer: (method: string, path: string) => Answer) {
+export function serve(
+  answer: (method: string, path: string) => Answer | Promise<Answer>,
+) {
   const asked: { method: string; path: string; body: unknown }[] = [];
   const fetchStub = vi.fn(
     async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -124,7 +147,7 @@ export function serve(answer: (method: string, path: string) => Answer) {
         body:
           typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
       });
-      const reply = answer(method, path);
+      const reply = await answer(method, path);
       if ("fails" in reply) {
         throw new TypeError(reply.fails);
       }
@@ -147,4 +170,9 @@ export function serve(answer: (method: string, path: string) => Answer) {
 /** A refusal as the service sends it. */
 export function refusal(status: number, code: string, message: string) {
   return { status, json: { detail: { code, message } } };
+}
+
+/** An answer that comes after `ms`, as over a network. */
+export function later<T>(ms: number, answer: T): Promise<T> {
+  return new Promise((resolve) => setTimeout(() => resolve(answer), ms));
 }

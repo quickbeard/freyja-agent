@@ -564,13 +564,13 @@ run it is not reading.
 
 ### Tests for User Story 4
 
-- [ ] T059 [P] [US4] Write `web/__tests__/components/tasks/follow-up.test.tsx` and
+- [X] T059 [P] [US4] Write `web/__tests__/components/tasks/follow-up.test.tsx` and
       `agent-tasks.test.tsx`: the box sends a message on the same thread and shows the run;
       it cannot be sent, and says why, while a run is in progress and while a proposal is
       pending; a refusal keeps the text; each agent task with its agent, its status in
       words, and its message as text, the pending ones marked, and the word "agent task",
       never "task" alone (FR-001a, FR-009, FR-020)
-- [ ] T060 [P] [US4] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 3: a
+- [X] T060 [P] [US4] Extend `web/__tests__/components/tasks/task-view.test.tsx`, part 3: a
       task that is `running` with no run in this tab's store says a run is in progress,
       offers no message and no decision, and reads the row and the state again every 5
       seconds until the run has ended; a task with a pending agent task reads them again
@@ -578,13 +578,13 @@ run it is not reading.
 
 ### Implementation for User Story 4
 
-- [ ] T061 [US4] Create `web/components/tasks/follow-up.tsx` and `agent-tasks.tsx` and show
+- [X] T061 [US4] Create `web/components/tasks/follow-up.tsx` and `agent-tasks.tsx` and show
       them in `web/components/tasks/task-view.tsx`, with the refresh intervals of T060
-- [ ] T062 [US4] Write `web/e2e/tasks-run.spec.ts`, part 1, with `web/e2e/tasks-api.ts`
+- [X] T062 [US4] Write `web/e2e/tasks-run.spec.ts`, part 1, with `web/e2e/tasks-api.ts`
       extended: a follow-up on a finished task; the box on a paused task; a task that waits
       for an agent and then shows its outcome without a reload; a task whose run is in
       progress elsewhere
-- [ ] T063 [US4] Add follow-ups and agent tasks to `web/README.md` and `README.md`
+- [X] T063 [US4] Add follow-ups and agent tasks to `web/README.md` and `README.md`
 
 **Checkpoint**: quickstart section 4 works with the stand-in agent.
 
