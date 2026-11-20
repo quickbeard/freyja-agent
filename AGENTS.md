@@ -244,7 +244,7 @@ startup and exits with an error naming the connection when it is unreachable.
   told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
   `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
-  the Agents section as it is read and its warnings, and `agents-manage.spec.ts` adding an
+  the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
@@ -333,7 +333,9 @@ startup and exits with an error naming the connection when it is unreachable.
   (`cleaned`), because an address may become an agent's after a card that names it was read.
   `tests/test_agents_address_nowhere.py` searches everything the service gives back and
   everything the checkpointer keeps. A new route or log line about agents is added to that
-  test. A test that searches for a port looks for it as a number of its own (`holds_port` in
+  test, and a new route or refusal code also to its table `CONTRACT`: the file's last test
+  fails when a route of `api/agents.py`, or a refusal the contract gives a route, is driven
+  by none of its parts. A test that searches for a port looks for it as a number of its own (`holds_port` in
   `tests/conftest.py`), so that digits of an id or a timestamp are not taken for it.
 - No secret is committed, and gitleaks checks it: in the commit hook over what is staged, and
   in CI over every commit. Its rules and the made-up keys the tests use are in

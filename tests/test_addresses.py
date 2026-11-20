@@ -166,6 +166,57 @@ def test_an_address_is_removed_in_every_form(scrubber: AddressScrubber, text: st
     assert "9998" not in cleaned
 
 
+@pytest.mark.parametrize(
+    "text",
+    [
+        # After a scheme other than http and https, and after none.
+        "reach me at ws://127.0.0.1:9998/a2a today",
+        "reach me at grpc://localhost:9998 today",
+        "reach me at tcp://[::1]:9998 today",
+        "reach me at //127.0.0.1:9998/a2a today",
+        "reach me at wss://user:secret@localhost:9998/x today",
+        "see docs/127.0.0.1:9998 today",
+        # However `localhost` is written: a name has no case, and may end in a full stop.
+        "reach me at http://LOCALHOST:9998/a2a today",
+        "reach me at HTTP://LocalHost:9998/ today",
+        "reach me at http://localhost.:9998 today",
+        "reach me at LocalHost:9998 today",
+        "reach me at localhost.:9998 today",
+        "Connect call failed ('LOCALHOST', 9998)",
+    ],
+)
+def test_an_address_is_removed_after_any_scheme_and_however_localhost_is_written(
+    scrubber: AddressScrubber, text: str
+) -> None:
+    """Found by the independent review of 005 Phase 9: text an agent writes about itself."""
+    cleaned = scrubber.scrub(text)
+    assert ADDRESS in cleaned
+    assert "9998" not in cleaned
+
+
+def test_the_path_of_an_address_goes_with_it_whatever_follows_in_the_sentence() -> None:
+    """Found by the same review: a full stop after an address is not part of its path."""
+    scrubber = AddressScrubber()
+    scrubber.mark_saved("http://127.0.0.1:9998/a2a/tok")
+    scrubber.mark_saved("http://127.0.0.1:9997/a,b/c")
+    for text, cleaned in [
+        ("Reach me at http://127.0.0.1:9998/a2a/tok.", f"Reach me at {ADDRESS}."),
+        ("Reach me at http://127.0.0.1:9998/a2a/tok, or call.", f"Reach me at {ADDRESS}, or call."),
+        ("(http://127.0.0.1:9998/a2a/tok)", f"({ADDRESS})"),
+        ("see http://127.0.0.1:9998/a2a/tok?x=1", f"see {ADDRESS}?x=1"),
+        ("see http://127.0.0.1:9998/a2a/tok#top", f"see {ADDRESS}#top"),
+        ("see localhost:9998/a2a/tok; then", f"see {ADDRESS}; then"),
+        ("see ws://127.0.0.1:9998/a2a/tok.", f"see ws://{ADDRESS}."),
+        # A path a saved address may hold: a comma does not end it.
+        ("see http://127.0.0.1:9997/a,b/c.", f"see {ADDRESS}."),
+        # Another path on the same listener loses its host and port, and keeps its path.
+        ("see http://127.0.0.1:9998/a2a/token", f"see {ADDRESS}/a2a/token"),
+        ("see http://127.0.0.1:9998/a2a/tok-2", f"see {ADDRESS}/a2a/tok-2"),
+        ("see http://127.0.0.1:9998/a2a/tok/more", f"see {ADDRESS}/more"),
+    ]:
+        assert scrubber.scrub(text) == cleaned, text
+
+
 def test_the_whole_address_goes_before_a_part_of_it() -> None:
     scrubber = AddressScrubber()
     scrubber.mark_saved("http://localhost:9998/agents/one")

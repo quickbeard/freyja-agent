@@ -1078,3 +1078,61 @@ What the implementation settled differently from the plan, or found out, phase b
   task. No line of the service's logs held a stand-in's port.
 - **Coverage of the service's lines is 91.25%** as CI measures it; the web app's is
   97.44% of statements, 95.33% of branches, 97.32% of functions, and 98.34% of lines.
+
+### Phase 9
+
+- **The journey and the sweep found no gap by themselves** (T111, T112): every route and
+  every refusal was driven with addresses in the forms the earlier parts used, and nothing
+  held one. **The independent review then found one** by feeding the proof forms it had
+  never been given, which is what T113 is for.
+- **The gap, in `delegates/addresses.py`**: text an agent writes about itself kept the
+  agent's host and port when it named them after a scheme other than `http` and `https`
+  (`ws://127.0.0.1:9998`, `grpc://localhost:9998`, `tcp://[::1]:9998`), after `//` alone,
+  or with `localhost` in capitals or with a full stop at its end. Such text is a card's
+  description, which the list and the catalog return. No library words an address this
+  way, so no stream, thread, or log line was affected in the proof.
+  - A host that follows a slash is no longer taken for part of another address.
+  - `localhost` is compared without its case and without a full stop at its end, in text
+    and in the operating system's pair `('LOCALHOST', 9998)`.
+- **The path of a saved address is part of it, and stayed behind a full stop.** A card
+  that ended a sentence with the agent's whole address, `…:9998/a2a/tok.`, kept
+  `/a2a/tok.`: the path was compared whole, with the full stop. What follows a host is now
+  looked at up to the next space or quote, only the part that is a known address's path
+  is taken, and the last segment may be followed by anything but a character a segment is
+  made of. A comma inside a saved path no longer ends it.
+- **The proof was given what it lacked**: part 5's cards name an address every one of
+  those ways, one saved address has a path, and the failures of a hand-off, a cancel, and
+  a round of watching on a connected link are the HTTP library's own wording. With the
+  scrubber as it was, part 5 and thirteen unit tests fail.
+- **The completeness check** (`CONTRACT` and the last two tests of the file). Each part
+  notes the routes it asks and the code of every refusal it gets. The table gives each
+  route its refusals; one test holds it against `contracts/openapi.yaml`, route by route,
+  and against the router; the other fails for a route or a refusal no part drove, and for
+  a refusal the table does not give the route. It is skipped when the parts did not all
+  run in the session, as with `-k`.
+- **The table gives `internal` to every route**, where the contract gives it to the list
+  alone: every route reads or writes the store and answers 500 when that fails. Each is
+  driven with an error that names two addresses.
+- **Other origins.** The sweep asks each of the four routes that change something with
+  seven sets of headers a page of another origin causes, and each route with four that
+  are the console's or no page's. It found no gap.
+- **Known, since Phase 5: a body that cannot be read is refused for that**, with 422 or
+  400, before the rule about other origins is asked: the framework reads a body marked as
+  JSON first. Nothing is changed and nothing that was sent comes back; a test now says so.
+  The 400 for bytes that are no text is the framework's own shape, which the contract
+  gives no route.
+- **Known: an address whose colon is encoded or missing is not found**, such as
+  `127.0.0.1%3A9998`, by the scrubber or by the proof's search. Nothing in the service
+  writes one.
+- **The frame test has a positive control**: it waits for the frame's own request for the
+  section and checks that it was answered with the two headers, so an empty frame is the
+  console's doing and not the browser's.
+- **Seen by hand, with the real service and a real model** (quickstart section 7), before
+  the review's fix. With a saved agent at port 9996 and three runs, one completed, one
+  paused, and one approved with the stand-in stopped: the catalog, the three threads'
+  states, the streams, and the service's log at every level held no `9996`. A `POST
+  /agents` with `Origin: http://evil.example` was refused as `other_origin`, a
+  `text/plain` body with 422, and `/agents` of the console carried `frame-ancestors
+  'none'` and `X-Frame-Options: DENY`.
+- **Coverage of the service's lines is 91.25%** as CI measures it; the web app's is
+  unchanged.

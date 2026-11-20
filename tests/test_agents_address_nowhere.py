@@ -1,5 +1,5 @@
 """005 FR-028, SC-008: an agent's address appears nowhere outside the Agents routes (parts 1
-to 4).
+to 5).
 
 Built like ``tests/test_llm_secrets_nowhere.py`` and grown in every phase that adds a route.
 One agent is saved on a recognizable port, one is named in the environment on another, and
@@ -25,15 +25,24 @@ and a resume that ends with ``approval_now_required``.
 Part 4 does the same for a move with each of its refusals, a removal with its refusals, a
 task given up and reported in its thread, and a run kept back because the address it started
 with is another agent's.
+
+Part 5 is one journey through every route: an agent saved under ``localhost``, checked, handed
+work, switched, moved, removed, and saved again under ``127.0.0.1``, beside a saved agent that
+is not in use. Each part notes the routes it drove and the refusals it got, and the check at
+the end of the file fails when a route of ``api/agents.py``, or a refusal code that
+``contracts/openapi.yaml`` gives a route, is driven by no part.
 """
 
 import json
 import logging
+import re
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import httpx
 import pytest
+import yaml
 from fastapi.testclient import TestClient
 
 from freyja_agent.api import agents as agents_api
@@ -77,6 +86,43 @@ TALKATIVE = (
 
 def found(text: str, port: int) -> bool:
     return holds_port(text, port) or f":{port}" in text
+
+
+# What the parts of this proof drove: the parts that ran, each route of the Agents section
+# that was asked, and each refusal a route gave, by its code. A 422 is noted as `invalid`.
+PARTS_RUN: set[int] = set()
+DRIVEN: set[tuple[str, str, str | None]] = set()
+
+
+def _route(path: str) -> str:
+    rest = path.partition("?")[0].removeprefix("/agents")
+    if rest == "":
+        return "/agents"
+    return "/agents/{agent_id}/check" if rest.endswith("/check") else "/agents/{agent_id}"
+
+
+def watch(client: TestClient, part: int) -> None:
+    """Note every request ``client`` makes to the Agents section from here on, for ``part``."""
+    PARTS_RUN.add(part)
+    request = client.request
+
+    def noting(method: str, url: Any, **kwargs: Any) -> Any:
+        response = request(method, url, **kwargs)
+        if str(url).startswith("/agents"):
+            code: str | None = None
+            if not response.is_success:
+                detail = response.json()["detail"]
+                if isinstance(detail, dict):
+                    code = detail["code"]
+                elif response.status_code == 422 and isinstance(detail, list):
+                    code = "invalid"
+                else:
+                    # No shape of the contract: the check at the end of the file says so.
+                    code = f"status {response.status_code}"
+            DRIVEN.add((method.upper(), _route(str(url)), code))
+        return response
+
+    client.request = noting  # type: ignore[method-assign]
 
 
 @pytest.mark.parametrize(
@@ -201,6 +247,7 @@ def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
     refusals: list[str] = []
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        watch(client, 1)
         seen = Seen(client, sse_events)
 
         def agents_route(method: str = "GET", **kwargs: Any) -> Any:
@@ -401,6 +448,7 @@ def test_an_address_is_in_nothing_a_check_returns_or_logs(
     answers: list[Any] = []
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        watch(client, 2)
         seen = Seen(client, sse_events)
         added = client.post("/agents", json={"name": "helper", "url": CHECKED_URL})
         assert added.status_code == 201, added.text
@@ -531,6 +579,7 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     refusals: list[str] = []
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        watch(client, 3)
         seen = Seen(client, sse_events)
 
         def agents_route(method: str, path: str = "", **kwargs: Any) -> Any:
@@ -705,6 +754,7 @@ def test_an_address_is_in_nothing_a_move_or_a_removal_returns_or_causes(
     refusals: list[str] = []
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        watch(client, 4)
         seen = Seen(client, sse_events)
 
         def agents_route(method: str, path: str = "", **kwargs: Any) -> Any:
@@ -868,3 +918,418 @@ async def _record_task(made: A2aApp, seed: dict[str, Any], now: Any) -> None:
             agent_ref=seed["ref"],
         )
     )
+
+
+# Part 5 (T111): one journey through every route, and the check that nothing is left out.
+
+ROVER_PORT = 9771
+ONWARD_PORT = 9772
+STAND_PORT = 9773
+SHADOW_PORT = 9774
+JOURNEY_PORTS = (ROVER_PORT, ONWARD_PORT, STAND_PORT, SHADOW_PORT)
+# The same place, spelled both ways an operator may enter it: each is kept as it was entered.
+ROVER_AS_LOCALHOST = f"http://localhost:{ROVER_PORT}"
+ROVER_AS_LOOPBACK = f"http://127.0.0.1:{ROVER_PORT}"
+# An address with a path, which is part of the address: it goes with its host and port.
+ONWARD_URL = f"http://127.0.0.1:{ONWARD_PORT}/agents/onward-path"
+STAND_URL = f"http://127.0.0.1:{STAND_PORT}"
+SHADOW_URL = f"http://127.0.0.1:{SHADOW_PORT}"
+TO_ROVER = ("handoff_to_rover", {"message": "For the rover."})
+
+
+def under(app: Any, prefix: str) -> Any:
+    """``app`` as it answers when it is served under ``prefix``, as behind a gateway."""
+
+    async def mounted(scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] == "http" and scope["path"].startswith(prefix):
+            scope = {**scope, "path": scope["path"][len(prefix) :] or "/"}
+        await app(scope, receive, send)
+
+    return mounted
+
+
+def every_way(port: int) -> str:
+    """An agent's own address as a card may write it: after any scheme or none, with
+    `localhost` in any case and with a full stop at its end. The independent review of
+    Phase 9 found that the first seven of these were left in card text."""
+    forms = (
+        "ws://127.0.0.1:{}/a2a",
+        "grpc://localhost:{}",
+        "//127.0.0.1:{}/a2a",
+        "tcp://[::1]:{}",
+        "http://LOCALHOST:{}/a2a",
+        "HTTP://LocalHost:{}/",
+        "http://localhost.:{}",
+        "http://127.0.0.1:{}/a2a",
+        "localhost:{}",
+        "[::1]:{}",
+        "('127.0.0.1', {})",
+    )
+    return "Reach me at " + ", or ".join(form.format(port) for form in forms) + " today."
+
+
+def test_an_address_is_in_nothing_one_journey_through_every_route_returns_or_causes(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            handoff("Greet the stand.", agent="stand"),
+            DONE,
+            propose(TO_ROVER),
+            DONE,
+            handoff("Sent with no pause.", agent="rover", call_id="h3"),
+            DONE,
+            # The background run that tells a thread its task was given up.
+            DONE,
+            propose(TO_ROVER, step="g"),
+            DONE,
+            # A hand-off and a cancel that fail on a link that holds a card.
+            propose(TO_ROVER, ("cancel_rover_task", {"task_id": "task-10"}), step="k"),
+            DONE,
+        ]
+    )
+    stand = make_stub("stand", card=stub_card("stand", description=naming(STAND_PORT, SHADOW_PORT)))
+    # A saved agent the environment overrides: `stand` is an environment agent's name.
+    shadow = make_stub("stand", card=stub_card("stand", description=naming(SHADOW_PORT)))
+    made = make_a2a_app(
+        model,
+        {"stand": {"url": STAND_URL, "read_only": True}},
+        stubs={"stand": stand},
+        saved={"stand": {"url": SHADOW_URL, "stub": shadow}},
+        a2a_startup_timeout_seconds=0.4,
+    )
+    put(made, STAND_URL, stand)
+    shadow_transport = put(made, SHADOW_URL, shadow)
+    rover = make_stub(
+        "rover",
+        card=stub_card(
+            "rover", description=f"{every_way(ROVER_PORT)} {naming(STAND_PORT, SHADOW_PORT)}"
+        ),
+    )
+    rover_transport = put(made, ROVER_AS_LOCALHOST, rover)
+    # Its card names its whole address, path included, as a sentence does: before a full
+    # stop, before a query, and in brackets.
+    onward = make_stub(
+        "rover",
+        card=stub_card(
+            "rover",
+            description=(
+                f"Reach me at {ONWARD_URL}. Or at {ONWARD_URL}?x=1, or ({ONWARD_URL}), or "
+                f"ws://localhost:{ONWARD_PORT}/agents/onward-path; {every_way(ROVER_PORT)} "
+                f"{naming(STAND_PORT, SHADOW_PORT)}"
+            ),
+        ),
+    )
+    onward_transport = Naming(under(onward.app, "/agents/onward-path"))
+    made.at[destination(canonical_address(ONWARD_URL))] = (onward, onward_transport)
+    shadow_id = made.saved["stand"].id
+    answers: list[Any] = []
+    refusals: list[str] = []
+
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        watch(client, 5)
+        seen = Seen(client, sse_events)
+
+        def route(method: str, path: str = "", **kwargs: Any) -> Any:
+            response = client.request(method, f"/agents{path}", **kwargs)
+            if response.is_success:
+                answers.append(response.json())
+            else:
+                refusals.append(f"{method} {path} -> {response.status_code} {response.text}")
+            return response
+
+        def code(response: Any) -> str:
+            return response.json()["detail"]["code"]
+
+        def decide(thread: str, proposal: Any) -> Any:
+            approve = [{"type": "approve"} for _action in proposal["action_requests"]]
+            body = {"interrupt_id": proposal["interrupt_id"], "decisions": approve}
+            return seen.stream(f"/threads/{thread}/resume", body, debug="true")
+
+        async def failing(*_args: Any, **_values: Any) -> Any:
+            raise RuntimeError(f"connection failed for {ROVER_AS_LOCALHOST} and {SHADOW_URL}")
+
+        # The list, and the list when the store cannot be read.
+        route("GET")
+        monkeypatch.setattr(made.saved_agents, "list_agents", failing)
+        assert code(route("GET")) == "internal"
+        monkeypatch.undo()
+
+        # The agent that is not in use: nothing but a removal is done with it.
+        assert code(route("POST", f"/{shadow_id}/check")) == "agent_read_only"
+        assert code(route("PATCH", f"/{shadow_id}", json={"version": 1, "approval": "none"})) == (
+            "agent_read_only"
+        )
+        # An agent of the environment's form that the environment does not name.
+        nobody = {"version": 1, "approval": "none"}
+        assert code(route("PATCH", "/env.nobody", json=nobody)) == "agent_not_found"
+        assert code(route("DELETE", "/env.nobody", params={"version": 1})) == "agent_not_found"
+        assert code(route("POST", "/env.nobody/check")) == "agent_not_found"
+
+        # Saved under `localhost`; first an add the store cannot write.
+        new = {"name": "rover", "url": f"HTTP://LocalHost:{ROVER_PORT}/"}
+        monkeypatch.setattr(made.saved_agents, "add", failing)
+        assert code(route("POST", json=new)) == "internal"
+        monkeypatch.undo()
+        monkeypatch.setattr(made.saved_agents, "list_agents", failing)
+        assert code(route("POST", json=new)) == "internal"
+        monkeypatch.undo()
+        added = route("POST", json=new)
+        assert added.status_code == 201 and added.json()["url"] == ROVER_AS_LOCALHOST
+        first = added.json()["id"]
+
+        # A check that succeeds, one whose result cannot be recorded, a change and a
+        # removal the store cannot read for, and a move to the environment agent's address.
+        assert route("POST", f"/{first}/check").json()["usable"] is True
+        monkeypatch.setattr(made.saved_agents, "get_agent", failing)
+        assert code(route("POST", f"/{first}/check")) == "internal"
+        assert code(route("DELETE", f"/{first}", params={"version": 1})) == "internal"
+        monkeypatch.undo()
+        monkeypatch.setattr(made.saved_agents, "list_agents", failing)
+        assert code(route("PATCH", f"/{first}", json=nobody)) == "internal"
+        monkeypatch.undo()
+        there = {"version": 1, "url": f"http://localhost:{STAND_PORT}/"}
+        assert code(route("PATCH", f"/{first}", json=there)) == "address_taken"
+        # A check that fails with the stand-in down.
+        rover_transport.down = True
+        assert route("POST", f"/{first}/check").json()["reason"] == "no_answer"
+
+        # A run that completes, one left paused, and a hand-off that fails once approved:
+        # the last check found the agent down, so its link holds no usable card.
+        completed = seen.stream("/threads/j-1/runs", {"message": "hello"}, debug="true")
+        assert completed[-1] == ("end", {"status": "completed"})
+        paused = seen.stream("/threads/j-2/runs", {"message": "hello"}, debug="true")
+        failed = decide("j-2", paused[-1][1])
+        rover_transport.down = False
+        seen.state("j-2")
+
+        # The approval choice, and a hand-off that waits for no one.
+        assert (
+            route("PATCH", f"/{first}", json={"version": 1, "approval": "none"}).status_code == 200
+        )
+        unpaused = seen.stream("/threads/j-3/runs", {"message": "hello"}, debug="true")
+        assert unpaused[-1] == ("end", {"status": "completed"})
+
+        # A task pending for the agent, given up by a move and told to its thread.
+        now = client.portal.call(made.store.now)
+        seed = {"agent": "rover", "task_id": "task-9", "thread_id": "j-4", "ref": f"{first}:1"}
+        client.portal.call(_record_task, made, seed, now)
+        moved = route("PATCH", f"/{first}", json={"version": 2, "url": ONWARD_URL})
+        assert moved.status_code == 200 and moved.json()["given_up"] == 1
+        tick(client, made.runtime)
+        told = seen.state("j-4")
+
+        # A removal with each refusal the other parts do not drive, then the removal.
+        assert code(route("DELETE", "/env.stand", params={"version": 1})) == "agent_read_only"
+        assert code(route("DELETE", f"/{'0' * 32}", params={"version": 1})) == "agent_not_found"
+        assert route("DELETE", f"/{first}", params={"version": 3}).json() == {"given_up": 0}
+        assert route("DELETE", f"/{shadow_id}", params={"version": 1}).status_code == 200
+
+        # Saved again, under `127.0.0.1` this time: another agent at the same place.
+        again = route("POST", json={"name": "rover", "url": ROVER_AS_LOOPBACK})
+        assert again.status_code == 201 and again.json()["url"] == ROVER_AS_LOOPBACK
+        assert again.json()["id"] != first
+        second = again.json()["id"]
+        waiting = seen.stream("/threads/j-5/runs", {"message": "hello"}, debug="true")
+        sent = decide("j-5", waiting[-1][1])
+        assert sent[-1] == ("end", {"status": "completed"})
+
+        # With the agent down, on a link that holds its card: a round of watching that
+        # cannot check its pending task, and a hand-off and a cancel that fail once
+        # approved. The stand-in's refused connection names the address as the HTTP
+        # library does.
+        now = client.portal.call(made.store.now)
+        seed = {"agent": "rover", "task_id": "task-10", "thread_id": "j-7", "ref": f"{second}:1"}
+        client.portal.call(_record_task, made, seed, now)
+        rover_transport.down = True
+        tick(client, made.runtime)
+        both = seen.stream("/threads/j-7/runs", {"message": "hello"}, debug="true")
+        down = decide("j-7", both[-1][1])
+        rover_transport.down = False
+        seen.state("j-7")
+
+        seen.call("GET", "/tools")
+        seen.call("GET", "/healthz")
+        listed = route("GET").json()
+        in_threads = kept(made.runtime.agent.checkpointer)
+
+    # What was driven happened.
+    (unreached,) = tool_results(failed, "handoff_to_rover")
+    assert unreached["content"] == (
+        "Agent 'rover' cannot be used: Nothing answered at the address."
+    )
+    report = [m for m in told["messages"] if m["name"] == "check_agent_tasks"]
+    assert len(report) == 1 and "moved to another address" in report[0]["content"]
+    assert [message.text for message in rover.record.messages] == [
+        "Sent with no pause.",
+        "For the rover.",
+    ]
+    # The failures on a connected link are worded by the library, with the address taken out.
+    (unsent,) = tool_results(down, "handoff_to_rover")
+    (uncanceled,) = tool_results(down, "cancel_rover_task")
+    for result in (unsent, uncanceled):
+        assert result["content"].startswith("Agent 'rover' could not be reached: ")
+        assert "<address>" in result["content"]
+    assert onward.record.messages == [] and shadow.record.messages == []
+    assert [request.method for request in onward_transport.requests] == ["GET"]
+    assert {request.method for request in shadow_transport.requests} <= {"GET"}
+    assert [agent["name"] for agent in listed["agents"]] == ["stand", "rover"]
+    assert (len(refusals), len(answers)) == (14, 10)
+
+    # Outside the Agents routes: every response, every stream with its debug events, and
+    # every thread as the checkpointer keeps it. Each spelling of an address holds its port.
+    assert any("handoff_to_rover" in text for text in seen.texts)
+    assert any("<address>" in text for text in seen.texts)
+    nowhere(seen.texts, *JOURNEY_PORTS)
+    assert any("Agent 'rover' cannot be used" in text for text in in_threads)
+    nowhere(in_threads, *JOURNEY_PORTS)
+    for text in (*seen.texts, *in_threads):
+        assert "localhost:" not in text.lower() and "127.0.0.1:" not in text, text[:300]
+        # The path of a saved address is part of it.
+        assert "onward-path" not in text, text[:300]
+
+    # Every refusal, the ones for a store that fails naming two addresses included.
+    nowhere(refusals, *JOURNEY_PORTS)
+
+    # An answer of the Agents routes holds a saved agent's address in `url`, as it was
+    # entered, and in nothing else. The environment agent's is in no part of any.
+    kept_urls = {ROVER_AS_LOCALHOST, ROVER_AS_LOOPBACK, ONWARD_URL, SHADOW_URL}
+    assert {url for answer in answers for url in addresses(answer)} == kept_urls
+    for answer in answers:
+        nowhere(strings(answer, but="url"), *JOURNEY_PORTS)
+        nowhere([json.dumps(answer)], STAND_PORT)
+        assert all("onward-path" not in text for text in strings(answer, but="url"))
+    # The cards' own words about their addresses came back with every form taken out.
+    described = [
+        agent["card"]["description"]
+        for answer in answers
+        for agent in (answer.get("agents") or [answer.get("agent") or answer])
+        if isinstance(agent, dict) and agent.get("card")
+    ]
+    assert any(text.count("<address>") >= 11 for text in described)
+
+    # Every log record at every level, with its arguments and its traceback.
+    logged = [record.getMessage() for record in caplog.records]
+    logged += [caplog.handler.format(record) for record in caplog.records]
+    for line in ("Agent added: rover", "Agent changed: rover", "Agent removed: rover"):
+        assert any(line in entry for entry in logged), line
+    assert any("could not check task task-10" in line and "<address>" in line for line in logged)
+    assert all("onward-path" not in line for line in logged)
+    assert any("Agent checked: rover" in line for line in logged)
+    assert any("The agents could not be listed: RuntimeError" in line for line in logged)
+    nowhere(logged, *JOURNEY_PORTS)
+
+
+# What each route refuses with, by contracts/openapi.yaml: `invalid` stands for a 422, and
+# `internal` for the store failing. The contract gives `internal` to the list alone; every
+# route reads or writes the store, answers 500 when it fails, and is driven that way here.
+CONTRACT = {
+    ("GET", "/agents"): {"internal"},
+    ("POST", "/agents"): {
+        "name_taken",
+        "address_taken",
+        "agent_limit",
+        "check_busy",
+        "agent_unusable",
+        "invalid",
+        "other_origin",
+        "internal",
+    },
+    ("PATCH", "/agents/{agent_id}"): {
+        "agent_changed",
+        "agent_read_only",
+        "agent_not_found",
+        "address_taken",
+        "check_busy",
+        "agent_unusable",
+        "invalid",
+        "other_origin",
+        "internal",
+    },
+    ("DELETE", "/agents/{agent_id}"): {
+        "agent_changed",
+        "agent_read_only",
+        "agent_not_found",
+        "invalid",
+        "other_origin",
+        "internal",
+    },
+    ("POST", "/agents/{agent_id}/check"): {
+        "check_busy",
+        "agent_read_only",
+        "agent_not_found",
+        "invalid",
+        "other_origin",
+        "internal",
+    },
+}
+CONTRACT_FILE = (
+    Path(__file__).parent.parent / "specs/005-web-delegate-agents/contracts/openapi.yaml"
+)
+
+
+def test_the_table_of_refusals_is_the_contract_s() -> None:
+    """The table above names every route of the router and every code of the contract, so
+    a route or a code added to either without a line here fails."""
+    routes = {
+        (method, f"/agents{route.path.removeprefix('/agents')}")
+        for route in agents_api.router.routes
+        for method in route.methods  # type: ignore[attr-defined]
+    }
+    assert routes == set(CONTRACT)
+    contract = yaml.safe_load(CONTRACT_FILE.read_text())
+    schemas = contract["components"]["schemas"]
+    codes = set(schemas["Error"]["properties"]["detail"]["properties"]["code"]["enum"])
+    codes.add(schemas["UnusableError"]["properties"]["detail"]["properties"]["code"]["const"])
+    named = set().union(*CONTRACT.values()) - {"invalid"}
+    assert named == codes
+    paths = {
+        (method.upper(), path)
+        for path, operations in contract["paths"].items()
+        for method in operations
+        if method in ("get", "post", "patch", "delete")
+    }
+    assert paths == set(CONTRACT)
+    # Route by route: what the contract's own answers for the route name.
+    by_reference = {"NotFound": "agent_not_found", "OtherOrigin": "other_origin"}
+    for (method, path), listed in CONTRACT.items():
+        given: set[str] = set()
+        for status, response in contract["paths"][path][method.lower()]["responses"].items():
+            if str(status).startswith("2"):
+                continue
+            if str(status) == "422":
+                given.add("invalid")
+            reference = response.get("$ref", "").rpartition("/")[2]
+            if reference in by_reference:
+                given.add(by_reference[reference])
+            words = re.findall(r"`([a-z_]+)`", response.get("description", ""))
+            given |= {word for word in words if word in codes}
+        assert listed - {"internal"} == given - {"internal"}, (method, path)
+        assert given <= listed, (method, path)
+
+
+def test_every_route_and_every_refusal_of_the_agents_section_is_driven_by_a_part() -> None:
+    """The proof is complete only when each route was asked, and each refusal the contract
+    gives a route was got, by one of the parts above, whose answers they then search."""
+    if {1, 2, 3, 4, 5} != PARTS_RUN:
+        pytest.skip("the parts of the proof did not all run in this session")
+    asked = {(method, route) for method, route, _code in DRIVEN}
+    assert asked == set(CONTRACT)
+    answered = {(method, route) for method, route, code in DRIVEN if code is None}
+    assert answered == set(CONTRACT), "every route also answers once with what it returns"
+    missing = sorted(
+        (method, route, code)
+        for (method, route), codes in CONTRACT.items()
+        for code in codes
+        if (method, route, code) not in DRIVEN
+    )
+    assert missing == []
+    beyond = sorted(
+        entry
+        for entry in DRIVEN
+        if entry[2] is not None and entry[2] not in CONTRACT[(entry[0], entry[1])]
+    )
+    assert beyond == [], "a route gave a refusal the contract does not give it"
