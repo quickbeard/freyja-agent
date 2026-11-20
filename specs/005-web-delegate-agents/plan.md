@@ -1136,3 +1136,81 @@ What the implementation settled differently from the plan, or found out, phase b
   'none'` and `X-Frame-Options: DENY`.
 - **Coverage of the service's lines is 91.25%** as CI measures it; the web app's is
   unchanged.
+
+### Phase 10
+
+- **Files the implementation touched that the tree above does not list.**
+  - `src/freyja_agent/api/outcomes.py`: a delivery marks the outcome it delivered and no
+    other (Phase 8, from the review).
+  - `tests/asgi_stream.py`: the in-process transport records each request's headers.
+  - `tests/test_guards.py` and `tests/test_a2a_stub_cards.py`: the shared guards, and the
+    stand-in's card options (Phase 1).
+  - `web/README.md`, which another change rewrote while Phase 5 was written.
+  - `.gitignore`: an exception for `web/__tests__/lib/`. The rule for `lib/` had kept
+    Phase 4's `agents.test.ts` there out of every commit; the directory's three earlier
+    files were tracked (Phase 5).
+- **Where the implementation settled something differently from the plan**, each recorded
+  under its phase above. The ones that change what a reader of the research would expect:
+  - R7: a person counts as having decided a call only when the call's row says it needed
+    a decision and the tool waits for one in its run, where R7 asks the tool alone
+    (Phase 7). A tool also asks whether its agent is still there before it reads a card,
+    not only before it sends (Phase 8).
+  - R10: an answer writes over a pending task or one in the state it had when the answer
+    began, where R10 says only a pending one; the list counts a saved agent's pending
+    tasks at every address it has had; a delivery is marked by its outcome; the worker
+    reads a task again before it asks its agent about it (all Phase 8).
+  - R12: an address is taken out after any scheme and however `localhost` is written, and
+    its path with it whatever follows in the sentence (Phase 9). Card details are cleaned
+    again where they are used, since an address may become an agent's after a card that
+    names it was read (Phase 5).
+  - R6: a link remembers the details of the card it last read, a reading has one time
+    limit for waiting and reading together, and a call under way keeps the client it was
+    sent with (Phase 6).
+  - T100, not the research: how many tasks a change gave up is said by the list and not
+    by the form, which closes when it succeeds (Phase 8).
+  - R18, R22: the shared setup of feature 004's end-to-end specs gained no answer for the
+    list: the specs count requests to `/api/llm` only and pass as they were (Phase 6).
+  - The contract gives `internal` to the list alone; every route answers 500 when the
+    store fails, and the proof drives each (Phase 9). The contract was not changed.
+- **Existing tests, against the list of T119.** Changed as T119 names them: the seven cases
+  of `tests/test_a2a_startup.py`, the one of `tests/test_a2a_gate.py`, the page test, and
+  `web/e2e/console.spec.ts`. Gained setup, names, or tests and lost nothing:
+  `tests/integration/test_a2a_tasks_postgres.py`, `app-sidebar.test.tsx`,
+  `tests/test_agent_task_store.py`, `tests/test_llm_check.py`, `web/__tests__/lib/api.test.ts`,
+  and `web/__tests__/next.config.test.ts`. The shared setup of `llm.spec.ts` and
+  `profiles.spec.ts` did not change. **One test beyond the list changed**, in Phase 3:
+  `test_a_redirected_card_fails_startup_and_the_target_receives_nothing` in
+  `tests/test_a2a_transport.py` expected startup to fail for a card that is redirected. It
+  now expects the service to start, and is named
+  `test_a_redirected_card_is_not_followed_and_the_target_receives_nothing`. FR-031 allows
+  exactly this kind of test to change; T119's list names the seven in
+  `test_a2a_startup.py` and missed this eighth case.
+- **No Ruff suppression was added**, no dependency on either side, no setting, and no entry
+  in the secret scan's allowlist. Two marks of other tools were added, both in Phase 4 and
+  each with its reason beside it: a Biome suppression in
+  `web/components/agents/agent-card.tsx`, for a list keyed by its place, and a Semgrep
+  mark in `web/e2e/agents.spec.ts`, for a script tag the test looks for as text.
+- **Known: an environment entry whose address the saved form refuses is not compared with
+  saved addresses**, such as one with a user name or a query. A saved agent can then be at
+  its host and port. An environment entry keeps its own rule and spelling (R11).
+- **Both default suites pass with the network disconnected** (T119): every connection and
+  name lookup that is not for this machine was refused from inside the process and counted,
+  for pytest and for Vitest. Neither made one.
+- **The quickstart, all eight sections, by hand** (T120), with the real service, stand-ins
+  on loopback, the built console in a browser, and a real model: every step behaved as
+  written.
+- **SC-015**: with twenty agents saved through the API, the Agents section took 53 to 71
+  milliseconds from navigation to the last card, in five readings on this machine. The
+  limit is two seconds.
+- **SC-006**: with a startup limit of five seconds, the service answered its health check
+  2.0 seconds after a start with three agents that all answer, and 7.0 seconds after a
+  start with three that never answer: one limit later, not three.
+- **The Constitution Check, again, against the code** (T121): every principle passes. I:
+  the gate is still generated from the catalog in `build_agent`, the only caller of which
+  is `runtime.py`; the rule before a send is stricter than planned, as above; what is
+  left is that a decision is inferred and not recorded. II: no other agent framework is
+  imported. III: `run_stream` is called by the thread routes and the worker only, and the
+  web app's one `fetch` is in `web/lib/api.ts`. IV: no setting was added. V: every gate
+  passes; no Ruff suppression, dependency, or allowlist entry was added, and the two
+  marks named above carry their reasons. VI: every check
+  that keeps a message back reads stored values and asks no model.

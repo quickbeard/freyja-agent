@@ -245,7 +245,7 @@ Each entry has the `agent`, the `task_id`, the `message` it was started with, it
 
 When a pending task finishes, fails, needs input, or is canceled by the agent, its outcome is recorded in the thread exactly once, as Freyja's `check_agent_tasks` call followed by its result. Your next message gets it at the start of its run, ahead of what you wrote. If no message comes first, a **background run** delivers it as soon as the thread is free: no run in progress and no pending proposal. A background run is a run like any other, with the same gate, step limit, and run lease, so a proposal in it pauses it and you decide it through resume. Background runs do not hold up the checks of other pending tasks, and one service instance runs at most `FREYJA_BACKGROUND_RUN_CONCURRENCY` of them at once; further ones wait their turn. No client is told that a background run happened: read the thread state to see its reply or its pause. A background run that fails with a model or internal error is tried again after `FREYJA_BACKGROUND_RETRY_SECONDS`, up to `FREYJA_BACKGROUND_RUN_ATTEMPTS` attempts in all, without recording the outcome or sending any message twice.
 
-A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its start, is **given up**: the service stops watching it and reports that the agent may still be working on it. It sends no cancel by itself: ask for one, and the cancel goes through the gate like any message to that agent. A pending task whose agent was removed from the configuration is given up after the restart that applies the change.
+A task still pending after `FREYJA_A2A_TASK_MAX_AGE_SECONDS`, counted from its start, is **given up**: the service stops watching it and reports that the agent may still be working on it. It sends no cancel by itself: ask for one, and the cancel goes through the gate like any message to that agent. A pending task whose agent was removed from the configuration is given up after the restart that applies the change. A saved agent's pending tasks are given up at once when the agent is moved or removed (see [Move or remove an agent](#move-or-remove-an-agent)).
 
 ### Add an agent while the service runs
 
@@ -268,7 +268,7 @@ Before it is used, know that:
 A name is in the form the environment's agents use, and an address is `http` or `https` on this machine (`localhost` or a loopback IP address), with no user name, password, query, or fragment. It is kept in one form, such as `http://127.0.0.1:9998`. A request is refused, and nothing is saved, with:
 
 - 422 and the field's error when a value breaks a rule, never repeating the value;
-- 409 `name_taken` when another agent, a tool server, or a tool has the name, and `address_taken` when another agent is at the address, however this machine is written;
+- 409 `name_taken` when another agent or a tool server has the name, or when another tool has the name of one of the agent's two tools, and `address_taken` when another agent is at the address, however this machine is written;
 - 409 `agent_limit` when twenty agents are saved, and `check_busy` while four card reads are under way on the instance;
 - 409 `agent_unusable` when the card cannot be used, with `reason` and the service's own sentence: nothing answered, no answer in time, no card, a card that cannot be read, a redirect, a card larger than one megabyte, or a card that requires authentication, accepts no text, or offers no JSON-RPC interface;
 - 403 `other_origin` when a browser marks the request as made by a page of another origin.
@@ -296,7 +296,7 @@ The two directions do not take effect the same way:
 
 A change is refused, and nothing changes, with 409 `agent_changed` when the agent is no longer at `version`, 409 `agent_read_only` for an agent named in the environment and for a saved agent that is not in use, 404 `agent_not_found`, 422 for a body with any field but `version`, `approval`, and `url` (`name` among them), and 403 `other_origin`.
 
-Anyone who can reach the service's port can make an agent run without approval with this request. The service has no authentication; keep it bound to an address only its operators reach.
+Anyone who can reach the service's port can make an agent run without approval with this request; see [what such a client can do](#saved-agents-beside-the-environments).
 
 ### Move or remove an agent
 
@@ -310,7 +310,7 @@ curl -s -X DELETE 'localhost:8000/agents/<id>?version=3'    # remove
 
 Both name the `version` that `GET /agents` shows, and both answer with `given_up`: how many of the agent's pending tasks were given up.
 
-- **A move reads the card at the new address first**, within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` and at most twenty seconds, and sends the agent nothing else. An agent that cannot be used there is refused with 409 `agent_unusable` and the reason, and the earlier address stays saved and in use. An address that is the saved one in another spelling is no move.
+- **A move reads the card at the new address first**, within `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` and at most twenty seconds, and sends the agent nothing else. An agent that cannot be used there is refused with 409 `agent_unusable` and the reason, and the earlier address stays saved and in use. An address that comes to the saved form is no move: another case, a trailing slash, or a default port written out. The same place under another host name is one, such as `localhost` for an agent saved at `127.0.0.1`.
 - **A move applies from the next run.** A run in progress finishes at the address it started with. A proposal for the agent that is waiting for a decision goes to the new address once approved.
 - **A removal holds at once**, on every instance, also for a run in progress: a tool of a saved agent reads the agent from the database before it sends, and the result is "Agent '<name>' was removed; nothing was sent." The next run has neither of the agent's tools. An agent added again under the name is another agent, and a proposal made for the removed one is never sent to it.
 - **Both give up the agent's pending tasks**, together with the change. Each task is listed in its thread as given up at once, a background run tells the thread once, and no cancel is sent: the agent may still be working. After a move the report says the agent was moved and may still be working where it was.
@@ -318,6 +318,18 @@ Both name the `version` that `GET /agents` shows, and both answer with `given_up
 - **A run does not send to an address its agent has left once another agent is there.** The result is "Agent '<name>': the address this run started with is another agent's now; nothing was sent."
 
 A move is refused, and nothing changes, with the refusals of a change above, and with 409 `address_taken`, 409 `check_busy`, 409 `agent_unusable`, and 422 for an address that breaks a rule, as for an add. A removal is refused with 409 `agent_changed`, 404 `agent_not_found`, 409 `agent_read_only` for an agent named in the environment, 422 for a missing `version`, and 403 `other_origin`. A saved agent that is not in use can be removed, and nothing else can be done with it.
+
+### Saved agents beside the environment's
+
+An instance has two kinds of agent, and `GET /agents` lists both: the ones named in `FREYJA_A2A_AGENTS`, first and in their order, then the saved ones by name.
+
+- **An agent named in the environment is read-only.** It can be checked, and nothing else: not changed, not removed. Its `id` is `env.<name>`, and its address is shown nowhere, the list included.
+- **A saved agent** has an `id`, its `url`, a `version` that every change of its address or approval choice raises, and `pending_tasks`. At most twenty are saved.
+- **Each agent has a `state`**, as this instance last found it: `reachable`, `unreachable` with the `reason`, `not_tried`, or `not_in_use`.
+- **The environment comes first.** A saved agent cannot take the name or the address of an agent named in the environment, nor the name of a tool server, and neither of its two tool names may be another tool's. When a restart gives the environment one of those, the environment's is the one in use: the saved agent is listed as `not_in_use` with the reason, its pending tasks are given up, a proposal that waited for it is never sent to the environment's agent, and it can only be removed. When a later restart takes the conflict away, it is in use again as it was saved.
+- **A change reaches every instance sharing the database** at its next run, its next reading of the list or the catalog, and its next round of watching. A run in progress keeps the tools it started with.
+
+**What anyone who can reach the service's port can now do.** The service has no authentication. Beside starting runs and deciding proposals, such a client can add an agent, on this machine only, since an address must be `localhost` or a loopback address; switch a saved agent to run without approval, so that no person sees what is sent to it; move a saved agent to another address on this machine; remove one; and have any agent's card read again. It can read every saved agent's address. A web page of another origin can do none of this through a browser: the Agents routes refuse it, and give it no permission to read an answer. Keep the service bound to an address only its operators reach.
 
 ### Check an agent
 
@@ -347,7 +359,7 @@ During a run, a hand-off to an agent that cannot be reached, does not acknowledg
 
 ### Agents in the catalog
 
-`GET /tools` lists each configured agent under `agents`: its `name`, `reachable`, `checked_at`, and `error` from the most recent attempt to use it (at startup, in a hand-off or cancel, or while checking a task), and its `card`: the card's name, description, version, and skills. The card is the agent's own claim and never changes the classification. Each agent's two tools are in `tools` with `agent` set to its name; every other tool has `agent: null`. The catalog never contacts an agent and never shows its address. An agent the service has not tried yet is listed as not reachable, with a reason that says so; one whose card it has not read has an empty `card`, and its hand-off tool is described by its name alone until the card is read. Before it answers, the catalog reads two rows of the database, to learn whether the agents or the active LLM profile changed; when a read fails it answers from what it last built. With no agents configured, `agents` is empty and the tools are as before.
+`GET /tools` lists each agent in use under `agents`, so not a saved agent the environment overrides: its `name`, `reachable`, `checked_at`, and `error` from the most recent attempt to use it (at startup, in a hand-off or cancel, while checking a task, in a check asked for, or when it was added or moved), and its `card`: the card's name, description, version, and skills. The card is the agent's own claim and never changes the classification. Each agent's two tools are in `tools` with `agent` set to its name; every other tool has `agent: null`. The catalog never contacts an agent and never shows its address. An agent the service has not tried yet is listed as not reachable, with a reason that says so; one whose card it has not read has an empty `card`, and its hand-off tool is described by its name alone until the card is read. Before it answers, the catalog reads two rows of the database, to learn whether the agents or the active LLM profile changed; when a read fails it answers from what it last built. With no agents configured, `agents` is empty and the tools are as before.
 
 A proposal for an agent's tool names its agent: each entry of `action_requests` has `agent` set, and `null` for every other tool.
 
@@ -565,7 +577,7 @@ pnpm exec playwright install chromium firefox   # once per machine: downloads th
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, and `agents-manage.spec.ts` for adding an agent. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` for adding an agent, checking one, changing one's approval choice, moving one, and removing one. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 
@@ -635,7 +647,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` | `20` | Time limit per server for connecting and listing its tools at startup. Servers connect concurrently. |
 | `FREYJA_A2A_AGENTS` | `{}` | Agents as a JSON object; see [Agents](#agents). The default is none. |
 | `FREYJA_A2A_CALL_TIMEOUT_SECONDS` | `30` | How long one hand-off, answer, or cancel waits within a run. A task still working at the limit becomes pending. |
-| `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` | `20` | Time limit per agent for reading its card at startup. Agents start concurrently. |
+| `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS` | `20` | Time limit per agent for reading its card at startup. Agents start concurrently. A card read asked for through the Agents routes (an add, a move, a check) takes this long at most, and never more than twenty seconds. |
 | `FREYJA_A2A_POLL_INTERVAL_SECONDS` | `10` | How often pending tasks are checked and waiting outcomes delivered. |
 | `FREYJA_A2A_TASK_MAX_AGE_SECONDS` | `86400` | When a pending task is given up, counted from its start. No cancel is sent. |
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |

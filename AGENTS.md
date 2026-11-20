@@ -114,7 +114,14 @@ startup and exits with an error naming the connection when it is unreachable.
   `connect` reads the agent's card and builds the client, so nothing is sent over a link that
   holds no usable card. It pins every request to the configured address, sends messages and
   reads and cancels tasks under the call time limit, records each agent's status, and removes
-  every known address from everything it emits (`describe`). `agent_registry.py` is the
+  every known address from everything it emits (`describe`). `agent_cards.py` reads an
+  agent's card under one time limit and one size limit and says in the service's own
+  sentence why a card cannot be used (`read_card`, `CardError`, the nine `CardProblem`
+  codes), and cuts and cleans what a card says of its agent into the details that are kept
+  and shown (`card_details`, `cleaned`). `addresses.py` is the process's one address
+  scrubber (`SCRUBBER`): it is told every agent address the process is given, takes each
+  out of text in every form it can be written in, its path included, and cleans every log
+  record through a record factory installed at startup. `agent_registry.py` is the
   `AgentRegistry`, which holds the instance's `AgentSet`: the links in use, of environment
   agents and of saved ones, each agent's approval choice, and the saved agents that are not in
   use. It refuses an entry that is invalid in itself at startup, tries every agent at once,
@@ -191,7 +198,9 @@ startup and exits with an error naming the connection when it is unreachable.
   progress is the lease's to say, never the row's. Text is cleaned of what a text column
   does not take before it is kept.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
-  `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume);
+  `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume),
+  each of which takes a context, the two that run under the thread's lease, and validates
+  a decision on the orchestrator that then carries it out;
   `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
   learn whether the agents or the active profile changed, contacts nothing, and lists the
   agents;
@@ -201,7 +210,7 @@ startup and exits with an error naming the connection when it is unreachable.
   it, leave out a row that cannot be read instead of failing the list, contact nothing, and
   change no thread,
   with their shapes in `thread_index_schemas.py`;
-  `agents.py` the routes of the Agents section under `/agents`, so far `GET /agents`, the list,
+  `agents.py` the routes of the Agents section under `/agents`: `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
   agent's card and saves the agent when it can be used, requiring approval unless the request
   chose otherwise, `PATCH /agents/{id}`, which changes a saved agent's approval choice, its address, or
@@ -214,10 +223,11 @@ startup and exits with an error naming the connection when it is unreachable.
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
-  profile's test with its endpoint; an activation is applied on this instance at once; its
-  routes answer a refused request without repeating the value (`NoInputRoute`), and turn
-  away a request that changes something when a browser marks it as made by a page of another
-  origin (`refuse_other_origins`, 403 `other_origin`); `streaming.py`
+  profile's test with its endpoint; an activation is applied on this instance at once;
+  `guards.py` what several routers share: the LLM routes and the Agents routes answer a
+  refused request without repeating the value (`NoInputRoute`), and those two and the
+  thread routes turn away a request that changes something when a browser marks it as made
+  by a page of another origin (`refuse_other_origins`, 403 `other_origin`); `streaming.py`
   the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
   which turns a run away with `no_usable_model` before the graph when no usable model is active,
   ends a resume whose paused step came to hold a call that needs a decision with
