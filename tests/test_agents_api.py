@@ -18,6 +18,10 @@ Part 4: FR-009, FR-010, FR-012, FR-017, FR-024, FR-029, FR-030; SC-007, SC-012, 
 change of `url` moves the agent: the card at the new address is read first, and the agent's
 pending tasks are given up with the change. `DELETE /agents/{id}` removes a saved agent.
 
+Part 5: FR-029, SC-009. One sweep over every route of the section for a page of another
+origin: nothing can be changed, nothing is given permission to be read, and a request that is
+no page's is served.
+
 Every agent is the stand-in, inside the test process.
 """
 
@@ -2182,3 +2186,255 @@ def test_a_service_put_together_without_agents_cannot_remove_one(
     with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
         response = remove(client, UNKNOWN_ID)
     assert refusal(response, 500, "internal")["message"] == "This instance cannot remove agents."
+
+
+# Part 5: other origins, as one sweep over every route of the section.
+
+SWEPT_URL = "http://127.0.0.1:9371"
+SWEPT_NEW_URL = "http://127.0.0.1:9372"
+# Every route of the section, and the four that change something.
+AGENT_ROUTES = [
+    ("GET", "/agents"),
+    ("POST", "/agents"),
+    ("PATCH", "/agents/{id}"),
+    ("DELETE", "/agents/{id}"),
+    ("POST", "/agents/{id}/check"),
+]
+CHANGING = AGENT_ROUTES[1:]
+ELSEWHERE = "http://elsewhere.example"
+# What a browser sends with a request a page of another origin makes. A page can set none
+# of these headers itself.
+FROM_ANOTHER_ORIGIN = [
+    {"Sec-Fetch-Site": "cross-site"},
+    # Another port of this machine is another origin, and the same site.
+    {"Sec-Fetch-Site": "same-site"},
+    {"Origin": ELSEWHERE},
+    {"Origin": "null"},
+    {"Origin": ELSEWHERE, "Sec-Fetch-Site": "same-origin"},
+    # Through the web app's server, which names the host the browser asked for.
+    {"Origin": ELSEWHERE, "X-Forwarded-Host": "localhost:3000"},
+    # The origin is the service's own host, and not the host the browser asked the web app
+    # for: behind the web app's server, that one decides.
+    {"Origin": "http://testserver", "X-Forwarded-Host": "localhost:3000"},
+]
+# A client that is no page, and the console, straight to the service and through the web
+# app's server.
+NOT_ANOTHER_ORIGIN = [
+    {},
+    {"Origin": "http://testserver", "Sec-Fetch-Site": "same-origin"},
+    {
+        "Origin": "http://localhost:3000",
+        "X-Forwarded-Host": "localhost:3000",
+        "Sec-Fetch-Site": "same-origin",
+    },
+    {"Sec-Fetch-Site": "none"},
+]
+
+
+def swept(make_a2a_app: Callable[..., A2aApp]) -> tuple[A2aApp, Any]:
+    """An app with one saved agent, one task pending for it, and a stand-in where an add or
+    a move would go."""
+    made = make_a2a_app(ScriptedChatModel(), {}, saved={"helper": {"url": SWEPT_URL}})
+    record = made.saved["helper"]
+    seed_task(made, "helper", "task-1", ref=record.ref, thread="s-1")
+    made.add_stub(SWEPT_NEW_URL, make_stub("helper"))
+    return made, record
+
+
+def asked(
+    client: TestClient,
+    method: str,
+    path: str,
+    agent_id: str,
+    *,
+    headers: dict[str, str] | None = None,
+    valid: bool = True,
+) -> Any:
+    """The request each route takes, as the console sends it; with ``valid`` false, one the
+    route would refuse for itself."""
+    url = path.format(id=agent_id)
+    if (method, path) == ("POST", "/agents"):
+        body: dict[str, Any] = {"name": "other", "url": SWEPT_NEW_URL} if valid else {"name": "X"}
+        return client.post(url, json=body, headers=headers)
+    if method == "PATCH":
+        body = {"version": 1, "url": SWEPT_NEW_URL, "approval": "none"} if valid else {"name": "x"}
+        return client.patch(url, json=body, headers=headers)
+    if method == "DELETE":
+        return client.delete(url, params={"version": 1} if valid else {}, headers=headers)
+    return client.request(method, url, headers=headers)
+
+
+def everything(client: TestClient, made: A2aApp) -> tuple[Any, ...]:
+    """What a refused request must leave as it was: the store, the list, the catalog, the
+    task, and what each stand-in was asked."""
+    return (
+        client.portal.call(made.saved_agents.list_agents),
+        client.portal.call(made.saved_agents.revision),
+        agents(client),
+        client.get("/tools").json(),
+        client.portal.call(made.store.get_task, "helper", "task-1"),
+        list(made.transport_at(SWEPT_URL).requests),
+        list(made.transport_at(SWEPT_NEW_URL).requests),
+    )
+
+
+@pytest.mark.parametrize("headers", FROM_ANOTHER_ORIGIN, ids=lambda h: ",".join(h.values()))
+@pytest.mark.parametrize(("method", "path"), CHANGING)
+def test_no_route_that_changes_something_serves_a_page_of_another_origin(
+    make_a2a_app: Callable[..., A2aApp],
+    caplog: pytest.LogCaptureFixture,
+    method: str,
+    path: str,
+    headers: dict[str, str],
+) -> None:
+    made, record = swept(make_a2a_app)
+    with caplog.at_level(logging.WARNING), TestClient(made.app) as client:
+        before = everything(client, made)
+        responses = [
+            asked(client, method, path, record.id, headers=headers),
+            # Refused before the route looks at what was asked: also a request the route
+            # would refuse for itself, and one for an agent that does not exist. (A body
+            # that cannot be read at all is refused for that first; see below.)
+            asked(client, method, path, record.id, headers=headers, valid=False),
+            asked(client, method, path, UNKNOWN_ID, headers=headers),
+        ]
+        after = everything(client, made)
+
+    for response in responses:
+        detail = refusal(response, 403, "other_origin")
+        assert detail["message"] == (
+            "This request was made by a page of another origin and was refused. Agents are "
+            "changed from the console, or by a client that is not a web page."
+        )
+    # Nothing changed, no card was read, and no agent was contacted.
+    assert after == before
+    refused = [line for line in caplog.messages if line.startswith(f"Refused {method} ")]
+    assert len(refused) == 3
+    assert not holds_port(caplog.text, "9371") and not holds_port(caplog.text, "9372")
+
+
+@pytest.mark.parametrize("headers", NOT_ANOTHER_ORIGIN, ids=lambda h: ",".join(h.values()) or "-")
+@pytest.mark.parametrize(("method", "path"), AGENT_ROUTES)
+def test_every_route_serves_the_console_and_a_client_that_is_no_page(
+    make_a2a_app: Callable[..., A2aApp], method: str, path: str, headers: dict[str, str]
+) -> None:
+    made, record = swept(make_a2a_app)
+    with TestClient(made.app) as client:
+        response = asked(client, method, path, record.id, headers=headers)
+    assert response.status_code == (201 if (method, path) == ("POST", "/agents") else 200), (
+        response.text
+    )
+
+
+# A body each route would accept as JSON, in the ways a page of another origin can send it
+# with no preflight and no header of its own: as plain text, as a form, and with no content
+# type at all.
+ACCEPTED = {
+    ("POST", "/agents"): {"name": "other", "url": SWEPT_NEW_URL},
+    ("PATCH", "/agents/{id}"): {"version": 1, "approval": "none"},
+}
+AS_A_PAGE_CAN_SEND = [
+    "text/plain",
+    "application/x-www-form-urlencoded",
+    "multipart/form-data",
+    None,
+]
+
+
+@pytest.mark.parametrize("content_type", AS_A_PAGE_CAN_SEND, ids=str)
+@pytest.mark.parametrize(("method", "path"), list(ACCEPTED))
+def test_each_route_that_takes_a_body_refuses_one_a_form_or_a_plain_text_post_can_send(
+    make_a2a_app: Callable[..., A2aApp],
+    method: str,
+    path: str,
+    content_type: str | None,
+) -> None:
+    made, record = swept(make_a2a_app)
+    body = ACCEPTED[(method, path)]
+    url = path.format(id=record.id)
+    if content_type == "application/x-www-form-urlencoded":
+        content = "&".join(f"{key}={value}" for key, value in body.items())
+    else:
+        content = json.dumps(body)
+    headers = {} if content_type is None else {"Content-Type": content_type}
+    with TestClient(made.app) as client:
+        before = everything(client, made)
+        response = client.request(method, url, content=content, headers=headers)
+        after = everything(client, made)
+        # The same body, sent as the console sends it, is one the route takes: what was
+        # refused above is how it was sent, and not what it said.
+        taken = client.request(method, url, json=body)
+    assert response.status_code == 422, response.text
+    for error in response.json()["detail"]:
+        assert set(error) == {"type", "loc", "msg"}
+    assert not holds_port(response.text, "9372")
+    assert after == before
+    assert taken.is_success, taken.text
+
+
+@pytest.mark.parametrize("content", [b"{", b"\xff\xfe not text", b'{"name": "other", "url": '])
+@pytest.mark.parametrize(("method", "path"), list(ACCEPTED))
+def test_a_body_that_cannot_be_read_changes_nothing_whoever_sent_it_and_is_not_repeated(
+    make_a2a_app: Callable[..., A2aApp], method: str, path: str, content: bytes
+) -> None:
+    """Known since Phase 5: the framework reads a body marked as JSON before the rule about
+    other origins is asked, so such a request is refused for its body, not with 403. What
+    matters holds: nothing is changed, and nothing that was sent comes back."""
+    made, record = swept(make_a2a_app)
+    headers = {"Content-Type": "application/json", "Sec-Fetch-Site": "cross-site"}
+    with TestClient(made.app) as client:
+        before = everything(client, made)
+        response = client.request(
+            method, path.format(id=record.id), content=content, headers=headers
+        )
+        after = everything(client, made)
+    assert response.status_code in (400, 422), response.text
+    assert after == before
+    assert "other" not in response.text and "\ufffd" not in response.text
+    assert not [name for name in response.headers if name.lower().startswith("access-control-")]
+
+
+@pytest.mark.parametrize(("method", "path"), AGENT_ROUTES)
+def test_no_route_gives_a_page_of_another_origin_permission_to_read_its_answer(
+    make_a2a_app: Callable[..., A2aApp], method: str, path: str
+) -> None:
+    made, record = swept(make_a2a_app)
+    url = path.format(id=record.id)
+    with TestClient(made.app) as client:
+        preflight = client.options(
+            url,
+            headers={
+                "Origin": ELSEWHERE,
+                "Access-Control-Request-Method": method,
+                "Access-Control-Request-Headers": "content-type",
+            },
+        )
+        # The request itself, as a page of that origin sends it, and as the console does.
+        sent = asked(client, method, path, record.id, headers={"Origin": ELSEWHERE})
+        served = asked(client, method, path, record.id)
+
+    for response in (preflight, sent, served):
+        allowed = [name for name in response.headers if name.lower().startswith("access-control-")]
+        assert allowed == [], (response.status_code, allowed)
+    # A preflight is answered with no permission at all, and with nothing of an agent.
+    assert preflight.status_code in (400, 405)
+    assert not holds_port(preflight.text, "9371")
+    # Reading is answered, and the browser keeps the answer from the page. Anything that
+    # would change something is refused outright.
+    if method == "GET":
+        assert sent.status_code == 200
+    else:
+        refusal(sent, 403, "other_origin")
+    assert served.is_success, served.text
+
+
+def test_the_sweep_covers_every_route_of_the_section() -> None:
+    from freyja_agent.api.agents import router
+
+    routes = {
+        (method, route.path.replace("{agent_id}", "{id}"))
+        for route in router.routes
+        for method in route.methods  # type: ignore[attr-defined]
+    }
+    assert routes == set(AGENT_ROUTES)
+    assert set(CHANGING) == {route for route in routes if route[0] != "GET"}

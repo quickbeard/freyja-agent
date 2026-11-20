@@ -40,18 +40,23 @@ LIBRARY_LOGGERS = ("httpx", "httpcore", "a2a")
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 # The three shapes an address takes in text. A host is a name, an IPv4 address, or an IPv6
-# address in brackets; a path runs to the first character that ends an address in prose.
+# address in brackets. What follows it up to the next space or quote is looked at as a path:
+# only the part that is a known address's path is taken, and the rest is put back, so a full
+# stop or a bracket that ends a sentence is never taken for a part of the path.
 _HOST = r"\[[0-9A-Fa-f:.]+\]|[A-Za-z0-9.\-]+"
-_PATH = r"(?:/[^\s\"'<>)\]},;]*)?"
+_PATH = r"(?:/[^\s\"'<>]*)?"
 # With its scheme: ``http://127.0.0.1:9998/a``, and ``http://localhost/a`` on a default port.
 _URL = re.compile(
     rf"(?P<scheme>https?)://(?:[^\s/@'\"<>]*@)?(?P<host>{_HOST})(?::(?P<port>\d{{1,5}}))?"
     rf"(?P<path>{_PATH})",
     re.IGNORECASE,
 )
-# Without one: ``127.0.0.1:9998``, ``localhost:9998/a``. Not inside a longer name or number.
+# Without one, or after any other scheme: ``127.0.0.1:9998``, ``localhost:9998/a``,
+# ``ws://127.0.0.1:9998``, ``//localhost:9998``. Not inside a longer name or number. A slash
+# before the host does not make it another host: text an agent writes about itself may name
+# its address after a scheme of its own.
 _HOST_AND_PORT = re.compile(
-    rf"(?<![A-Za-z0-9.\-/])(?P<host>{_HOST}):(?P<port>\d{{1,5}})(?!\d|\.\d)(?P<path>{_PATH})"
+    rf"(?<![A-Za-z0-9.\-])(?P<host>{_HOST}):(?P<port>\d{{1,5}})(?!\d|\.\d)(?P<path>{_PATH})"
 )
 # As the operating system names a connection: ``('127.0.0.1', 9998)``, ``('::1', 9998, 0, 0)``.
 _PAIR = re.compile(r"\(\s*'(?P<host>[^']{1,255})'\s*,\s*(?P<port>\d{1,5})(?:\s*,\s*\d+)*\s*\)")
@@ -61,7 +66,17 @@ _NUMBER = re.compile(r"(?<![\d.])\d{1,5}(?!\d|\.\d)")
 # A host at the end of a longer token: ``at-127.0.0.1``, ``my-localhost``. When in doubt an
 # address is removed: a letter or a hyphen before an IP address does not make it another one.
 _TRAILING_IPV4 = re.compile(r"(?<![\d.])\d{1,3}(?:\.\d{1,3}){3}$")
-_TRAILING_LOCALHOST = re.compile(r"(?<![A-Za-z0-9.])localhost$", re.IGNORECASE)
+_TRAILING_LOCALHOST = re.compile(r"(?<![A-Za-z0-9.])localhost\.?$", re.IGNORECASE)
+# What may follow an address's path in text without making it another path: anything but a
+# character a path segment is made of.
+_GOES_ON = re.compile(r"[A-Za-z0-9_\-~%]")
+
+
+def _local(host: str) -> str:
+    """``host`` as it is compared: a name has no case, and may be written with a full stop
+    at its end."""
+    return host.strip("[]").rstrip(".").lower()
+
 
 # Where an agent is: its port on this machine (the host is then None), or a host and a port.
 Place = tuple[str | None, int]
@@ -80,7 +95,8 @@ def _place(url: str) -> tuple[Place, Segments] | None:
         return None
     path = parts.path.removesuffix("/")
     segments = tuple(unquote(segment) for segment in path.split("/")[1:])
-    return (None if is_local_host(host) else host.rstrip(".").lower(), port), segments
+    host = _local(host)
+    return (None if is_local_host(host) else host, port), segments
 
 
 class AddressScrubber:
@@ -131,8 +147,8 @@ class AddressScrubber:
 
     def _known(self, host: str, port: int) -> Place | None:
         """The place ``host`` and ``port`` name, when it is a known agent's."""
-        bare = host.strip("[]")
-        place: Place = (None if is_local_host(bare) else bare.rstrip(".").lower(), port)
+        bare = _local(host)
+        place: Place = (None if is_local_host(bare) else bare, port)
         return place if place in self._places else None
 
     def _in_token(self, token: str, port: int) -> tuple[int, Place] | None:
@@ -152,12 +168,24 @@ class AddressScrubber:
         """How much of ``path`` is the path of an address at ``place``.
 
         Segment by segment and decoded, so a path a library wrote encoded is found as well.
+        The last segment may be followed by what ends an address in prose, a full stop or a
+        question mark, which is not taken; a letter or a digit after it makes it the
+        segment of another path.
         """
         raw = path.split("/")[1:] if path else []
         decoded = [unquote(segment) for segment in raw]
         for known in self._places[place]:
-            if known and tuple(decoded[: len(known)]) == known:
-                return sum(len(segment) + 1 for segment in raw[: len(known)])
+            if not known or len(raw) < len(known):
+                continue
+            before = len(known) - 1
+            if tuple(decoded[:before]) != known[:before]:
+                continue
+            taken = sum(len(segment) + 1 for segment in raw[:before])
+            last = raw[before]
+            if decoded[before] == known[before]:
+                return taken + len(last) + 1
+            if last.startswith(known[before]) and not _GOES_ON.match(last[len(known[before])]):
+                return taken + len(known[before]) + 1
         return 0
 
     def _url(self, match: re.Match[str]) -> str:

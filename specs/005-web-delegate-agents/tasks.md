@@ -1134,12 +1134,12 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ### Tests for User Story 6
 
-- [ ] T111 [P] [US6] Complete `tests/test_agents_address_nowhere.py`, part 5. The saved agent
+- [X] T111 [P] [US6] Complete `tests/test_agents_address_nowhere.py`, part 5. The saved agent
       is saved under `localhost`, removed, and saved again under `127.0.0.1`, so both spellings
       are searched for; the parts of Phases 5 to 8 are run as one journey; and a check at the
       end of the file fails when a route of `api/agents.py` or a refusal code of
       contracts/openapi.yaml is driven by no part of it (FR-028, SC-008, R20)
-- [ ] T112 [P] [US6] Extend `tests/test_agents_api.py`, part 5, as one sweep: each of the four
+- [X] T112 [P] [US6] Extend `tests/test_agents_api.py`, part 5, as one sweep: each of the four
       routes that change something is refused with 403 `other_origin` for `Sec-Fetch-Site:
       cross-site` and `same-site`, and for an `Origin` whose host is not the one asked for,
       also behind `X-Forwarded-Host`, before anything else is looked at, and nothing changed; a
@@ -1149,10 +1149,10 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ### Implementation for User Story 6
 
-- [ ] T113 [US6] Close each gap T111 and T112 find, in the module that words, returns, or logs
+- [X] T113 [US6] Close each gap T111 and T112 find, in the module that words, returns, or logs
       the text, and add the route or the line to the proof. When they find none, say so in the
       pull request (FR-028, FR-029)
-- [ ] T114 [US6] Write the end-to-end tests of this story: extend `web/e2e/agents.spec.ts`. A
+- [X] T114 [US6] Write the end-to-end tests of this story: extend `web/e2e/agents.spec.ts`. A
       saved agent's card shows its address and an environment agent's shows none; the only
       requests of the page that hold a saved agent's address hold it in a body; with a saved
       agent on the page, the Agents section still cannot be shown in a frame of another origin

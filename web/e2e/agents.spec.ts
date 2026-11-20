@@ -505,3 +505,162 @@ test.describe("in a narrow window", () => {
     ).toBe(true);
   });
 });
+
+// 005, User Story 6: an agent's address stays inside the Agents section.
+
+const STUB_AT = "http://127.0.0.1:9998/agents/recognizable-stub";
+const MOVED_TO = "http://127.0.0.1:9996/agents/recognizable-other";
+
+test("a saved agent's address is on its card and in the body of the request that sets it, and in no address the page asks for", async ({
+  page,
+}) => {
+  const asked: string[] = [];
+  page.on("request", (request) => asked.push(request.url()));
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", { url: STUB_AT }),
+  ).serve(page);
+  await page.goto("/agents");
+
+  // A saved agent's card shows its address, and an environment agent's shows none.
+  const stub = card(page, "stub");
+  await expect(stub.getByText("Address")).toBeVisible();
+  await expect(stub.getByText(STUB_AT)).toBeVisible();
+  await expect(card(page, "hello").getByText("Address")).toHaveCount(0);
+  await expect(card(page, "hello")).not.toContainText("127.0.0.1");
+
+  // Everything the card offers: a check, a move, and the removal.
+  await stub.getByRole("button", { name: "Check" }).click();
+  await expect(stub.getByRole("status")).toContainText("can be used");
+  await stub.getByRole("button", { name: "Edit" }).click();
+  const form = page.getByRole("dialog", { name: "Edit stub" });
+  await form.getByLabel("Address").fill(MOVED_TO);
+  await form.getByRole("button", { name: "Save" }).click();
+  await form.getByRole("button", { name: "Confirm" }).click();
+  await expect(stub.getByText(MOVED_TO)).toBeVisible();
+  await stub.getByRole("button", { name: "Remove" }).click();
+  await page
+    .getByRole("alertdialog")
+    .getByRole("button", { name: "Remove" })
+    .click();
+  await expect(cards(page)).toHaveCount(1);
+  await page.waitForLoadState("networkidle");
+
+  // Three requests changed something, and the one that set an address held it in its body.
+  expect(service.changes.map(({ method }) => method)).toEqual([
+    "POST",
+    "PATCH",
+    "DELETE",
+  ]);
+  const bodies = service.changes.map(({ body }) =>
+    JSON.stringify(body ?? null),
+  );
+  expect(bodies.filter((body) => body.includes("recognizable"))).toEqual([
+    JSON.stringify({ version: 1, url: MOVED_TO }),
+  ]);
+  // No address the page asked for holds either address, written plainly or encoded:
+  // neither its path, nor a host with its port. The port alone is not looked for, since
+  // four digits can turn up in an id or in the name of a file the app is built into.
+  expect(asked.length).toBeGreaterThan(4);
+  const paths = service.asked.map(({ path }) => path);
+  for (const url of [...asked, page.url(), ...paths]) {
+    const plain = decodeURIComponent(url).toLowerCase();
+    expect(plain).not.toContain("recognizable");
+    expect(plain).not.toMatch(/(localhost|127\.0\.0\.1|\[::1\]):999[68]/);
+  }
+  // The only thing a request to the service carries in a query is the version of a removal.
+  const queries = asked
+    .map((url) => new URL(url))
+    .filter((url) => url.pathname.startsWith("/api/") && url.search !== "")
+    .map((url) => url.search);
+  expect(queries).toEqual(["?version=2"]);
+});
+
+test("with a saved agent on the page, a page of another origin that frames the Agents section is shown nothing of it", async ({
+  page,
+  context,
+  browserName,
+  baseURL,
+}) => {
+  // Chromium asks before a page may reach an address on this machine, and refuses the
+  // frame's request unasked. With the permission given, the request is made, so that what
+  // keeps the frame empty is the console's answer and not the browser's own caution.
+  if (browserName === "chromium") {
+    await context.grantPermissions(["local-network-access"]);
+  }
+  await answerAgents(page, {
+    list: agentList(
+      environmentAgent("hello"),
+      savedAgent("stub", { url: STUB_AT }),
+    ),
+  });
+  // The same server under its other name is another origin to a browser: the console runs
+  // on localhost, and this page is served from 127.0.0.1.
+  const framedSection = new URL("/agents", baseURL);
+  expect(framedSection.hostname).toBe("localhost");
+  const origin = `http://127.0.0.1:${framedSection.port}`;
+  const elsewhere = `${origin}/a-page-of-another-origin`;
+  // A second frame, of a page that forbids nothing, to know when frames have been drawn.
+  const allowed = `${origin}/a-frame-that-may-be-shown`;
+  await page.route(allowed, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Allowed</title><p>This frame is shown.</p>",
+    }),
+  );
+  await page.route(elsewhere, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: `<!doctype html><title>Elsewhere</title><h1>Elsewhere</h1>
+        <iframe title="agents" src="${framedSection.href}" width="900" height="400"></iframe>
+        <iframe title="allowed" src="${allowed}" width="900" height="100"></iframe>`,
+    }),
+  );
+
+  // The frame's own request for the section: that it is made, and answered with the headers
+  // that forbid the frame, is what shows the frame is empty because of the console's answer
+  // and not because the browser never asked.
+  const framed = page.waitForResponse(
+    (response) => response.url() === framedSection.href,
+    { timeout: 10_000 },
+  );
+  await page.goto(elsewhere);
+  await expect(page.getByRole("heading", { name: "Elsewhere" })).toBeVisible();
+  await expect(
+    page
+      .frameLocator('iframe[title="allowed"]')
+      .getByText("This frame is shown."),
+  ).toBeVisible();
+  const answer = await framed;
+  expect(answer.status()).toBe(200);
+  expect(answer.headers()["content-security-policy"]).toContain(
+    "frame-ancestors 'none'",
+  );
+  expect(answer.headers()["x-frame-options"]).toBe("DENY");
+
+  // Nothing of the section is in its frame: not its heading, an agent's name, or the saved
+  // agent's address. A frame the browser refused holds the browser's own error page or
+  // nothing, and neither answers like a page, so the read gives up after two seconds and
+  // counts as empty.
+  const others = page
+    .frames()
+    .filter((frame) => frame !== page.mainFrame() && frame.url() !== allowed);
+  expect(others).toHaveLength(1);
+  await others[0].waitForLoadState("load", { timeout: 5_000 }).catch(() => {});
+  const shown = await Promise.race([
+    others[0]
+      .evaluate(() => `${document.title}\n${document.body?.innerText ?? ""}`)
+      .catch(() => ""),
+    new Promise<string>((resolve) => setTimeout(() => resolve(""), 2_000)),
+  ]);
+  expect(shown).not.toContain("Freyja");
+  expect(shown).not.toContain("Agents");
+  expect(shown).not.toContain("stub");
+  expect(shown).not.toContain("recognizable");
+  expect(shown).not.toContain("9998");
+
+  // The section itself, opened as its own page, does show the agent and its address: what
+  // kept the frame empty is the rule, and not a list that could not be read.
+  await page.goto("/agents");
+  await expect(card(page, "stub").getByText(STUB_AT)).toBeVisible();
+});
