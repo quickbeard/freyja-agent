@@ -102,13 +102,15 @@ def _build(
     *,
     server_tools: Sequence[Any],
     task_store: AgentTaskStore,
+    saved_store: SavedAgentStore,
     **options: Any,
 ) -> Orchestrator:
     """The orchestrator around ``model`` with the tool servers' tools and the set's agents'.
 
     Each agent's two tools take their classification from the set, which carries the
-    approval choice (005 research R7). Agent tasks exist only with agents: without any, the
-    orchestrator is what it was before feature 003 (003 FR-024).
+    approval choice, and a saved agent's tools are given the store they read their agent
+    from before a send (005 research R7). Agent tasks exist only with agents: without any,
+    the orchestrator is what it was before feature 003 (003 FR-024).
     """
     links = agents.links if agents is not None else ()
     return build_agent(
@@ -118,7 +120,9 @@ def _build(
             *(
                 tool
                 for link in links
-                for tool in agent_tools(link, task_store, gated=agents.gated(link))
+                for tool in agent_tools(
+                    link, task_store, gated=agents.gated(link), saved=saved_store
+                )
             ),
         ],
         agent_tasks=task_store if links else None,
@@ -413,6 +417,7 @@ class Runtime:
                         _build,
                         server_tools=server_tools,
                         task_store=task_store,
+                        saved_store=saved_store,
                         checkpointer=checkpointer,
                         store=store,
                         workspace_dir=settings.workspace_dir,

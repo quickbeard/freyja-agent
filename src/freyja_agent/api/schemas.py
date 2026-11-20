@@ -286,16 +286,44 @@ class AgentCreate(BaseModel):
     """What adding an agent takes: a name and an address (005 FR-006, FR-008).
 
     ``url`` is validated by the address rule and kept in its form, at most 2,000 characters,
-    which the rule checks itself. ``approval`` accepts ``required`` only, which is also what
-    it is when left out: an agent that runs without approval can be added once the routes
-    that can take that choice back exist. No refused value is repeated.
+    which the rule checks itself. ``approval`` is ``required`` when left out; ``none`` adds
+    an agent that runs without approval, which the console asks an operator to confirm
+    (005 FR-011). No refused value is repeated.
     """
 
     model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
 
     name: Annotated[str, AfterValidator(_agent_name)]
     url: Annotated[str, AfterValidator(_agent_address)]
-    approval: Literal["required"] = "required"
+    approval: Literal["required", "none"] = "required"
+
+
+def _a_choice(value: str | None) -> str:
+    """Refuse an approval choice sent as null: a field that is kept is left out, not emptied."""
+    if value is None:
+        raise PydanticCustomError("literal_error", "Input should be 'required' or 'none'")
+    return value
+
+
+class AgentUpdate(BaseModel):
+    """What changing a saved agent takes (005 FR-009, FR-012; research R14).
+
+    ``version`` is the one the page that asks last read: the change is refused when the agent
+    was changed since. ``approval`` left out is kept. Nothing else is accepted: a saved
+    agent's name never changes, and its address is not changed by this shape yet.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    version: Annotated[int, Field(ge=1, strict=True)]
+    approval: Annotated[Literal["required", "none"] | None, AfterValidator(_a_choice)] = None
+
+
+class AgentChanged(BaseModel):
+    """A saved agent after a change, and how many of its tasks the change gave up."""
+
+    agent: Agent
+    given_up: Annotated[int, Field(ge=0)]
 
 
 # A saved agent's id, or ``env.<name>`` for an environment agent (contracts/openapi.yaml).

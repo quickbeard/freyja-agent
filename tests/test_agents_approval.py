@@ -1,4 +1,5 @@
-"""005: a message is only ever sent to the agent it was proposed for (part 1).
+"""005: a message is only ever sent to the agent it was proposed for (part 1), and an
+agent's approval choice alone decides whether a message to it waits for a person (part 2).
 
 FR-023, FR-030; research R8; data-model.md "Proposed call" and "What a call gives without
 sending". A pause holds a tool's name and nothing about which agent had the name. So each call
@@ -6,12 +7,22 @@ of an agent's tool that a model proposes is kept as a row, from the model's repl
 call's send is finished, and the tool reads it before it sends: a proposal made for one agent
 is never sent to another that has its name by the time it is decided.
 
+Part 2: FR-019, FR-022, FR-023, FR-030, SC-004; research R7, R9. A saved agent that requires
+approval pauses every kind of message, wherever it is proposed. A switch to running without
+approval holds from the next run. A switch to requiring approval, and a removal, hold at once:
+a run in progress reads the saved agent right before it sends, and sends nothing to an agent
+that now requires approval or is gone. A paused step that came to hold a call that needs a
+decision cannot be continued, and the refusal names the agent.
+
 Every agent is the stand-in, inside the test process. Saved agents are written to the store,
-as `tests/test_agents_apply.py` part 1 does; the route that adds one is covered there.
+as `tests/test_agents_apply.py` part 1 does; the routes that add and change one are covered
+there and in `tests/test_agents_api.py`.
 """
 
+import asyncio
 import dataclasses
 import logging
+import threading
 from collections.abc import Callable
 from typing import Any
 
@@ -21,14 +32,23 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from freyja_agent.delegates import delegation_worker
 from freyja_agent.runtime.agent_tasks import AgentTaskRecord, ProposedCall
-from tests.conftest import A2aApp
-from tests.fakes import FakeClock, ScriptedChatModel
+from tests.a2a_stub import make_stub, stub_card
+from tests.conftest import A2aApp, saved_card
+from tests.fakes import FakeClock, LabelledChatModel, ScriptedChatModel
 from tests.test_a2a_background import RETRY, FlakyChatModel, follow_up, ready_outcome, retry_app
-from tests.test_a2a_gate import DELEGATE, PROPOSED, interrupted, pending, propose, resume
+from tests.test_a2a_gate import (
+    DELEGATE,
+    PROPOSED,
+    interrupted,
+    pending,
+    propose,
+    refuse,
+    resume,
+)
 from tests.test_a2a_handoff import DONE, handoff, run, tool_results
 from tests.test_a2a_pending import stub, tick
-from tests.test_agents_apply import save, texts
-from tests.test_agents_startup import SAVED_URL, TOOLS, sent, warnings
+from tests.test_agents_apply import OTHER_URL, choose, save, texts
+from tests.test_agents_startup import SAVED_URL, TOOLS, seed_task, sent, tools, warnings
 
 Events = list[tuple[str, Any]]
 # What a call gives when it was not proposed for the agent its tool belongs to now.
@@ -657,3 +677,732 @@ def test_one_tool_call_id_used_twice_for_two_saved_agents_reaches_only_the_one_i
     assert kept_back["content"] == KEPT_BACK.format(agent="helper")
     assert sent(made.transport_at(SAVED_URL)) == 0
     assert [m.text for m in made.stub_at(other_url).record.messages] == ["two"]
+
+
+# Part 2: the approval choice decides, and a tightened choice or a removal holds at once.
+
+STREAMING = "freyja_agent.api.streaming"
+NOW_REQUIRES = "Agent '{agent}' now requires approval, so this message was not sent."
+REMOVED = "Agent '{agent}' was removed; nothing was sent."
+# The message of contracts/sse-events.md for a resume that a tightened choice blocks.
+BLOCKED = (
+    "This step cannot continue: it holds a message to agent '{agent}' that needed no approval "
+    "when it was proposed, and the agent now requires approval. Switch the agent back, or "
+    "remove it, then decide the proposal again."
+)
+WHERE = ["orchestrator", "subagent", "background"]
+KINDS = ["handoff", "follow_up", "answer", "cancel"]
+# Where a message that needs no decision is seen to leave: a background run starts at a
+# round of the worker, which also checks the agent's pending tasks, so an answer and a
+# cancel, which need such a task, are followed on the orchestrator and on its subagent.
+SENDS = [(kind, where) for where in WHERE[:2] for kind in KINDS] + [
+    (kind, "background") for kind in KINDS[:2]
+]
+THIRD_URL = "http://127.0.0.1:9103"
+
+
+def a_call(kind: str) -> tuple[str, dict[str, Any]]:
+    if kind == "cancel":
+        return "cancel_helper_task", {"task_id": "t-1"}
+    args: dict[str, Any] = {"message": "Summarize the week."}
+    if kind == "answer":
+        args["task_id"] = "t-1"
+    return "handoff_to_helper", args
+
+
+def one_helper(
+    make_a2a_app: Callable[..., A2aApp],
+    kind: str,
+    where: str,
+    thread: str,
+    *,
+    read_only: bool,
+    model: type[ScriptedChatModel] = ScriptedChatModel,
+) -> tuple[A2aApp, ScriptedChatModel]:
+    """An app with the saved agent ``helper``, and a model that proposes one message to it:
+    on the orchestrator, on its subagent, or in the background run a round of the worker
+    starts on ``thread``."""
+    call = a_call(kind)
+    script = {
+        "orchestrator": [propose(call)],
+        "subagent": [DELEGATE, propose(call, step="d")],
+        "background": [propose(call, step="b")],
+    }[where]
+    scripted = model(script=script)
+    background = where == "background"
+    made = make_a2a_app(
+        scripted,
+        {"hello": {"read_only": True}} if background else {},
+        saved={"helper": {"url": SAVED_URL, "read_only": read_only}},
+    )
+    record = made.saved["helper"]
+    if background:
+        # An outcome for the worker to deliver: a task the stand-in will not know.
+        seed_task(made, "hello", "task-1", thread=thread)
+    elif kind in ("answer", "cancel"):
+        state = "input_required" if kind == "answer" else "working"
+        seed_task(made, "helper", "t-1", ref=record.ref, state=state, thread=thread)
+    if kind == "follow_up":
+        # The thread already has a conversation with the agent.
+        asyncio.run(made.store.set_context(thread, "helper", "ctx-1"))
+    return made, scripted
+
+
+def started(
+    client: TestClient, made: A2aApp, where: str, thread: str, sse_events: Any
+) -> dict[str, Any] | None:
+    """Start the run in which the message is proposed; the proposal it paused on, or None."""
+    if where == "background":
+        tick(client, made.runtime)
+    else:
+        events = run(client, thread, sse_events)
+        assert events[-1][0] in ("interrupt", "end"), events[-1]
+    return client.get(f"/threads/{thread}/state").json()["pending"]
+
+
+def results(model: ScriptedChatModel, tool: str) -> list[ToolMessage]:
+    """Every result of ``tool`` the model was shown, on the orchestrator or its subagent."""
+    found: dict[str, ToolMessage] = {}
+    for seen in model.seen:
+        for message in seen:
+            if isinstance(message, ToolMessage) and message.name == tool:
+                found[message.tool_call_id] = message
+    return list(found.values())
+
+
+def before_the_send(made: A2aApp, monkeypatch: pytest.MonkeyPatch, change: Any) -> None:
+    """Have ``change`` happen once, while a tool is on its way to sending: after its run
+    started, and before the tool looks at the saved agent."""
+    get_call = made.store.get_call
+    done: list[bool] = []
+
+    async def changing(*args: Any) -> Any:
+        if not done:
+            done.append(True)
+            await change()
+        return await get_call(*args)
+
+    monkeypatch.setattr(made.store, "get_call", changing)
+
+
+def kept_back_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [line for line in warnings(caplog, TOOLS) if line.startswith("Agent helper: ")]
+
+
+@pytest.mark.parametrize("where", WHERE)
+@pytest.mark.parametrize("kind", KINDS)
+def test_every_message_to_a_saved_agent_that_requires_approval_waits_for_a_person(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, kind: str, where: str
+) -> None:
+    thread = f"p-1-{kind}-{where}"
+    made, _model = one_helper(make_a2a_app, kind, where, thread, read_only=False)
+    with TestClient(made.app) as client:
+        proposal = started(client, made, where, thread, sse_events)
+    assert proposal is not None
+    (action,) = proposal["action_requests"]
+    assert (action["name"], action["agent"]) == (a_call(kind)[0], "helper")
+    # Nothing left before the decision.
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+@pytest.mark.parametrize(("kind", "where"), SENDS)
+def test_after_a_switch_to_running_without_approval_the_next_run_sends_with_no_pause(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, kind: str, where: str
+) -> None:
+    thread = f"p-2-{kind}-{where}"
+    made, _model = one_helper(make_a2a_app, kind, where, thread, read_only=False)
+    with TestClient(made.app) as client:
+        choose(client, made, made.saved["helper"], read_only=True)
+        proposal = started(client, made, where, thread, sse_events)
+    assert proposal is None
+    assert sent(made.transport_at(SAVED_URL)) == 1
+
+
+def test_a_run_in_progress_keeps_pausing_after_a_switch_to_running_without_approval(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = LabelledChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved=HELPER)
+    streamed: dict[str, Events] = {}
+    with TestClient(made.app) as client:
+        model.hold()
+        running = threading.Thread(
+            target=lambda: streamed.update(events=run(client, "p-3", sse_events))
+        )
+        running.start()
+        with model.held():
+            # The run has reached its model and waits there while the choice is changed.
+            choose(client, made, made.saved["helper"], read_only=True)
+        running.join(10)
+        assert not running.is_alive()
+        before_the_decision = sent(made.transport_at(SAVED_URL))
+        # The run that was in progress still has its gate. Its continuation is a run of its
+        # own, with the agent as it is now: the proposal can only be approved.
+        proposal = interrupted(streamed["events"])
+        errors = refuse(client, "p-3", [{"type": "reject", "message": "no"}])
+        events = resume(client, "p-3", [{"type": "approve"}], sse_events)
+
+    assert [action["name"] for action in proposal["action_requests"]] == ["handoff_to_helper"]
+    assert before_the_decision == 0
+    assert "no longer needs a decision" in errors[0]["msg"]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["Summarize the week."]
+
+
+def test_after_a_switch_to_requiring_approval_the_next_run_pauses_on_every_instance(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    saved = {"helper": {"url": SAVED_URL, "read_only": True}}
+    first = make_a2a_app(
+        ScriptedChatModel(script=[handoff("Before.", agent="helper"), DONE, propose(TO_HELPER)]),
+        {},
+        saved=saved,
+    )
+    second = make_a2a_app(
+        ScriptedChatModel(script=[propose(TO_HELPER)]),
+        {},
+        instance_id="instance-b",
+        store=first.store,
+        saved_agents=first.saved_agents,
+        at=first.at,
+    )
+    with TestClient(first.app) as one, TestClient(second.app) as two:
+        before = run(one, "p-4", sse_events)
+        # Changed in the store, as a third instance's route would: neither has seen it.
+        choose(one, first, first.saved["helper"], read_only=False)
+        here = run(one, "p-4b", sse_events)
+        there = run(two, "p-4c", sse_events)
+
+    assert before[-1] == ("end", {"status": "completed"})
+    for events in (here, there):
+        (action,) = interrupted(events)["action_requests"]
+        assert (action["name"], action["agent"]) == ("handoff_to_helper", "helper")
+    assert texts(first) == ["Before."]
+
+
+@pytest.mark.parametrize(("kind", "where"), SENDS)
+def test_a_run_in_progress_sends_nothing_to_an_agent_that_now_requires_approval(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    kind: str,
+    where: str,
+) -> None:
+    thread = f"p-5-{kind}-{where}"
+    made, model = one_helper(make_a2a_app, kind, where, thread, read_only=True)
+    record = made.saved["helper"]
+
+    async def tighten() -> None:
+        await made.saved_agents.change(record.id, record.version, read_only=False)
+
+    # The run starts while the agent runs without approval, so its tool waits for no one.
+    before_the_send(made, monkeypatch, tighten)
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        proposal = started(client, made, where, thread, sse_events)
+        state = client.get(f"/threads/{thread}/state").json()
+
+    sentence = NOW_REQUIRES.format(agent="helper")
+    # Nothing was sent, the call says why, and the run went on to its end.
+    assert sent(made.transport_at(SAVED_URL)) == 0
+    (result,) = results(model, a_call(kind)[0])
+    assert (result.status, result.content) == ("error", sentence)
+    assert proposal is None and state["run_active"] is False
+    assert state["messages"][-1]["type"] == "ai"
+    assert kept_back_lines(caplog) == [f"Agent helper: {sentence}"]
+
+
+def test_a_send_that_began_before_the_change_is_not_recalled_and_none_follows_it(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            handoff("Began before the change.", agent="helper"),
+            handoff("Proposed after it.", agent="helper", call_id="h2"),
+            DONE,
+        ]
+    )
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    record = made.saved["helper"]
+    start_send = made.store.start_send
+    begun: list[int] = []
+
+    async def then_tightened(send: Any) -> None:
+        await start_send(send)
+        # The first write of the first send is made: the change is answered right after it.
+        if not begun:
+            begun.append(sent(made.transport_at(SAVED_URL)))
+            await made.saved_agents.change(record.id, record.version, read_only=False)
+
+    monkeypatch.setattr(made.store, "start_send", then_tightened)
+    with TestClient(made.app) as client:
+        events = run(client, "p-6", sse_events)
+
+    assert events[-1] == ("end", {"status": "completed"})
+    first, second = tool_results(events, "handoff_to_helper")
+    # When the change was answered nothing had left yet; what had begun was sent all the same.
+    assert begun == [0]
+    assert first["content"].startswith("Agent 'helper' completed task ")
+    assert second["content"] == NOW_REQUIRES.format(agent="helper")
+    # By the stand-in's own record, nothing reached it after the change.
+    assert texts(made) == ["Began before the change."]
+    assert sent(made.transport_at(SAVED_URL)) == 1
+
+
+@pytest.mark.parametrize("saved_again", [False, True])
+@pytest.mark.parametrize("read_only", [True, False])
+def test_a_run_in_progress_sends_nothing_to_an_agent_that_was_removed(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    read_only: bool,
+    saved_again: bool,
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": read_only}})
+    record = made.saved["helper"]
+    again = make_stub("helper")
+
+    async def remove() -> None:
+        await made.saved_agents.remove(record.id, record.version)
+        if saved_again:
+            # Another agent under the same name: another id.
+            made.add_stub(OTHER_URL, again)
+            await made.saved_agents.add(name="helper", url=OTHER_URL, card=saved_card(again))
+
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        if read_only:
+            before_the_send(made, monkeypatch, remove)
+            events = run(client, "p-7", sse_events)
+        else:
+            # A person approves it, and the continuation has started when the agent is
+            # removed: it still holds the removed agent's tool.
+            interrupted(run(client, "p-7", sse_events))
+            before_the_send(made, monkeypatch, remove)
+            events = resume(client, "p-7", [{"type": "approve"}], sse_events)
+
+    sentence = REMOVED.format(agent="helper")
+    assert events[-1] == ("end", {"status": "completed"})
+    (result,) = results(model, "handoff_to_helper")
+    assert (result.status, result.content) == ("error", sentence)
+    assert sent(made.transport_at(SAVED_URL)) == 0
+    assert again.record.messages == []
+    assert kept_back_lines(caplog) == [f"Agent helper: {sentence}"]
+
+
+@pytest.mark.parametrize("change", ["requires approval", "removed"])
+def test_a_step_that_runs_again_after_its_send_was_recorded_is_not_refused_afterwards(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    change: str,
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("once", agent="helper", call_id="c1")]),
+        {},
+        saved={"helper": {"url": SAVED_URL, "read_only": True}},
+    )
+    record = made.saved["helper"]
+    delete = made.store.delete_call
+
+    async def deleted_then_lost(*args: Any, **kwargs: Any) -> None:
+        await delete(*args, **kwargs)
+        raise RuntimeError("the service stopped before the step was saved")
+
+    config = {"configurable": {"thread_id": "p-8"}}
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.store, "delete_call", deleted_then_lost)
+        assert run(client, "p-8", sse_events)[-1][0] == "error"
+        monkeypatch.undo()
+        if change == "removed":
+            client.portal.call(made.saved_agents.remove, record.id, record.version)
+        else:
+            choose(client, made, record, read_only=False)
+        # The message left before the change. The step that runs again finds its result in
+        # the send ledger, which is read first, and is not told afterwards that it may not send.
+        messages = client.portal.call(made.runtime.agent.ainvoke, None, config)["messages"]
+
+    assert texts(made) == ["once"]
+    (result,) = [m for m in messages if isinstance(m, ToolMessage)]
+    assert result.content.startswith("Agent 'helper' completed task ")
+
+
+def reads_of_the_saved_agent(made: A2aApp, monkeypatch: pytest.MonkeyPatch) -> list[str]:
+    get_agent = made.saved_agents.get_agent
+    read: list[str] = []
+
+    async def counting(agent_id: str) -> Any:
+        read.append(agent_id)
+        return await get_agent(agent_id)
+
+    monkeypatch.setattr(made.saved_agents, "get_agent", counting)
+    return read
+
+
+def test_an_environment_agent_s_tools_read_no_saved_agent_before_they_send(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("Say hello.")]),
+        {"hello": {"read_only": True}},
+        saved=HELPER,
+    )
+    read = reads_of_the_saved_agent(made, monkeypatch)
+    with TestClient(made.app) as client:
+        events = run(client, "p-9", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert [m.text for m in made.stubs["hello"].record.messages] == ["Say hello."]
+    assert read == []
+
+
+def test_a_saved_agent_s_tool_reads_its_agent_once_before_each_send(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ScriptedChatModel(
+        script=[handoff("one", agent="helper"), handoff("two", agent="helper", call_id="h2")]
+    )
+    made = make_a2a_app(model, {}, saved={"helper": {"url": SAVED_URL, "read_only": True}})
+    read = reads_of_the_saved_agent(made, monkeypatch)
+    with TestClient(made.app) as client:
+        events = run(client, "p-10", sse_events)
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["one", "two"]
+    assert read == [made.saved["helper"].id] * 2
+
+
+def test_a_saved_agent_that_cannot_be_read_fails_the_step_and_nothing_is_sent(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[handoff("Say hello.", agent="helper")]),
+        {},
+        saved={"helper": {"url": SAVED_URL, "read_only": True}},
+    )
+
+    async def unreadable(_agent_id: str) -> None:
+        raise RuntimeError("the database went away")
+
+    with TestClient(made.app) as client:
+        monkeypatch.setattr(made.saved_agents, "get_agent", unreadable)
+        events = run(client, "p-11", sse_events)
+    kind, data = events[-1]
+    assert (kind, data["code"]) == ("error", "internal")
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_a_paused_proposal_decided_after_a_switch_to_running_without_approval_is_sent_as_proposed(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    made = make_a2a_app(ScriptedChatModel(script=[propose(TO_HELPER)]), {}, saved=HELPER)
+    with TestClient(made.app) as client:
+        proposal = interrupted(run(client, "p-12", sse_events))
+        choose(client, made, made.saved["helper"], read_only=True)
+        now = pending(client, "p-12")
+        edit = {"type": "edit", "args": {"message": "Something else."}}
+        refused = [
+            refuse(client, "p-12", [decision])[0]["msg"]
+            for decision in (edit, {"type": "reject", "message": "no"})
+        ]
+        before_the_decision = sent(made.transport_at(SAVED_URL))
+        events = resume(client, "p-12", [{"type": "approve"}], sse_events)
+
+    assert now["interrupt_id"] == proposal["interrupt_id"]
+    assert now["action_requests"][0]["allowed_decisions"] == ["approve"]
+    assert all("no longer needs a decision" in message for message in refused)
+    assert before_the_decision == 0
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["Summarize the week."]
+
+
+TO_OTHER = ("handoff_to_other", {"message": "To the one that needed no approval."})
+TWO_AGENTS = {
+    "helper": {"url": SAVED_URL},
+    "other": {"url": OTHER_URL, "read_only": True},
+}
+
+
+@pytest.mark.parametrize("where", WHERE[:2])
+def test_a_paused_step_whose_call_came_to_require_approval_cannot_be_continued(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    where: str,
+) -> None:
+    step = propose(TO_HELPER, TO_OTHER, step="d" if where == "subagent" else "c")
+    script = [DELEGATE, step] if where == "subagent" else [step]
+    made = make_a2a_app(ScriptedChatModel(script=script), {}, saved=TWO_AGENTS)
+    caplog.set_level(logging.WARNING, logger=STREAMING)
+    with TestClient(made.app) as client:
+        proposal = interrupted(run(client, "p-13", sse_events))
+        # The step waits for a decision about `helper`. Its call to `other` needed none.
+        tightened = choose(client, made, made.saved["other"], read_only=False)
+        blocked = resume(client, "p-13", [{"type": "approve"}], sse_events)
+        still = pending(client, "p-13")
+        left = (sent(made.transport_at(SAVED_URL)), sent(made.transport_at(OTHER_URL)))
+        refusals = warnings(caplog, STREAMING)
+        # Once the agent is switched back, the same decision goes through.
+        choose(client, made, tightened, read_only=True)
+        events = resume(client, "p-13", [{"type": "approve"}], sse_events)
+
+    assert [action["name"] for action in proposal["action_requests"]] == ["handoff_to_helper"]
+    assert blocked[-1] == (
+        "error",
+        {"code": "approval_now_required", "message": BLOCKED.format(agent="other")},
+    )
+    # Nothing from the step ran, and the proposal is as it was.
+    assert left == (0, 0)
+    assert still["interrupt_id"] == proposal["interrupt_id"]
+    # The refusal is in the log with its thread and the agent.
+    (line,) = refusals
+    assert "thread p-13" in line and "refused" in line and line.endswith("agents: other")
+    assert events[-1] == ("end", {"status": "completed"})
+    assert texts(made) == ["Summarize the week."]
+    assert texts(made, OTHER_URL) == ["To the one that needed no approval."]
+
+
+def test_a_blocked_resume_names_every_agent_that_came_to_require_approval(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    third = ("handoff_to_third", {"message": "To another that needed no approval."})
+    saved = {**TWO_AGENTS, "third": {"url": THIRD_URL, "read_only": True}}
+    made = make_a2a_app(
+        ScriptedChatModel(script=[propose(TO_HELPER, TO_OTHER, third)]), {}, saved=saved
+    )
+    with TestClient(made.app) as client:
+        interrupted(run(client, "p-14", sse_events))
+        for name in ("third", "other"):
+            choose(client, made, made.saved[name], read_only=False)
+        blocked = resume(client, "p-14", [{"type": "approve"}], sse_events)
+
+    kind, data = blocked[-1]
+    assert (kind, data["code"]) == ("error", "approval_now_required")
+    assert data["message"] == (
+        "This step cannot continue: it holds messages to agents 'other' and 'third' that "
+        "needed no approval when they were proposed, and the agents now require approval. "
+        "Switch the agents back, or remove them, then decide the proposal again."
+    )
+    assert [sent(made.transport_at(url)) for url in (SAVED_URL, OTHER_URL, THIRD_URL)] == [0, 0, 0]
+
+
+def test_a_blocked_resume_whose_calls_cannot_be_read_ends_as_it_did_before(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_a2a_app(
+        ScriptedChatModel(script=[propose(TO_HELPER, TO_OTHER)]), {}, saved=TWO_AGENTS
+    )
+
+    async def unreadable(_thread: str) -> None:
+        raise RuntimeError("the database went away")
+
+    with TestClient(made.app) as client:
+        proposal = interrupted(run(client, "p-15", sse_events))
+        choose(client, made, made.saved["other"], read_only=False)
+        monkeypatch.setattr(made.store, "list_calls", unreadable)
+        blocked = resume(client, "p-15", [{"type": "approve"}], sse_events)
+        monkeypatch.undo()
+        still = pending(client, "p-15")
+
+    kind, data = blocked[-1]
+    assert (kind, data["code"]) == ("error", "internal")
+    assert still["interrupt_id"] == proposal["interrupt_id"]
+    assert sent(made.transport_at(OTHER_URL)) == 0
+
+
+def test_the_code_of_a_blocked_resume_is_not_among_those_a_background_run_is_retried_for() -> None:
+    assert "approval_now_required" not in delegation_worker.RETRIED
+    assert "internal" in delegation_worker.RETRIED
+
+
+def test_a_card_that_calls_its_agent_read_only_changes_nothing(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    card = stub_card("helper", description="A read-only agent: it only reads, never writes.")
+    made = make_a2a_app(
+        ScriptedChatModel(script=[propose(TO_HELPER)]),
+        {},
+        saved={"helper": {"url": SAVED_URL, "stub": make_stub("helper", card=card)}},
+    )
+    with TestClient(made.app) as client:
+        catalog = tools(client)
+        proposal = interrupted(run(client, "p-16", sse_events))
+
+    assert "read-only" in catalog["handoff_to_helper"]["description"]
+    assert catalog["handoff_to_helper"]["classification"] == "gated"
+    assert [action["name"] for action in proposal["action_requests"]] == ["handoff_to_helper"]
+    assert sent(made.transport_at(SAVED_URL)) == 0
+
+
+def test_a_saved_agent_s_tools_are_not_built_without_the_store_they_read_it_from() -> None:
+    from freyja_agent.config import A2aAgentConfig
+    from freyja_agent.delegates.a2a_agents import AgentLink, default_transport
+    from freyja_agent.delegates.a2a_tools import agent_tools
+    from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
+    from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore
+
+    def link(source: str) -> AgentLink:
+        return AgentLink(
+            "helper",
+            A2aAgentConfig(url=SAVED_URL, read_only=False),
+            transport=default_transport,
+            call_timeout=5,
+            source=source,
+            agent_id="a" * 32 if source == "saved" else None,
+        )
+
+    tasks = InMemoryAgentTaskStore()
+    # A saved agent's tools check the agent before every send: they cannot be made unable to.
+    with pytest.raises(ValueError, match="saved-agent store"):
+        agent_tools(link("saved"), tasks)
+    assert len(agent_tools(link("saved"), tasks, saved=InMemorySavedAgentStore(tasks))) == 2
+    # An environment agent's need none, as before.
+    assert len(agent_tools(link("environment"), tasks)) == 2
+
+
+# A step that runs again before its send: found by the independent review of Phase 7. A
+# background run that fails is tried again from its last checkpoint, which lies after the
+# approval gate, on an orchestrator built for the agents as they are by then.
+
+
+def failing_once(target: Any, name: str, monkeypatch: pytest.MonkeyPatch) -> list[bool]:
+    """Make ``target.name`` fail the first time it is called, as a database does for a moment."""
+    original = getattr(target, name)
+    failed: list[bool] = []
+
+    async def blip(*args: Any, **kwargs: Any) -> Any:
+        if not failed:
+            failed.append(True)
+            raise RuntimeError("the database went away for a moment")
+        return await original(*args, **kwargs)
+
+    monkeypatch.setattr(target, name, blip)
+    return failed
+
+
+@pytest.mark.parametrize("failing", ["get_context", "get_agent", "start_send"])
+def test_a_retry_sends_nothing_no_person_decided_to_an_agent_that_came_to_require_approval(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    failing: str,
+) -> None:
+    thread = f"p-17-{failing}"
+    made, model = one_helper(make_a2a_app, "handoff", "background", thread, read_only=True)
+    record = made.saved["helper"]
+    target = made.saved_agents if failing == "get_agent" else made.store
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(made.app) as client:
+        failed = failing_once(target, failing, monkeypatch)
+        # The first attempt: the hand-off needs no decision, passes the gate, and its step
+        # fails before anything is sent.
+        tick(client, made.runtime)
+        (row,) = rows(client, made, thread)
+        before = sent(made.transport_at(SAVED_URL))
+        # The agent now requires approval, and the change is answered.
+        choose(client, made, record, read_only=False)
+        catalog = tools(client)
+        # The retry continues the step, past the gate, with the tools of the agents as
+        # they are now.
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+        state = client.get(f"/threads/{thread}/state").json()
+
+    assert failed == [True] and before == 0
+    assert (row.agent, row.gated) == ("helper", False)
+    assert catalog["handoff_to_helper"]["classification"] == "gated"
+    # No person decided this message, and the agent requires approval: nothing was sent.
+    assert texts(made) == []
+    assert sent(made.transport_at(SAVED_URL)) == 0
+    sentence = NOW_REQUIRES.format(agent="helper")
+    (result,) = results(model, "handoff_to_helper")
+    assert (result.status, result.content) == ("error", sentence)
+    assert state["pending"] is None and state["messages"][-1]["type"] == "ai"
+    assert kept_back_lines(caplog) == [f"Agent helper: {sentence}"]
+
+
+def test_a_retry_sends_what_no_person_decided_to_an_agent_that_still_runs_without_approval(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    made, _model = one_helper(make_a2a_app, "handoff", "background", "p-18", read_only=True)
+    with TestClient(made.app) as client:
+        failed = failing_once(made.store, "get_context", monkeypatch)
+        tick(client, made.runtime)
+        before = sent(made.transport_at(SAVED_URL))
+        clock.advance(RETRY)
+        tick(client, made.runtime)
+    assert failed == [True] and before == 0
+    # Nothing changed in between: the retry sends the message, once.
+    assert texts(made) == ["Summarize the week."]
+
+
+def test_a_retry_after_a_restart_sends_nothing_to_an_environment_agent_that_lost_its_mark(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    step = propose(("handoff_to_stub", {"message": "Summarize the week."}), step="b")
+    model = ScriptedChatModel(script=[step])
+    first = make_a2a_app(model, {"hello": {"read_only": True}, "stub": {"read_only": True}})
+    seed_task(first, "hello", "task-1", thread="p-19")
+    with TestClient(first.app) as client:
+        failed = failing_once(first.store, "get_context", monkeypatch)
+        tick(client, first.runtime)
+        (row,) = rows(client, first, "p-19")
+
+    # The service starts again, and `stub` no longer runs without approval.
+    second = restart(
+        make_a2a_app,
+        first,
+        model,
+        {"hello": {"read_only": True}, "stub": {}},
+        stubs=first.stubs,
+    )
+    caplog.set_level(logging.WARNING, logger=TOOLS)
+    with TestClient(second.app) as client:
+        clock.advance(RETRY)
+        tick(client, second.runtime)
+        state = client.get("/threads/p-19/state").json()
+
+    assert failed == [True]
+    assert (row.agent, row.agent_id, row.gated) == ("stub", None, False)
+    # The step passed the gate before the restart. No person decided its message.
+    assert first.stubs["stub"].record.messages == []
+    sentence = NOW_REQUIRES.format(agent="stub")
+    (result,) = results(model, "handoff_to_stub")
+    assert (result.status, result.content) == ("error", sentence)
+    assert state["pending"] is None
+    assert f"Agent stub: {sentence}" in warnings(caplog, TOOLS)
+
+
+def test_a_call_proposed_as_needing_a_decision_is_not_sent_by_a_tool_that_waits_for_none(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model = ScriptedChatModel(script=[propose(TO_HELPER)])
+    made = make_a2a_app(model, {}, saved=HELPER)
+    with TestClient(made.app) as client:
+        interrupted(run(client, "p-20", sse_events))
+        loosened = choose(client, made, made.saved["helper"], read_only=True)
+
+        async def tighten() -> None:
+            await made.saved_agents.change(loosened.id, loosened.version, read_only=False)
+
+        # The continuation is built while the agent runs without approval, so its tool
+        # waits for no one, and the agent requires approval again before the tool sends.
+        before_the_send(made, monkeypatch, tighten)
+        events = resume(client, "p-20", [{"type": "approve"}], sse_events)
+
+    # That the call needed a decision when it was proposed is not enough by itself: the run
+    # that carries it out has no gate for it. It fails toward sending nothing.
+    assert events[-1] == ("end", {"status": "completed"})
+    (result,) = results(model, "handoff_to_helper")
+    assert result.content == NOW_REQUIRES.format(agent="helper")
+    assert sent(made.transport_at(SAVED_URL)) == 0

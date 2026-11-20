@@ -144,25 +144,32 @@ function Claim({ card }: { card: AgentClaim }) {
 }
 
 /**
- * One agent Freyja can hand work to, as the service describes it. Nothing here changes the
- * agent, and an environment agent's address is not known to the console at all. An agent
- * that is in use can be checked from its card: the service reads its card again and says
- * whether the agent can be used. `onChecked` is told when the list should be read again.
+ * One agent Freyja can hand work to, as the service describes it. Nothing in the card itself
+ * changes the agent, and an environment agent's address is not known to the console at all.
+ * An agent that is in use can be checked from its card: the service reads its card again
+ * and says whether the agent can be used. `onChecked` is told when the list should be read
+ * again. A saved agent that is in use has Edit, which hands the agent to whoever opens the
+ * form; an environment agent cannot be changed, and a saved agent that is not in use can
+ * only be removed (FR-017).
  */
 export function AgentCard({
   agent,
   onChecked,
   onGone,
+  onEdit,
 }: {
   agent: Agent;
   /** Told after any result of a check, and when a check got no answer. */
   onChecked?: () => void;
   /** Told when the service says this agent no longer exists. */
   onGone?: () => void;
+  /** Told that the operator asked to change this agent. */
+  onEdit?: (agent: Agent) => void;
 }) {
   const down = agent.state === "unreachable" || agent.state === "not_in_use";
   // A saved agent the environment overrides has no link to check (FR-013).
   const inUse = agent.state !== "not_in_use";
+  const editable = agent.source === "saved" && inUse;
   // What the last check from this card found, or why it was refused. Either stays until the
   // next check starts: the result carries the time the service gave it.
   const [checked, setChecked] = useState<AgentCheck | null>(null);
@@ -273,6 +280,11 @@ export function AgentCard({
           >
             {checking ? "Checking…" : "Check"}
           </Button>
+          {editable && (
+            <Button variant="outline" size="sm" onClick={() => onEdit?.(agent)}>
+              Edit
+            </Button>
+          )}
         </CardFooter>
       )}
     </Card>

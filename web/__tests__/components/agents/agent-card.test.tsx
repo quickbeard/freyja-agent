@@ -241,13 +241,16 @@ describe("AgentCard", () => {
     ).toBeNull();
   });
 
-  it("offers Check and nothing to change or remove the agent", () => {
-    for (const shown of [HELLO, STUB]) {
+  it("offers Check, and Edit for a saved agent, and nothing in the card itself that changes or removes the agent", () => {
+    for (const [shown, buttons] of [
+      [HELLO, ["Check"]],
+      [STUB, ["Check", "Edit"]],
+    ] as const) {
       const { unmount } = render(<AgentCard agent={shown} />);
       expect(
         screen.getAllByRole("button").map((button) => button.textContent),
-      ).toEqual(["Check"]);
-      for (const role of ["link", "textbox", "switch", "combobox"]) {
+      ).toEqual(buttons);
+      for (const role of ["link", "textbox", "switch", "combobox", "radio"]) {
         expect(screen.queryAllByRole(role)).toEqual([]);
       }
       unmount();
@@ -565,5 +568,63 @@ describe("AgentCard, checking", () => {
     );
     expect(onChecked).toHaveBeenCalledTimes(1);
     expect(onGone).not.toHaveBeenCalled();
+  });
+});
+
+// Part 3 (T086): Edit, for a saved agent that is in use.
+
+describe("AgentCard, Edit", () => {
+  it("has Edit on the card of a saved agent that is in use, whatever was last found of it", () => {
+    const inUse = [
+      STUB,
+      agent({ approval: "none" }),
+      agent({ state: "unreachable", reason: "Nothing answered." }),
+      agent({ state: "not_tried", checked_at: null }),
+    ];
+    for (const shown of inUse) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.getByRole("button", { name: "Edit" })).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("has no Edit on an environment agent's card", () => {
+    for (const shown of [
+      HELLO,
+      { ...HELLO, approval: "required" as const },
+      { ...HELLO, state: "unreachable" as const, card: null },
+    ]) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+      unmount();
+    }
+  });
+
+  it("has no Edit on the card of a saved agent that is not in use", () => {
+    render(
+      <AgentCard
+        agent={agent({
+          state: "not_in_use",
+          checked_at: null,
+          reason: "An agent named in the environment has this name.",
+        })}
+      />,
+    );
+    expect(screen.queryByRole("button", { name: "Edit" })).toBeNull();
+    expect(screen.queryAllByRole("button")).toEqual([]);
+  });
+
+  it("hands its agent to whoever opens the form, and asks the service nothing", () => {
+    const fetchStub = stubFetch(result());
+    const onEdit = vi.fn();
+    const shown = agent({ approval: "none", version: 5 });
+    render(<AgentCard agent={shown} onEdit={onEdit} />);
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    expect(onEdit).toHaveBeenCalledWith(shown);
+    // Nothing on the card itself changes the agent: the form does, behind a confirmation.
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog")).toBeNull();
   });
 });

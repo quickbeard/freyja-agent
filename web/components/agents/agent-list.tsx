@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
   AGENTS_KEY,
+  type Agent,
   type AgentList as Agents,
   downAgents,
   listAgents,
@@ -35,6 +36,23 @@ export function AgentList() {
     shouldRetryOnError: false,
   });
   const [adding, setAdding] = useState(false);
+  // The agent whose form is open, as it was when Edit was pressed: the form's fields are
+  // filled from it once, and it stays after the form is closed, so the form can close.
+  const [editing, setEditing] = useState<{
+    agent: Agent;
+    open: boolean;
+  } | null>(null);
+
+  /**
+   * The agent being changed as the list has it now, for the form's confirmation: null when
+   * the list no longer has it, and undefined while the list is not known (FR-011).
+   */
+  function live(agent: Agent): Agent | null | undefined {
+    if (error !== undefined || data === undefined) {
+      return undefined;
+    }
+    return data.agents.find(({ id }) => id === agent.id) ?? null;
+  }
 
   let list: React.ReactNode;
   if (error !== undefined) {
@@ -96,6 +114,7 @@ export function AgentList() {
                 agent={agent}
                 onChecked={() => mutate()}
                 onGone={() => mutate()}
+                onEdit={(chosen) => setEditing({ agent: chosen, open: true })}
               />
             ))}
           </div>
@@ -117,6 +136,20 @@ export function AgentList() {
         onSaved={() => mutate()}
         onUnknown={() => mutate()}
       />
+      {/* A form of its own for changing a saved agent. After a change, after a refusal that
+          says the agent is no longer as the form has it, and after a request with no
+          answer, the list is read again. */}
+      {editing && (
+        <AgentForm
+          agent={editing.agent}
+          live={live(editing.agent)}
+          open={editing.open}
+          onOpenChange={(open) => setEditing({ ...editing, open })}
+          onSaved={() => mutate()}
+          onUnknown={() => mutate()}
+          onStale={() => mutate()}
+        />
+      )}
     </>
   );
 }

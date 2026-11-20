@@ -1,6 +1,7 @@
 import { expect, type Page, test } from "@playwright/test";
 import {
   AGENT_ADDRESS_TAKEN,
+  AGENT_CHANGED_SINCE,
   AgentService,
   ALREADY_CHECKED,
   agentsBadge,
@@ -63,10 +64,14 @@ test("Add saves an agent, which shows as a new card with its address as the serv
   await expect(card(page, "hello")).toBeVisible();
   await openForm(page);
 
-  // The form says what adding means for approval, and offers no choice about it.
+  // The form says what adding means for approval. The choice is set to requiring it, and
+  // this test does not touch it.
   await expect(form(page)).toContainText(
     "Messages to this agent will require approval",
   );
+  await expect(
+    form(page).getByRole("radio", { name: "Requires approval" }),
+  ).toBeChecked();
   await expect(form(page).getByRole("textbox")).toHaveCount(2);
   await expect(
     form(page).getByRole("switch").or(form(page).getByRole("combobox")),
@@ -517,6 +522,365 @@ test("checking an agent that was removed meanwhile has the list read again, and 
   await expect(cards(page)).toHaveCount(1);
   await expect(card(page, "hello")).toBeVisible();
   expect(service.reads).toBe(2);
+});
+
+// 005, User Story 4: the approval choice, when adding and on a saved agent.
+
+const FREE = "Runs without approval";
+const REQUIRED = "Requires approval";
+const STUB_ID = "0123456789abcdef0123456789abcdef";
+const editForm = (page: Page, name = "stub") =>
+  page.getByRole("dialog", { name: `Edit ${name}` });
+const asks = (page: Page) =>
+  page.getByRole("dialog").getByRole("note", { name: "Confirmation" });
+
+async function openEdit(page: Page, name = "stub") {
+  await card(page, name).getByRole("button", { name: "Edit" }).click();
+  await expect(editForm(page, name)).toBeVisible();
+}
+
+/** The operator comes back to the window, and the list is read again behind what is open. */
+async function comeBack(page: Page, service: AgentService) {
+  const before = service.reads;
+  // The page waits a few seconds between two such readings, so it is asked until it reads.
+  await expect
+    .poll(
+      async () => {
+        await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+        return service.reads;
+      },
+      { timeout: 20_000 },
+    )
+    .toBeGreaterThan(before);
+}
+
+test("adding an agent to run without approval asks first, sends nothing before Confirm, and Cancel leaves no card", async ({
+  page,
+}) => {
+  const service = await new AgentService(environmentAgent("hello")).serve(page);
+  await page.goto("/agents");
+  await openForm(page);
+  await fill(page, "stub", TYPED);
+  await form(page).getByRole("radio", { name: FREE }).check();
+  await expect(form(page)).toContainText(
+    "Messages to this agent will be sent without approval",
+  );
+  await save(page);
+
+  // It names the agent and says what running without approval means.
+  await expect(asks(page)).toContainText("Add stub to run without approval?");
+  await expect(asks(page)).toContainText(
+    "Nothing Freyja sends to stub will be seen by a person first.",
+  );
+  // Enter in a field asks again and sends nothing.
+  await input(page, "Address").press("Enter");
+  await expect(asks(page)).toBeVisible();
+  expect(service.changes).toEqual([]);
+
+  await form(page).getByRole("button", { name: "Cancel" }).click();
+  await expect(form(page)).toBeHidden();
+  await page.waitForLoadState("networkidle");
+  expect(service.changes).toEqual([]);
+  await expect(cards(page)).toHaveCount(1);
+
+  // Asked again and confirmed, the agent is saved with the choice, in one request.
+  await openForm(page);
+  await expect(form(page).getByRole("radio", { name: REQUIRED })).toBeChecked();
+  await fill(page, "stub", TYPED);
+  await form(page).getByRole("radio", { name: FREE }).check();
+  await save(page);
+  await form(page).getByRole("button", { name: "Confirm" }).dblclick();
+
+  await expect(form(page)).toBeHidden();
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(card(page, "stub").getByText(KEPT)).toBeVisible();
+  expect(service.changes).toEqual([
+    {
+      method: "POST",
+      path: "/agents",
+      body: { name: "stub", url: TYPED, approval: "none" },
+    },
+  ]);
+});
+
+test("switching an agent to run without approval asks first and says what is given up; Cancel changes nothing, Confirm changes the card", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub", { pending_tasks: 2 }),
+  ).serve(page);
+  await page.goto("/agents");
+  await openEdit(page);
+
+  // The form opens with the agent's values; its name and its address cannot be edited.
+  const dialog = editForm(page);
+  await expect(dialog.getByLabel("Name", { exact: true })).toHaveValue("stub");
+  await expect(dialog.getByLabel("Name", { exact: true })).not.toBeEditable();
+  await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue(
+    "http://127.0.0.1:9998",
+  );
+  await expect(
+    dialog.getByLabel("Address", { exact: true }),
+  ).not.toBeEditable();
+  await expect(dialog.getByRole("radio", { name: REQUIRED })).toBeChecked();
+
+  // Saved as it is, nothing is asked and nothing is sent.
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(dialog.getByRole("status")).toContainText("Nothing is changed");
+  await expect(asks(page)).toHaveCount(0);
+
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(asks(page)).toContainText("Let stub run without approval?");
+  await expect(asks(page)).toContainText(
+    "Every message to stub will be sent without a person seeing it first, from the next run.",
+  );
+  await expect(asks(page)).toContainText(
+    "A proposal for stub that is already waiting for a decision can then only be approved.",
+  );
+  // The agent as the list has it at this moment.
+  await expect(asks(page)).toContainText(
+    "As the list has it now: stub, at http://127.0.0.1:9998, requires approval, reachable, 2 pending tasks.",
+  );
+  expect(service.changes).toEqual([]);
+
+  // Canceled: no request, and the card is as it was.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await page.waitForLoadState("networkidle");
+  expect(service.changes).toEqual([]);
+  await expect(card(page, "stub").getByText(REQUIRED)).toBeVisible();
+
+  // Asked again and confirmed: one request, with the version the form opened with and
+  // only the choice, and the card follows the list.
+  await openEdit(page);
+  await expect(dialog.getByRole("radio", { name: REQUIRED })).toBeChecked();
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+
+  await expect(dialog).toBeHidden();
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(card(page, "stub").getByText(REQUIRED)).toHaveCount(0);
+  expect(service.changes).toEqual([
+    {
+      method: "PATCH",
+      path: `/agents/${STUB_ID}`,
+      body: { version: 1, approval: "none" },
+    },
+  ]);
+  await expect(alerts(page)).toHaveCount(0);
+  // The address is in no path the page asked at.
+  expect(service.asked.every(({ path }) => !path.includes("9998"))).toBe(true);
+});
+
+test("switching an agent back to requiring approval asks and says that it holds at once", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    savedAgent("stub", { approval: "none", version: 4 }),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await openEdit(page);
+  const dialog = editForm(page);
+  await expect(dialog.getByRole("radio", { name: FREE })).toBeChecked();
+
+  await dialog.getByRole("radio", { name: REQUIRED }).check();
+  // A double press on Save asks, and confirms nothing.
+  await dialog.getByRole("button", { name: "Save" }).dblclick();
+  await expect(asks(page)).toContainText("Require approval for stub?");
+  await expect(asks(page)).toContainText(
+    "This holds at once, also for runs in progress.",
+  );
+  await expect(asks(page)).toContainText(
+    "A paused step that holds a message to stub that needed no approval cannot be continued until the choice is changed back or the agent is removed.",
+  );
+  await expect(asks(page)).toContainText("runs without approval, reachable");
+  expect(service.changes).toEqual([]);
+
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(card(page, "stub").getByText(REQUIRED)).toBeVisible();
+  expect(service.changes).toEqual([
+    {
+      method: "PATCH",
+      path: `/agents/${STUB_ID}`,
+      body: { version: 4, approval: "required" },
+    },
+  ]);
+});
+
+test("a change made elsewhere while the form is open takes the confirmation back", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await openEdit(page);
+  const dialog = editForm(page);
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(asks(page)).toBeVisible();
+
+  // Another operator changes the agent, and this page reads the list again.
+  service.changeElsewhere("stub", { url: "http://127.0.0.1:9997" });
+  await comeBack(page, service);
+
+  await expect(asks(page)).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Confirm" })).toHaveCount(0);
+  await expect(dialog.getByRole("alert")).toContainText(
+    "stub was changed elsewhere while this form was open",
+  );
+  await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(service.changes).toEqual([]);
+
+  // Opened again, the form is of the agent as it is now, and the change goes through at
+  // the later version.
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await openEdit(page);
+  await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue(
+    "http://127.0.0.1:9997",
+  );
+  await expect(dialog.getByRole("alert")).toHaveCount(0);
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  expect(service.changes).toEqual([
+    {
+      method: "PATCH",
+      path: `/agents/${STUB_ID}`,
+      body: { version: 2, approval: "none" },
+    },
+  ]);
+});
+
+test("a change refused because the agent was changed since shows the agent as it is now", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await openEdit(page);
+  const dialog = editForm(page);
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  await expect(asks(page)).toBeVisible();
+
+  // Changed elsewhere, and this page has not read the list since.
+  service.changeElsewhere("stub", { url: "http://127.0.0.1:9997" });
+  const readBefore = service.reads;
+  const refused = page.waitForResponse((response) => response.status() === 409);
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+  expect(await (await refused).json()).toEqual({
+    detail: { code: "agent_changed", message: AGENT_CHANGED_SINCE },
+  });
+
+  // The form says so, the list was read again, and nothing was changed by this page.
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  await expect(dialog.getByRole("alert")).toHaveCount(1);
+  await expect(dialog.getByRole("alert")).toContainText("changed elsewhere");
+  await expect(asks(page)).toHaveCount(0);
+  await expect(dialog.getByRole("button", { name: "Save" })).toBeDisabled();
+  expect(service.agents.find(({ name }) => name === "stub")?.approval).toBe(
+    "required",
+  );
+
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  const shown = card(page, "stub");
+  await expect(
+    shown.getByText("http://127.0.0.1:9997", { exact: true }),
+  ).toBeVisible();
+  await expect(shown.getByText(REQUIRED)).toBeVisible();
+  await expect(shown.getByText(FREE)).toHaveCount(0);
+});
+
+test("a change of an agent that was removed meanwhile has the list read again, and its card goes", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello"),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await openEdit(page);
+  const dialog = editForm(page);
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+
+  service.removeElsewhere("stub");
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+
+  await expect(dialog.getByRole("alert")).toContainText(
+    "stub is no longer in the list",
+  );
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(cards(page)).toHaveCount(1);
+  await expect(card(page, "hello")).toBeVisible();
+});
+
+test("a change that gets no answer says the outcome is not known, and the list is read again", async ({
+  page,
+}) => {
+  const service = await new AgentService(savedAgent("stub")).serve(page);
+  await page.goto("/agents");
+  await openEdit(page);
+  const dialog = editForm(page);
+  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("button", { name: "Save" }).click();
+  const readBefore = service.reads;
+
+  // The service makes the change, and its answer never arrives.
+  service.loseNextAnswer();
+  await dialog.getByRole("button", { name: "Confirm" }).click();
+
+  const said = dialog.getByRole("alert").first();
+  await expect(said).toContainText("not known");
+  await expect(said).not.toContainText(/fail|could not|cannot/i);
+  await expect.poll(() => service.reads).toBe(readBefore + 1);
+  // Nothing is sent again by itself; the list says what is so.
+  expect(service.changes).toHaveLength(1);
+  await dialog.getByRole("button", { name: "Cancel" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+});
+
+test("an environment agent's card offers no way to change its approval choice, and neither does a saved agent's that is not in use", async ({
+  page,
+}) => {
+  const service = await new AgentService(
+    environmentAgent("hello", { approval: "none" }),
+    savedAgent("shadowed", {
+      id: "2".repeat(32),
+      state: "not_in_use",
+      checked_at: null,
+      reason: "An agent named in the environment has this name.",
+    }),
+    savedAgent("stub"),
+  ).serve(page);
+  await page.goto("/agents");
+  await expect(card(page, "stub")).toBeVisible();
+
+  await expect(card(page, "hello").getByRole("button")).toHaveText(["Check"]);
+  await expect(card(page, "shadowed").getByRole("button")).toHaveCount(0);
+  await expect(card(page, "stub").getByRole("button")).toHaveText([
+    "Check",
+    "Edit",
+  ]);
+  // Nothing on a card is a choice by itself: no radio, switch, or field.
+  for (const role of ["radio", "switch", "textbox", "combobox"] as const) {
+    await expect(page.getByRole("main").getByRole(role)).toHaveCount(0);
+  }
+  expect(service.changes).toEqual([]);
 });
 
 test.describe("in a short, narrow window", () => {

@@ -826,3 +826,135 @@ What the implementation settled differently from the plan, or found out, phase b
   of the service's log held the stand-in's port.
 - **Coverage of the service's lines is 90.79%** as CI measures it; the web app's is
   96.52% of statements, 95.01% of branches, 96.59% of functions, and 97.74% of lines.
+
+### Phase 7
+
+- **The check before a send is `_still_allowed` in `delegates/a2a_tools.py`**, called by both
+  tools after the proposed call was looked at and before the send's first write, with
+  nothing else awaited in between (R7). It reads the saved agent by its id. No row: "Agent
+  '<name>' was removed; nothing was sent.", also when another agent was saved under the
+  name, which has another id. A row that requires approval, for a call no person decided:
+  "Agent '<name>' now requires approval, so this message was not sent." Both are error
+  results, logged by the tool with the agent's name, and the run continues.
+- **A person decided a call only when both hold**: the call needed a decision when it was
+  proposed, which its row says, and its tool waits for one in the run that carries it out.
+  The first version asked the tool alone, as T088 and R7 word it ("the tool needed no
+  decision when it was built"). The independent review showed that this is not FR-022: a
+  background run whose step fails after the gate is tried again from its last checkpoint,
+  on an orchestrator built for the agents as they are by then. A hand-off that passed the
+  gate while its agent ran without approval was sent by the retry after the agent was
+  switched to requiring approval, with no person asked. The row alone is not enough
+  either, so a call proposed as needing a decision is not sent by a tool that waits for
+  none when the agent requires approval at that moment. That refuses one message a person
+  did approve: approved after a switch to running without approval, with a switch back
+  before its tool sent. It fails toward sending nothing.
+- **An environment agent's tools apply the same rule to what they already hold**, which is
+  beyond T088: a tool that waits for a person does not send a call whose row says it
+  needed no decision. This is the retry above after a restart that took an agent's
+  read-only mark away. They read no saved agent, and a call with no row follows the tool,
+  as before the rows existed.
+- **What a tool sends with is fixed when the tool is built** (`_Send`): the link, the task
+  store, whether the tool waits for a person in its run, and the saved-agent store. Whether
+  it waits is not read from the link, which a later set may share (R7).
+- **A saved agent's tools are not built without the saved-agent store**: `agent_tools`
+  raises. A caller that forgets the store therefore cannot make tools that skip the check.
+  An environment agent's tools are given no store and read no saved agent.
+- **A saved agent that cannot be read fails the step**, as a proposed call that cannot be
+  read does: nothing is sent, and the run ends with `internal`.
+- **The middleware's sentence is still the one matched** (T095, research "Not verified").
+  With langchain 1.4.7 the approval middleware raises `ValueError("Number of human
+  decisions (N) does not match number of hanging tool calls (M).")`. `run_stream` knows a
+  blocked resume by that type and that wording, numbers apart
+  (`decisions_mismatch`). `tests/test_a2a_gate.py` raises the sentence from the installed
+  middleware itself and fails the day it is worded differently; such a resume then ends
+  with `internal` again, as before this feature. The same sentence reaches `run_stream`
+  for a subagent's step, which `tests/test_agents_approval.py` shows.
+- **Which agents a blocked resume names**: each agent of the thread's proposed calls that
+  needed no decision when proposed and has a gated tool in the run's catalog, by name, in
+  alphabetical order. For more than one the sentence is the contract's in the plural:
+  "it holds messages to agents 'a' and 'b' that needed no approval when they were
+  proposed, and the agents now require approval. Switch the agents back, or remove them,
+  then decide the proposal again." When the proposed calls cannot be read, or name no such
+  agent, the resume ends with `internal`, as before.
+- **The refusal is not tied to the word "resume"**: any run that fails with the sentence is
+  answered this way. Only a resume carries decisions, so only a resume can. The code is
+  not among the ones a background run is tried again for (`RETRIED`).
+- **`PATCH /agents/{id}` reads the agent from the store**, not from a set this instance
+  holds: what is refused or allowed is what is saved now. `env.<name>` is `agent_read_only`
+  when the environment names the agent and `agent_not_found` otherwise. A saved agent the
+  environment overrides is `agent_read_only`, by the rule that keeps it out of use.
+- **The shape accepts `version` and `approval` only** (`AgentUpdate`). `version` is a whole
+  number of at least 1 and is not converted from a string. `approval` sent as null is
+  refused: a value that is kept is left out. `name`, `url`, and any other field are
+  refused with 422. The address comes with Phase 8.
+- **A request that changes nothing**, by naming the choice the agent has or by naming no
+  value, is answered with the agent as it is, when `version` is current: the same version,
+  no log line, and no move of the revision. At another version it is `agent_changed`.
+- **The number of pending tasks in the answer is read before the change.** A change of the
+  approval choice gives up no task, so `given_up` is 0 and the count is the same after it.
+  Read first, a failure of that read changes nothing.
+- **Two failures the tasks do not name are answered with 500 `internal`**: the saved agents
+  or the pending tasks cannot be read ("The saved agents could not be read."), and the
+  change cannot be written ("The agent could not be changed.").
+- **The sentences of the refusals**: "The agent was changed since this page read it.
+  Nothing was changed.", "An agent named in the environment cannot be changed here.", and
+  "This saved agent is not in use, so it can only be removed."
+- **The log line** is "Agent changed: <name> (<id>): its approval choice is now <new>, was
+  <old>".
+- **`POST /agents` accepts `approval` `none`** with no confirmation of its own. FR-011 asks
+  the console to confirm; a request sent straight to the service is the operator's own.
+- **The console's wording.** The choice: "Approval", with "Requires approval" and "Runs
+  without approval". Adding without approval: "Add <name> to run without approval? Nothing
+  Freyja sends to <name> will be seen by a person first." Switching to none: "Let <name>
+  run without approval? Every message to <name> will be sent without a person seeing it
+  first, from the next run. A proposal for <name> that is already waiting for a decision
+  can then only be approved." Switching to required: "Require approval for <name>? This
+  holds at once, also for runs in progress. A paused step that holds a message to <name>
+  that needed no approval cannot be continued until the choice is changed back or the
+  agent is removed." Under each of the last two: "As the list has it now: <name>, at
+  <url>, <choice>, <state>, N pending task(s)." Changed elsewhere: "<name> was changed
+  elsewhere while this form was open, so nothing can be saved from it. Close the form and
+  open it again to change the agent as it is now." Removed elsewhere: "<name> is no longer
+  in the list: it was removed elsewhere while this form was open. Nothing can be saved
+  from this form." Nothing changed: "Nothing is changed, so nothing was sent."
+- **The confirmation is a step of the form**, with Cancel and Confirm. Changing a value
+  takes it back. Confirm is a button of its own, so Enter in a field does not confirm, and
+  the second press of a double press is ignored.
+- **A form opened on an agent that the list then shows at another version, or no longer
+  shows, saves nothing**: its confirmation goes, it says why, and Save takes no press.
+  While the list cannot be read the form keeps the agent it opened with.
+- **`agent_read_only` is handled like `agent_changed` and `agent_not_found`** in the form:
+  the service's sentence is shown and the list is read again.
+- **In the edit form the name and the address are shown and cannot be typed in.** Only the
+  approval choice changes there until Phase 8.
+- **Existing tests of feature 005 that changed.** `tests/test_agents_api.py`: the add test
+  gained the case `approval: none`, and the case that refused it left the list of refused
+  bodies, as T080 says. `tests/test_agents_address_nowhere.py` part 1: the body it sends
+  to be refused now has `approval: maybe`. `tests/test_a2a_gate.py`: the one test FR-031
+  names. In the console: one unit test each of `agents.ts`, the form, the card, and the
+  list, and two end-to-end assertions, now expect the approval choice or the Edit button.
+- **The independent review** found the retry above, and one defect in the console: a
+  confirmation the form had taken back, because the list showed a later version, returned
+  when the next reading of the list failed, and Confirm then sent the earlier version. The
+  service refused it, so nothing was saved wrongly. The form now keeps what it learned
+  until it is closed. A confirmation shown while the list cannot be read no longer calls
+  the form's own copy the list's: "The list cannot be read now. As it was when this form
+  opened: ...". Each test added for a finding failed before its fix.
+- **Known: two texts name an action that does not exist yet.** The message of
+  `approval_now_required` and the confirmation for requiring approval say the agent can be
+  removed. The wording is the contract's and FR-011's; removing arrives in Phase 8.
+- **Known: a decision is inferred, not recorded.** Nothing keeps which calls a person
+  approved. The rule above is right for every path found. A record written when a
+  decision is accepted would not depend on that reasoning.
+- **Seen by hand, with the real service, the console in a browser, and a real model**
+  (quickstart section 4), before the review's fixes. With the stand-in added requiring
+  approval, a hand-off paused. Edit, "Runs without approval", Save showed the
+  confirmation and sent nothing; Cancel left the agent as it was, and a hand-off still
+  paused. Save and Confirm sent one PATCH, and the next run's hand-off reached the
+  stand-in with no pause. During a hand-off of twenty seconds the agent was switched back
+  and confirmed: that hand-off ended as it began, the run's second hand-off got "Agent
+  'stub' now requires approval, so this message was not sent.", the stand-in received
+  nothing after the switch, and the next run paused. No line of the service's log held
+  the stand-in's port.
+- **Coverage of the service's lines is 91.00%** as CI measures it; the web app's is
+  96.96% of statements, 95.53% of branches, 97% of functions, and 98.02% of lines.

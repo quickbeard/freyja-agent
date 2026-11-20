@@ -6,6 +6,7 @@ import {
   type AgentCheck,
   type AgentList,
   addAgent,
+  changeAgent,
   checkAgent,
   downAgents,
   listAgents,
@@ -146,11 +147,36 @@ describe("addAgent", () => {
 
   it("sends nothing but the two values, whatever else it is handed", async () => {
     const fetchStub = stubFetch({ status: 201, json: STUB });
-    const more = { name: "stub", url: ADDRESS, approval: "none", id: "x" };
+    const more = { name: "stub", url: ADDRESS, id: "x", version: 4 };
     await addAgent(more);
     expect(JSON.parse(String(fetchStub.mock.calls[0][1]?.body))).toEqual({
       name: "stub",
       url: ADDRESS,
+    });
+  });
+
+  // Part 4 (T084): the approval choice.
+
+  it("says nothing about approval when the agent is to require it, which is what the service chooses by itself", async () => {
+    const fetchStub = stubFetch({ status: 201, json: STUB });
+    await addAgent({ name: "stub", url: ADDRESS, approval: "required" });
+    expect(JSON.parse(String(fetchStub.mock.calls[0][1]?.body))).toEqual({
+      name: "stub",
+      url: ADDRESS,
+    });
+  });
+
+  it("sends the choice to run without approval with the two values", async () => {
+    const free = { ...STUB, approval: "none" as const };
+    const fetchStub = stubFetch({ status: 201, json: free });
+    expect(
+      await addAgent({ name: "stub", url: ADDRESS, approval: "none" }),
+    ).toEqual(free);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchStub.mock.calls[0][1]?.body))).toEqual({
+      name: "stub",
+      url: ADDRESS,
+      approval: "none",
     });
   });
 
@@ -262,5 +288,107 @@ describe("checkAgent", () => {
       "There is no agent with this id.",
     );
     expect(isGone(refused)).toBe(true);
+  });
+});
+
+describe("changeAgent", () => {
+  const SAVED = "7c9e6679f0a54b3e8d2a1f4b6c8e0a2d";
+  const CHANGED = {
+    agent: agent({
+      id: SAVED,
+      name: "stub",
+      source: "saved",
+      approval: "none",
+      url: "http://127.0.0.1:9998",
+      version: 4,
+    }),
+    given_up: 0,
+  };
+
+  it.each([
+    "required",
+    "none",
+  ] as const)("sends a PATCH to the agent with exactly the version and the choice it was given: %s", async (approval) => {
+    const fetchStub = stubFetch({ json: CHANGED });
+    expect(await changeAgent(SAVED, { version: 3, approval })).toEqual(CHANGED);
+
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe(`/api/agents/${SAVED}`);
+    expect(init?.method).toBe("PATCH");
+    expect(new Headers(init?.headers).get("content-type")).toBe(
+      "application/json",
+    );
+    expect(JSON.parse(String(init?.body))).toEqual({ version: 3, approval });
+  });
+
+  it("sends nothing it was not given, and nothing else it is handed", async () => {
+    const fetchStub = stubFetch({ json: CHANGED });
+    await changeAgent(SAVED, { version: 3 });
+    expect(JSON.parse(String(fetchStub.mock.calls[0][1]?.body))).toEqual({
+      version: 3,
+    });
+
+    const more = { version: 3, approval: "none" as const, name: "other" };
+    await changeAgent(SAVED, more);
+    expect(JSON.parse(String(fetchStub.mock.calls[1][1]?.body))).toEqual({
+      version: 3,
+      approval: "none",
+    });
+  });
+
+  it("keeps an id that is no id inside its one place in the path", async () => {
+    const fetchStub = stubFetch({ json: CHANGED });
+    await changeAgent("a/b?c", { version: 1, approval: "none" });
+    expect(fetchStub.mock.calls[0][0]).toBe("/api/agents/a%2Fb%3Fc");
+  });
+
+  it.each([
+    [
+      409,
+      "agent_changed",
+      "The agent was changed since this page read it. Nothing was changed.",
+    ],
+    [
+      409,
+      "agent_read_only",
+      "An agent named in the environment cannot be changed here.",
+    ],
+  ])("surfaces a refusal with the service's code and sentence: %s %s", async (status, code, message) => {
+    stubFetch({ status, json: { detail: { code, message } } });
+    const refused = await changeAgent(SAVED, {
+      version: 3,
+      approval: "none",
+    }).catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(ApiError);
+    expect((refused as ApiError).code).toBe(code);
+    expect((refused as ApiError).message).toBe(message);
+    expect(isGone(refused)).toBe(false);
+  });
+
+  it("says an agent is gone when the service knows no agent with the id", async () => {
+    stubFetch({
+      status: 404,
+      json: {
+        detail: {
+          code: "agent_not_found",
+          message: "There is no agent with this id.",
+        },
+      },
+    });
+    const refused = await changeAgent(SAVED, {
+      version: 3,
+      approval: "none",
+    }).catch((error: unknown) => error);
+    expect(isGone(refused)).toBe(true);
+  });
+
+  it("surfaces a request that got no answer as unreachable", async () => {
+    stubFetch({ fails: "Failed to fetch" });
+    const failed = await changeAgent(SAVED, {
+      version: 3,
+      approval: "none",
+    }).catch((error: unknown) => error);
+    expect((failed as ApiError).code).toBe("unreachable");
   });
 });

@@ -1,4 +1,5 @@
-"""005 User Stories 1 and 2: the list of agents (`GET /agents`) and adding one (`POST /agents`).
+"""005 User Stories 1, 2, and 4: the list of agents (`GET /agents`), adding one (`POST
+/agents`), and changing one's approval choice (`PATCH /agents/{id}`).
 
 Part 1: FR-001, FR-003, FR-004, FR-017, FR-028; contracts/openapi.yaml. The list is read from
 the saved-agent store and from what this instance holds in memory. It contacts no agent, shows
@@ -8,6 +9,10 @@ when the store cannot be read.
 Part 2: FR-005 to FR-008, FR-014, FR-016, FR-027 to FR-030; SC-007, SC-011, SC-012. Adding
 reads the agent's card and nothing more, saves the agent only when it can be used, and
 refuses everything else with a reason of the service's own that never holds the address.
+
+Part 3: FR-009, FR-012, FR-017, FR-026, FR-029, FR-030; SC-016. `PATCH /agents/{id}` changes
+a saved agent's approval choice and contacts no agent. A change names the version its page
+read and is refused when the agent was changed since. Adding now takes the choice too.
 
 Every agent is the stand-in, inside the test process.
 """
@@ -441,11 +446,15 @@ def route_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
     return [record.getMessage() for record in caplog.records if record.name == ROUTES]
 
 
-@pytest.mark.parametrize("approval", [{}, {"approval": "required"}])
+@pytest.mark.parametrize(
+    ("approval", "choice"),
+    [({}, "required"), ({"approval": "required"}, "required"), ({"approval": "none"}, "none")],
+)
 def test_adding_an_agent_reads_its_card_and_answers_with_the_agent_as_it_is_saved(
     make_a2a_app: Callable[..., A2aApp],
     caplog: pytest.LogCaptureFixture,
     approval: dict[str, str],
+    choice: str,
 ) -> None:
     made = make_a2a_app(ScriptedChatModel(), {"hello": {}})
     stub = make_stub("helper")
@@ -462,9 +471,10 @@ def test_adding_an_agent_reads_its_card_and_answers_with_the_agent_as_it_is_save
     assert set(agent) == FIELDS
     assert agent["id"] == record.id and len(agent["id"]) == 32
     assert (agent["name"], agent["source"]) == ("helper", "saved")
-    # The address in the form the service keeps it in, and approval required, sent or not.
+    # The address in the form the service keeps it in, and approval required unless the
+    # request chose otherwise.
     assert agent["url"] == record.url == "http://localhost:9311"
-    assert agent["approval"] == "required" and record.read_only is False
+    assert agent["approval"] == choice and record.read_only is (choice == "none")
     assert agent["version"] == 1
     # Its card was just read: the agent answers, and its details are the kept ones.
     assert (agent["state"], agent["reason"]) == ("reachable", None)
@@ -472,18 +482,20 @@ def test_adding_an_agent_reads_its_card_and_answers_with_the_agent_as_it_is_save
     assert agent["card"] == saved_card(stub) == record.card
     assert agent["pending_tasks"] == 0
     assert datetime.fromisoformat(agent["created_at"]) == record.created_at
-    # The list has it as the answer had it, and the catalog has its two tools, gated.
+    # The list has it as the answer had it, and the catalog has its two tools, classified
+    # by the choice.
     assert listed[record.id] == agent
     tools = {tool["name"]: tool for tool in catalog["tools"]}
-    assert tools["handoff_to_helper"]["classification"] == "gated"
-    assert tools["cancel_helper_task"]["classification"] == "gated"
+    classification = "gated" if choice == "required" else "read_only"
+    assert tools["handoff_to_helper"]["classification"] == classification
+    assert tools["cancel_helper_task"]["classification"] == classification
     # One request reached the agent, for its card: no message and no task (SC-011).
     assert [(request.method, request.path) for request in transport.requests] == [
         ("GET", CARD_PATH)
     ]
     assert stub.record.messages == [] and stub.record.cancels == []
     # The log names the agent and its approval choice, and never the address (FR-030).
-    assert f"Agent added: helper ({record.id}), approval required" in route_lines(caplog)
+    assert f"Agent added: helper ({record.id}), approval {choice}" in route_lines(caplog)
     no_port(caplog.text)
     # Neither does the catalog, in the agent's entry or in either of its tools.
     no_address(
@@ -844,8 +856,7 @@ def test_a_name_that_is_not_in_the_form_is_refused_at_the_name(
 @pytest.mark.parametrize(
     ("body", "loc", "kind"),
     [
-        # Running without approval cannot be chosen when adding until a later phase.
-        ({"name": "helper", "url": NEW_URL, "approval": "none"}, "approval", "literal_error"),
+        # `none` is a choice since the routes that can take it back exist (Phase 7).
         ({"name": "helper", "url": NEW_URL, "approval": "maybe"}, "approval", "literal_error"),
         ({"name": "helper", "url": NEW_URL, "approval": None}, "approval", "literal_error"),
         ({"name": "helper", "url": NEW_URL, "read_only": True}, "read_only", "extra_forbidden"),
@@ -1162,3 +1173,365 @@ def test_the_address_of_a_saved_agent_that_is_not_in_use_is_removed_from_what_ca
     }.items():
         assert "My neighbour is at <address>/a2a and <address>." in text, (where, text)
         assert not holds_port(text, port), (where, text)
+
+
+# Part 3: changing a saved agent's approval choice.
+
+# A port of this part's own, for the reason given at the top of part 2.
+CHANGED_URL = "http://127.0.0.1:9351"
+CHANGED_PORT = "9351"
+UNKNOWN_ID = "0" * 32
+CHANGED = "The agent was changed since this page read it. Nothing was changed."
+ENVIRONMENT_READ_ONLY = "An agent named in the environment cannot be changed here."
+ONLY_REMOVED = "This saved agent is not in use, so it can only be removed."
+NOT_FOUND = "There is no agent with this id."
+
+
+def change(client: TestClient, agent_id: str, **kwargs: Any) -> Any:
+    return client.patch(f"/agents/{agent_id}", **kwargs)
+
+
+def helper_app(
+    make_a2a_app: Callable[..., A2aApp], *, read_only: bool = False, **more: Any
+) -> A2aApp:
+    saved = {"helper": {"url": CHANGED_URL, "read_only": read_only}}
+    return make_a2a_app(ScriptedChatModel(), more.pop("agents", {}), saved=saved, **more)
+
+
+def changed_lines(caplog: pytest.LogCaptureFixture) -> list[str]:
+    return [line for line in route_lines(caplog) if line.startswith("Agent changed")]
+
+
+@pytest.mark.parametrize("down", [False, True])
+@pytest.mark.parametrize(("before", "after"), [("required", "none"), ("none", "required")])
+def test_a_change_of_the_approval_choice_contacts_no_agent_and_answers_with_the_agent(
+    make_a2a_app: Callable[..., A2aApp],
+    caplog: pytest.LogCaptureFixture,
+    before: str,
+    after: str,
+    down: bool,
+) -> None:
+    made = helper_app(make_a2a_app, read_only=before == "none")
+    record = made.saved["helper"]
+    transport = made.transport_at(CHANGED_URL)
+    # Not running when the service starts, and still not when the choice is changed.
+    transport.down = down
+    seed_task(made, "helper", "task-1", ref=record.ref, thread="g-1")
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        at_startup = list(transport.requests)
+        was = by_id(agents(client))[record.id]
+        response = change(client, record.id, json={"version": 1, "approval": after})
+        requests = list(transport.requests)
+        now = by_id(agents(client))[record.id]
+        catalog = {tool["name"]: tool for tool in client.get("/tools").json()["tools"]}
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+        task = client.portal.call(made.store.get_task, "helper", "task-1")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert set(body) == {"agent", "given_up"} and body["given_up"] == 0
+    agent = body["agent"]
+    assert set(agent) == FIELDS
+    # The choice and the version moved, and nothing else of the agent did.
+    assert (was["approval"], was["version"]) == (before, 1)
+    assert (agent["approval"], agent["version"]) == (after, 2)
+    assert kept.read_only is (after == "none") and kept.version == 2
+    for field in FIELDS - {"approval", "version", "updated_at"}:
+        assert agent[field] == was[field], field
+    assert agent["state"] == ("unreachable" if down else "reachable")
+    assert now == agent
+    # The agent was sent nothing, in either direction and whether or not it answers.
+    assert requests == at_startup
+    # Its pending task is as it was (FR-026).
+    assert agent["pending_tasks"] == 1 and task.state == "working"
+    # The catalog classifies its two tools by the new choice.
+    classification = "gated" if after == "required" else "read_only"
+    assert catalog["handoff_to_helper"]["classification"] == classification
+    assert catalog["cancel_helper_task"]["classification"] == classification
+    # The log names the agent and what changed, and never the address (FR-030).
+    assert changed_lines(caplog) == [
+        f"Agent changed: helper ({record.id}): its approval choice is now {after}, was {before}"
+    ]
+    assert not holds_port(caplog.text, CHANGED_PORT)
+
+
+@pytest.mark.parametrize("read_only", [False, True])
+@pytest.mark.parametrize("named", [True, False])
+def test_a_change_that_changes_nothing_answers_with_the_agent_as_it_is(
+    make_a2a_app: Callable[..., A2aApp],
+    caplog: pytest.LogCaptureFixture,
+    read_only: bool,
+    named: bool,
+) -> None:
+    made = helper_app(make_a2a_app, read_only=read_only)
+    record = made.saved["helper"]
+    choice = "none" if read_only else "required"
+    # The choice the agent has, or no value at all: a field left out is kept.
+    body = {"version": 1, "approval": choice} if named else {"version": 1}
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        was = by_id(agents(client))[record.id]
+        revision = client.portal.call(made.saved_agents.revision)
+        response = change(client, record.id, json=body)
+        after = client.portal.call(made.saved_agents.revision)
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+
+    assert response.status_code == 200, response.text
+    assert response.json() == {"agent": was, "given_up": 0}
+    assert (was["approval"], was["version"]) == (choice, 1)
+    assert kept == record and after == revision
+    assert changed_lines(caplog) == []
+
+
+@pytest.mark.parametrize("version", [1, 3, 99])
+@pytest.mark.parametrize("approval", ["none", "required"])
+def test_a_change_at_a_version_that_is_not_current_is_refused_and_changes_nothing(
+    make_a2a_app: Callable[..., A2aApp],
+    caplog: pytest.LogCaptureFixture,
+    version: int,
+    approval: str,
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    transport = made.transport_at(CHANGED_URL)
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        # Changed elsewhere since the page read it: the agent is at version 2 now.
+        current, _ = client.portal.call(
+            lambda: made.saved_agents.change(record.id, 1, read_only=True)
+        )
+        before = what_exists(client)
+        requests = list(transport.requests)
+        response = change(client, record.id, json={"version": version, "approval": approval})
+        after = what_exists(client)
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+
+    assert current.version == 2
+    assert refusal(response, 409, "agent_changed") == {"code": "agent_changed", "message": CHANGED}
+    # Nothing changed, whatever the request asked for (SC-016).
+    assert kept == current and after == before
+    assert transport.requests == requests
+    assert changed_lines(caplog) == []
+
+
+def test_an_environment_agent_cannot_be_changed(make_a2a_app: Callable[..., A2aApp]) -> None:
+    made = make_a2a_app(ScriptedChatModel(), {"hello": {}})
+    with TestClient(made.app) as client:
+        before = what_exists(client)
+        responses = [
+            change(client, "env.hello", json={"version": 1, "approval": approval})
+            for approval in ("none", "required")
+        ]
+        unknown = change(client, "env.nobody", json={"version": 1, "approval": "none"})
+        after = what_exists(client)
+    for response in responses:
+        assert refusal(response, 409, "agent_read_only")["message"] == ENVIRONMENT_READ_ONLY
+    assert refusal(unknown, 404, "agent_not_found")["message"] == NOT_FOUND
+    assert after == before
+    assert before[0]["agents"][0]["approval"] == "required"
+
+
+def test_a_saved_agent_that_is_not_in_use_cannot_be_changed(
+    make_a2a_app: Callable[..., A2aApp],
+) -> None:
+    # The environment has an agent of the saved agent's name: the saved one is not in use.
+    made = helper_app(make_a2a_app, agents={"helper": {}})
+    record = made.saved["helper"]
+    with TestClient(made.app) as client:
+        listed = by_id(agents(client))[record.id]
+        response = change(client, record.id, json={"version": 1, "approval": "none"})
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+    assert listed["state"] == "not_in_use"
+    assert refusal(response, 409, "agent_read_only")["message"] == ONLY_REMOVED
+    assert kept == record
+
+
+def test_a_change_of_an_agent_that_does_not_exist_is_not_found(
+    make_a2a_app: Callable[..., A2aApp],
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    with TestClient(made.app) as client:
+        unknown = change(client, UNKNOWN_ID, json={"version": 1, "approval": "none"})
+        client.portal.call(made.saved_agents.remove, record.id, 1)
+        removed = change(client, record.id, json={"version": 1, "approval": "none"})
+    for response in (unknown, removed):
+        assert refusal(response, 404, "agent_not_found")["message"] == NOT_FOUND
+
+
+@pytest.mark.parametrize(
+    ("body", "loc", "kind"),
+    [
+        # A saved agent's name never changes (FR-009), and its address not by this phase's route.
+        ({"version": 1, "approval": "none", "name": "other"}, "name", "extra_forbidden"),
+        ({"version": 1, "name": "other"}, "name", "extra_forbidden"),
+        ({"version": 1, "approval": "none", "url": CHANGED_URL}, "url", "extra_forbidden"),
+        ({"version": 1, "approval": "none", "read_only": True}, "read_only", "extra_forbidden"),
+        ({"approval": "none"}, "version", "missing"),
+        ({"version": 0, "approval": "none"}, "version", "greater_than_equal"),
+        ({"version": "1", "approval": "none"}, "version", "int_type"),
+        ({"version": 1.5, "approval": "none"}, "version", "int_type"),
+        ({"version": None, "approval": "none"}, "version", "int_type"),
+        ({"version": 1, "approval": "maybe"}, "approval", "literal_error"),
+        ({"version": 1, "approval": True}, "approval", "literal_error"),
+        ({"version": 1, "approval": None}, "approval", "literal_error"),
+    ],
+)
+def test_a_change_whose_body_is_not_the_shape_is_refused_and_changes_nothing(
+    make_a2a_app: Callable[..., A2aApp], body: dict[str, Any], loc: str, kind: str
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    with TestClient(made.app) as client:
+        response = change(client, record.id, json=body)
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+    assert response.status_code == 422, response.text
+    (error,) = response.json()["detail"]
+    assert (error["type"], error["loc"]) == (kind, ["body", loc])
+    assert set(error) == {"type", "loc", "msg"}
+    assert not holds_port(response.text, CHANGED_PORT)
+    assert kept == record
+
+
+@pytest.mark.parametrize(
+    ("content", "content_type"),
+    [
+        ("version=1&approval=none", "application/x-www-form-urlencoded"),
+        ('{"version": 1, "approval": "none"}', "text/plain"),
+        ("version=1 approval=none", "application/json"),
+        ("", "application/json"),
+    ],
+)
+def test_a_change_whose_body_is_not_sent_as_json_is_refused(
+    make_a2a_app: Callable[..., A2aApp], content: str, content_type: str
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    with TestClient(made.app) as client:
+        response = change(
+            client, record.id, content=content, headers={"Content-Type": content_type}
+        )
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+    assert response.status_code == 422, response.text
+    for error in response.json()["detail"]:
+        assert set(error) == {"type", "loc", "msg"}
+    assert kept == record
+
+
+@pytest.mark.parametrize("agent_id", ["Helper", "env.", "env.Hello", "0" * 31, "0" * 33, "x" * 32])
+def test_a_change_of_an_id_in_neither_form_is_refused(
+    make_a2a_app: Callable[..., A2aApp], agent_id: str
+) -> None:
+    made = helper_app(make_a2a_app)
+    with TestClient(made.app) as client:
+        response = change(client, agent_id, json={"version": 1, "approval": "none"})
+    assert response.status_code == 422, response.text
+    (error,) = response.json()["detail"]
+    assert error["loc"] == ["path", "agent_id"] and set(error) == {"type", "loc", "msg"}
+
+
+@pytest.mark.parametrize(
+    "headers",
+    [
+        {"Sec-Fetch-Site": "cross-site"},
+        {"Sec-Fetch-Site": "same-site"},
+        {"Origin": "http://elsewhere.example"},
+        {"Origin": "http://elsewhere.example", "Sec-Fetch-Site": "same-origin"},
+    ],
+)
+def test_a_change_made_by_a_page_of_another_origin_is_refused_before_anything_is_looked_at(
+    make_a2a_app: Callable[..., A2aApp], headers: dict[str, str]
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    body = {"version": 1, "approval": "none"}
+    with TestClient(made.app) as client:
+        responses = [
+            change(client, record.id, json=body, headers=headers),
+            # Refused also when the request would have been refused for itself.
+            change(client, UNKNOWN_ID, json=body, headers=headers),
+            change(client, record.id, json={"name": "other"}, headers=headers),
+        ]
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+        own = {"Sec-Fetch-Site": "same-origin", "Origin": "http://testserver"}
+        served = change(client, record.id, json=body, headers=own)
+    for refused in responses:
+        detail = refusal(refused, 403, "other_origin")
+        assert detail["message"].endswith(
+            "Agents are changed from the console, or by a client that is not a web page."
+        )
+    assert kept == record
+    # The console's own page is served.
+    assert served.status_code == 200, served.text
+
+
+def test_a_change_stands_when_this_instance_cannot_take_it_up_at_once(
+    make_a2a_app: Callable[..., A2aApp],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        registry = made.runtime.registry
+        assert registry is not None
+
+        async def failing() -> Any:
+            raise RuntimeError(f"could not connect to {CHANGED_URL}")
+
+        monkeypatch.setattr(registry, "refresh", failing)
+        response = change(client, record.id, json={"version": 1, "approval": "none"})
+        monkeypatch.undo()
+        listed = by_id(agents(client))[record.id]
+
+    assert response.status_code == 200, response.text
+    agent = response.json()["agent"]
+    assert (agent["approval"], agent["version"]) == ("none", 2)
+    # Changed all the same: this instance, like every other, takes it up at its next context.
+    assert (listed["approval"], listed["version"], listed["state"]) == ("none", 2, "reachable")
+    lines = route_lines(caplog)
+    assert (
+        "Agent helper was changed, and this instance could not take it up at once: RuntimeError"
+        in lines
+    )
+    assert len(changed_lines(caplog)) == 1
+    assert not holds_port(caplog.text, CHANGED_PORT)
+
+
+@pytest.mark.parametrize("read", ["get_agent", "pending_counts", "change"])
+def test_a_change_is_answered_with_an_error_when_the_store_fails(
+    make_a2a_app: Callable[..., A2aApp],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    read: str,
+) -> None:
+    made = helper_app(make_a2a_app)
+    record = made.saved["helper"]
+
+    async def failing(*_args: Any, **_values: Any) -> Any:
+        raise RuntimeError(f"connection to db.internal failed: {MARKER} {CHANGED_URL}")
+
+    store = made.store if read == "pending_counts" else made.saved_agents
+    with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
+        monkeypatch.setattr(store, read, failing)
+        response = change(client, record.id, json={"version": 1, "approval": "none"})
+        monkeypatch.undo()
+        kept = client.portal.call(made.saved_agents.get_agent, record.id)
+
+    message = (
+        "The agent could not be changed."
+        if read == "change"
+        else "The saved agents could not be read."
+    )
+    assert refusal(response, 500, "internal") == {"code": "internal", "message": message}
+    for text in (response.text, caplog.text):
+        assert MARKER not in text and "db.internal" not in text
+    assert not holds_port(response.text, CHANGED_PORT)
+    assert not holds_port(caplog.text, CHANGED_PORT)
+    assert kept == record
+
+
+def test_a_service_put_together_without_agents_cannot_change_one(
+    make_runtime: Callable[..., Any], make_app: Callable[..., Any]
+) -> None:
+    with TestClient(make_app(make_runtime(ScriptedChatModel()))) as client:
+        response = change(client, UNKNOWN_ID, json={"version": 1, "approval": "none"})
+    assert refusal(response, 500, "internal")["message"] == "This instance cannot change agents."

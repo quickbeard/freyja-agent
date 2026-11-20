@@ -51,7 +51,7 @@ curl -N -X POST localhost:8000/threads/demo-1/runs \
   -d '{"message": "Summarize what you can do and which skills you have loaded."}'
 ```
 
-Each event has an `event:` line naming its kind and a `data:` line holding one JSON object. The first event is always `start`; its `profile` names the [LLM profile](#llm-profiles) the run uses, as `id`, `name`, and `source`. Then come `update` (one per orchestrator step, with messages, tool calls, and tool results), `message` (the reply as it is produced), and, with `?debug=true`, `debug` (raw LangGraph detail; it never changes the run). Exactly one terminal event closes the stream: `end` when the reply is finished, `interrupt` when the orchestrator proposes an action that needs approval, or `error` with a `code` of `step_limit`, `model_error`, `internal`, or `no_usable_model`. A later message to the same thread continues the conversation, including after a service restart.
+Each event has an `event:` line naming its kind and a `data:` line holding one JSON object. The first event is always `start`; its `profile` names the [LLM profile](#llm-profiles) the run uses, as `id`, `name`, and `source`. Then come `update` (one per orchestrator step, with messages, tool calls, and tool results), `message` (the reply as it is produced), and, with `?debug=true`, `debug` (raw LangGraph detail; it never changes the run). Exactly one terminal event closes the stream: `end` when the reply is finished, `interrupt` when the orchestrator proposes an action that needs approval, or `error` with a `code` of `step_limit`, `model_error`, `internal`, `no_usable_model`, or, for a resume only, [`approval_now_required`](#change-whether-an-agent-needs-approval). A later message to the same thread continues the conversation, including after a service restart.
 
 One run per thread: a second run while one streams gets `409` with code `run_active`. The marker is a lease in the database, so it holds across service instances and expires after `FREYJA_RUN_LOCK_TTL_SECONDS` if the instance holding it dies. A clean stop (Ctrl-C or SIGTERM) waits for in-flight runs to finish before closing the database pool, because uvicorn's graceful shutdown has no timeout by default; pass `--timeout-graceful-shutdown` to uvicorn to cap the wait. Only a crash leaves a lease behind, and it expires.
 
@@ -248,8 +248,8 @@ The service reads the agent's card at the address first, within `FREYJA_A2A_STAR
 
 Before it is used, know that:
 
-- **An added agent always requires approval.** Every hand-off, answer, and cancel to it pauses for a person's decision. `approval` accepts `required` only, which is also what it is when left out.
-- **A saved agent cannot be changed or removed yet.** Its name, address, and approval choice stay as they were added.
+- **An added agent requires approval unless the request says otherwise.** Every hand-off, answer, and cancel to it then pauses for a person's decision. `"approval": "none"` adds an agent that runs without approval: nothing sent to it is seen by a person first. The console asks for confirmation before it sends that; a request sent straight to the service is not asked.
+- **A saved agent's address cannot be changed yet, and it cannot be removed.** Its name never changes. Its approval choice can be changed, as the next section says.
 - **Every instance has to run this version before the first agent is saved.** An instance on an earlier version knows no saved agent and gives up the tasks of an agent it does not know.
 
 A name is in the form the environment's agents use, and an address is `http` or `https` on this machine (`localhost` or a loopback IP address), with no user name, password, query, or fragment. It is kept in one form, such as `http://127.0.0.1:9998`. A request is refused, and nothing is saved, with:
@@ -260,9 +260,30 @@ A name is in the form the environment's agents use, and an address is `http` or 
 - 409 `agent_unusable` when the card cannot be used, with `reason` and the service's own sentence: nothing answered, no answer in time, no card, a card that cannot be read, a redirect, a card larger than one megabyte, or a card that requires authentication, accepts no text, or offers no JSON-RPC interface;
 - 403 `other_origin` when a browser marks the request as made by a page of another origin.
 
-`GET /agents` lists every agent. It and the answer to an add are the only answers of the service that hold a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where another agent's card names it.
+`GET /agents` lists every agent. It and the answers to an add and to a change are the only answers of the service that hold a saved agent's address, in `url`. The address is in no other response, no stream, no thread, and no log line, also where another agent's card names it.
 
 A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
+
+### Change whether an agent needs approval
+
+A saved agent's approval choice is changed from its card in the Agents section of the [web console](#web-console), behind a confirmation, or with:
+
+```bash
+curl -s -X PATCH localhost:8000/agents/<id> -H 'content-type: application/json' \
+  -d '{"version": 1, "approval": "none"}'       # or "required"
+```
+
+`version` is the one `GET /agents` shows for the agent. The answer is the agent as it is now, with `version` one higher, and `given_up`, which is 0 for this change. The agent is not contacted, so the change does not depend on whether it answers, and its pending tasks stay as they are. A request that names the choice the agent already has changes nothing.
+
+The two directions do not take effect the same way:
+
+- **Requiring approval holds at once**, on every instance, also for a run in progress and for a failed step that is tried again. Before a tool of a saved agent sends anything, it reads the agent from the database. A message that no person decided, to an agent that requires approval by then, is not sent: the call gets an error result, "Agent '<name>' now requires approval, so this message was not sent.", and the run continues. A message whose sending had begun is not recalled.
+- **Running without approval holds from the next run.** A run in progress keeps pausing until it ends. A proposal for the agent that is already waiting for a decision can then only be approved, and is sent as proposed.
+- **A paused step can become impossible to continue.** When a step waits for a decision and also holds a message to an agent that needed no approval when it was proposed and requires it now, the resume ends with an `error` event of code `approval_now_required` that names the agent. Nothing from the step ran, and the proposal stays. Switch the agent back, then decide again.
+
+A change is refused, and nothing changes, with 409 `agent_changed` when the agent is no longer at `version`, 409 `agent_read_only` for an agent named in the environment and for a saved agent that is not in use, 404 `agent_not_found`, 422 for a body with any other field (`name` and `url` among them), and 403 `other_origin`.
+
+Anyone who can reach the service's port can make an agent run without approval with this request. The service has no authentication; keep it bound to an address only its operators reach.
 
 ### Check an agent
 
@@ -400,7 +421,7 @@ pnpm dev                       # http://localhost:3000
 Open <http://localhost:3000>, by that name: in development Next.js serves its dev-only assets to `localhost` only, so the page does not load fully when opened as `127.0.0.1`. The address changes to `/llm`. A sidebar on the left lists the sections, LLM and Agents; on a screen narrower than 768 pixels it opens from a button. Like the API, the console has no authentication.
 
 - **LLM** shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
-- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. **Add** saves a new agent by its name and address: the service reads the agent's card first and refuses an agent it cannot use, with the reason shown in the form. An agent added here always requires approval, and the form says so. A saved agent's card shows its address. **Check** on a card has the service read the agent's card again and says whether the agent can be used, with the reason when it cannot, and whether the agent's card changed. Every agent that cannot be used is warned about three times from one reading of the list: on its card, in a warning above the cards that names it, and as a number on the sidebar's Agents entry, which shows on every section. A card has nothing to change or remove an agent with yet. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
+- **Agents** shows every agent Freyja can hand work to as a card: its name, whether its messages require approval, whether it comes from the environment, and whether the service could reach it at its most recent attempt, with the time. An agent that cannot be reached, or a saved agent the environment overrides, carries a warning with the reason. Below that is what the agent's card says of itself, shown as plain text and marked as the agent's own claim. **Add** saves a new agent by its name and address: the service reads the agent's card first and refuses an agent it cannot use, with the reason shown in the form. An agent added here requires approval unless the form's approval choice is set to run without it, which the form asks to confirm, saying that nothing sent to the agent will be seen by a person first. A saved agent's card shows its address. **Edit** on the card of a saved agent that is in use changes its approval choice. Nothing is sent before **Confirm**, which says what the change means: running without approval holds from the next run, and requiring approval holds at once, also for runs in progress. A form that was opened before the agent was changed elsewhere saves nothing and says so. **Check** on a card has the service read the agent's card again and says whether the agent can be used, with the reason when it cannot, and whether the agent's card changed. Every agent that cannot be used is warned about three times from one reading of the list: on its card, in a warning above the cards that names it, and as a number on the sidebar's Agents entry, which shows on every section. A card has nothing to move or remove an agent with yet, and an agent named in the environment cannot be changed. The list is `GET /agents`, which contacts no agent and never shows the address of an agent named in the environment.
 
 When the service cannot be reached, a section says so and offers to try again.
 

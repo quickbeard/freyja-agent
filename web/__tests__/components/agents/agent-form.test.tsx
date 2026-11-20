@@ -34,13 +34,20 @@ function refusal(code: string, message: string, more: object = {}): Reply {
   return { status: 409, json: { detail: { code, message, ...more } } };
 }
 
-// The form as the list holds it: a control opens it, and it closes itself.
+// The form as the list holds it: a control opens it, and it closes itself. Given an agent it
+// changes that agent, and `live` is the agent as the list has it now.
 function Harness({
   onSaved,
   onUnknown,
+  onStale,
+  agent,
+  live,
 }: {
   onSaved?: (agent: Agent) => void;
   onUnknown?: () => void;
+  onStale?: () => void;
+  agent?: Agent;
+  live?: Agent | null;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -53,6 +60,9 @@ function Harness({
         onOpenChange={setOpen}
         onSaved={onSaved ?? (() => {})}
         onUnknown={onUnknown ?? (() => {})}
+        onStale={onStale}
+        agent={agent}
+        live={live}
       />
     </>
   );
@@ -100,9 +110,10 @@ describe("AgentForm, adding", () => {
     expect(dialog.textContent).toContain(
       "Messages to this agent will require approval",
     );
-    // There is no choice to make about approval here, and no other field.
+    // The one choice is about approval, and there is no other field.
     expect(screen.getAllByRole("textbox")).toHaveLength(2);
-    for (const role of ["switch", "combobox", "checkbox", "radio"]) {
+    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    for (const role of ["switch", "combobox", "checkbox"]) {
       expect(screen.queryAllByRole(role)).toEqual([]);
     }
   });
@@ -496,5 +507,697 @@ describe("AgentForm, adding", () => {
     expect(field("Name").value).toBe("report");
     expect(screen.queryByRole("alert")).toBeNull();
     expect(document.body.textContent).not.toContain("not known");
+  });
+});
+
+// Part 2 (T085): the approval choice, when adding and when changing a saved agent.
+
+const choice = (name: string) =>
+  screen.getByRole("radio", { name }) as HTMLInputElement;
+const choose = (name: string) => fireEvent.click(choice(name));
+const REQUIRED = "Requires approval";
+const FREE = "Runs without approval";
+const confirmation = () => screen.queryByRole("note", { name: "Confirmation" });
+const confirm = (detail = 1) =>
+  fireEvent.click(screen.getByRole("button", { name: "Confirm" }), { detail });
+const theForm = () => field("Name").closest("form") as HTMLFormElement;
+
+const FREED: Agent = { ...STUB, approval: "none", version: 2 };
+
+describe("AgentForm, adding with the approval choice", () => {
+  it("offers the choice, set to requiring approval", () => {
+    render(<Harness />);
+    expect(screen.getByRole("group", { name: "Approval" })).toBeTruthy();
+    expect(choice(REQUIRED).checked).toBe(true);
+    expect(choice(FREE).checked).toBe(false);
+    expect(confirmation()).toBeNull();
+  });
+
+  it("says what the other choice means once it is chosen", () => {
+    render(<Harness />);
+    choose(FREE);
+    const dialog = screen.getByRole("dialog");
+    expect(choice(FREE).checked).toBe(true);
+    expect(dialog.textContent).toContain(
+      "Messages to this agent will be sent without approval",
+    );
+    expect(dialog.textContent).not.toContain("will require approval");
+  });
+
+  it("asks nothing when the agent is to require approval", async () => {
+    const fetchStub = stubFetch(CREATED);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    choose(FREE);
+    choose(REQUIRED);
+    save();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(STUB));
+    expect(sent(fetchStub).body).toEqual({ name: "stub", url: ADDRESS });
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("sends nothing on Save with running without approval chosen, and says what confirming means", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill();
+    choose(FREE);
+    save();
+
+    const note = confirmation() as HTMLElement;
+    // It names the agent, and says that nothing sent to it will be seen by a person first.
+    expect(note.textContent).toContain("stub");
+    expect(note.textContent).toContain(
+      "Nothing Freyja sends to stub will be seen by a person first.",
+    );
+    expect(fetchStub).not.toHaveBeenCalled();
+    // What was typed is still there, and Save gave way to a button of its own.
+    expect(field("Name").value).toBe("stub");
+    expect(screen.queryByRole("button", { name: "Save" })).toBeNull();
+    expect(screen.getByRole("button", { name: "Confirm" })).toBeTruthy();
+  });
+
+  it("sends nothing when the confirmation is canceled, and keeps nothing", async () => {
+    const fetchStub = stubFetch(CREATED);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    choose(FREE);
+    save();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    expect(field("Name").value).toBe("");
+    expect(choice(REQUIRED).checked).toBe(true);
+    expect(confirmation()).toBeNull();
+  });
+
+  it("sends the choice with the two values once Confirm is pressed, in one request", async () => {
+    const fetchStub = stubFetch({ status: 201, json: FREED });
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill({ Name: " stub " });
+    choose(FREE);
+    save();
+    confirm();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(FREED));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(sent(fetchStub)).toEqual({
+      path: "/api/agents",
+      method: "POST",
+      body: { name: "stub", url: ADDRESS, approval: "none" },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("does not confirm on Enter in a field, nor on the second press of a double press", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill();
+    choose(FREE);
+    const pressed = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(pressed, { detail: 1 });
+    // The second press of a double press lands where the first one did.
+    fireEvent.click(pressed, { detail: 2 });
+    expect(confirmation()).not.toBeNull();
+    // Nor when it lands on the button that took Save's place.
+    confirm(2);
+    expect(fetchStub).not.toHaveBeenCalled();
+
+    // Enter in a field asks the form to save, which asks again and sends nothing.
+    fireEvent.submit(theForm());
+    fireEvent.submit(theForm());
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).not.toBeNull();
+  });
+
+  it("sends once when Confirm is pressed again while the request is under way", async () => {
+    let answer: (response: Response) => void = () => {};
+    const fetchStub = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    const onSaved = vi.fn();
+    render(<Harness onSaved={onSaved} />);
+    fill();
+    choose(FREE);
+    save();
+    confirm();
+    const busy = await screen.findByRole("button", { name: "Saving…" });
+    expect((busy as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(busy);
+    fireEvent.submit(theForm());
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+
+    answer(
+      new Response(JSON.stringify(FREED), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("takes the confirmation back when a value or the choice is changed", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    fill();
+    choose(FREE);
+    save();
+    expect(confirmation()).not.toBeNull();
+
+    type("Name", "report");
+    expect(confirmation()).toBeNull();
+    save();
+    expect((confirmation() as HTMLElement).textContent).toContain("report");
+
+    choose(REQUIRED);
+    expect(confirmation()).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("says which values are missing before it asks anything", () => {
+    const fetchStub = stubFetch(CREATED);
+    render(<Harness />);
+    choose(FREE);
+    save();
+
+    expect(errorAt("Name")).toMatch(/name/i);
+    expect(errorAt("Address")).toMatch(/address/i);
+    expect(confirmation()).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("goes back to the fields with the service's reason when a confirmed add is refused", async () => {
+    stubFetch(
+      refusal("agent_unusable", "Nothing answered at the address.", {
+        reason: "no_answer",
+      }),
+    );
+    render(<Harness />);
+    fill();
+    choose(FREE);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Nothing answered at the address.");
+    // Saving again is asked about again: nothing is confirmed twice by one press.
+    expect(confirmation()).toBeNull();
+    expect(choice(FREE).checked).toBe(true);
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
+  });
+});
+
+function changed(agent: Agent): Reply {
+  return { json: { agent, given_up: 0 } };
+}
+
+describe("AgentForm, changing a saved agent", () => {
+  const SAVED: Agent = { ...STUB, version: 3, pending_tasks: 1 };
+  const NOW_FREE: Agent = { ...SAVED, approval: "none", version: 4 };
+  const SERVED: Agent = { ...SAVED, approval: "none" };
+  const NOW_REQUIRED: Agent = { ...SERVED, approval: "required", version: 4 };
+
+  it("opens with the agent's values, and neither its name nor its address can be edited", () => {
+    render(<Harness agent={SAVED} live={SAVED} />);
+    expect(screen.getByRole("dialog", { name: "Edit stub" })).toBeTruthy();
+    expect(field("Name").value).toBe("stub");
+    expect(field("Name").readOnly).toBe(true);
+    expect(field("Address").value).toBe(ADDRESS);
+    expect(field("Address").readOnly).toBe(true);
+    expect(choice(REQUIRED).checked).toBe(true);
+    expect(choice(FREE).checked).toBe(false);
+    // A name that is typed over all the same stays what it was.
+    type("Name", "other");
+    expect(field("Name").value).toBe("stub");
+  });
+
+  it("opens with the choice the agent has", () => {
+    render(<Harness agent={SERVED} live={SERVED} />);
+    expect(choice(FREE).checked).toBe(true);
+    expect(choice(REQUIRED).checked).toBe(false);
+  });
+
+  it("sends nothing when Save is pressed with nothing changed, and says so", () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const onSaved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onSaved={onSaved} />);
+    save();
+    fireEvent.submit(theForm());
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("status").textContent).toMatch(/nothing/i);
+    expect(onSaved).not.toHaveBeenCalled();
+    // Chosen and chosen back is nothing changed either.
+    choose(FREE);
+    expect(screen.queryByRole("status")).toBeNull();
+    choose(REQUIRED);
+    save();
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).toBeNull();
+  });
+
+  it("asks before switching to running without approval, and says what is given up", () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+
+    const said = (confirmation() as HTMLElement).textContent ?? "";
+    expect(said).toContain("stub");
+    // Every message is sent unseen, from the next run, and a waiting proposal can then
+    // only be approved (FR-011, SC-005).
+    expect(said).toContain(
+      "Every message to stub will be sent without a person seeing it first, from the next run.",
+    );
+    expect(said).toContain(
+      "A proposal for stub that is already waiting for a decision can then only be approved.",
+    );
+    expect(said).not.toMatch(/holds at once/);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("asks before switching to requiring approval, and says that it holds at once", () => {
+    const fetchStub = stubFetch(changed(NOW_REQUIRED));
+    render(<Harness agent={SERVED} live={SERVED} />);
+    choose(REQUIRED);
+    save();
+
+    const said = (confirmation() as HTMLElement).textContent ?? "";
+    expect(said).toContain("stub");
+    expect(said).toContain("This holds at once, also for runs in progress.");
+    expect(said).toContain(
+      "A paused step that holds a message to stub that needed no approval cannot be continued until the choice is changed back or the agent is removed.",
+    );
+    expect(said).not.toMatch(/from the next run/);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("sends the version the form opened with and only the choice, once Confirm is pressed", async () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const onSaved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onSaved={onSaved} />);
+    choose(FREE);
+    save();
+    expect(fetchStub).not.toHaveBeenCalled();
+    confirm();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(NOW_FREE));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    // Neither the name nor the address is sent: only what was changed, at that version.
+    expect(sent(fetchStub)).toEqual({
+      path: `/api/agents/${SAVED.id}`,
+      method: "PATCH",
+      body: { version: 3, approval: "none" },
+    });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  it("sends the choice to require approval the same way", async () => {
+    const fetchStub = stubFetch(changed(NOW_REQUIRED));
+    const onSaved = vi.fn();
+    render(<Harness agent={SERVED} live={SERVED} onSaved={onSaved} />);
+    choose(REQUIRED);
+    save();
+    confirm();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(NOW_REQUIRED));
+    expect(sent(fetchStub).body).toEqual({ version: 3, approval: "required" });
+  });
+
+  it("sends nothing when the confirmation is canceled", async () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const onSaved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onSaved={onSaved} />);
+    choose(FREE);
+    save();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+  });
+
+  it("does not confirm on Enter in a field, nor on the second press of a double press", () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    const pressed = screen.getByRole("button", { name: "Save" });
+    fireEvent.click(pressed, { detail: 1 });
+    fireEvent.click(pressed, { detail: 2 });
+    expect(confirmation()).not.toBeNull();
+    confirm(2);
+    fireEvent.submit(theForm());
+    fireEvent.submit(theForm());
+
+    expect(fetchStub).not.toHaveBeenCalled();
+    expect(confirmation()).not.toBeNull();
+  });
+
+  it("sends once when Confirm is pressed again while the request is under way", async () => {
+    let answer: (response: Response) => void = () => {};
+    const fetchStub = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    const onSaved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onSaved={onSaved} />);
+    choose(FREE);
+    save();
+    confirm();
+    const busy = await screen.findByRole("button", { name: "Saving…" });
+    fireEvent.click(busy);
+    fireEvent.submit(theForm());
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+
+    answer(
+      new Response(JSON.stringify({ agent: NOW_FREE, given_up: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    await waitFor(() => expect(onSaved).toHaveBeenCalledTimes(1));
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the agent in the confirmation as the list has it at that moment", () => {
+    stubFetch(changed(NOW_FREE));
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    const said = () => (confirmation() as HTMLElement).textContent ?? "";
+    expect(said()).toContain(ADDRESS);
+    expect(said()).toContain("requires approval");
+    expect(said()).toContain("reachable");
+    expect(said()).toContain("1 pending task.");
+
+    // The list is read again while the form asks: the same version, and more to tell.
+    rerender(
+      <Harness
+        agent={SAVED}
+        live={{
+          ...SAVED,
+          state: "unreachable",
+          reason: "Nothing answered.",
+          pending_tasks: 2,
+        }}
+      />,
+    );
+    expect(said()).toContain("unreachable");
+    expect(said()).toContain("2 pending tasks.");
+    expect(said()).not.toContain("1 pending task.");
+    // It is still the same question, about the same agent.
+    expect(said()).toContain("without a person seeing it first");
+  });
+
+  it("sends the version its fields were filled from, whatever it is handed afterwards", async () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const onSaved = vi.fn();
+    const { rerender } = render(<Harness agent={SAVED} onSaved={onSaved} />);
+    choose(FREE);
+    // Whoever holds the form hands it the agent again, as it has become, and the list
+    // itself cannot be read just now: the form still stands for what it opened with.
+    rerender(<Harness agent={{ ...SAVED, version: 9 }} onSaved={onSaved} />);
+    save();
+    confirm();
+
+    await waitFor(() => expect(onSaved).toHaveBeenCalled());
+    expect(sent(fetchStub).body).toEqual({ version: 3, approval: "none" });
+  });
+
+  it("takes its confirmation back and says the agent was changed elsewhere when the list shows a later version", () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    expect(confirmation()).not.toBeNull();
+
+    rerender(
+      <Harness
+        agent={SAVED}
+        live={{ ...SAVED, version: 4, url: "http://localhost:9997" }}
+      />,
+    );
+    expect(confirmation()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+    const alert = screen.getByRole("alert");
+    expect(alert.textContent).toContain("stub was changed elsewhere");
+    // Nothing can be saved from this form any more: its values are of an earlier agent.
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(saveButton);
+    fireEvent.submit(theForm());
+    expect(confirmation()).toBeNull();
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("says so before anything was asked, too, when the list shows a later version", () => {
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    expect(screen.queryByRole("alert")).toBeNull();
+    rerender(<Harness agent={SAVED} live={{ ...SAVED, version: 4 }} />);
+    expect(screen.getByRole("alert").textContent).toContain(
+      "changed elsewhere",
+    );
+  });
+
+  it("says the agent was removed elsewhere when the list no longer has it", () => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    rerender(<Harness agent={SAVED} live={null} />);
+
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "stub is no longer in the list",
+    );
+    fireEvent.submit(theForm());
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["a later version", { ...SAVED, version: 4 }, "stub was changed elsewhere"],
+    ["no such agent", null, "stub is no longer in the list"],
+  ])("stays taken back when the list showed %s and then cannot be read", (_what, shown, said) => {
+    const fetchStub = stubFetch(changed(NOW_FREE));
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    rerender(<Harness agent={SAVED} live={shown} />);
+    expect(confirmation()).toBeNull();
+
+    // The next reading of the list fails. What the form learned still holds: its values
+    // are of an earlier agent, and it asks nothing and saves nothing.
+    rerender(<Harness agent={SAVED} live={undefined} />);
+    expect(confirmation()).toBeNull();
+    expect(screen.queryByRole("button", { name: "Confirm" })).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(said);
+    const saveButton = screen.getByRole("button", { name: "Save" });
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(theForm());
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("keeps asking while the list cannot be read, and says the agent is shown as the form opened it", () => {
+    const { rerender } = render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    expect((confirmation() as HTMLElement).textContent).toContain(
+      "As the list has it now:",
+    );
+    rerender(<Harness agent={SAVED} live={undefined} />);
+    const asked = (confirmation() as HTMLElement).textContent ?? "";
+    expect(asked).toContain(ADDRESS);
+    // Not called the list's copy when it is not.
+    expect(asked).not.toContain("As the list has it now");
+    expect(asked).toContain(
+      "The list cannot be read now. As it was when this form opened:",
+    );
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
+  it.each([
+    [
+      409,
+      "agent_changed",
+      "The agent was changed since this page read it. Nothing was changed.",
+    ],
+    [404, "agent_not_found", "There is no agent with this id."],
+    [
+      409,
+      "agent_read_only",
+      "This saved agent is not in use, so it can only be removed.",
+    ],
+  ])("says so and has the list read again when the change is refused: %s %s", async (status, code, message) => {
+    const fetchStub = stubFetch({
+      status,
+      json: { detail: { code, message } },
+    });
+    const onSaved = vi.fn();
+    const onStale = vi.fn();
+    const onUnknown = vi.fn();
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onStale={onStale}
+        onUnknown={onUnknown}
+      />,
+    );
+    choose(FREE);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(message);
+    expect(onStale).toHaveBeenCalledTimes(1);
+    expect(onSaved).not.toHaveBeenCalled();
+    // The service answered: the outcome is known.
+    expect(onUnknown).not.toHaveBeenCalled();
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(confirmation()).toBeNull();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("shows any other refusal in the service's words and leaves the list alone", async () => {
+    stubFetch(
+      refusal(
+        "other_origin",
+        "Agents can only be changed from the console itself.",
+      ),
+    );
+    const onStale = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onStale={onStale} />);
+    choose(FREE);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe(
+      "Agents can only be changed from the console itself.",
+    );
+    expect(onStale).not.toHaveBeenCalled();
+  });
+
+  it("shows a refused value over the form, as the service words it", async () => {
+    stubFetch({
+      status: 422,
+      json: {
+        detail: [
+          {
+            type: "literal_error",
+            loc: ["body", "approval"],
+            msg: "Input should be 'required' or 'none'",
+          },
+        ],
+      },
+    });
+    render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toBe("Input should be 'required' or 'none'");
+  });
+
+  it.each<[string, Reply]>([
+    ["the request got no answer", { fails: "Failed to fetch" }],
+    ["the web app's server could not pass it on", { status: 502, text: "" }],
+  ])("says the outcome is not known, never that it failed, when %s", async (_when, reply) => {
+    const fetchStub = stubFetch(reply);
+    const onSaved = vi.fn();
+    const onUnknown = vi.fn();
+    const onStale = vi.fn();
+    render(
+      <Harness
+        agent={SAVED}
+        live={SAVED}
+        onSaved={onSaved}
+        onUnknown={onUnknown}
+        onStale={onStale}
+      />,
+    );
+    choose(FREE);
+    save();
+    confirm();
+
+    const alert = await screen.findByRole("alert");
+    expect(alert.textContent).toMatch(/not known/);
+    expect(alert.textContent).toMatch(/changed/);
+    expect(alert.textContent).not.toMatch(/fail|could not|was not|cannot/i);
+    expect(onUnknown).toHaveBeenCalledTimes(1);
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onStale).not.toHaveBeenCalled();
+    // Nothing is sent again by itself, and nothing is confirmed twice by one press.
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    expect(confirmation()).toBeNull();
+    expect(choice(FREE).checked).toBe(true);
+    expect(screen.getByRole("dialog")).toBeTruthy();
+  });
+
+  it("opens with the agent's own choice again after it is closed", async () => {
+    render(<Harness agent={SAVED} live={SAVED} />);
+    choose(FREE);
+    save();
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    expect(choice(REQUIRED).checked).toBe(true);
+    expect(confirmation()).toBeNull();
+  });
+
+  it("leaves the form that is open now alone when an earlier form's change is answered", async () => {
+    let answer: (response: Response) => void = () => {};
+    const fetchStub = vi.fn(
+      (_input: RequestInfo | URL, _init?: RequestInit) =>
+        new Promise<Response>((resolve) => {
+          answer = resolve;
+        }),
+    );
+    vi.stubGlobal("fetch", fetchStub);
+    const onSaved = vi.fn();
+    render(<Harness agent={SAVED} live={SAVED} onSaved={onSaved} />);
+    choose(FREE);
+    save();
+    confirm();
+    await screen.findByRole("button", { name: "Saving…" });
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    fireEvent.click(screen.getByRole("button", { name: "Open the form" }));
+    await screen.findByRole("dialog");
+    choose(FREE);
+
+    answer(
+      new Response(JSON.stringify({ agent: NOW_FREE, given_up: 0 }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    // The change was made, so whoever holds the list is told; the form that is open now
+    // is another one and stays as it is.
+    await waitFor(() => expect(onSaved).toHaveBeenCalledWith(NOW_FREE));
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(choice(FREE).checked).toBe(true);
+    expect(screen.getByRole("button", { name: "Save" })).toBeTruthy();
   });
 });
