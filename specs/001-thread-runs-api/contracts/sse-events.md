@@ -120,9 +120,14 @@ against. The top-level list is the union of them, for display.
 
 `code` is one of `step_limit`, `model_error` (an exception raised by the chat model: provider
 API errors and timeouts), `internal` (anything else, including a database failure during the
-run), and `no_usable_model` (the active LLM profile cannot be used; the orchestrator is not
-invoked and nothing is added to the thread). `no_usable_model` was added by feature 004; see
+run), `no_usable_model` (the active LLM profile cannot be used; the orchestrator is not
+invoked and nothing is added to the thread), and `approval_now_required` (a resume only: the
+paused step holds a message to an agent that needed no approval when it was proposed and
+requires it now; nothing from the step ran, and the proposal is still pending).
+`no_usable_model` was added by feature 004; see
 [its stream contract](../../004-web-llm-profiles/contracts/sse-events.md#error-gains-no_usable_model).
+`approval_now_required` was added by feature 005; see
+[its stream contract](../../005-web-delegate-agents/contracts/sse-events.md#error-with-approval_now_required).
 
 `message` is human-readable. The service puts no value of its own credential settings in it
 (FR-004b). For `model_error` it includes the provider's error text; what that text contains

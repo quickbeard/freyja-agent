@@ -1164,12 +1164,12 @@ another origin, nothing can be read or changed, and the console is not shown in 
 
 ## Phase 10: Polish & Cross-Cutting Concerns
 
-- [ ] T115 [P] Complete `README.md`, which Phases 3 to 5 kept true: the Agents section and how
+- [X] T115 [P] Complete `README.md`, which Phases 3 to 5 kept true: the Agents section and how
       an agent is added, checked, changed, and removed; saved agents beside
       `FREYJA_A2A_AGENTS`; the console's warnings; that requiring approval and a removal hold
       at once; the `approval_now_required` code; and what anyone who can reach the port can now
       do. Only what now exists
-- [ ] T116 [P] Update `AGENTS.md`: Layout entries for `runtime/saved_agents.py`,
+- [X] T116 [P] Update `AGENTS.md`: Layout entries for `runtime/saved_agents.py`,
       `delegates/agent_registry.py`, `delegates/agent_cards.py`, `delegates/addresses.py`,
       `api/agents.py`, and `api/guards.py`; what changed in `a2a_agents.py`, `a2a_tools.py`,
       `delegation_worker.py`, `runtime.py`, `threads.py`, and `tools.py`, a context in place of
@@ -1177,14 +1177,14 @@ another origin, nothing can be read or changed, and the console is not shown in 
       new end-to-end files; and under Conventions, that an agent's address appears nowhere
       outside the Agents routes, that text about an agent goes through the scrubber, and that a
       new route or log line about agents is added to `tests/test_agents_address_nowhere.py`
-- [ ] T117 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
+- [X] T117 [P] Update `specs/001-thread-runs-api/contracts/sse-events.md` so the stream
       contract names the `approval_now_required` code where a reader looks first, pointing at
       `specs/005-web-delegate-agents/contracts/sse-events.md`
-- [ ] T118 [P] Update `specs/005-web-delegate-agents/plan.md`: under Implementation Notes,
+- [X] T118 [P] Update `specs/005-web-delegate-agents/plan.md`: under Implementation Notes,
       anything the implementation settled differently from the plan, beside what T015, T035,
       T036, T062, T079, and T095 recorded, and its file tree where the implementation touched a
       file it does not list
-- [ ] T119 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
+- [X] T119 Run `uv run ruff check .`, `uv run ruff format --check .`, `uv run pytest`,
       `FREYJA_TEST_DATABASE_URI=... uv run pytest tests/integration`, in `web/` `pnpm lint`,
       `pnpm test`, `pnpm build`, and `pnpm test:e2e`, and `uv run pre-commit run --all-files`;
       confirm that no Ruff suppression was added, that both default suites pass with the
@@ -1195,12 +1195,12 @@ another origin, nothing can be read or changed, and the console is not shown in 
       `web/__tests__/components/app-sidebar.test.tsx` (T073), and the shared setup of
       `web/e2e/llm.spec.ts` and `web/e2e/profiles.spec.ts` (T079) (FR-031, FR-032, SC-014,
       principle V)
-- [ ] T120 Run `specs/005-web-delegate-agents/quickstart.md`, all eight sections, against the
+- [X] T120 Run `specs/005-web-delegate-agents/quickstart.md`, all eight sections, against the
       real service, stand-ins on loopback, and the web app in a browser. Then save twenty
       agents through the API and time the Agents section from navigation to the last card:
       within two seconds (SC-015). Time a start with three stand-ins that never answer against
       a start with all answering: no later than the startup limit (SC-006)
-- [ ] T121 Re-run the Constitution Check of `specs/005-web-delegate-agents/plan.md` against the
+- [X] T121 Re-run the Constitution Check of `specs/005-web-delegate-agents/plan.md` against the
       implemented code and note the result in the pull request description (principles I to VI)
 
 ---
