@@ -7,9 +7,7 @@ routes (feature 005). This file drives the routes of feature 007 with a recogniz
 a recognizable address, through threads that finish, pause, and fail, and searches what they
 returned and what the service logged.
 
-It reuses the helpers of ``tests/test_llm_secrets_nowhere.py`` and
-``tests/test_agents_address_nowhere.py`` and changes neither. The three have to be joined
-once feature 005 is done: its Phase 9 rewrites the second.
+It shares its tools with the proofs of features 004 and 005, in ``tests/nowhere.py``.
 """
 
 import logging
@@ -20,10 +18,9 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from tests import test_agents_address_nowhere as addresses
-from tests import test_llm_secrets_nowhere as keys
 from tests.conftest import A2aApp, LlmApp
 from tests.fakes import ScriptedChatModel
+from tests.nowhere import MARK, LeakyModel, Seen, logged, no_address, no_key, profile
 from tests.unattended_helpers import Reader, idle
 
 # A port nothing else in the suite uses, so finding it means an address got out.
@@ -45,7 +42,7 @@ def handoff(message: str, call_id: str) -> AIMessage:
     )
 
 
-def index_routes(seen: keys.Seen, *threads: str) -> dict[str, str]:
+def index_routes(seen: Seen, *threads: str) -> dict[str, str]:
     """Read the list and each thread's row; the status of each thread by its id."""
     listed = seen.call("GET", "/threads")
     assert listed.status_code == 200, listed.text
@@ -59,11 +56,11 @@ def test_a_key_is_in_nothing_the_thread_index_returns_or_logs(
 ) -> None:
     made = make_llm_app(model="openai:env-model")
     made.models.model("saved-model").script = [NOTIFY]
-    made.models.models["leaky-model"] = keys.LeakyModel()
+    made.models.models["leaky-model"] = LeakyModel()
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
-        seen = keys.Seen(client, sse_events)
-        saved = seen.call("POST", "/llm/profiles", json=keys.profile()).json()["id"]
+        seen = Seen(client, sse_events)
+        saved = seen.call("POST", "/llm/profiles", json=profile()).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{saved}/activate").status_code == 200
 
         # A thread that pauses, and one that finishes; the person's own text names the key's
@@ -74,7 +71,7 @@ def test_a_key_is_in_nothing_the_thread_index_returns_or_logs(
 
         # One that fails with a provider's error that repeats the key.
         leaky = seen.call(
-            "POST", "/llm/profiles", json=keys.profile(name="Leaky", model="leaky-model")
+            "POST", "/llm/profiles", json=profile(name="Leaky", model="leaky-model")
         ).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{leaky}/activate").status_code == 200
         failed = seen.stream("/threads/k-failed/runs", {"message": "This one fails."})
@@ -91,8 +88,8 @@ def test_a_key_is_in_nothing_the_thread_index_returns_or_logs(
         # A run started the earlier way: its error went to its own reader.
         "k-failed": "stopped",
     }
-    keys.nowhere(seen.texts, keys.MARK)
-    keys.nowhere([caplog.handler.format(record) for record in caplog.records], keys.MARK)
+    no_key(seen.texts, MARK)
+    no_key(logged(caplog), MARK)
 
 
 def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
@@ -106,7 +103,7 @@ def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
     made = make_a2a_app(model, {}, saved={"helper": {"url": URL}})
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
-        seen = keys.Seen(client, sse_events)
+        seen = Seen(client, sse_events)
         waiting = seen.stream("/threads/a-paused/runs", {"message": "Ask the helper."})
         assert waiting[-1][0] == "interrupt"
 
@@ -124,8 +121,8 @@ def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
     assert statuses == {"a-paused": "needs_decision", "a-done": "done"}
     # The helper did receive the approved message, so the address was in use.
     assert len(made.stub_at(URL).record.messages) == 1
-    addresses.nowhere(seen.texts, PORT)
-    addresses.nowhere([caplog.handler.format(record) for record in caplog.records], PORT)
+    no_address(seen.texts, PORT)
+    no_address(logged(caplog), PORT)
 
 
 # Part 2 (Phase 3): console runs, through the three routes that start, continue, and stop
@@ -142,11 +139,11 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
     made = make_llm_app(model="openai:env-model")
     saved_model = made.models.model("saved-model")
     saved_model.script = [NOTIFY, AIMessage(content="Not sent."), ls_call("l1"), ls_call("l2")]
-    made.models.models["leaky-model"] = keys.LeakyModel()
+    made.models.models["leaky-model"] = LeakyModel()
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
-        seen = keys.Seen(client, sse_events)
-        saved = seen.call("POST", "/llm/profiles", json=keys.profile()).json()["id"]
+        seen = Seen(client, sse_events)
+        saved = seen.call("POST", "/llm/profiles", json=profile()).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{saved}/activate").status_code == 200
 
         paused = seen.stream("/threads/c-paused/runs/unattended", {"message": "Tell #ops."})
@@ -170,7 +167,7 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
 
         # One that fails with a provider's error that repeats the key.
         leaky = seen.call(
-            "POST", "/llm/profiles", json=keys.profile(name="Leaky", model="leaky-model")
+            "POST", "/llm/profiles", json=profile(name="Leaky", model="leaky-model")
         ).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{leaky}/activate").status_code == 200
         failed = seen.stream("/threads/c-failed/runs/unattended", {"message": "This one fails."})
@@ -182,8 +179,8 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
     assert statuses == {"c-paused": "done", "c-stopped": "stopped", "c-failed": "failed"}
     # The reason is there, with the key taken out of it.
     assert "Incorrect API key provided" in failed_row["error"]["message"]
-    keys.nowhere(seen.texts, keys.MARK)
-    keys.nowhere([caplog.handler.format(record) for record in caplog.records], keys.MARK)
+    no_key(seen.texts, MARK)
+    no_key(logged(caplog), MARK)
 
 
 def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
@@ -200,7 +197,7 @@ def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
     made = make_a2a_app(model, {}, saved={"helper": {"url": URL}})
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
-        seen = keys.Seen(client, sse_events)
+        seen = Seen(client, sse_events)
         proposed = seen.stream("/threads/c-done/runs/unattended", {"message": "Ask the helper."})
         assert proposed[-1][0] == "interrupt"
         body = {
@@ -217,5 +214,5 @@ def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
 
     assert statuses == {"c-done": "done", "c-paused": "needs_decision"}
     assert len(made.stub_at(URL).record.messages) == 1
-    addresses.nowhere(seen.texts, PORT)
-    addresses.nowhere([caplog.handler.format(record) for record in caplog.records], PORT)
+    no_address(seen.texts, PORT)
+    no_address(logged(caplog), PORT)

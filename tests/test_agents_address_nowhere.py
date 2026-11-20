@@ -50,8 +50,9 @@ from freyja_agent.config import canonical_address, destination
 from freyja_agent.delegates.agent_cards import SENTENCES
 from tests.a2a_stub import StubAgent, make_stub, stub_card
 from tests.asgi_stream import StreamingASGITransport
-from tests.conftest import A2aApp, holds_port
+from tests.conftest import A2aApp
 from tests.fakes import ScriptedChatModel
+from tests.nowhere import Seen, addresses, found, kept, no_address, strings
 from tests.test_a2a_gate import propose
 from tests.test_a2a_handoff import DONE, handoff, tool_results
 from tests.test_a2a_pending import tick
@@ -62,7 +63,6 @@ from tests.test_agents_approval import (
     InTheTool,
     before_the_send,
 )
-from tests.test_llm_secrets_nowhere import Seen, kept
 
 # Ports nothing else in the suite uses. Each is searched for as a number of its own, and
 # after a colon, which is how every form of an address holds it (FR-028).
@@ -82,10 +82,6 @@ TALKATIVE = (
     f"[::1]:{SAVED_PORT}. My neighbour is at http://localhost:{ENVIRONMENT_PORT} and "
     f"('127.0.0.1', {ENVIRONMENT_PORT})."
 )
-
-
-def found(text: str, port: int) -> bool:
-    return holds_port(text, port) or f":{port}" in text
 
 
 # What the parts of this proof drove: the parts that ran, each route of the Agents section
@@ -182,38 +178,6 @@ def put(made: A2aApp, url: str, stub: StubAgent) -> Naming:
     transport = Naming(stub.app)
     made.at[destination(canonical_address(url))] = (stub, transport)
     return transport
-
-
-def strings(value: Any, *, but: str | None = None) -> list[str]:
-    """Every text in a JSON value, keys included, leaving out what is under the key ``but``."""
-    if isinstance(value, str):
-        return [value]
-    if isinstance(value, dict):
-        return [
-            text
-            for key, item in value.items()
-            if key != but
-            for text in (key, *strings(item, but=but))
-        ]
-    if isinstance(value, list):
-        return [text for item in value for text in strings(item, but=but)]
-    return [json.dumps(value)]
-
-
-def addresses(value: Any) -> list[str]:
-    """Every ``url`` of an Agents answer that holds one."""
-    if isinstance(value, dict):
-        own = [value["url"]] if isinstance(value.get("url"), str) else []
-        return own + [text for item in value.values() for text in addresses(item)]
-    if isinstance(value, list):
-        return [text for item in value for text in addresses(item)]
-    return []
-
-
-def nowhere(texts: list[str], *ports: int) -> None:
-    for text in texts:
-        for port in ports:
-            assert not found(text, port), f"{port} found in: {text[:400]}"
 
 
 def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
@@ -360,21 +324,21 @@ def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
     # every thread as the checkpointer keeps it.
     assert any("handoff_to_helper" in text for text in seen.texts)
     assert any("<address>" in text for text in seen.texts)
-    nowhere(seen.texts, *PORTS)
+    no_address(seen.texts, *PORTS)
     assert any("could not be reached" in text for text in in_threads)
-    nowhere(in_threads, *PORTS)
+    no_address(in_threads, *PORTS)
 
     # Every refusal's reason, the Agents routes' own included.
-    nowhere(refusals, *PORTS)
+    no_address(refusals, *PORTS)
 
     # An answer of the Agents routes holds a saved agent's address in `url`, in the form it is
     # kept in, and in nothing else: not in what a card says, and not in a reason.
     assert any(addresses(answer) for answer in answers)
     for answer in answers:
         assert set(addresses(answer)) <= {kept_url}
-        nowhere(strings(answer, but="url"), *PORTS)
+        no_address(strings(answer, but="url"), *PORTS)
         # The environment agent's address, and a refused add's, are in no part of it.
-        nowhere([json.dumps(answer)], ENVIRONMENT_PORT, REFUSED_PORT, SLOW_PORT)
+        no_address([json.dumps(answer)], ENVIRONMENT_PORT, REFUSED_PORT, SLOW_PORT)
     card_texts = [agent["card"]["description"] for agent in answers[-1]["agents"]]
     assert len(card_texts) == 2 and all("<address>" in text for text in card_texts)
 
@@ -388,7 +352,7 @@ def test_an_address_is_in_nothing_the_service_returns_streams_keeps_or_logs(
         record.name == "httpx" and "<address>" in line
         for record, line in zip(caplog.records, logged, strict=False)
     )
-    nowhere(logged, *PORTS)
+    no_address(logged, *PORTS)
 
 
 # Part 2 (T069): checks.
@@ -508,15 +472,15 @@ def test_an_address_is_in_nothing_a_check_returns_or_logs(
 
     assert len(results) == 14 and len(refusals) == 5
     # A check's answer holds no address at all, and neither does a refusal.
-    nowhere(results, *CHECK_PORTS)
-    nowhere(refusals, *CHECK_PORTS)
+    no_address(results, *CHECK_PORTS)
+    no_address(refusals, *CHECK_PORTS)
     # The catalog describes both agents from the new details, with every address taken out.
     assert any("Now with reports. Reach me at <address>/a2a" in text for text in seen.texts)
-    nowhere(seen.texts, *CHECK_PORTS)
+    no_address(seen.texts, *CHECK_PORTS)
     # The list holds the saved agent's address in `url` and in nothing else.
     for answer in answers:
         assert addresses(answer) == [CHECKED_URL]
-        nowhere(strings(answer, but="url"), *CHECK_PORTS)
+        no_address(strings(answer, but="url"), *CHECK_PORTS)
         cards = [agent["card"]["description"] for agent in answer["agents"]]
         assert len(cards) == 2
         assert all(text.startswith("Now with reports. Reach me at <address>") for text in cards)
@@ -525,7 +489,7 @@ def test_an_address_is_in_nothing_a_check_returns_or_logs(
     logged += [caplog.handler.format(record) for record in caplog.records]
     assert sum("Agent checked: helper" in line for line in logged) == 2 * 11
     assert sum("Agent checked: desk" in line for line in logged) == 2 * 3
-    nowhere(logged, *CHECK_PORTS)
+    no_address(logged, *CHECK_PORTS)
 
 
 # Part 3 (T087): the approval choice.
@@ -674,12 +638,12 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     # every thread as the checkpointer keeps it.
     assert any("handoff_to_free" in text for text in seen.texts)
     assert any("<address>" in text for text in seen.texts)
-    nowhere(seen.texts, *CHOICE_PORTS)
+    no_address(seen.texts, *CHOICE_PORTS)
     assert any("now requires approval" in text for text in in_threads)
-    nowhere(in_threads, *CHOICE_PORTS)
+    no_address(in_threads, *CHOICE_PORTS)
 
     # Every refusal of a change, the one for a failing store included.
-    nowhere(refusals, *CHOICE_PORTS)
+    no_address(refusals, *CHOICE_PORTS)
 
     # An answer of the Agents routes holds a saved agent's address in `url` and in nothing
     # else, and the environment agent's in no part of it.
@@ -687,8 +651,8 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     assert any(addresses(answer) for answer in answers)
     for answer in answers:
         assert set(addresses(answer)) <= kept_urls
-        nowhere(strings(answer, but="url"), *CHOICE_PORTS)
-        nowhere([json.dumps(answer)], COUNTER_PORT)
+        no_address(strings(answer, but="url"), *CHOICE_PORTS)
+        no_address([json.dumps(answer)], COUNTER_PORT)
     card_texts = [agent["card"]["description"] for agent in listed["agents"]]
     assert len(card_texts) == 3 and all("<address>" in text for text in card_texts)
 
@@ -700,7 +664,7 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     assert any("Agent free was not changed: RuntimeError" in line for line in logged)
     assert any(f"Agent free: {NOW_REQUIRES.format(agent='free')}" in line for line in logged)
     assert any("refused" in line and line.endswith("agents: free") for line in logged)
-    nowhere(logged, *CHOICE_PORTS)
+    no_address(logged, *CHOICE_PORTS)
 
 
 # Part 4 (T103): moving and removing.
@@ -872,12 +836,12 @@ def test_an_address_is_in_nothing_a_move_or_a_removal_returns_or_causes(
     # Outside the Agents routes: every response, every stream with its debug events, and
     # every thread as the checkpointer keeps it.
     assert any("handoff_to_roam" in text for text in seen.texts)
-    nowhere(seen.texts, *MOVING_PORTS)
+    no_address(seen.texts, *MOVING_PORTS)
     assert any("moved to another address" in text for text in in_threads)
-    nowhere(in_threads, *MOVING_PORTS)
+    no_address(in_threads, *MOVING_PORTS)
 
     # Every refusal of a move and of a removal, the ones for a failing store included.
-    nowhere(refusals, *MOVING_PORTS)
+    no_address(refusals, *MOVING_PORTS)
 
     # An answer of the Agents routes holds a saved agent's address in `url` and nowhere else.
     kept_urls = {
@@ -890,7 +854,7 @@ def test_an_address_is_in_nothing_a_move_or_a_removal_returns_or_causes(
     assert any(addresses(answer) for answer in answers)
     for answer in answers:
         assert set(addresses(answer)) <= kept_urls
-        nowhere(strings(answer, but="url"), *MOVING_PORTS)
+        no_address(strings(answer, but="url"), *MOVING_PORTS)
 
     # Every log record at every level, with its arguments and its traceback.
     logged = [record.getMessage() for record in caplog.records]
@@ -899,7 +863,7 @@ def test_an_address_is_in_nothing_a_move_or_a_removal_returns_or_causes(
     assert any("Agent changed: roam" in line and "1 task was given up" in line for line in logged)
     assert any("gave up" not in line and "Agent removed: roam" in line for line in logged)
     assert any(f"Agent roam: {ELSEWHERE.format(agent='roam')}" in line for line in logged)
-    nowhere(logged, *MOVING_PORTS)
+    no_address(logged, *MOVING_PORTS)
 
 
 async def _record_task(made: A2aApp, seed: dict[str, Any], now: Any) -> None:
@@ -1183,24 +1147,24 @@ def test_an_address_is_in_nothing_one_journey_through_every_route_returns_or_cau
     # every thread as the checkpointer keeps it. Each spelling of an address holds its port.
     assert any("handoff_to_rover" in text for text in seen.texts)
     assert any("<address>" in text for text in seen.texts)
-    nowhere(seen.texts, *JOURNEY_PORTS)
+    no_address(seen.texts, *JOURNEY_PORTS)
     assert any("Agent 'rover' cannot be used" in text for text in in_threads)
-    nowhere(in_threads, *JOURNEY_PORTS)
+    no_address(in_threads, *JOURNEY_PORTS)
     for text in (*seen.texts, *in_threads):
         assert "localhost:" not in text.lower() and "127.0.0.1:" not in text, text[:300]
         # The path of a saved address is part of it.
         assert "onward-path" not in text, text[:300]
 
     # Every refusal, the ones for a store that fails naming two addresses included.
-    nowhere(refusals, *JOURNEY_PORTS)
+    no_address(refusals, *JOURNEY_PORTS)
 
     # An answer of the Agents routes holds a saved agent's address in `url`, as it was
     # entered, and in nothing else. The environment agent's is in no part of any.
     kept_urls = {ROVER_AS_LOCALHOST, ROVER_AS_LOOPBACK, ONWARD_URL, SHADOW_URL}
     assert {url for answer in answers for url in addresses(answer)} == kept_urls
     for answer in answers:
-        nowhere(strings(answer, but="url"), *JOURNEY_PORTS)
-        nowhere([json.dumps(answer)], STAND_PORT)
+        no_address(strings(answer, but="url"), *JOURNEY_PORTS)
+        no_address([json.dumps(answer)], STAND_PORT)
         assert all("onward-path" not in text for text in strings(answer, but="url"))
     # The cards' own words about their addresses came back with every form taken out.
     described = [
@@ -1220,7 +1184,7 @@ def test_an_address_is_in_nothing_one_journey_through_every_route_returns_or_cau
     assert all("onward-path" not in line for line in logged)
     assert any("Agent checked: rover" in line for line in logged)
     assert any("The agents could not be listed: RuntimeError" in line for line in logged)
-    nowhere(logged, *JOURNEY_PORTS)
+    no_address(logged, *JOURNEY_PORTS)
 
 
 # What each route refuses with, by contracts/openapi.yaml: `invalid` stands for a 422, and
