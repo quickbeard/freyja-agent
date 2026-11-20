@@ -351,7 +351,8 @@ startup and exits with an error naming the connection when it is unreachable.
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
   with stub tool servers, `make_a2a_app` with stand-in agents, and `make_llm_app` with LLM
   profiles and a model factory. `fakes.py` holds the scripted chat model, a labelled one that
-  can hold a call open, and the test model factory; `llm_stub.py` the stand-in model
+  can hold a call open, and the test model factory; `nowhere.py` what the three proofs
+  that no key and no agent address gets out share; `llm_stub.py` the stand-in model
   endpoint, OpenAI-compatible, which the suite reaches through the real client;
   `mcp_stub.py` the stub MCP server, which
   records every call it
@@ -430,9 +431,11 @@ startup and exits with an error naming the connection when it is unreachable.
   made with `refuse_other_origins`. `tests/test_threads_other_origins.py` covers every thread
   route; a new one is added to it.
 - The index of threads returns text from threads, so `tests/test_thread_index_nowhere.py`
-  searches its answers and the log for a recognizable key and a recognizable agent address,
-  with the helpers of the two proofs above. A new route of the index is added to it. The
-  three files are to be joined once feature 005 is done.
+  searches its answers and the log for a recognizable key and a recognizable agent address.
+  A new route of the index is added to it. The three proofs share their tools in
+  `tests/nowhere.py`: `Seen`, which keeps everything the service gave back, `kept`, what the
+  checkpointer holds, `logged`, and the searches `no_key` and `no_address`. A proof imports
+  them from there, never from another test file.
 - A console run is stopped only between two steps, never by cancelling it, also when the
   service stops: `SegmentedGraph` is the one place that decides where (`BOUNDARY_NODES`),
   so that an action under way is never cut off (principle I). `tests/test_unattended_stop.py`

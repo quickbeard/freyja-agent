@@ -19,99 +19,23 @@ from freyja_agent.llm.secrets import REDACTED, decrypt
 from tests.conftest import LlmApp
 from tests.fakes import ScriptedChatModel
 from tests.llm_stub import LlmStub
-
-# Nothing else in the suite holds this text, so finding any of it means a key got out.
-KEY = "sk-recognizable-key-0001"
-NEW_KEY = "sk-recognizable-other-0002"
-MARK = "recognizable"
-ENV_KEY = "sk-environment-secret-9f2c"
-ENV_MARK = "environment-secret"
-BASE_URL = "http://127.0.0.1:9997/v1"
+from tests.nowhere import (
+    ENV_KEY,
+    ENV_MARK,
+    KEY,
+    MARK,
+    NEW_KEY,
+    LeakyModel,
+    Seen,
+    kept,
+    no_key,
+    profile,
+)
 
 
 @pytest.fixture(autouse=True)
 def environment_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENAI_API_KEY", ENV_KEY)
-
-
-class LeakyModel(ScriptedChatModel):
-    """A model whose provider repeats the key in every error, until it is ``healed``."""
-
-    healed: bool = False
-
-    def _generate(
-        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
-    ) -> Any:
-        if not self.healed:
-            self.calls += 1
-            raise RuntimeError(f"401: Incorrect API key provided: {KEY}. Check {KEY}!")
-        return super()._generate(messages, stop, run_manager, **kwargs)
-
-
-class Seen:
-    """Everything the service gave back, kept as text to be searched."""
-
-    def __init__(self, client: TestClient, sse_events: Any) -> None:
-        self.client = client
-        self.sse_events = sse_events
-        self.texts: list[str] = []
-
-    def call(self, method: str, path: str, **kwargs: Any) -> Any:
-        response = self.client.request(method, path, **kwargs)
-        self.texts.append(f"{method} {path} -> {response.status_code} {response.text}")
-        return response
-
-    def stream(self, path: str, body: dict[str, Any], **params: Any) -> list[tuple[str, Any]]:
-        with self.client.stream("POST", path, json=body, params=params) as response:
-            assert response.status_code == 200, response.read()
-            lines = list(response.iter_lines())
-        # The stream as it went over the wire, every event of it.
-        self.texts.append(f"POST {path} stream\\n" + "\\n".join(lines))
-        return self.sse_events(iter(lines))
-
-    def state(self, thread: str) -> dict[str, Any]:
-        return self.call("GET", f"/threads/{thread}/state").json()
-
-
-def kept(saver: Any) -> list[str]:
-    """Everything the in-memory checkpointer holds, as text: checkpoints, blobs, and the writes
-    of each step, a failed step's error among them."""
-    texts: list[str] = []
-
-    def walk(value: Any) -> None:
-        if isinstance(value, bytes | bytearray):
-            texts.append(bytes(value).decode("latin-1"))
-        elif isinstance(value, str):
-            texts.append(value)
-        elif isinstance(value, dict):
-            for key, item in value.items():
-                walk(key)
-                walk(item)
-        elif isinstance(value, list | tuple):
-            for item in value:
-                walk(item)
-
-    for part in (saver.storage, saver.blobs, saver.writes):
-        walk(part)
-    return texts
-
-
-def nowhere(texts: list[str], *marks: str) -> None:
-    for text in texts:
-        for mark in marks:
-            assert mark not in text, f"{mark!r} found in: {text[:300]}"
-
-
-def profile(**values: Any) -> dict[str, Any]:
-    return {
-        "name": "Stub",
-        "provider": "openai",
-        "model": "saved-model",
-        "base_url": BASE_URL,
-        "api_key": KEY,
-        "responses_api": False,
-        **values,
-    }
 
 
 def test_a_key_is_in_nothing_the_service_returns_streams_keeps_or_logs(
@@ -252,16 +176,16 @@ def test_a_key_is_in_nothing_the_service_returns_streams_keeps_or_logs(
     debugged = [str(data) for kind, data in broken if kind == "debug"]
     assert any("Incorrect API key provided" in text for text in debugged)
     assert any("Incorrect API key provided" in text for text in in_threads)
-    nowhere(in_threads, MARK, ENV_MARK)
+    no_key(in_threads, MARK, ENV_MARK)
 
     # Nothing returned or streamed, and no thread, holds any part of either key.
     assert len(seen.texts) >= 40
-    nowhere(seen.texts, MARK, ENV_MARK)
+    no_key(seen.texts, MARK, ENV_MARK)
     # Nor does any log record, with its arguments and its traceback.
     logged = [record.getMessage() for record in caplog.records]
     logged += [caplog.handler.format(record) for record in caplog.records]
     assert any("model error" in line for line in logged)
-    nowhere(logged, MARK, ENV_MARK)
+    no_key(logged, MARK, ENV_MARK)
     # What is stored is a token that does not hold the key, readable only under the secret.
     (record,) = records
     assert MARK not in record.api_key_encrypted
@@ -292,12 +216,12 @@ def test_the_real_clients_error_reaches_a_run_and_the_log_without_the_key(
     kind, error = events[-1]
     assert (kind, error["code"]) == ("error", "model_error")
     assert f"The key {REDACTED} is not allowed" in error["message"]
-    nowhere(seen.texts, MARK)
+    no_key(seen.texts, MARK)
     assert any("is not allowed" in text for text in in_threads)
-    nowhere(in_threads, MARK)
+    no_key(in_threads, MARK)
     logged = [caplog.handler.format(record) for record in caplog.records]
     assert any("model error" in line and REDACTED in line for line in logged)
-    nowhere(logged, MARK)
+    no_key(logged, MARK)
 
 
 def test_the_environments_key_is_removed_from_a_failed_run_too(
@@ -323,12 +247,12 @@ def test_the_environments_key_is_removed_from_a_failed_run_too(
         "message": f"The model request failed: 401: Incorrect API key provided: {REDACTED}",
     }
     assert tested["reason"] == f"401: Incorrect API key provided: {REDACTED}"
-    nowhere(seen.texts, ENV_MARK)
+    no_key(seen.texts, ENV_MARK)
     debugged = [str(data) for kind, data in events if kind == "debug"]
     assert any("Incorrect API key provided" in text for text in debugged)
     assert any("Incorrect API key provided" in text for text in in_threads)
-    nowhere(in_threads, ENV_MARK)
-    nowhere([caplog.handler.format(record) for record in caplog.records], ENV_MARK)
+    no_key(in_threads, ENV_MARK)
+    no_key([caplog.handler.format(record) for record in caplog.records], ENV_MARK)
 
 
 GATEWAY_KEY = "ls-gateway-secret-7777"
@@ -374,11 +298,11 @@ def test_the_gateways_key_is_removed_from_a_failed_run_and_a_failed_test(
     debugged = [str(data) for kind, data in events if kind == "debug"]
     assert any("is not allowed" in text for text in debugged)
     assert any("is not allowed" in text for text in in_threads)
-    nowhere(seen.texts, GATEWAY_MARK)
-    nowhere(in_threads, GATEWAY_MARK)
+    no_key(seen.texts, GATEWAY_MARK)
+    no_key(in_threads, GATEWAY_MARK)
     logged = [caplog.handler.format(record) for record in caplog.records]
     assert any("model error" in line and REDACTED in line for line in logged)
-    nowhere(logged, GATEWAY_MARK)
+    no_key(logged, GATEWAY_MARK)
 
 
 @pytest.mark.parametrize(
