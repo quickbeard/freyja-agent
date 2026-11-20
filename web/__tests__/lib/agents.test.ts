@@ -6,6 +6,7 @@ import {
   type AgentCheck,
   type AgentList,
   addAgent,
+  agentInWords,
   changeAgent,
   checkAgent,
   downAgents,
@@ -101,6 +102,31 @@ describe("downAgents", () => {
     };
     expect(downAgents(list)).toEqual([]);
     expect(downAgents({ agents: [], limit: 20, unusable: 0 })).toEqual([]);
+  });
+});
+
+describe("agentInWords", () => {
+  it("words a saved agent as a confirmation shows it", () => {
+    const shown = {
+      name: "stub",
+      url: "http://127.0.0.1:9998",
+      approval: "none",
+      state: "not_tried",
+      pending_tasks: 1,
+    } as Agent;
+    expect(agentInWords(shown)).toBe(
+      "stub, at http://127.0.0.1:9998, runs without approval, not tried yet, 1 pending task.",
+    );
+    expect(
+      agentInWords({
+        ...shown,
+        approval: "required",
+        state: "not_in_use",
+        pending_tasks: 0,
+      }),
+    ).toBe(
+      "stub, at http://127.0.0.1:9998, requires approval, not in use, 0 pending tasks.",
+    );
   });
 });
 

@@ -14,11 +14,11 @@ refuse a message proposed for another agent.
 
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from deepagents.middleware._utils import append_to_system_message
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool, ToolException
 from langgraph.config import get_config
 from pydantic import BaseModel, ConfigDict, Field
@@ -37,6 +37,10 @@ PENDING_HEADER = (
 NO_TASKS = "This thread has no agent tasks."
 # How much of a task's message the check repeats, so the model can tell tasks apart.
 MESSAGE_PREVIEW = 200
+# The key of a run's configuration that holds, in a resume, what the person decided: the
+# namespace of the approval gate whose interrupt the resume answers, and the calls of that
+# interrupt they approved or edited (``run_stream``, ``decided_calls``; 005 FR-022).
+RESUME_KEY = "freyja_resume"
 
 
 def _thread_id() -> str | None:
@@ -141,6 +145,78 @@ class AgentTasksMiddleware(AgentMiddleware):
             if call.get("id") and (tool := self.agent_tools.get(call["name"])) is not None
         ]
         await self.store.replace_calls(thread_id, _namespace(), calls)
+
+    async def aafter_model(self, state: Any, runtime: Any) -> dict[str, Any] | None:
+        """Record which proposed calls of an agent's tools a person approved or edited.
+
+        This hook runs right after the approval gate's own, in the same graph: the gate's
+        middleware comes later in the list, and hooks after the model run in reverse order.
+        A resume answers one interrupt, of one gate, and the run's configuration holds under
+        ``RESUME_KEY`` that gate's namespace, the ids of the calls of the reply it paused on,
+        and the calls of the interrupt the person approved or edited, by name and arguments
+        as they were shown. A call is recorded as decided only when it is a call of that
+        reply and one of those, each matched once and in order, and the gate did not answer
+        it with a message of its own, as it answers a rejection (005 FR-022). A later reply
+        of the same resume, in the same namespace, is another reply, whatever it proposes:
+        only the first run of this step in that namespace records anything.
+
+        Nothing about the build or the gate is taken for a decision. The gate's step may
+        have completed in an earlier run, under another configuration, and be reused by
+        this one: a retried resume reuses it, and a background retry carries no decision
+        at all. A call the person was not shown is not decided, whatever this build's gate
+        would ask. In a resume, another namespace is another gate's: a sibling subagent is
+        continued by the same resume, and nobody decided its calls.
+        """
+        del runtime  # named by the framework, which passes it by that name; nothing is read
+        decision = get_config().get("configurable", {}).get(RESUME_KEY)
+        if not isinstance(decision, Mapping) or decision.get("namespace") != _namespace():
+            return None
+        # Only the first time this step runs in that namespace in the resume, which is right
+        # after the gate the resume answers: a later reply of the resume is another reply,
+        # also when a model gives its calls the same ids again. The list is the run's own,
+        # shared by every step and segment of it.
+        seen = decision.get("seen")
+        if not isinstance(seen, list) or _namespace() in seen:
+            return None
+        seen.append(_namespace())
+        thread_id = _thread_id()
+        messages = list(state.get("messages") or []) if isinstance(state, Mapping) else []
+        index = next(
+            (i for i in range(len(messages) - 1, -1, -1) if isinstance(messages[i], AIMessage)),
+            None,
+        )
+        if thread_id is None or index is None:
+            return None
+        answered = {
+            message.tool_call_id
+            for message in messages[index + 1 :]
+            if isinstance(message, ToolMessage)
+        }
+        shown = [
+            (str(action.get("name")), action.get("args"))
+            for action in decision.get("approved") or []
+            if isinstance(action, Mapping)
+        ]
+        # The calls of the reply the gate paused on, by id: a later reply of this resume
+        # in the same namespace may propose the same message again, unasked.
+        paused = set(decision.get("calls") or [])
+        decided = []
+        for call in messages[index].tool_calls:
+            if (
+                not call.get("id")
+                or call["id"] not in paused
+                or call["id"] in answered
+                or call["name"] not in self.agent_tools
+            ):
+                continue
+            key = (call["name"], call["args"])
+            if key in shown:
+                shown.remove(key)
+                decided.append(call["id"])
+        if decided:
+            # Not caught: a decision that could not be recorded leaves the call unsent.
+            await self.store.mark_decided(thread_id, _namespace(), decided)
+        return None
 
 
 class CheckArgs(BaseModel):

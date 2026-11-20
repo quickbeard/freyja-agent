@@ -21,7 +21,7 @@ from typing import Any
 
 from fastapi import HTTPException
 from jsonschema.validators import validator_for
-from langgraph.types import Command
+from langgraph.types import Command, Interrupt
 from pydantic import BaseModel, ValidationError
 from referencing import Registry
 from referencing.exceptions import NoSuchResource
@@ -99,6 +99,51 @@ def build_resume_command(
         else:
             payload.append(_edit(decision, tool, index, request.get("args") or {}))
     return Command(resume={pending["interrupt_id"]: {"decisions": payload}})
+
+
+def decided_calls(
+    tasks: Sequence[Any], interrupt: Any, decisions: Sequence[AnyDecision]
+) -> dict[str, Any] | None:
+    """What a resume tells the step after the gate (``AgentTasksMiddleware``; 005 FR-022).
+
+    The namespace of the gate whose interrupt the resume answers, and the calls of that
+    interrupt the person approved or edited, by name and arguments as the interrupt holds
+    them, which is how they were shown. The resume route adds the ids of the paused reply's
+    calls (``calls``). None when no paused task holds the interrupt; nothing is then
+    recorded as decided.
+    """
+    namespace = decided_namespace(tasks, interrupt.id)
+    if namespace is None:
+        return None
+    value = interrupt.value if isinstance(interrupt.value, Mapping) else {}
+    requests = list(value.get("action_requests") or [])
+    approved = [
+        {"name": request.get("name"), "args": request.get("args")}
+        for request, decision in zip(requests, decisions, strict=False)
+        if isinstance(request, Mapping) and isinstance(decision, ApproveDecision | EditDecision)
+    ]
+    return {"namespace": namespace, "approved": approved}
+
+
+def decided_namespace(tasks: Sequence[Any], interrupt_id: str) -> str | None:
+    """The namespace of the graph whose approval gate raised the interrupt ``interrupt_id``.
+
+    It is the namespace a proposed call of that gate is kept under (``call_namespace``):
+    empty when the gate is the orchestrator's own, and the paused task's when the gate is a
+    subagent's, which runs inside that task. A resume marks as decided only the calls of
+    that namespace (005 FR-022): a sibling subagent that stopped between its gate and the
+    step after it is continued by the same resume, and nobody decided its calls.
+
+    An interrupt's id is made from the namespace that raised it, so the orchestrator's own
+    is known by its id. None when no paused task holds the interrupt; nothing is then
+    marked.
+    """
+    for task in tasks:
+        if not any(found.id == interrupt_id for found in task.interrupts):
+            continue
+        own = f"{task.name}:{task.id}"
+        return "" if Interrupt.from_ns(None, own).id == interrupt_id else own
+    return None
 
 
 def _not_allowed(name: str, decision: str, allowed: list[str], tool: CatalogTool | None) -> str:

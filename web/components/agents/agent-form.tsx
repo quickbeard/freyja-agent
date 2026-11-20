@@ -19,7 +19,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { type Agent, type Approval, addAgent, changeAgent } from "@/lib/agents";
+import {
+  type Agent,
+  type Approval,
+  addAgent,
+  agentInWords,
+  changeAgent,
+} from "@/lib/agents";
 import { ApiError, isGone } from "@/lib/api";
 
 type FieldName = "name" | "url";
@@ -58,18 +64,6 @@ const MEANS: Record<Approval, string> = {
   required:
     "Messages to this agent will require approval: Freyja sends it nothing until a person has approved the message.",
   none: "Messages to this agent will be sent without approval: no person sees them first.",
-};
-
-// An agent's state and choice as a confirmation words them, inside a sentence.
-const STATE_IN_WORDS: Record<Agent["state"], string> = {
-  reachable: "reachable",
-  unreachable: "unreachable",
-  not_tried: "not tried yet",
-  not_in_use: "not in use",
-};
-const CHOICE_IN_WORDS: Record<Approval, string> = {
-  required: "requires approval",
-  none: "runs without approval",
 };
 
 /**
@@ -214,9 +208,7 @@ function Confirmation({
           {fromList
             ? "As the list has it now:"
             : "The list cannot be read now. As it was when this form opened:"}{" "}
-          {listed.name}, at {listed.url}, {CHOICE_IN_WORDS[listed.approval]},{" "}
-          {STATE_IN_WORDS[listed.state]}, {listed.pending_tasks} pending{" "}
-          {listed.pending_tasks === 1 ? "task" : "tasks"}.
+          {agentInWords(listed)}
         </p>
       )}
     </div>

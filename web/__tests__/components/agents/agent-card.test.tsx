@@ -473,14 +473,15 @@ describe("AgentCard, checking", () => {
     expect(onChecked).not.toHaveBeenCalled();
   });
 
-  it("says the service cannot be reached when a check got no answer, and has the list read again", async () => {
+  it("says the outcome is not known when a check got no answer, and has the list read again", async () => {
     stubFetch({ fails: "Failed to fetch" });
     const onChecked = vi.fn();
     render(<AgentCard agent={STUB} onChecked={onChecked} />);
     check();
     const alert = await screen.findByRole("alert");
-    expect(alert.textContent).toContain(
-      "The Freyja service cannot be reached.",
+    // A check may record what it read, so it never says that it failed (FR-004).
+    expect(alert.textContent).toBe(
+      "The request got no answer, so it is not known whether the agent was checked. The list is being read again: it shows the agent as the service has it now.",
     );
     // Whether the check was carried out is not known: the list says what is so.
     expect(onChecked).toHaveBeenCalledTimes(1);

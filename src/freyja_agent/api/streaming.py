@@ -21,6 +21,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.types import Interrupt
 from sse_starlette import ServerSentEvent
 
+from freyja_agent.agent.agent_tasks import RESUME_KEY
 from freyja_agent.api.serialize import (
     interrupt_to_pending,
     message_to_dict,
@@ -211,6 +212,7 @@ async def run_stream(
     run_id: str,
     on_end: OnEnd | None = None,
     on_recorded: OnRecorded | None = None,
+    decided: dict[str, Any] | None = None,
 ) -> AsyncIterator[ServerSentEvent]:
     """Stream one run. The caller must already hold the lease for ``run_id``.
 
@@ -228,7 +230,12 @@ async def run_stream(
     """
     owner = lease_owner(runtime, run_id)
     settings = runtime.settings
-    config = {"configurable": {"thread_id": thread_id}, "recursion_limit": settings.max_steps}
+    configurable: dict[str, Any] = {"thread_id": thread_id}
+    if mode == "resume" and decided is not None:
+        # Only a resume carries a person's decisions: which gate they answer, and which of
+        # its calls the person approved or edited (``decided_calls``; 005 FR-022).
+        configurable[RESUME_KEY] = decided
+    config = {"configurable": configurable, "recursion_limit": settings.max_steps}
     stream_modes = ["updates", "messages", "custom"] + (["debug"] if debug else [])
 
     async def heartbeat() -> None:

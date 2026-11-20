@@ -463,6 +463,32 @@ async def test_a_call_is_deleted_alone_and_a_thread_s_calls_are_cleared_together
     await store.clear_calls("th-1")
 
 
+async def test_a_decision_is_recorded_on_the_calls_it_names_and_no_other(
+    store: AgentTaskStore,
+) -> None:
+    """A call is kept as undecided, and only ``mark_decided`` records that a person approved
+    or edited it (005 FR-022). A reply's replacement starts its calls undecided again."""
+    await store.replace_calls("th-1", "", [a_call("call-1"), a_call("call-2")])
+    await store.replace_calls("th-1", "tools:x", [a_call("call-1", namespace="tools:x")])
+    await store.replace_calls("th-2", "", [a_call("call-1", thread_id="th-2")])
+    assert [call.decided for call in await store.list_calls("th-1")] == [False, False, False]
+
+    # An id with no row stays without one, and an empty list changes nothing.
+    await store.mark_decided("th-1", "", ["call-1", "call-9"])
+    await store.mark_decided("th-1", "", [])
+
+    decided = {
+        (call.namespace, call.tool_call_id): call.decided for call in await store.list_calls("th-1")
+    }
+    assert decided == {("", "call-1"): True, ("", "call-2"): False, ("tools:x", "call-1"): False}
+    assert [call.decided for call in await store.list_calls("th-2")] == [False]
+    assert await store.get_call("th-1", "", "call-9") is None
+
+    await store.replace_calls("th-1", "", [a_call("call-1")])
+    again = await store.get_call("th-1", "", "call-1")
+    assert again is not None and again.decided is False
+
+
 @pytest.mark.parametrize(
     ("checkpoint_ns", "namespace"),
     [

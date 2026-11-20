@@ -21,6 +21,7 @@ import asyncio
 import logging
 from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field
+from urllib.parse import unquote, urlsplit
 
 from a2a.types import AgentCard
 
@@ -85,16 +86,40 @@ class AgentSet:
         return not self.read_only.get(link.name, False)
 
 
-def _destination(url: str) -> str | None:
-    """Where an environment agent's address leads, or None for a spelling the rule refuses.
+_DEFAULT_PORTS = {"http": 80, "https": 443}
 
-    An environment entry keeps its own rule and its own spelling (research R11), so one that
-    the saved form does not allow cannot be compared and matches no saved agent.
+
+def _destination(url: str) -> str | None:
+    """Where an environment agent's address leads, in the form ``destination`` gives.
+
+    An environment entry keeps its own rule and its own spelling (research R11), and may be
+    written in a way the saved form refuses: with a user name, a query, a fragment, or a
+    path that is encoded, doubled, or holds dot segments. Such an entry still leads to a
+    port and a path, and no saved agent may be where it leads (FR-006, FR-017). Its path is
+    therefore taken as a server would take it: decoded, without empty or ``.`` segments,
+    and with each ``..`` taking the segment before it away. When in doubt two addresses
+    lead to one place, which only ever refuses a saved agent. None only for an entry with
+    no port to compare.
     """
     try:
         return destination(canonical_address(url))
     except AddressError:
+        pass
+    try:
+        parts = urlsplit(url)
+        port = parts.port or _DEFAULT_PORTS.get(parts.scheme.lower())
+    except ValueError:
         return None
+    if port is None:
+        return None
+    segments: list[str] = []
+    for segment in unquote(parts.path).split("/"):
+        if segment == "..":
+            if segments:
+                segments.pop()
+        elif segment not in ("", "."):
+            segments.append(segment)
+    return f"{port}" + "".join(f"/{segment}" for segment in segments)
 
 
 class AgentRegistry:

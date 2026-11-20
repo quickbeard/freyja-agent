@@ -43,6 +43,11 @@ function Value({ label, children }: { label: string; children: string }) {
 }
 
 // What a warning says of each state it is about, in words (FR-001a).
+// A check reads the card and may record what it read, so a check that got no answer may or
+// may not have done so (FR-004).
+const NO_ANSWER =
+  "The request got no answer, so it is not known whether the agent was checked. The list is being read again: it shows the agent as the service has it now.";
+
 const DOWN = {
   unreachable: { badge: "Unreachable", says: "This agent cannot be reached." },
   not_in_use: { badge: "Not in use", says: "This agent is not in use." },
@@ -198,21 +203,20 @@ export function AgentCard({
       // The service says what is so now: its state, its time, and its card's details.
       onChecked?.();
     } catch (error) {
+      const noAnswer =
+        !(error instanceof ApiError) || error.code === "unreachable";
       if (isGone(error)) {
         onGone?.();
       } else if (
-        !(error instanceof ApiError) ||
-        error.code === "unreachable" ||
-        error.code === "agent_read_only"
+        noAnswer ||
+        (error instanceof ApiError && error.code === "agent_read_only")
       ) {
         // No answer came back, so whether the card was read is not known; or the service
         // says the agent is not in use, which this card does not show yet.
         onChecked?.();
       }
       setRefusal(
-        error instanceof ApiError
-          ? error.message
-          : "The agent could not be checked.",
+        noAnswer || !(error instanceof ApiError) ? NO_ANSWER : error.message,
       );
     } finally {
       inFlight.current = false;

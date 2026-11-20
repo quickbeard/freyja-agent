@@ -334,3 +334,52 @@ async def test_without_the_column_setup_gives_up_at_the_lock_timeout_and_names_t
     await PostgresAgentTaskStore(pools[0]).setup()
     cursor = await earlier_database.execute(HAS_COLUMN)
     assert (await cursor.fetchone()) == (1,)
+
+
+# The column ``decided``, on the table of proposed calls that 005's fifth phase created
+# without it (005 FR-022, Phase 11).
+
+CALLS_BEFORE_DECIDED = """
+    CREATE TABLE freyja_agent_calls (
+        thread_id    text NOT NULL,
+        namespace    text NOT NULL,
+        tool_call_id text NOT NULL,
+        agent        text NOT NULL,
+        agent_id     text,
+        gated        boolean NOT NULL,
+        proposed_at  timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (thread_id, namespace, tool_call_id)
+    )
+"""
+AN_EARLIER_CALL = (
+    "INSERT INTO freyja_agent_calls (thread_id, namespace, tool_call_id, agent, agent_id, gated)"
+    " VALUES ('th-1', '', 'call-1', 'stub', NULL, true)"
+)
+HAS_DECIDED = (
+    "SELECT count(*) FROM information_schema.columns"
+    " WHERE table_name = 'freyja_agent_calls' AND column_name = 'decided'"
+)
+
+
+async def test_the_decided_column_is_added_and_an_earlier_call_counts_as_undecided(
+    pools: list, settings: Settings
+) -> None:
+    async with await psycopg.AsyncConnection.connect(
+        settings.database_uri, autocommit=True
+    ) as conn:
+        await conn.execute(CALLS_BEFORE_DECIDED)
+        await conn.execute(AN_EARLIER_CALL)
+        cursor = await conn.execute(HAS_DECIDED)
+        assert (await cursor.fetchone()) == (0,)
+        store = PostgresAgentTaskStore(pools[0])
+        await store.setup()
+        cursor = await conn.execute(HAS_DECIDED)
+        assert (await cursor.fetchone()) == (1,)
+    # A call proposed before the column existed was decided by nobody the store knows of,
+    # so no gated tool sends it.
+    earlier = await store.get_call("th-1", "", "call-1")
+    assert earlier is not None and earlier.decided is False
+    await store.mark_decided("th-1", "", ["call-1"])
+    marked = await store.get_call("th-1", "", "call-1")
+    assert marked is not None and marked.decided is True
+    await store.setup()

@@ -188,3 +188,24 @@ export function downAgents(list: AgentList): Agent[] {
     (agent) => agent.state === "unreachable" || agent.state === "not_in_use",
   );
 }
+
+// An agent's state and choice as a confirmation words them, inside a sentence.
+const STATE_IN_WORDS: Record<Agent["state"], string> = {
+  reachable: "reachable",
+  unreachable: "unreachable",
+  not_tried: "not tried yet",
+  not_in_use: "not in use",
+};
+const CHOICE_IN_WORDS: Record<Approval, string> = {
+  required: "requires approval",
+  none: "runs without approval",
+};
+
+/**
+ * A saved agent as a confirmation shows it (FR-011): its name, its address, its approval
+ * choice, its state, and how many of its tasks are pending.
+ */
+export function agentInWords(agent: Agent): string {
+  const tasks = agent.pending_tasks === 1 ? "task" : "tasks";
+  return `${agent.name}, at ${agent.url}, ${CHOICE_IN_WORDS[agent.approval]}, ${STATE_IN_WORDS[agent.state]}, ${agent.pending_tasks} pending ${tasks}.`;
+}
