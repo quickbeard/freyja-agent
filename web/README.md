@@ -1,8 +1,8 @@
 # Freyja web console
 
-The console of [Freyja](../README.md): a [Next.js](https://nextjs.org) app that shows and changes the service's configuration through the service's API. It is a client of that API and nothing more. It holds no key for a model or an agent, calls neither itself, and decides nothing the orchestrator does.
+The console of [Freyja](../README.md): a [Next.js](https://nextjs.org) app through which a person changes the service's configuration, hands Freyja tasks, and decides the actions that need approval, all through the service's API. It is a client of that API and nothing more. It holds no key for a model or an agent, calls neither itself, and decides nothing the orchestrator does.
 
-Like the API, the console has no authentication: whoever can reach it can change the service's configuration.
+Like the API, the console has no authentication, and it has no users: whoever can reach it can change the service's configuration, sees every task, and can decide every proposal. Nothing records who decided.
 
 ## Setup
 
@@ -50,11 +50,11 @@ The variable has no `NEXT_PUBLIC_` prefix, because the browser never learns the 
 - `components/`: `app-sidebar.tsx`, the LLM section under `llm/` (the list, the card, the form that adds or changes a profile, the confirmations before a profile is activated or deleted, and how a test's result is shown), and the Agents section under `agents/` (the list, the card with its Check, how a check's result is shown, the warning above the cards, the form that adds an agent or changes a saved agent's address and approval choice, with the confirmation it asks for first, and the dialog that removes one), and the Tasks section under `tasks/` (the list of tasks, New task, a task's view, a message, the status, the box that sends text, the proposal card, which offers each action the decisions the service allows and sends them through `decide` in `lib/tasks.ts`, the follow-up box, which sends another message on a task and cannot be sent while a run is in progress or a proposal is pending, the list of a task's agent tasks, and Stop, a button outside any form, which asks the service to stop a run the console started through `stopRun` in `lib/tasks.ts` and says in words that the run is stopping until the service says it has ended). A task's view reads its task again by a timer of its own: every five seconds while a run it does not read is in progress, and every fifteen while an agent task is pending or its outcome is not yet in the conversation. The sidebar reads the list of agents too, under the same key as the section, and shows how many cannot be used; it reads the list of tasks under the key the Tasks section reads it under, and shows how many tasks need a decision. Both lists of tasks are read again every fifteen seconds by a timer of their own (`hooks/use-every.ts`), which goes on past a reading that failed, where SWR's `refreshInterval` would stop.
 - `components/ui/`: the [shadcn/ui](https://ui.shadcn.com) components, generated and not edited by hand. `components.json` is shadcn's configuration.
 - `lib/`: `api.ts` is the one place that calls the service, always through `/api`: `api` for an answer of JSON, `stream` for a run's events, and their error type `ApiError`. `llm.ts`, `agents.ts`, and `tasks.ts` hold the types and the calls of their sections; `tasks.ts` also reads a run's events as they arrive. `task-runs.ts` holds the runs this browser tab started, so that a run begun from the list's page is shown on the task's page as it arrives; nothing is stored, and a reload forgets it. `utils.ts` is the `cn` helper.
-- `hooks/`: `use-mobile.ts`, the sidebar's width check.
+- `hooks/`: `use-mobile.ts`, the sidebar's width check, and `use-every.ts`, the timer the list of tasks is read again by.
 - `__tests__/`: the unit tests. `e2e/`: the end-to-end tests.
 - `next.config.ts`: the configuration above, the `/api` forwarding, the redirect, and the frame headers.
 
-Lists are read in the browser with [SWR](https://swr.vercel.app), in Client Components. A read that fails is shown with a way to try again, and is not retried on its own.
+Lists are read in the browser with [SWR](https://swr.vercel.app), in Client Components. A read that fails is shown with a way to try again, and is not retried on its own, apart from the list of tasks and a task that is followed, which are read again on their timers.
 
 To add a shadcn/ui component, generate it and then format it; three lint rules the generated code does not meet are off for `components/ui/` only (`biome.json`).
 
@@ -83,7 +83,7 @@ pnpm test                      # vitest run
 pnpm test:coverage             # with coverage; fails below the thresholds
 ```
 
-They are `*.test.ts` and `*.test.tsx` files under `__tests__/`, which follows the layout of the code it covers: `__tests__/lib/api.test.ts` covers `lib/api.ts`. No test file sits beside the code. The tests reach no service: `__tests__/testing.ts` replaces `fetch`.
+They are `*.test.ts` and `*.test.tsx` files under `__tests__/`, which follows the layout of the code it covers: `__tests__/lib/api.test.ts` covers `lib/api.ts`. No test file sits beside the code. The tests reach no service: `__tests__/testing.ts` replaces `fetch`, and `__tests__/tasks-testing.ts` does the same for the Tasks section's tests, answering by the path asked for, with a run's stream built from its events.
 
 `pnpm test:coverage` holds the suite to the four thresholds in `vitest.config.mts`, 90% each of statements, branches, functions, and lines. Everything under `app/`, `components/`, `hooks/`, and `lib/` is counted, and `next.config.ts` with it, apart from `components/ui/`. The commit hook and CI run the suite this way; `pnpm test` measures nothing, so a run of one file is not held to the suite's numbers.
 
