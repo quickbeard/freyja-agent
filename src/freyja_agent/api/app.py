@@ -5,6 +5,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 
 from freyja_agent.api.agents import router as agents_router
+from freyja_agent.api.hosts import AllowedHosts
 from freyja_agent.api.llm import router as llm_router
 from freyja_agent.api.thread_index import router as thread_index_router
 from freyja_agent.api.threads import router as threads_router
@@ -49,6 +50,9 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
             yield
 
     app = FastAPI(title="Freyja Orchestrator", lifespan=lifespan)
+    # Before any route: a request made for a host name the deployment does not list is
+    # refused, a request that only reads included (api/hosts.py).
+    app.add_middleware(AllowedHosts, names=settings.allowed_hosts)
 
     app.include_router(threads_router)
     # Feature 007: the list of threads, beside the routes that run them.

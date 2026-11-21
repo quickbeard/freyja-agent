@@ -15,6 +15,10 @@ import pytest
 # Settings has no default for the database URI. Give the suite one before any test
 # imports the app; no database is contacted.
 os.environ.setdefault("FREYJA_DATABASE_URI", "postgresql://localhost:5432/freyja_test")
+# FastAPI's test client asks for the host ``testserver``, a name the service answers for
+# only when it is listed (api/hosts.py). Set, not defaulted: a list the environment already
+# holds, as when the suite is run with ``--env-file .env``, would refuse every request.
+os.environ["FREYJA_ALLOWED_HOSTS"] = '["testserver"]'
 
 from cryptography.fernet import Fernet
 from fastapi import FastAPI

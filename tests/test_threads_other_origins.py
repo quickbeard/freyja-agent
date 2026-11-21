@@ -14,7 +14,9 @@ fails this file.
 Not covered, here or by the rule: a request that reaches the service under a name an
 attacker controls (DNS rebinding). The browser then calls the page's origin and the host it
 asked for by the same name, and the rule has nothing to tell them apart by. Feature 004
-left that open on purpose, and features 005 and 007 record that they inherit it.
+left that open on purpose, and features 005 and 007 recorded that they inherit it. Such a
+request is refused by the name it is made for, before any route (``api/hosts.py``), which
+``tests/test_allowed_hosts.py`` covers.
 """
 
 import json
