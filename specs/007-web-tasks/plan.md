@@ -881,6 +881,133 @@ request go; the service refused that one too. The database was dropped afterward
 
 **Left for later**: DNS rebinding, above; and Phase 10 (polish).
 
+### Phase 10 as built (2026-11-21)
+
+The polish. No code of the service or the console changed.
+
+**The quickstart, walked from its first section to its last (T073)** on a check instance on
+port 8020 with a database of its own, the stand-in agent on 9978, and the console on 3020,
+driven by a script in a real Chromium. The model was a scripted endpoint of the walk's own,
+kept outside the repository: OpenAI chat completions, answering by what the last message
+says, with a call of `send_notification`, a hand-off to the stand-in agent, eight calls of
+`ls` one a step, or text. `tests/llm_stub.py` answers in text only and is feature 004's;
+no provider's key was used, as the hand checks' rule asks. Every section did what the
+quickstart says, apart from five places, which are corrected in it:
+
+- **No usable model** (section 1). A profile that is not usable cannot be activated; the
+  service answers 409. The state arises when the active profile stops being usable. The
+  walk made it by starting the service with another `FREYJA_SECRET_KEY`: the profile read
+  active and `key_unreadable`, a new task's page said that the run failed because no usable
+  model is active, pointed to the LLM section, and offered the text again, no thread was
+  listed, and after the first key was back the same text, sent again, ran.
+- **A proposal decided in another window** (section 2): the second window says that nothing
+  is pending any more. "No longer the pending one" is said when another proposal has taken
+  its place.
+- **Text that is not JSON** (section 2): the button that would send it cannot be pressed.
+- **An agent task** (section 4) is listed when the run that handed the work over has ended,
+  thirty seconds after the approval, which is the limit of one hand-off; the outcome was in
+  the conversation 61 seconds after the approval, without a reload: forty seconds of the
+  agent's, up to ten until the service looks, the service's run, and up to fifteen until
+  the page reads. The quickstart said "about forty seconds".
+- **Stop** (section 5): pressed during a reply that asked for an action, it left that reply
+  as the last entry and the action not run, which is "the step under way completes, and no
+  further step starts". The quickstart said the step is there "with its result". Two of the
+  script's eight steps had run; four seconds later the service held the same six messages;
+  `Go on.` continued the task. The quickstart also gained what the page says when a run
+  ends by itself before the stop takes effect, and section 6 the frame headers.
+
+What the walk saw besides: the reply growing while the run was in progress (the
+conversation's length at six readings: 72, 121, 121, 168, 273, 273 characters); approve,
+edit, and reject with the log line as proposed, as edited, and none; the service's refusal
+of arguments that lack one beside the edit, which kept its text; the sidebar's number on
+another section, gone when the proposal was decided; with the service stopped, "cannot be
+reached" after 15 seconds with no row and no number, and the list back by itself once the
+service was; a follow-up answered from the earlier conversation; a tab closed at once and
+the task found done half a minute later; `no_run`, `not_stoppable`, `other_origin`, and 422
+from the commands; and a stream through the console that came in nine pieces over a second
+and a half, with `no-transform` and no content encoding.
+
+**The two timings no test makes** (SC-001, SC-009): the page said that a run had started
+475 ms after Send; with 100 tasks the section showed its 100 rows 182, 185, and 167 ms
+after the page was asked for, and `GET /threads` alone took 24 ms. Both on the machine the
+service ran on, against a model that answers at once.
+
+**One thing the walk taught about the tests**: after a move inside the console, as from the
+list to a task, the page that was left stayed in the document, hidden; this was seen with
+the development server. A locator that looks for a status by its text then finds two, and
+the walk's own script had to look at what is visible. The end-to-end specs pass as they
+are, against the built app; one that goes from a list with rows to a task and finds a
+status twice has met this.
+
+**The documents read against the code (T074).** `web/README.md` still opened by calling
+the console an app that shows and changes configuration, and did not say that it has no
+users: both corrected. The README said that the console "is getting" a Tasks section, and
+`AGENTS.md` spoke of phases in two places and described "stopping" as Phase 8 first built
+it: corrected. Named now: `web/__tests__/tasks-testing.ts` and
+`tests/unattended_helpers.py`, the two helpers the feature's tests share. Single test
+files are not named in the Layout, for this feature as for the others.
+
+**Coverage (T075).** Neither floor is changed: both files are the owner's to change.
+
+| | At the start (T001) | Now | Floor |
+|---|---|---|---|
+| Service, lines, as CI measures | 91.25% (1,437 tests) | 91.27% (1,728 tests) | 88% |
+| Web, statements | 97.44% (419 tests) | 97.86% (617 tests) | 90% |
+| Web, branches | 95.33% | 94.62% | 90% |
+| Web, functions | 97.32% | 98.21% | 90% |
+| Web, lines | 98.34% | 98.33% | 90% |
+
+The web app's branches fell by 0.7 of a point over the feature: the task's view has many
+conditions, and not every combination of a failed reading with each state has a test. The
+service's number hides what CI does not run: `runtime/thread_index.py` stands at 86.17% as
+CI measures it, 39 lines missed, 35 of them the Postgres index's statements. With the
+opt-in Postgres tests the file is at 98.58% and the whole service at 96.84% (1,855 tests);
+the Postgres index alone is 0.6 of a point of the service's number.
+
+**What T076 asked to say.** Both are settled, by others or earlier:
+
+- The three proofs that no key and no address gets out were joined while this feature was
+  built, by the other session's pull request #117: they share their tools in
+  `tests/nowhere.py`, and `tests/test_thread_index_nowhere.py` imports them from there.
+- The automated browser proof that a stream arrives as it is produced was answered with
+  yes after Phase 3 and built in Phase 4 (`web/e2e/stream.spec.ts`), with the change to
+  `web/playwright.config.ts` it needed.
+
+**Every gate once more (T077)**, on this branch: the commit hook over all files; the
+end-to-end suite, 270 tests in Chromium and Firefox; the opt-in Postgres tests against
+`freyja_test_tasks`, 1,855 tests with the rest of the suite; Semgrep, no finding; Trivy,
+nothing of HIGH or CRITICAL severity.
+
+**Read by a reviewer that had not written it**, against the code. It found nine sentences
+to correct, three of them written in this phase: the quickstart said that a reply which
+asks for an action is left as the last entry by a stop, which holds only for an action
+that needs no approval, since a run pauses on a proposal before a stop is looked at; it
+told the person to activate a usable profile once the first key is back, where there is
+nothing to activate; and its two-windows step cannot be followed by hand as written, since
+a window that is given the focus reads its task again. Six were in sentences of earlier
+phases: `web/README.md` on a failed reading that is "not retried", its opening sentence,
+and its `hooks/` entry; the quickstart's prerequisites, which lacked `FREYJA_SECRET_KEY`;
+`AGENTS.md` on what the proposal card checks; and the README on `not_stoppable`, which a
+console run also gets in the moment before its first event. All nine are corrected. No
+test is added: the change is documentation.
+
+**Open at the end of the feature**, each recorded where it arose:
+
+- DNS rebinding is not covered by the refusal of other origins (Phase 9; the owner's to
+  decide, for the LLM and Agents routes as well).
+- A page that follows a run by reading cannot tell a stop that came too late from a stopped
+  run followed by another run: the row names no run (Phase 8).
+- `api()` in `web/lib/api.ts` has no time limit, so a reading that hangs is never a failure
+  (Phase 6).
+- No browser test presses Stop on a page that is reading the run's stream (Phase 8).
+- `web/e2e/console.spec.ts` has a frame test that passes when the frame's request never
+  leaves the browser, and the service's own pages carry no frame headers (Phase 9).
+- One reading of the list costs a lease read per row (Phase 2).
+- The stand-in model gives every reply the same id (Phase 7); a model that can ask for
+  tools would let the quickstart be walked without a script of its own (this phase).
+
+The next step is `/speckit-converge`.
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

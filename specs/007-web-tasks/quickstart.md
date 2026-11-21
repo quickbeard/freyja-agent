@@ -18,7 +18,8 @@ not hand work to: an action that is approved here really runs.
   (`tests/llm_stub.py`) answers in text only.
 - Node 20.9 or newer and `pnpm`, for the web app.
 - `curl` and `jq`.
-- `.env` with no `FREYJA_A2A_AGENTS` and no `FREYJA_MCP_SERVERS` to begin with.
+- `.env` with no `FREYJA_A2A_AGENTS` and no `FREYJA_MCP_SERVERS` to begin with, and with
+  `FREYJA_SECRET_KEY` set, for the profile section 1 saves.
 
 ## Setup
 
@@ -56,10 +57,14 @@ curl -s localhost:8000/threads | jq '{needs_decision, total, threads: [.threads[
 Reload the page: the same conversation. Text is shown as text: a reply that holds markup or a
 link shows its characters and nothing to click.
 
-Without a usable model: in the LLM section, activate a profile that is not usable, then send
-a new task. The page says that no usable model is active and points to the LLM section, the
-text is still in the box, and `GET /threads` lists no new thread. Activate the usable profile
-again.
+Without a usable model. A profile that is not usable cannot be activated; the state arises
+when the active profile stops being usable, as when the key it was saved with can no longer
+be read. To see it: save a profile in the LLM section and activate it, then start the
+service again with another `FREYJA_SECRET_KEY`. The LLM section shows the profile as active
+and not usable. Send a new task: its page says that the run failed because no usable model
+is active, points to the LLM section, and offers the text again in a box with Send again;
+`GET /threads` lists no new thread. Start the service with the first key again: the profile
+is usable once more, with nothing to activate. Press Send again: the task runs.
 
 ## 2. Decide an action (User Story 2)
 
@@ -79,9 +84,16 @@ Refusals, each of which leaves the proposal in place:
 
 - Edit the arguments to `{"channel": "#ops"}`, which lacks `message`: the service's reason is
   shown beside the box, which keeps the text.
-- Edit them to text that is not JSON: the page does not send it.
-- Open a paused task in two windows, approve in one, then approve in the other: the second
-  says the proposal is no longer the pending one and shows the task as it is.
+- Edit them to text that is not JSON: the button that would send it cannot be pressed, and
+  the page says that the text is not valid JSON.
+- Open a paused task in two windows and approve in one. A window that is given the focus
+  reads its task again and then shows no card, so to send the second decision from a page
+  that still shows the card, press its Approve as the first thing in the other window, or
+  send the decision with curl. The second decision changes nothing: the page says that
+  nothing is pending on the task any more, since the proposal was decided elsewhere, and
+  shows the task as it is. While the first window's continuation is still in progress it
+  says that a run is in progress and the decision was not applied, and when another
+  proposal has taken the first one's place, that the proposal is no longer the pending one.
 
 Pressing Enter in the edit box, or in the reason, sends no decision.
 
@@ -122,12 +134,18 @@ uv run python -m tests.a2a_stub --http 9998 --name stub
 ```
 
 Add it in the Agents section as `stub` at `http://127.0.0.1:9998`. Send the task
-`Hand this to the stub agent: slow 40`, and approve the hand-off.
+`Hand this to the stub agent: slow 40`, and approve the hand-off, whose card says that it
+is sent to the agent `stub`.
 
-- The task's page lists one agent task for `stub`, pending, with the message it was started
-  with. In the list the task is "Waiting for an agent".
-- About forty seconds later, without a reload, the conversation shows the outcome and the
-  agent task as completed.
+- The run waits for the agent for thirty seconds, the limit of one hand-off
+  (`FREYJA_A2A_CALL_TIMEOUT_SECONDS`), and then ends. From then on the task's page lists one
+  agent task for `stub`, pending, with the message it was started with, and says that it
+  reads the task again every fifteen seconds. The task's status, on its page and in the
+  list, is "Waiting for an agent".
+- About a minute after the approval, without a reload, the conversation shows the outcome
+  and the agent task as completed: the agent takes forty seconds, the service looks every
+  ten (`FREYJA_A2A_POLL_INTERVAL_SECONDS`) and records the outcome in a run of its own, and
+  the page reads every fifteen.
 
 ## 5. Leave, come back, stop (User Story 5)
 
@@ -146,7 +164,14 @@ Stop. Send a task that takes many steps, such as
 press Stop while it runs.
 
 - The page says the run is stopping, then shows the task as stopped. The step that was under
-  way is in the conversation with its result; nothing after it ran.
+  way is in the conversation: a reply of Freyja's as it was written, or the actions of one
+  round with their results. Nothing after it ran. When the step under way was a reply that
+  asks for an action that needs no approval, that reply is the last entry and the action
+  did not run.
+- When the run ends by itself before the stop takes effect, the task is shown as it ended,
+  never as stopped, and the page says that the run ended before the stop took effect. A run
+  ends so when the reply under way asks for nothing more, when it asks for an action that
+  needs approval, on whose proposal the run pauses, and when it fails.
 - The follow-up box can be used: `Go on.` continues the task.
 
 ```bash
@@ -169,7 +194,13 @@ curl -s -X POST localhost:8000/threads/x1/runs -H 'sec-fetch-site: cross-site' \
 curl -s -o /dev/null -w '%{http_code}\n' -X POST localhost:8000/threads/x1/runs \
   -H 'content-type: text/plain' -d '{"message": "hi"}'
 # 422: a body that is not sent as JSON
+curl -sI localhost:3000/tasks | grep -i 'content-security-policy\|x-frame-options'
+# frame-ancestors 'none' and DENY: no page of another origin can show the section in a frame
 ```
+
+The same is refused when it is sent through the console's address, `localhost:3000/api/...`,
+by a page of another origin. Not covered: a page that reaches the service or the console
+under a name its own author controls (DNS rebinding); see the spec's Assumptions.
 
 ## 7. The stream through the console (research R1)
 

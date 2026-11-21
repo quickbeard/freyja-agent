@@ -198,8 +198,8 @@ startup and exits with an error naming the connection when it is unreachable.
   that run's lease owner, and one made from a reading of a thread's state names the number
   of runs the row had; either changes nothing once the row has moved on. Whether a run is in
   progress is the lease's to say, never the row's. Text is cleaned of what a text column
-  does not take before it is kept. `unattended.py` is the console's runs (feature 007, Phase
-  3): `UnattendedRuns` drives a run that goes on without a reader in a task of its own,
+  does not take before it is kept. `unattended.py` is the console's runs (feature
+  007): `UnattendedRuns` drives a run that goes on without a reader in a task of its own,
   hands each event to its reader and disconnects one that falls `READER_BACKLOG` events
   behind, notes in the index how the run ended (`failed` with its error, or `stopped`), and
   at shutdown (`close`) asks each run to stop at its next boundary and waits for it;
@@ -285,14 +285,15 @@ startup and exits with an error naming the connection when it is unreachable.
   (`useRun`); nothing is stored. The list of tasks and the sidebar's number of tasks that
   need a decision are one reading of `GET /threads` under `THREADS_KEY`, read again every
   `LIST_SECONDS` by `web/hooks/use-every.ts`, a timer that goes on past a reading that
-  failed, and at once by a task's view when a run it shows ends. From this phase on every
-  page asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
+  failed, and at once by a task's view when a run it shows ends. So every page of the
+  console asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
   the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
   run as it streams and the service's conversation once it ended, a message
   (`message.tsx`), the status in words (`status.tsx`), and the proposal card
   (`proposal-card.tsx`), which offers each proposed action only the decisions the service
   lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
-  no more than that edited arguments are a JSON object (`parseArguments`), and has its
+  no more than that edited arguments are a JSON object (`parseArguments`) and that a
+  reason is within the service's length, and has its
   buttons outside any form, so that Enter in a field sends no decision. It also holds the
   follow-up box (`follow-up.tsx`), which sends another message on a task through the same
   `send-box.tsx` and is given why it cannot be sent, a run in progress or a pending
@@ -303,9 +304,10 @@ startup and exits with an error naming the connection when it is unreachable.
   Stop (`stop-button.tsx`) is offered by the view for a run the console started that is in
   progress: a run of this tab once its `start` event arrived, and a run it follows when the
   row says `stoppable`. It sends `stopRun` on a press, never otherwise; the view says
-  "stopping" until a reading of the row made after the stop says how the run ended, shows a
-  task as stopped only when the row does, and says that the stop came too late when the run
-  ended another way (FR-022a).
+  "stopping" until it learns how the run ended, from the run's last event when it reads the
+  stream and otherwise from a reading of the row made after the stop, shows a task as
+  stopped only when the row does, and says that the stop came too late when the run ended
+  another way (FR-022a).
   All text of a task is put in
   text nodes and never rendered as markup. The console has no users, and the section says
   so above its list.
@@ -322,7 +324,8 @@ startup and exits with an error naming the connection when it is unreachable.
   its server forwards `/api/...`, documented in `web/.env.example`; it also holds the redirect. Unit
   tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of
   the code it covers (`web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`), run by Vitest with
-  jsdom; `web/__tests__/testing.ts` stubs `fetch` for them. No test file sits beside the code.
+  jsdom; `web/__tests__/testing.ts` stubs `fetch` for them, and `web/__tests__/tasks-testing.ts`
+  for the Tasks section's tests, with runs' streams built from events. No test file sits beside the code.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
@@ -386,7 +389,9 @@ startup and exits with an error naming the connection when it is unreachable.
   receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
   records every message and cancel and behaves by a keyword at the start of the message;
   `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams
-  its replies as they are sent; `integration/` holds the Postgres tests, skipped unless
+  its replies as they are sent; `unattended_helpers.py` what the tests of the console's runs
+  share (a tool step a test holds open, a stream read in a thread of its own);
+  `integration/` holds the Postgres tests, skipped unless
   `FREYJA_TEST_DATABASE_URI` is set.
 - `.specify/`: Spec Kit templates, scripts, installed extensions, and the constitution. Feature
   artifacts go under `specs/<NNN-slug>/` as `spec.md`, `plan.md`, and `tasks.md`.
