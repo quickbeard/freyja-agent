@@ -34,6 +34,8 @@ const stops: {
 }[] = [];
 const one = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value;
+// The `Host` each such request reached the stand-in with, by the thread it named.
+const hosts = new Map<string, string | undefined>();
 
 test.describe.configure({ mode: "serial" });
 
@@ -54,6 +56,7 @@ test.beforeAll(async () => {
     }
     const stop = path.match(/^\/threads\/([^/]+)\/stop$/);
     if (request.method === "POST" && stop !== null) {
+      hosts.set(stop[1], one(request.headers.host));
       stops.push({
         thread: stop[1],
         origin: one(request.headers.origin),
@@ -182,4 +185,34 @@ test("the console's forwarding passes on what a browser says of a request, its o
   expect(theirs?.origin).toBe(otherOrigin);
   expect(theirs?.asked).toBe(asked);
   expect(new URL(theirs?.origin ?? "").host).not.toBe(theirs?.asked);
+});
+
+// The service also refuses a request made for a host name it does not answer for
+// (api/hosts.py): it reads `Host`, and the name the console was asked under. A page whose
+// own name was pointed at this machine (DNS rebinding) is a page of the console's origin to
+// the browser, and such a page may write `X-Forwarded-Host` on its request. This shows that
+// the console's server replaces what the page wrote with the name it was itself asked
+// under, and that `Host` names the service: the page chooses neither. Were a later version
+// of the forwarding to keep the page's value, the service would be told a name of the
+// page's choosing, and this test is what fails.
+test("a page cannot choose the name the console tells the service it was asked under", async ({
+  page,
+  baseURL,
+}) => {
+  const asked = new URL(baseURL ?? "").host;
+
+  await page.goto("/tasks");
+  const status = await page.evaluate(async () => {
+    const answer = await fetch("/api/threads/forged-name/stop", {
+      method: "POST",
+      headers: { "X-Forwarded-Host": "forged.example" },
+    });
+    return answer.status;
+  });
+  expect(status).toBe(202);
+
+  // Exactly the name the browser asked the console for: not the page's, and not both.
+  const seen = stops.find(({ thread }) => thread === "forged-name");
+  expect(seen?.asked).toBe(asked);
+  expect(hosts.get("forged-name")).toBe(`127.0.0.1:${STAND_IN_PORT}`);
 });

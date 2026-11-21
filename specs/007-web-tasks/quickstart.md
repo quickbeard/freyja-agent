@@ -199,8 +199,22 @@ curl -sI localhost:3000/tasks | grep -i 'content-security-policy\|x-frame-option
 ```
 
 The same is refused when it is sent through the console's address, `localhost:3000/api/...`,
-by a page of another origin. Not covered: a page that reaches the service or the console
-under a name its own author controls (DNS rebinding); see the spec's Assumptions.
+by a page of another origin.
+
+A page that reaches the service or the console under a name its own author controls (DNS
+rebinding) is the same origin to the browser, so the refusal above does not see it. It is
+refused by the name it asks for, a request that only reads included:
+
+```bash
+curl -s -H 'Host: attacker.example:8000' localhost:8000/threads
+# 403 unknown_host
+curl -s -H 'Host: attacker.example:3000' localhost:3000/api/threads
+# 403 unknown_host: the console's server passes the name on
+curl -s -X POST -H 'Host: attacker.example:3000' -H 'Origin: http://attacker.example:3000' \
+  -H 'Sec-Fetch-Site: same-origin' -H 'Content-Type: application/json' \
+  -d '{"message": "hi"}' localhost:3000/api/threads/t-rebound/runs/unattended
+# 403 unknown_host, and GET /threads lists no such thread
+```
 
 ## 7. The stream through the console (research R1)
 
