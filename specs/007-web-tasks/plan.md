@@ -795,6 +795,92 @@ is the unit and end-to-end tests', and the service's own (`tests/test_unattended
 
 **Left for later**: Phase 9 (the checks from another origin) and Phase 10 (polish).
 
+### Phase 9 as built (2026-11-21)
+
+User story 6 needed no code: the two thread routers were made with the refusal in Phases 2
+and 3, and the console has sent the frame headers for every path since feature 005. T070
+and T071 found nothing to fix (T072). This phase adds the proof for every route, in one
+place, and says in the README what a page of another origin cannot do with tasks.
+
+- **One table of every thread route that changes something** (`CHANGING` in
+  `tests/test_threads_other_origins.py`), each with the test that refuses it. The file walks
+  every route the application serves, through the routers it includes, and fails when a
+  thread route that changes something is not in the table, when a route under any prefix
+  that changes something serves a request marked as another origin's, and when it meets a
+  kind of route it does not know, such as a WebSocket route or a mounted application. The
+  table is also compared with the feature's contract, which promises the 403 for each.
+- **"Before a lease is taken or a stop is marked"** is asserted on what would be left behind:
+  no row in the index, no lease, no run that goes on by itself, no further run counted on a
+  paused thread, no stop mark on a run in progress, which then runs to its end through the
+  step a stop would have kept from starting.
+- **The forms a page can send** are each tried on the console's routes: a body sent as plain
+  text, as a form, as a multipart form, and with no content type is refused with 422; a
+  page that asks first is given no permission, for every route of the table; an origin of
+  `null`, and the service's own address beside the console's, are refused; and the
+  console's own requests, with the headers its server passes on, are served.
+- **The refusal's sentence** is compared whole, for all five routes, with a recognizable
+  thread id, message, proposal id, and origin sent: none of them is in the answer, and the
+  answer carries no header that would let a page of another origin read it. One answer
+  comes before the refusal: 422 for a body that cannot be read as JSON, which the framework
+  reads before any rule of the service runs. The README said "before anything else is
+  looked at", since Phase 2; it now says what is true.
+- **The frame tests** are the ones `console.spec.ts` has for the LLM section, for `/tasks`
+  and `/tasks/<id>`, with a task that waits for a decision behind the frame. They also wait
+  for the console's answer to the frame's request and check its two headers, so that an
+  empty frame is seen to be the console's doing and not a request that never left. Nothing
+  of the console is in the frame, the console asked the service for nothing from it, and
+  nothing was sent, decided, or stopped. `console.spec.ts` is not changed.
+- **What the forwarding passes on** is in `stream.spec.ts`, the one spec with something
+  behind the console's forwarding: a request of the console's own page reaches the stand-in
+  with its origin, `same-origin`, and the host the browser asked for, and a request of a
+  page of another origin with that page's origin and `cross-site`. The service's tests show
+  that it refuses on exactly these; no test joins the two ends, which the hand check did.
+- **`tests/unattended_helpers.py`**: `Reader` takes headers.
+
+**Not covered: DNS rebinding.** A request that reaches the service, or the console, under a
+name an attacker controls is to the browser a request of that page's own origin: the origin
+and the host asked for are the same name, and the rule has nothing to tell them apart by.
+Feature 004 left this open on purpose and feature 005 recorded that it inherits it. This
+feature inherits it too, and with more at stake: such a page could read the list of tasks
+and a pending proposal, and approve it. The spec (Assumptions, "Scope"), the README, and
+the test file's header now say so. Closing it needs the service to know the names it
+answers to, a new setting and a check in `api/guards.py` or as middleware, for the LLM and
+Agents routes as well; that is a change for all three features and the owner's to decide.
+
+**Read by a reviewer that had not written it.** It found that the three new tests prove
+"before a lease or a mark" and found no form of request a page can send that the rule lets
+through, apart from DNS rebinding, above. It found the README overclaiming, tests that
+proved less than they said, and forms of request that were not tried. Each was checked
+against the code, and each test added or changed was shown to fail with what it rests on
+taken out (twelve checks for the service's tests, two for the browser's).
+
+| Finding | What was wrong | What changed |
+|---|---|---|
+| High, known since 004 | DNS rebinding passes the rule, and the new README sentence said a page of another origin "can do none of this" without the exception. | Not changed in code; see above. The README, the spec, and the test file say what is not covered. |
+| Test | The frame test never saw the frame's request reach the console: with Chromium's permission line taken out the browser itself blocks the request, the frame is empty, and the test passed. What the page asked the service for was read once, at once. | The test waits for the console's answer to the frame's request and checks its headers, and reads what was asked for after a second. Without the permission line it now fails. `console.spec.ts`, which has the same weakness for the LLM section, is feature 005's and is not changed. |
+| Test | The table was checked against the application's description of itself, which leaves out a route declared as not described, a WebSocket route, a mounted application, and a route under another prefix. | The file walks the routes themselves and asks every changing route of the application, under any prefix. |
+| Test | The console's routes were tried with JSON only, which a page cannot send without asking; no route had a test of the asking; an origin of `null` and the service's own address were not tried; and the console's own requests were shown to be served on the earlier routes only. | One test or case each. |
+| Docs | "Through the console's own address" had no automated proof. | The forwarding's part is in `stream.spec.ts`. |
+| Docs | "Before anything else is looked at" was not exact. | Reworded in both places, with a test of the one answer that comes first. |
+| Low, not changed | The frame headers are the console's. The service's own pages, such as `/docs`, carry none. | Not this feature's: `api/app.py` serves them for every feature. Recorded here. |
+
+**Checked by hand** on a check instance on port 8020 with a database of its own, the
+stand-in model on 9977 answering as `slow`, and the console on 3020, in a real Chromium and a
+real Firefox. With a console run in progress, a page of another origin
+(`http://127.0.0.1:9978`) tried, both through the console's address and straight to the
+service: to stop the run by `fetch` without asking, by `sendBeacon`, and by a form; to start
+a run and to send a decision with a body sent as plain text, and with JSON; to read the
+list, the task, and its conversation; and to show the task's page in a frame. In both
+browsers the run went on, not stopping; the thread it tried to start did not exist; the
+conversation held one message of a person; no answer could be read; and the frame was
+empty. The service's log had 22 requests refused with 403 `other_origin`, the stops, the
+runs, and the decisions, and the two requests Firefox sent to ask first answered 405. Stop
+pressed in the console itself was accepted. One thing of the tool: with requests handed to
+a page, Playwright's Chromium answers a page's asking-first itself and lets the JSON
+request go; the service refused that one too. The database was dropped afterwards.
+
+**Left for later**: DNS rebinding, above; and Phase 10 (polish).
+
 ## Complexity Tracking
 
 No violation of the constitution to justify. The three additions that carry complexity are

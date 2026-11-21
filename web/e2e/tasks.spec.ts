@@ -297,3 +297,134 @@ test("a thread another client started is a row like any other, and opens", async
   await expect(page).toHaveURL("/tasks/by-curl");
   await expect(conversation(page)).toContainText("Hello!");
 });
+
+// 007, User Story 6: a page of another origin cannot show the Tasks section in a frame.
+// A frame is how such a page would get a person to press Approve, or Stop, on a control
+// they cannot see. The rule is feature 005's (FR-029), for every path of the console.
+
+const FRAME_HEADERS = {
+  "content-security-policy": "frame-ancestors 'none'",
+  "x-frame-options": "DENY",
+};
+const FRAMED = "0123456789abcdef0123456789abcdef";
+const FRAMED_PATHS = ["/tasks", `/tasks/${FRAMED}`];
+
+for (const path of FRAMED_PATHS) {
+  test(`${path} is answered with the headers that forbid a frame`, async ({
+    request,
+  }) => {
+    const response = await request.get(path);
+
+    expect(response.status()).toBe(200);
+    expect(response.headers()).toMatchObject(FRAME_HEADERS);
+  });
+
+  test(`a page of another origin that frames ${path} is shown nothing of the console`, async ({
+    page,
+    context,
+    browserName,
+    baseURL,
+  }) => {
+    // Chromium asks before a page may reach an address on this machine, and refuses the
+    // frame's request unasked. With the permission given, the request is made, so that what
+    // keeps the frame empty is the console's answer and not the browser's own caution.
+    if (browserName === "chromium") {
+      await context.grantPermissions(["local-network-access"]);
+    }
+    // A task that waits for a decision: what a frame would be after is its Approve.
+    const service = new TaskService();
+    service.tasks.set(
+      FRAMED,
+      pausedTask(FRAMED, "Tell #ops.", proposal("int-1", notify())),
+    );
+    await service.serve(page);
+    const asked: string[] = [];
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/api/")) {
+        asked.push(request.url());
+      }
+    });
+
+    // The same server under its other name is another origin to a browser: the console
+    // runs on localhost, and this page is served from 127.0.0.1.
+    const framedConsole = new URL(path, baseURL);
+    expect(framedConsole.hostname).toBe("localhost");
+    const origin = `http://127.0.0.1:${framedConsole.port}`;
+    const elsewhere = `${origin}/a-page-of-another-origin`;
+    // A second frame, of a page that forbids nothing, to know when frames have been drawn.
+    const allowed = `${origin}/a-frame-that-may-be-shown`;
+    await page.route(allowed, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: "<!doctype html><title>Allowed</title><p>This frame is shown.</p>",
+      }),
+    );
+    await page.route(elsewhere, (route) =>
+      route.fulfill({
+        contentType: "text/html",
+        body: `<!doctype html><title>Elsewhere</title><h1>Elsewhere</h1>
+          <iframe title="console" src="${framedConsole.href}" width="900" height="400"></iframe>
+          <iframe title="allowed" src="${allowed}" width="900" height="100"></iframe>`,
+      }),
+    );
+
+    // The frame's request for the console's page, and the console's answer to it: what
+    // keeps the frame empty is seen to be that answer, not a request that never left.
+    const answered = page.waitForResponse(
+      (response) => response.url() === framedConsole.href,
+    );
+    await page.goto(elsewhere);
+    const answer = await answered;
+    expect(answer.status()).toBe(200);
+    expect(answer.headers()).toMatchObject(FRAME_HEADERS);
+    await expect(
+      page.getByRole("heading", { name: "Elsewhere" }),
+    ).toBeVisible();
+    await expect(
+      page
+        .frameLocator('iframe[title="allowed"]')
+        .getByText("This frame is shown."),
+    ).toBeVisible();
+
+    // Nothing of the console is in its frame: not its title, the section, the task, or a
+    // control. A frame the browser refused holds the browser's own error page or nothing,
+    // and neither answers like a page, so the read gives up after two seconds and counts
+    // as empty.
+    const others = page
+      .frames()
+      .filter((frame) => frame !== page.mainFrame() && frame.url() !== allowed);
+    expect(others).toHaveLength(1);
+    // A frame that is allowed finishes loading; one that is refused may never say so.
+    await others[0]
+      .waitForLoadState("load", { timeout: 5_000 })
+      .catch(() => {});
+    const shown = await Promise.race([
+      others[0]
+        .evaluate(() => `${document.title}\n${document.body?.innerText ?? ""}`)
+        .catch(() => ""),
+      new Promise<string>((resolve) => setTimeout(() => resolve(""), 2_000)),
+    ]);
+    for (const words of ["Freyja", "Tasks", "Tell #ops.", "Approve", "Stop"]) {
+      expect(shown).not.toContain(words);
+    }
+    // The console never ran in the frame: it asked the service for nothing, and sent it
+    // nothing, also a moment later, when a console that did run would have asked for its
+    // list of tasks.
+    await page.waitForTimeout(1_000);
+    expect(asked).toEqual([]);
+    expect(service.sent).toEqual([]);
+    expect(service.decided).toEqual([]);
+    expect(service.stops).toEqual([]);
+
+    // The same address opened as a page of its own shows the console, so the frame was
+    // empty because of the rule and not because nothing was served.
+    await page.goto(framedConsole.href);
+    await expect(
+      path === "/tasks"
+        ? page.getByRole("heading", { level: 1, name: "Tasks" })
+        : page.getByRole("button", { name: "Approve send_notification" }),
+    ).toBeVisible();
+    await expect(page.getByText("Tell #ops.").first()).toBeVisible();
+    expect(asked.length).toBeGreaterThan(0);
+  });
+}

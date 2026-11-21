@@ -332,7 +332,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
-  `tasks.spec.ts` the Tasks section, `tasks-decide.spec.ts` deciding a proposal, and
+  `tasks.spec.ts` the Tasks section, and that a page of another origin cannot show it in a
+  frame, `tasks-decide.spec.ts` deciding a proposal, and
   `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
   during a run, and Stop (it moves the page's clock with `page.clock` in place of waiting
   five or fifteen seconds), with
@@ -343,7 +344,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `answerThreads`; it answers a stop as the service rules it and keeps each in `stops`); and
   `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
   to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
-  forwards to), to see a run's events arrive as they are produced. It runs in projects of
+  forwards to), to see a run's events arrive as they are produced, and that the forwarding
+  passes on the three headers the service's refusal of other origins reads. It runs in projects of
   its own, `stream-chromium` and then `stream-firefox`, after every other spec; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
@@ -454,7 +456,13 @@ startup and exits with an error naming the connection when it is unreachable.
 - The thread routes refuse a request that changes something when a browser marks it as made
   by a page of another origin, as the `/llm` and `/agents` routes do: both thread routers are
   made with `refuse_other_origins`. `tests/test_threads_other_origins.py` covers every thread
-  route; a new one is added to it.
+  route; a new one is added to it, and to its table `CHANGING`: the file walks every route
+  the application serves and fails when a thread route that changes something is not in
+  the table, when any route that changes something, under any prefix, serves a request
+  marked as another origin's, when it meets a kind of route it does not know, such as a
+  WebSocket route or a mounted application, and when the feature's contract has a route the
+  table lacks. The rule does not cover a request that reaches the service under a name an
+  attacker controls (DNS rebinding); features 004, 005, and 007 each record that.
 - The index of threads returns text from threads, so `tests/test_thread_index_nowhere.py`
   searches its answers and the log for a recognizable key and a recognizable agent address.
   A new route of the index is added to it. The three proofs share their tools in

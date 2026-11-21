@@ -24,6 +24,16 @@ let server: Server;
 // The run's stream, held open until the test has seen what it sent so far.
 let holding: ServerResponse | null = null;
 const finished = new Set<string>();
+// What the web app's server passed on of each request to stop a run: the three headers the
+// service reads to tell a page of another origin from the console (api/guards.py).
+const stops: {
+  thread: string;
+  origin: string | undefined;
+  site: string | undefined;
+  asked: string | undefined;
+}[] = [];
+const one = (value: string | string[] | undefined) =>
+  Array.isArray(value) ? value[0] : value;
 
 test.describe.configure({ mode: "serial" });
 
@@ -40,6 +50,19 @@ test.beforeAll(async () => {
       response.write(start(run[1]));
       response.write(piece(REPLY));
       holding = response;
+      return;
+    }
+    const stop = path.match(/^\/threads\/([^/]+)\/stop$/);
+    if (request.method === "POST" && stop !== null) {
+      stops.push({
+        thread: stop[1],
+        origin: one(request.headers.origin),
+        site: one(request.headers["sec-fetch-site"]),
+        asked: one(request.headers["x-forwarded-host"]),
+      });
+      // The stand-in refuses nothing: it only shows what reached it.
+      response.writeHead(202, { "content-type": "application/json" });
+      response.end(JSON.stringify({ thread_id: stop[1], stopping: true }));
       return;
     }
     const thread = path.match(/^\/threads\/([^/]+)(\/state)?$/);
@@ -99,4 +122,64 @@ test("a run's reply reaches the page through the console's forwarding before the
   holding = null;
   await expect(page.getByText("Done", { exact: true })).toBeVisible();
   await expect(conversation).toContainText(REPLY);
+});
+
+// 007, FR-024: the service turns a page of another origin away by what the browser says of
+// the request, and the console's forwarding stands between the two. This shows that what
+// the browser says reaches the service through it: the origin, the site, and the host the
+// browser asked for. The service's tests show that it refuses on exactly these
+// (tests/test_threads_other_origins.py).
+test("the console's forwarding passes on what a browser says of a request, its own and another origin's", async ({
+  page,
+  context,
+  browserName,
+  baseURL,
+}) => {
+  const consoleOrigin = new URL(baseURL ?? "").origin;
+  const asked = new URL(consoleOrigin).host;
+
+  // The console's own page asks.
+  await page.goto("/tasks");
+  const own = await page.evaluate(async () => {
+    const answer = await fetch("/api/threads/own-request/stop", {
+      method: "POST",
+    });
+    return answer.status;
+  });
+  expect(own).toBe(202);
+  expect(stops.find(({ thread }) => thread === "own-request")).toEqual({
+    thread: "own-request",
+    origin: consoleOrigin,
+    site: "same-origin",
+    asked,
+  });
+
+  // A page of another origin asks, in a form a browser sends without asking first.
+  if (browserName === "chromium") {
+    await context.grantPermissions(["local-network-access"]);
+  }
+  expect(new URL(consoleOrigin).hostname).toBe("localhost");
+  const otherOrigin = `http://127.0.0.1:${new URL(consoleOrigin).port}`;
+  const elsewhere = `${otherOrigin}/a-page-of-another-origin`;
+  await page.route(elsewhere, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Elsewhere</title><h1>Elsewhere</h1>",
+    }),
+  );
+  await page.goto(elsewhere);
+  await page.evaluate(async (address) => {
+    await fetch(address, { method: "POST", mode: "no-cors" });
+  }, `${consoleOrigin}/api/threads/other-request/stop`);
+
+  await expect
+    .poll(() => stops.find(({ thread }) => thread === "other-request"))
+    .toBeDefined();
+  const theirs = stops.find(({ thread }) => thread === "other-request");
+  // Each of the two would be enough for the service to refuse: a site that is not the
+  // console's own, and an origin that is not the host the browser asked for.
+  expect(theirs?.site).toBe("cross-site");
+  expect(theirs?.origin).toBe(otherOrigin);
+  expect(theirs?.asked).toBe(asked);
+  expect(new URL(theirs?.origin ?? "").host).not.toBe(theirs?.asked);
 });
