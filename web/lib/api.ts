@@ -30,6 +30,58 @@ export class ApiError extends Error {
 const UNREACHABLE =
   "The Freyja service cannot be reached. Check that it is running, then try again.";
 
+/**
+ * How long a request waits for its answer. The web app's server gives up forwarding a
+ * request the service does not answer after 30 seconds, and that is "cannot be reached"
+ * already; this is just past it, for a request that is not ended on the way either.
+ */
+export const ANSWER_SECONDS = 35;
+
+function silent(method: string): string {
+  const said = `The Freyja service did not answer within ${ANSWER_SECONDS} seconds.`;
+  // A request that only reads changed nothing. Any other may have arrived.
+  return method === "GET"
+    ? `${said} Check that it is running, then try again.`
+    : `${said} It may still have taken the request: read again before sending it once more.`;
+}
+
+/**
+ * Send a request and hand `use` its answer, giving up `ANSWER_SECONDS` after it was sent
+ * unless `use` has returned by then. A request that fails, or is given up, is raised as
+ * the `ApiError` of a request with no answer.
+ */
+async function ask<T>(
+  path: string,
+  init: RequestInit,
+  use: (response: Response) => Promise<T>,
+): Promise<T> {
+  const limit = new AbortController();
+  const timer = setTimeout(() => limit.abort(), ANSWER_SECONDS * 1000);
+  try {
+    let response: Response;
+    try {
+      response = await fetch(`/api${path}`, { ...init, signal: limit.signal });
+    } catch {
+      throw new ApiError(
+        limit.signal.aborted ? silent(init.method ?? "GET") : UNREACHABLE,
+        0,
+        "unreachable",
+      );
+    }
+    try {
+      return await use(response);
+    } catch (failure) {
+      // Given up while the answer's body was read: no answer, as above.
+      if (limit.signal.aborted && !(failure instanceof ApiError)) {
+        throw new ApiError(silent(init.method ?? "GET"), 0, "unreachable");
+      }
+      throw failure;
+    }
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 type Options = { method?: string; body?: unknown };
 
 function refusal(status: number, payload: unknown): ApiError | null {
@@ -69,30 +121,34 @@ function refusal(status: number, payload: unknown): ApiError | null {
 /** Call the service at `path` and return its answer, or raise an `ApiError`. */
 export async function api<T>(path: string, options: Options = {}): Promise<T> {
   const { method = "GET", body } = options;
-  let response: Response;
+  const init = {
+    method,
+    headers:
+      body === undefined ? undefined : { "content-type": "application/json" },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  };
+  return ask(path, init, async (response) => {
+    if (response.status === 204) {
+      return undefined as T;
+    }
+    const payload = await read(response);
+    if (response.ok) {
+      return payload as T;
+    }
+    throw failure(response.status, payload);
+  });
+}
+
+/** An answer's body as JSON, or undefined when it is none; a body given up is raised. */
+async function read(response: Response): Promise<unknown> {
   try {
-    response = await fetch(`/api${path}`, {
-      method,
-      headers:
-        body === undefined ? undefined : { "content-type": "application/json" },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(UNREACHABLE, 0, "unreachable");
+    return await response.json();
+  } catch (unread) {
+    if (unread instanceof DOMException && unread.name === "AbortError") {
+      throw unread;
+    }
+    return undefined;
   }
-  if (response.status === 204) {
-    return undefined as T;
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = undefined;
-  }
-  if (response.ok) {
-    return payload as T;
-  }
-  throw failure(response.status, payload);
 }
 
 /** What an answer that is not a success says, as the error a caller is given. */
@@ -122,31 +178,23 @@ function failure(status: number, payload: unknown): ApiError {
 /**
  * Post `body` as JSON to `path` and return the answer's body, unread, for a caller to read
  * as it arrives. A refusal, refused values, and no answer raise the `ApiError` `api` raises.
+ * The time limit ends with the beginning of the answer: a run lasts as long as it does.
  */
 export async function stream(
   path: string,
   body: unknown,
 ): Promise<ReadableStream<Uint8Array>> {
-  let response: Response;
-  try {
-    response = await fetch(`/api${path}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(UNREACHABLE, 0, "unreachable");
-  }
-  if (response.ok && response.body !== null) {
-    return response.body;
-  }
-  let payload: unknown;
-  try {
-    payload = await response.json();
-  } catch {
-    payload = undefined;
-  }
-  throw failure(response.status, payload);
+  const init = {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  };
+  return ask(path, init, async (response) => {
+    if (response.ok && response.body !== null) {
+      return response.body;
+    }
+    throw failure(response.status, await read(response));
+  });
 }
 
 /** Whether a request was refused because the profile or the agent it names no longer exists. */

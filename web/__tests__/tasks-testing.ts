@@ -117,6 +117,7 @@ export function summary(values: Partial<ThreadSummary> = {}): ThreadSummary {
     created_at: "2026-11-20T08:00:00Z",
     changed_at: "2026-11-20T08:00:04Z",
     stoppable: false,
+    runs: 1,
     stopping: false,
     ...values,
   };

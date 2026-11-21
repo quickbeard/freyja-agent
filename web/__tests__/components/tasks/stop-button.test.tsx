@@ -11,7 +11,10 @@ import { StopButton } from "@/components/tasks/stop-button";
 
 // 007, User Story 5: stop a run the console started (FR-022, FR-022a).
 
-const ACCEPTED = { status: 202, json: { thread_id: "t-1", stopping: true } };
+const ACCEPTED = {
+  status: 202,
+  json: { thread_id: "t-1", stopping: true, run: 1 },
+};
 const NOT_STOPPABLE =
   "This run has no Stop: the console did not start it. A run another client started ends when that client stops reading, and a run the service started ends by itself.";
 

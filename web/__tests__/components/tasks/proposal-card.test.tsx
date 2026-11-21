@@ -383,3 +383,222 @@ describe("the proposal card, further", () => {
     expect(edit.hasAttribute("aria-expanded")).toBe(false);
   });
 });
+
+// FR-014, FR-015: a whole number beyond 2^53, such as a 64-bit id, is one a browser cannot
+// hold exactly. The page can neither show such an argument as it was proposed nor send
+// one as it was entered, so it says so, sends no such edit, and still approves as proposed.
+describe("the proposal card and a number a browser cannot hold exactly", () => {
+  const RECORD: ActionRequest = {
+    name: "close_record",
+    server: "records",
+    agent: null,
+    // What a browser has left of the id once it has read the service's answer.
+    args: JSON.parse('{"id": 1234567890123456789, "note": "Closed."}'),
+    description: null,
+    allowed_decisions: ["approve", "edit", "reject"],
+  };
+  const INEXACT = /too large for a browser to hold exactly/;
+
+  it("says that such an argument may not be shown as proposed, and says nothing otherwise", () => {
+    renderCard(proposal(RECORD));
+    expect(
+      within(
+        screen.getByRole("article", { name: "Proposed action close_record" }),
+      ).getByText(INEXACT),
+    ).toBeTruthy();
+  });
+
+  it("says nothing of the kind for ordinary arguments", () => {
+    renderCard(proposal(NOTIFY, LOOKUP));
+    expect(screen.queryByText(INEXACT)).toBeNull();
+  });
+
+  it("does not send an edit that holds such a number, and names the number beside the edit", () => {
+    const { send } = renderCard(proposal(NOTIFY));
+    fireEvent.click(button("Edit the arguments of send_notification"));
+    const box = screen.getByLabelText(
+      "Arguments for send_notification, as JSON",
+    );
+    fireEvent.change(box, {
+      target: { value: '{"channel": "#ops", "ticket": 1234567890123456789}' },
+    });
+
+    expect(screen.getByRole("alert").textContent).toContain(
+      "1234567890123456789",
+    );
+    const approve = button("Approve send_notification with these arguments");
+    expect((approve as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(approve);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("sends the same number as text, which a browser holds as entered", async () => {
+    const { send } = renderCard(proposal(NOTIFY));
+    fireEvent.click(button("Edit the arguments of send_notification"));
+    fireEvent.change(
+      screen.getByLabelText("Arguments for send_notification, as JSON"),
+      {
+        target: {
+          value: '{"channel": "#ops", "ticket": "1234567890123456789"}',
+        },
+      },
+    );
+    fireEvent.click(button("Approve send_notification with these arguments"));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith([
+        {
+          type: "edit",
+          args: { channel: "#ops", ticket: "1234567890123456789" },
+        },
+      ]),
+    );
+  });
+
+  it("opens the edit of a proposed number of 22 digits already refused, which a browser writes with an exponent", () => {
+    const { send } = renderCard(
+      proposal({
+        ...RECORD,
+        args: JSON.parse('{"id": 1234567890123456789012, "note": "Closed."}'),
+      }),
+    );
+    expect(screen.getByText(INEXACT)).toBeTruthy();
+    fireEvent.click(button("Edit the arguments of close_record"));
+    const box = screen.getByLabelText(
+      "Arguments for close_record, as JSON",
+    ) as HTMLTextAreaElement;
+    // What the box starts from is no longer the number that was proposed.
+    expect(box.value).toContain("e+21");
+    const withThese = button("Approve close_record with these arguments");
+    expect((withThese as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("alert").textContent).toMatch(/exactly/);
+    fireEvent.click(withThese);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("opens the edit of such a proposal already refused, and still approves it as proposed", async () => {
+    const { send } = renderCard(proposal(RECORD));
+    fireEvent.click(button("Edit the arguments of close_record"));
+    // The box starts from what the browser holds, which is not what was proposed: sent
+    // back, it would run the action with a number nobody proposed or entered.
+    const withThese = button("Approve close_record with these arguments");
+    expect((withThese as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("alert").textContent).toMatch(/exactly/);
+
+    // Approving sends no arguments: the service runs the action with its own.
+    fireEvent.click(button("Approve close_record as proposed"));
+    await waitFor(() =>
+      expect(send).toHaveBeenCalledWith([{ type: "approve" }]),
+    );
+  });
+});
+
+// FR-014: a decision is offered only while the service lists it for the action. The list
+// is worked out from what is configured now, so a later reading of the same proposal can
+// list fewer.
+describe("the proposal card and a decision the service no longer lists", () => {
+  function card(pending: PendingDecision, send = vi.fn(async () => {})) {
+    return <ProposalCard pending={pending} send={send} onStale={vi.fn()} />;
+  }
+  const without = (action: ActionRequest, gone: string): ActionRequest => ({
+    ...action,
+    allowed_decisions: action.allowed_decisions.filter((d) => d !== gone),
+  });
+
+  it("closes an open edit when a later reading no longer lists edit", () => {
+    const view = render(card(proposal(NOTIFY)));
+    fireEvent.click(button("Edit the arguments of send_notification"));
+    expect(
+      screen.getByLabelText("Arguments for send_notification, as JSON"),
+    ).toBeTruthy();
+
+    view.rerender(card(proposal(without(NOTIFY, "edit"))));
+
+    expect(
+      screen.queryByLabelText("Arguments for send_notification, as JSON"),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Approve send_notification with these arguments",
+      }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Edit the arguments of send_notification",
+      }),
+    ).toBeNull();
+    // The plain Approve is the one way to approve again, and says so plainly.
+    expect(button("Approve send_notification")).toBeTruthy();
+  });
+
+  it("closes an open rejection when a later reading no longer lists reject", () => {
+    const send = vi.fn(async () => {});
+    const view = render(card(proposal(NOTIFY), send));
+    fireEvent.click(button("Reject send_notification"));
+    expect(screen.getByLabelText(/^Why/)).toBeTruthy();
+
+    view.rerender(card(proposal(without(NOTIFY, "reject")), send));
+
+    expect(screen.queryByLabelText(/^Why/)).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: /^Reject send_notification/ }),
+    ).toBeNull();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("with several actions, takes a chosen decision for not chosen once it is no longer listed", () => {
+    const send = vi.fn(async () => {});
+    const view = render(card(proposal(NOTIFY, LOOKUP), send));
+    fireEvent.click(button("Reject send_notification"));
+    fireEvent.click(button("Approve record_note"));
+    const sendAll = () => button("Send the 2 decisions") as HTMLButtonElement;
+    expect(sendAll().disabled).toBe(false);
+
+    view.rerender(card(proposal(without(NOTIFY, "reject"), LOOKUP), send));
+
+    // The first action has no decision any more: nothing can be sent until it has one.
+    expect(sendAll().disabled).toBe(true);
+    expect(
+      screen.getByText("Each action needs a decision before anything is sent."),
+    ).toBeTruthy();
+    fireEvent.click(sendAll());
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+// Edge Cases, "A proposal's action is no longer configured, or its agent was removed": the
+// service then names neither a tool server nor an agent for it, lists approve and reject,
+// and runs nothing whatever is decided. The page cannot tell such an action from one of
+// Freyja's own, so it claims no more than holds for both.
+describe("the proposal card and an action that may no longer be set up", () => {
+  const GONE: ActionRequest = {
+    name: "close_ticket",
+    server: null,
+    agent: null,
+    args: { ticket: "T-1" },
+    description: null,
+    allowed_decisions: ["approve", "reject"],
+  };
+
+  it("shows the action as the service gives it, with the decisions it lists and no other", () => {
+    renderCard(proposal(GONE));
+    const shown = screen.getByRole("article", {
+      name: "Proposed action close_ticket",
+    });
+    expect(shown.textContent).toContain("close_ticket");
+    expect(shown.textContent).toContain('"ticket": "T-1"');
+    expect(
+      within(shown)
+        .getAllByRole("button")
+        .map((control) => control.textContent),
+    ).toEqual(["Approve close_ticket", "Reject close_ticket"]);
+  });
+
+  it("does not say that an approved action runs, only that it runs once at most", () => {
+    renderCard(proposal(GONE));
+    const said = screen.getByText(/^Nothing has run\./).textContent ?? "";
+    expect(said).toBe(
+      "Nothing has run. An approved action runs once at most, and not at all when it is no longer set up on the service; a rejected one never runs.",
+    );
+    expect(said).not.toMatch(/runs once;/);
+  });
+});

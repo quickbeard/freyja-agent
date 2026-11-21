@@ -60,8 +60,8 @@ export function StopButton({
   /** How the task's first message begins, for the control's name; null when not known. */
   about: string | null;
   run: StopState;
-  /** Called once the service has accepted the stop. */
-  onAsked: () => void;
+  /** Called once the service has accepted the stop, with which run it was asked for. */
+  onAsked: (run: number) => void;
   /** Told why nothing was stopped, or that it is not known; the task is read again. */
   onStale: (said: string) => void;
 }) {
@@ -77,8 +77,8 @@ export function StopButton({
     busy.current = true;
     setAsking(true);
     try {
-      await stopRun(threadId);
-      onAsked();
+      const { run: asked } = await stopRun(threadId);
+      onAsked(asked);
     } catch (failure) {
       if (failure instanceof ApiError && failure.code in REFUSED) {
         onStale(REFUSED[failure.code]);

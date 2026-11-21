@@ -4,7 +4,9 @@ import { stubFetch } from "@/__tests__/testing";
 import {
   decide,
   events,
+  inexact,
   isTerminal,
+  LIST_SECONDS,
   listThreads,
   newThreadId,
   parseArguments,
@@ -206,6 +208,74 @@ describe("parseArguments", () => {
     const parsed = parseArguments(text);
     expect("error" in parsed && parsed.error).toMatch(/JSON/);
   });
+
+  // FR-015: an edit is sent as the person entered it. A browser reads a whole number
+  // beyond 2^53 as the nearest one it can hold, so such text would arrive changed.
+  it.each([
+    ["a 64-bit id", '{"id": 1234567890123456789}', "1234567890123456789"],
+    [
+      "the first number a browser changes",
+      '{"n": 9007199254740993}',
+      "9007199254740993",
+    ],
+    ["a negative one", '{"n": -9007199254740993}', "-9007199254740993"],
+    [
+      "one inside a list",
+      '{"ids": [1, 2, 12345678901234567890]}',
+      "12345678901234567890",
+    ],
+    [
+      "one inside an object",
+      '{"a": {"b": 99999999999999999999}}',
+      "99999999999999999999",
+    ],
+    ["a number too large to hold at all", '{"n": 1e999}', "1e999"],
+    // How a browser writes a whole number of 22 digits or more, as the edit box starts
+    // from one that was proposed: its last digits are already gone.
+    [
+      "a whole number written with an exponent",
+      '{"id": 1.2345678901234568e+21}',
+      "1.2345678901234568e+21",
+    ],
+    ["a power of ten beyond what a browser holds", '{"n": 1e30}', "1e30"],
+  ])("refuses %s, which a browser would change, and names it", (_what, text, number) => {
+    const parsed = parseArguments(text);
+    expect("error" in parsed).toBe(true);
+    expect("error" in parsed && parsed.error).toContain(number);
+    expect("error" in parsed && parsed.error).toMatch(/exactly/);
+  });
+
+  it.each([
+    ["the largest whole number a browser holds", '{"n": 9007199254740991}'],
+    ["the smallest", '{"n": -9007199254740991}'],
+    ["a long number inside text", '{"id": "1234567890123456789"}'],
+    [
+      "a quote and a long number inside text",
+      '{"id": "say \\"1234567890123456789\\""}',
+    ],
+    ["a long number as a name", '{"1234567890123456789": 1}'],
+    ["a fraction", '{"n": 0.1}'],
+    ["a number with an exponent", '{"n": 1.5e3}'],
+    ["a small fraction with an exponent", '{"n": 2.5e-30}'],
+    ["a fraction beyond the whole numbers a browser holds", '{"n": 0.1e1}'],
+    ["zero and small numbers", '{"a": 0, "b": -1, "c": [10, 20]}'],
+  ])("takes %s", (_what, text) => {
+    const parsed = parseArguments(text);
+    expect("args" in parsed).toBe(true);
+    expect("args" in parsed && parsed.args).toEqual(JSON.parse(text));
+  });
+});
+
+describe("inexact", () => {
+  it("says whether arguments the service sent hold a whole number a browser cannot hold exactly", () => {
+    expect(inexact(JSON.parse('{"id": 1234567890123456789}'))).toBe(true);
+    expect(inexact({ a: [{ b: 2 ** 53 + 2 }] })).toBe(true);
+    expect(inexact({ a: { b: [1, "x", null, true, -(2 ** 60)] } })).toBe(true);
+    expect(inexact({ id: "1234567890123456789", n: 2 ** 53 - 1, f: 0.5 })).toBe(
+      false,
+    );
+    expect(inexact({})).toBe(false);
+  });
 });
 
 // Phase 8: stopping a run (FR-022).
@@ -214,9 +284,13 @@ describe("stopRun", () => {
   it("asks the service to stop the task's run, with no body", async () => {
     const fetchStub = stubFetch({
       status: 202,
-      json: { thread_id: "t-1", stopping: true },
+      json: { thread_id: "t-1", stopping: true, run: 3 },
     });
-    expect(await stopRun("t-1")).toEqual({ thread_id: "t-1", stopping: true });
+    expect(await stopRun("t-1")).toEqual({
+      thread_id: "t-1",
+      stopping: true,
+      run: 3,
+    });
     const [url, init] = fetchStub.mock.calls[0];
     expect(url).toBe("/api/threads/t-1/stop");
     expect(init?.method).toBe("POST");
@@ -245,5 +319,14 @@ describe("stopRun", () => {
     const fetchStub = stubFetch({ status: 202, json: {} });
     await stopRun("a/b");
     expect(fetchStub.mock.calls[0][0]).toBe("/api/threads/a%2Fb/stop");
+  });
+});
+
+describe("LIST_SECONDS", () => {
+  it("is shorter than the fifteen seconds within which a change is followed", () => {
+    // SC-004, FR-006: a reading takes time of its own, so a period of fifteen seconds
+    // would follow a change later than that.
+    expect(LIST_SECONDS).toBeLessThan(15);
+    expect(LIST_SECONDS).toBeGreaterThan(0);
   });
 });

@@ -222,7 +222,7 @@ describe("a task's page", () => {
     await waitFor(() => expect(conversation()).toContain("Back again."));
   });
 
-  it("follows a run it does not read every five seconds, also past a read that failed", async () => {
+  it("follows a run it does not read by its timer, also past a read that failed", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       let reads = 0;
@@ -990,7 +990,7 @@ describe("a task's page and a run it does not read", () => {
       ).toBeNull();
       expect([reads(""), reads("/state")]).toEqual([1, 1]);
 
-      // The row and the state are read again every five seconds.
+      // The row and the state are read again by the timer.
       vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
       await waitFor(() => expect([reads(""), reads("/state")]).toEqual([2, 2]));
       running = false;
@@ -1089,10 +1089,9 @@ describe("a task's page and its agent tasks", () => {
 
   const agentTasks = () =>
     screen.queryByRole("list", { name: "Agent tasks" })?.textContent ?? "";
-  const WAITING =
-    "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet.";
+  const WAITING = `This page reads the task again every ${AGENT_SECONDS} seconds while an agent task is pending or its outcome is not in the conversation yet.`;
 
-  it("lists the agent tasks, and reads the task again every fifteen seconds while one is pending", async () => {
+  it("lists the agent tasks, and reads the task again by the slower timer while one is pending", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       let arrived = false;
@@ -1111,7 +1110,7 @@ describe("a task's page and its agent tasks", () => {
       expect(sendMessage().disabled).toBe(false);
       expect([reads(""), reads("/state")]).toEqual([1, 1]);
 
-      // Not at the pace of a run that is followed, but every fifteen seconds.
+      // Not at the pace of a run that is followed, but at the slower one.
       vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
       expect([reads(""), reads("/state")]).toEqual([1, 1]);
       vi.advanceTimersByTime((AGENT_SECONDS - FOLLOW_SECONDS) * 1000);
@@ -1204,7 +1203,7 @@ describe("a task's page and its agent tasks", () => {
     }
   });
 
-  it("follows the run that reports an agent's outcome every five seconds", async () => {
+  it("follows the run that reports an agent's outcome at the pace of a run", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       let step = 0;
@@ -1268,8 +1267,11 @@ describe("a task's page and its agent tasks", () => {
 // Phase 7, from the review: what the page holds from before a run says nothing of that run.
 
 describe("a task's page and the periods it reads at", () => {
-  it("follows a run every five seconds and an agent task every fifteen", () => {
-    expect([FOLLOW_SECONDS, AGENT_SECONDS]).toEqual([5, 15]);
+  it("follows a run and an agent task more often than the five and fifteen seconds the spec gives as the most", () => {
+    // A reading takes time of its own: a period equal to the bound would exceed it.
+    expect(FOLLOW_SECONDS).toBeLessThan(5);
+    expect(AGENT_SECONDS).toBeLessThan(15);
+    expect(FOLLOW_SECONDS).toBeLessThan(AGENT_SECONDS);
   });
 });
 
@@ -1552,7 +1554,10 @@ describe("a task's page and Stop", () => {
   const TOO_LATE =
     "The run ended before the stop took effect. The task is shown as it ended.";
   const NO_STOP = /^This run has no Stop: the console did not start it\./;
-  const ACCEPTED = { status: 202, json: { thread_id: "t-1", stopping: true } };
+  const ACCEPTED = {
+    status: 202,
+    json: { thread_id: "t-1", stopping: true, run: 1 },
+  };
   const STOPPED = sse("end", { status: "stopped" });
   const stop = () => screen.queryByRole("button", { name: /^Stop/ });
   const pause = (ms: number) =>
@@ -1927,6 +1932,7 @@ describe("a task's page and Stop", () => {
             status: "running",
             stoppable: true,
             stopping: false,
+            runs: pressed ? 2 : 1,
             changed_at: pressed
               ? "2026-11-20T08:05:00Z"
               : "2026-11-20T08:00:04Z",
@@ -1945,6 +1951,277 @@ describe("a task's page and Stop", () => {
   });
 });
 
+// Phase 11 (T082): the row names its run, so a page that follows a run by reading knows
+// whether a row still speaks of the run it asked to stop (FR-022a).
+
+describe("a task's page that follows a run on a slow service", () => {
+  it("shows a reading that took longer than the timer's period, and asks for no other meanwhile", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // The first reading of each is answered at once; the second only when the test
+      // lets it, which is two periods after it was asked for.
+      const held: (() => void)[] = [];
+      const asked = { row: 0, state: 0 };
+      let ended = false;
+      serve((_method, path) => {
+        const what = path.endsWith("/state") ? "state" : "row";
+        asked[what] += 1;
+        const reply = () =>
+          what === "state"
+            ? {
+                json: state(
+                  ended
+                    ? [human("Count slowly."), ai("One, two, three.")]
+                    : [human("Count slowly.")],
+                  { run_active: !ended },
+                ),
+              }
+            : {
+                json: summary({
+                  first_message: "Count slowly.",
+                  status: ended ? "done" : "running",
+                }),
+              };
+        if (asked[what] === 1) {
+          return reply();
+        }
+        return new Promise((resolve) => {
+          held.push(() => resolve(reply()));
+        });
+      });
+      renderView();
+      expect(await screen.findByText("Running")).toBeTruthy();
+
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(asked).toEqual({ row: 2, state: 2 }));
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      expect(asked).toEqual({ row: 2, state: 2 });
+
+      ended = true;
+      for (const answer of held.splice(0)) {
+        answer();
+      }
+      await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+      await waitFor(() => expect(conversation()).toContain("One, two, three."));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("a task's page, Stop, and the run a row is of", () => {
+  const STOPPING = "The run is stopping. The step under way completes first.";
+  const TOO_LATE =
+    "The run ended before the stop took effect. The task is shown as it ended.";
+  const stop = () => screen.queryByRole("button", { name: /^Stop/ });
+  const pause = (ms: number) =>
+    new Promise((resolve) => setTimeout(resolve, ms));
+
+  it.each([
+    ["finished", "done" as const],
+    ["failed", "failed" as const],
+    ["was stopped in its turn", "stopped" as const],
+  ])("says nothing of how the run it stopped ended once the row is of a later run, which %s", async (_how, status) => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let step = 0;
+      serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          // The stop was asked for the thread's fourth run.
+          return {
+            status: 202,
+            json: { thread_id: "t-1", stopping: true, run: 4 },
+          };
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state([human("Count slowly."), ai("One, two.")], {
+              run_active: step < 2,
+            }),
+          };
+        }
+        // Between two readings the fourth run ended, nobody here knows how, and a fifth
+        // started and ended: the row is the fifth run's.
+        return {
+          json: summary({
+            first_message: "Count slowly.",
+            status: step < 2 ? "running" : status,
+            stoppable: step < 2,
+            stopping: step === 1,
+            runs: step < 2 ? 4 : 5,
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(screen.queryByText(STOPPING)).toBeNull());
+      await pause(50);
+      // How the fifth run ended is not how the fourth did: the page claims neither.
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+      expect(stop()).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still says too late when the row is of the run it stopped and that run ended another way", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let step = 0;
+      serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          return {
+            status: 202,
+            json: { thread_id: "t-1", stopping: true, run: 4 },
+          };
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state([human("Count slowly."), ai("One, two.")], {
+              run_active: step < 2,
+            }),
+          };
+        }
+        return {
+          json: summary({
+            first_message: "Count slowly.",
+            status: step < 2 ? "running" : "done",
+            stoppable: step < 2,
+            stopping: step === 1,
+            runs: 4,
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      expect(await screen.findByText(new RegExp(TOO_LATE))).toBeTruthy();
+      expect(screen.queryByText(STOPPING)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes on saying stopping past a reading that failed, which says nothing of how the run ended", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // 0: in progress. 1: stop accepted, the row says stopping. 2: the row cannot be
+      // read. 3: the run ended as stopped.
+      let step = 0;
+      serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          return {
+            status: 202,
+            json: { thread_id: "t-1", stopping: true, run: 2 },
+          };
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state([human("Count slowly.")], { run_active: step < 3 }),
+          };
+        }
+        if (step === 2) {
+          return refusal(
+            500,
+            "internal",
+            "The list of threads could not be read.",
+          );
+        }
+        return {
+          json: summary({
+            first_message: "Count slowly.",
+            status: step < 3 ? "running" : "stopped",
+            stoppable: step < 3,
+            stopping: step === 1,
+            runs: 2,
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+      await pause(100);
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      expect(
+        await screen.findByText("The list of threads could not be read.", {
+          exact: false,
+        }),
+      ).toBeTruthy();
+      // A reading that failed is no word of the service about the run.
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+
+      step = 3;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(screen.getByText("Stopped")).toBeTruthy());
+      await waitFor(() => expect(screen.queryByText(STOPPING)).toBeNull());
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("goes on saying stopping after a reading of the same run that was made before the stop", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // 0: in progress. 1: stop accepted; the reading answered next was made before the
+      // mark, so it says the same run is in progress and not stopping. 2: stopped.
+      let step = 0;
+      serve((method, path) => {
+        if (method === "POST") {
+          step = 1;
+          return {
+            status: 202,
+            json: { thread_id: "t-1", stopping: true, run: 2 },
+          };
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state([human("Count slowly.")], { run_active: step < 2 }),
+          };
+        }
+        return {
+          json: summary({
+            first_message: "Count slowly.",
+            status: step < 2 ? "running" : "stopped",
+            stoppable: step < 2,
+            stopping: false,
+            runs: 2,
+          }),
+        };
+      });
+      renderView();
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+      await pause(100);
+      // The run is the one this page stopped: it is stopping, whatever that reading said.
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+      expect(stop()).toBeNull();
+
+      step = 2;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() => expect(screen.getByText("Stopped")).toBeTruthy());
+      await waitFor(() => expect(screen.queryByText(STOPPING)).toBeNull());
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 // Phase 8, from the review: what the page holds from before says nothing of how a run ended.
 
 describe("a task's page, Stop, and readings that come late", () => {
@@ -1952,7 +2229,10 @@ describe("a task's page, Stop, and readings that come late", () => {
   const TOO_LATE =
     "The run ended before the stop took effect. The task is shown as it ended.";
   const NO_STOP = /^This run has no Stop/;
-  const ACCEPTED = { status: 202, json: { thread_id: "t-1", stopping: true } };
+  const ACCEPTED = {
+    status: 202,
+    json: { thread_id: "t-1", stopping: true, run: 1 },
+  };
   const stop = () => screen.queryByRole("button", { name: /^Stop/ });
   const pause = (ms: number) =>
     new Promise((resolve) => setTimeout(resolve, ms));

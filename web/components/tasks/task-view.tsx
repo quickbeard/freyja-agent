@@ -36,12 +36,13 @@ import { TaskStatus } from "./status";
 import { StopButton, type StopState } from "./stop-button";
 
 // How often a page that does not read a run's stream reads the task again while that run is
-// in progress (FR-013).
-export const FOLLOW_SECONDS = 5;
+// in progress. FR-013 gives five seconds as the most; a reading takes time of its own, so
+// the period is shorter than the bound.
+export const FOLLOW_SECONDS = 4;
 
 // How often a page reads a task again while one of its agent tasks is pending, or has ended
-// with its outcome not yet in the conversation (FR-013).
-export const AGENT_SECONDS = 15;
+// with its outcome not yet in the conversation. FR-013 gives fifteen seconds as the most.
+export const AGENT_SECONDS = 12;
 
 const NO_USABLE_MODEL = "no_usable_model";
 
@@ -229,9 +230,13 @@ export function TaskView({ threadId }: { threadId: string }) {
   // until a reading made after it says the run is no longer in progress (FR-010): the row
   // the page held before, as for a follow-up, says nothing of this run.
   const [cut, setCut] = useState<number | null>(null);
-  // Set when the service accepted a stop this page asked for, to the number of readings of
-  // the row answered until then: how the run ended is told by a reading made after it.
-  const [stopAsked, setStopAsked] = useState<number | null>(null);
+  // Set when the service accepted a stop this page asked for: `at` is the number of
+  // readings of the row answered until then, since how the run ended is told by a reading
+  // made after it, and `run` which of the task's runs the service said the stop was for.
+  const [stopAsked, setStopAsked] = useState<{
+    at: number;
+    run: number;
+  } | null>(null);
   // Set when a run this page asked to stop ended another way before the stop took effect:
   // it is said until the task's next run (FR-022a). `at` is the number of readings of the
   // row answered until then, and `rested` whether a reading since has said that no run is
@@ -382,6 +387,10 @@ export function TaskView({ threadId }: { threadId: string }) {
     (row.data?.status === "waiting_for_agent" ||
       (state.data?.agent_tasks ?? []).some(awaited));
   const period = following ? FOLLOW_SECONDS : waiting ? AGENT_SECONDS : null;
+  // Whether a reading the timer below asked for is still under way. Kept here and not
+  // taken from SWR's `isValidating`: a component that reads that is rendered again each
+  // time a reading begins or ends, which this view's effects are not written for.
+  const reading = useRef({ row: false, state: false });
   useEffect(() => {
     if (period === null) {
       return;
@@ -391,8 +400,26 @@ export function TaskView({ threadId }: { threadId: string }) {
       if (document.visibilityState === "hidden") {
         return;
       }
-      void readRowAgain();
-      void readStateAgain();
+      // A reading asked for while one is under way takes its place, and the earlier one's
+      // answer is dropped: with a service slower than the period, none would ever be
+      // shown. A reading that gets no answer is given up by itself (`ANSWER_SECONDS`).
+      const under = reading.current;
+      if (!under.row) {
+        under.row = true;
+        void readRowAgain()
+          .catch(() => undefined)
+          .finally(() => {
+            under.row = false;
+          });
+      }
+      if (!under.state) {
+        under.state = true;
+        void readStateAgain()
+          .catch(() => undefined)
+          .finally(() => {
+            under.state = false;
+          });
+      }
     }, period * 1000);
     return () => clearInterval(timer);
   }, [period, readRowAgain, readStateAgain]);
@@ -435,19 +462,30 @@ export function TaskView({ threadId }: { threadId: string }) {
     }
   }, [stopAsked, ended]);
   // A page that follows the run by reading is told by a reading of the row made after the
-  // stop. A reading that says a run is in progress and not stopping is of another run. A
-  // run that ended and was followed by another between two readings cannot be told from
-  // one that ended another way: the row names no run.
+  // stop. The row names its run. One that is of a later run says nothing of how the run
+  // this page stopped ended, as stopped or another way: the page then claims neither. One
+  // of the same run that says the run is in progress goes on waiting, also when it does
+  // not say "stopping": it was made before the stop was marked.
   const rowStatus = row.data?.status;
   const rowStopping = rowRunning && row.data?.stopping === true;
+  const rowRuns = row.data?.runs;
+  const rowUnread = row.error !== undefined;
   useEffect(() => {
-    if (stopAsked === null || rowReads <= stopAsked) {
+    // A reading that failed says nothing of the run: the row held from before is not the
+    // service's word on how it ended.
+    if (
+      stopAsked === null ||
+      rowReads <= stopAsked.at ||
+      rowRuns === undefined ||
+      rowUnread
+    ) {
+      return;
+    }
+    if (rowRuns !== stopAsked.run) {
+      setStopAsked(null);
       return;
     }
     if (rowRunning) {
-      if (!rowStopping) {
-        setStopAsked(null);
-      }
       return;
     }
     // The row says the run has ended, and how: its status is the service's word.
@@ -455,7 +493,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     if (rowStatus !== "stopped") {
       setLate({ at: rowReadsNow.current, rested: true });
     }
-  }, [stopAsked, rowReads, rowRunning, rowStopping, rowStatus]);
+  }, [stopAsked, rowReads, rowRuns, rowRunning, rowStatus, rowUnread]);
   // That a stop came too late is about the run that ended: it goes with the next run, one
   // of this page or one the row shows once it has said that the earlier run was over.
   useEffect(() => {
@@ -626,7 +664,7 @@ export function TaskView({ threadId }: { threadId: string }) {
       : inProgress
         ? "A run is in progress. This page reads the task again until it ends."
         : waiting
-          ? "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet."
+          ? `This page reads the task again every ${AGENT_SECONDS} seconds while an agent task is pending or its outcome is not in the conversation yet.`
           : null;
   const words = [
     late !== null
@@ -681,8 +719,8 @@ export function TaskView({ threadId }: { threadId: string }) {
           threadId={threadId}
           about={row.data?.first_message ?? run?.message ?? null}
           run={stopState}
-          onAsked={() => {
-            setStopAsked(rowReadsNow.current);
+          onAsked={(asked) => {
+            setStopAsked({ at: rowReadsNow.current, run: asked });
             setNotice(null);
             // The button goes; the focus goes to where the page says the run is stopping.
             statusRef.current?.focus();

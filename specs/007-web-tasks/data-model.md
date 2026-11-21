@@ -124,6 +124,11 @@ First match:
 is true. `stopping` is
 true when, besides, `stop_owner` equals `run_owner`.
 
+A row is given to a client with its `runs`, and the answer to a stop names the `run` it was
+asked for, `runs` of the row at that time (Phase 11, T082). The status is of the thread's
+last run, so a client that follows a run by reading knows from the number whether a row
+still speaks of the run it stopped.
+
 ## Unattended run (in memory)
 
 Not stored. `UnattendedRuns` holds, for each run it drives on this instance: the thread's id,

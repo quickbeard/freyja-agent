@@ -6,6 +6,8 @@ exist since feature 001 and by the delegation worker: the index learns of them t
 run lease, whoever starts them.
 """
 
+import asyncio
+import logging
 import threading
 import time
 from collections.abc import Callable
@@ -93,6 +95,30 @@ def test_a_thread_that_ran_is_listed_with_how_it_began_and_where_it_stands(
     # When it last changed is the thread's last recorded step, as its state says.
     assert datetime.fromisoformat(one["changed_at"]) == datetime.fromisoformat(state["updated_at"])
     assert datetime.fromisoformat(one["created_at"]) <= datetime.fromisoformat(one["changed_at"])
+
+
+def test_reading_the_list_and_a_row_contacts_no_tool_server(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any
+) -> None:
+    """FR-023: answering the list or the number contacts no model, no agent, and no tool
+    server. The model and the agent are held to it above and below; this is the third."""
+    model = ScriptedChatModel(final_text="All done.")
+    made = make_mcp_app(model, {"stub": {"command": "stub-command"}})
+    with TestClient(made.app) as client:
+        run(client, "t-1", "Summarize the workspace.", sse_events)
+        link = made.links["stub"]
+        # The server was reached at startup, to list its tools; that is what "before" holds.
+        before = (link.connections, list(link.stub.calls))
+        assert before[0] >= 1
+        calls = model.calls
+
+        for _ in range(3):
+            answer = listed(client)
+            row(client, "t-1")
+
+        assert answer["total"] == 1
+        assert (link.connections, list(link.stub.calls)) == before
+        assert model.calls == calls
 
 
 def test_a_paused_thread_needs_a_decision_until_it_is_decided(
@@ -249,6 +275,120 @@ def test_a_run_that_died_in_the_middle_is_stopped_once_its_lease_expired(
 
     assert [t["status"] for t in after["threads"]] == ["stopped"]
     assert (kept.run_owner, kept.settled) == ("instance-b:dead", "unfinished")
+
+
+def test_a_thread_the_index_does_not_know_keeps_its_first_message_when_a_console_run_continues_it(
+    make_mcp_app: Callable[..., McpApp], sse_events: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    """FR-002, FR-004: a thread from before the index, or one whose row could not be
+    written, that a client continues through the console's route without opening it first.
+    The run's text is a follow-up, not how the thread began."""
+    made = make_mcp_app(ScriptedChatModel(final_text="Answered."), {})
+    with TestClient(made.app) as client:
+        run(client, "old", "From before the index.", sse_events)
+        index_of(made)._rows.clear()
+
+        with client.stream(
+            "POST", "/threads/old/runs/unattended", json={"message": "And one thing more."}
+        ) as response:
+            events = sse_events(response.iter_lines())
+        one = row(client, "old")
+        after = listed(client)
+
+        # A thread that is new is listed under the run's text, as before.
+        with client.stream(
+            "POST", "/threads/new/runs/unattended", json={"message": "A new task."}
+        ) as response:
+            sse_events(response.iter_lines())
+        new = row(client, "new")
+
+    assert events[-1][0] == "end"
+    assert (one["first_message"], one["status"], one["runs"]) == (
+        "From before the index.",
+        "done",
+        1,
+    )
+    assert [t["first_message"] for t in after["threads"]] == ["From before the index."]
+    assert new["first_message"] == "A new task."
+
+
+def test_a_console_run_starts_all_the_same_when_the_thread_cannot_be_looked_up_first(
+    make_mcp_app: Callable[..., McpApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FR-023: keeping the list never fails or changes a run."""
+    made = make_mcp_app(ScriptedChatModel(final_text="Answered."), {})
+    with TestClient(made.app) as client:
+        index = index_of(made)
+        real = index.get
+        failed: list[str] = []
+
+        async def fails_once(thread_id: str) -> Any:
+            if not failed:
+                failed.append(thread_id)
+                raise RuntimeError("the index is away")
+            return await real(thread_id)
+
+        monkeypatch.setattr(index, "get", fails_once)
+        with (
+            caplog.at_level(logging.WARNING, logger="freyja_agent.api.thread_index"),
+            client.stream(
+                "POST", "/threads/t-1/runs/unattended", json={"message": "Say hello."}
+            ) as response,
+        ):
+            assert response.status_code == 200
+            events = sse_events(response.iter_lines())
+        one = row(client, "t-1")
+
+    assert failed == ["t-1"]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert (one["first_message"], one["status"]) == ("Say hello.", "done")
+    assert "Thread t-1: its row could not be looked up before its run" in caplog.text
+
+
+def test_a_console_run_starts_when_the_lookup_before_it_never_answers(
+    make_mcp_app: Callable[..., McpApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """FR-023: a list that hangs holds a run up for a bounded time, and never fails it."""
+    made = make_mcp_app(ScriptedChatModel(final_text="Answered."), {})
+    monkeypatch.setattr(api, "INDEX_WRITE_SECONDS", 0.05)
+    with TestClient(made.app) as client:
+        index = index_of(made)
+        real = index.get
+        hung: list[str] = []
+
+        async def hangs_once(thread_id: str) -> Any:
+            if not hung:
+                hung.append(thread_id)
+                await asyncio.Event().wait()
+            return await real(thread_id)
+
+        monkeypatch.setattr(index, "get", hangs_once)
+        began = time.monotonic()
+        with (
+            caplog.at_level(logging.WARNING, logger="freyja_agent.api.thread_index"),
+            client.stream(
+                "POST", "/threads/t-1/runs/unattended", json={"message": "Say hello."}
+            ) as response,
+        ):
+            assert response.status_code == 200
+            events = sse_events(response.iter_lines())
+        took = time.monotonic() - began
+        held = sum(made.runtime.registry._holders.values())
+        one = row(client, "t-1")
+
+    assert hung == ["t-1"]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert took < 2
+    # No context was left taken by the lookup that was given up.
+    assert held == 0
+    assert (one["first_message"], one["status"]) == ("Say hello.", "done")
+    assert "Thread t-1: its row could not be looked up before its run" in caplog.text
 
 
 def test_a_thread_the_index_does_not_know_is_listed_once_it_was_opened(

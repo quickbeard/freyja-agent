@@ -97,17 +97,23 @@ function CurrentSectionLinks() {
 // is the one the Tasks section reads the list under, so the two are one reading. On another
 // section the sidebar is the list's only reader, so it reads it again on a timer of its own,
 // which goes on past a reading that failed. Nothing is counted from a list that could not be
-// read.
-function useTasksWaiting(): number {
-  const { data, error, mutate } = useSWR<ThreadList, unknown>(
+// read: the number is then null, not known, which is not the same as none.
+function useTasksWaiting(): number | null {
+  const { data, error, isValidating, mutate } = useSWR<ThreadList, unknown>(
     THREADS_KEY,
     listThreads,
     { shouldRetryOnError: false },
   );
   useEvery(THREADS_KEY, LIST_SECONDS, () => {
-    void mutate();
+    // Not while a reading is under way: a new one would take its place.
+    if (!isValidating) {
+      void mutate();
+    }
   });
-  return data === undefined || error !== undefined ? 0 : data.needs_decision;
+  if (error !== undefined) {
+    return null;
+  }
+  return data === undefined ? 0 : data.needs_decision;
 }
 
 function SectionLinks({ pathname }: { pathname: string | null }) {
@@ -123,7 +129,8 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
           pathname !== null &&
           (pathname === href || pathname.startsWith(`${href}/`));
         const warned = href === AGENTS && down > 0;
-        const counted = href === TASKS && waiting > 0;
+        const unknown = href === TASKS && waiting === null;
+        const counted = href === TASKS && waiting !== null && waiting > 0;
         return (
           <SidebarMenuItem key={href}>
             <SidebarMenuButton
@@ -135,7 +142,11 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
                   // The entry keeps its name; what the number means is said
                   // beside it, for whoever does not see where the number stands.
                   aria-describedby={
-                    warned ? warning : counted ? waitingSaid : undefined
+                    warned
+                      ? warning
+                      : counted || unknown
+                        ? waitingSaid
+                        : undefined
                   }
                   // In a narrow window the sidebar is a sheet over the page:
                   // choosing a section closes it, or it would hide the page.
@@ -167,6 +178,24 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
                   {waiting === 1
                     ? "1 task needs a decision"
                     : `${waiting} tasks need a decision`}
+                </span>
+              </SidebarMenuBadge>
+            )}
+            {unknown && (
+              <SidebarMenuBadge>
+                {/* A list that could not be read is not "none": the entry says so, in
+                    words (FR-006; Edge Cases, "The list cannot be kept or read"). The
+                    eye reads the two words, and assistive technology the sentence they
+                    stand in; no part is hidden from either, since nothing here is a
+                    number that needs its meaning said beside it. */}
+                <span id={waitingSaid}>
+                  <span className="sr-only">
+                    How many tasks need a decision is{" "}
+                  </span>
+                  not known
+                  <span className="sr-only">
+                    : the list of tasks could not be read.
+                  </span>
                 </span>
               </SidebarMenuBadge>
             )}

@@ -79,3 +79,50 @@ describe("a message", () => {
     ).toBe('First.\n{"type":"image","url":"x"}');
   });
 });
+
+// US2/AC3: after an edit the conversation shows both what was proposed and that a person
+// changed it. The first is Freyja's own message, kept as it was; the second is in the
+// action's result, in words the service's approval step writes
+// (tests/test_unattended_runs.py holds the service to them). Both are shown as text.
+describe("an action a person edited before it ran", () => {
+  const NOTICE =
+    'Note: a human reviewer replaced this tool call before it ran. The call recorded in your message is the one you produced; the call that ran was send_notification with arguments {"channel": "#ops-staging", "message": "Ready."}.';
+
+  it("is shown as it was proposed, and its result says that a person changed it and to what", () => {
+    const proposed: Message = {
+      ...ai(""),
+      tool_calls: [
+        {
+          id: "n1",
+          name: "send_notification",
+          args: { channel: "#ops", message: "Ready." },
+        },
+      ],
+    };
+    const result: Message = {
+      id: "r1",
+      type: "tool",
+      content: `${NOTICE}\n\nTool response:\nNotification to #ops-staging recorded.`,
+      name: "send_notification",
+      tool_call_id: "n1",
+    };
+    render(
+      <>
+        <MessageView message={proposed} />
+        <MessageView message={result} />
+      </>,
+    );
+
+    const asked = screen.getByRole("article", { name: "Freyja" });
+    expect(asked.textContent).toContain('"channel": "#ops"');
+    expect(asked.textContent).not.toContain("#ops-staging");
+    const ran = screen.getByRole("article", {
+      name: "Result of send_notification",
+    });
+    expect(ran.textContent).toContain(
+      "a human reviewer replaced this tool call before it ran",
+    );
+    expect(ran.textContent).toContain('"channel": "#ops-staging"');
+    expect(ran.textContent).toContain("Notification to #ops-staging recorded.");
+  });
+});

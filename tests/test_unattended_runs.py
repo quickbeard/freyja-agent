@@ -299,6 +299,134 @@ def test_a_run_goes_on_after_its_reader_leaves(make_mcp_app: Callable[..., McpAp
     assert one["status"] == "done"
 
 
+def said(state: dict[str, Any]) -> list[Any]:
+    """A conversation without what differs between two runs of one script: the ids."""
+    return [
+        (
+            message["type"],
+            message["content"],
+            message.get("name"),
+            [(call["name"], call["args"]) for call in message.get("tool_calls") or []],
+        )
+        for message in state["messages"]
+    ]
+
+
+def test_a_run_whose_reader_left_holds_the_same_conversation_as_one_that_was_read(
+    make_mcp_app: Callable[..., McpApp],
+) -> None:
+    """SC-011: the same end, with the same conversation. Each action runs alone here, so
+    the order of results is the script's."""
+    states = {}
+    for how in ("read", "left"):
+        script = [ls(f"l{n}") for n in range(3)]
+        made = make_mcp_app(ScriptedChatModel(script=script, final_text="All three listed."), {})
+        with TestClient(made.app) as client:
+            path, body = NEW["runs"].format("t-1"), {"message": "List three times."}
+            if how == "read":
+                assert stream(client, path, body)[-1] == ("end", {"status": "completed"})
+            else:
+                leave(client, path, body, at="event: update")
+            idle(client, "t-1")
+            states[how] = client.get("/threads/t-1/state").json()
+
+    assert said(states["left"]) == said(states["read"])
+    assert kinds(states["left"]) == ["human", "ai", "tool", "ai", "tool", "ai", "tool", "ai"]
+    assert states["left"]["pending"] is None
+
+
+@pytest.mark.parametrize("at", [None, "event: update"], ids=["at once", "at a step"])
+def test_a_decision_whose_reader_left_is_carried_out_as_one_that_was_read(
+    make_mcp_app: Callable[..., McpApp], caplog: pytest.LogCaptureFixture, at: str | None
+) -> None:
+    """US5/AC1, SC-011: a run the console started with a decision goes on too."""
+    caplog.set_level(logging.WARNING, logger="freyja_agent.actions")
+    states, rows, sent = {}, {}, {}
+    for how in ("read", "left"):
+        caplog.clear()
+        made = make_mcp_app(ScriptedChatModel(script=[NOTIFY], final_text="Sent."), {})
+        with TestClient(made.app) as client:
+            body = decide(paused(client, NEW, "t-1"), {"type": "approve"})
+            path = NEW["resume"].format("t-1")
+            if how == "read":
+                assert stream(client, path, body)[-1] == ("end", {"status": "completed"})
+            else:
+                leave(client, path, body, at=at)
+            idle(client, "t-1")
+            states[how] = client.get("/threads/t-1/state").json()
+            rows[how] = row(client, "t-1")
+        sent[how] = [r.getMessage() for r in caplog.records if r.name == "freyja_agent.actions"]
+
+    assert said(states["left"]) == said(states["read"])
+    assert kinds(states["left"]) == ["human", "ai", "tool", "ai"]
+    assert states["left"]["pending"] is None
+    assert (rows["left"]["status"], rows["left"]["runs"]) == ("done", 2)
+    # The approved action ran once, whoever read the run.
+    assert len(sent["left"]) == 1
+    assert sent["left"] == sent["read"]
+
+
+def test_a_second_message_is_refused_while_a_run_nobody_reads_is_in_progress(
+    make_mcp_app: Callable[..., McpApp],
+) -> None:
+    """FR-021: one run per task for as long as the run lasts, also without a reader."""
+    model = LabelledChatModel(script=[], final_text="Answered.")
+    made = make_mcp_app(model, {})
+    with TestClient(made.app) as client:
+        model.hold()
+        leave(client, NEW["runs"].format("t-1"), {"message": "The first."})
+        with model.held():
+            refusals = [
+                (response.status_code, response.json()["detail"]["code"])
+                for response in (
+                    client.post(NEW["runs"].format("t-1"), json={"message": "The second."}),
+                    client.post(OLD["runs"].format("t-1"), json={"message": "The second."}),
+                    client.post(NEW["resume"].format("t-1"), json=decide("x", {"type": "approve"})),
+                )
+            ]
+            during = row(client, "t-1")
+        idle(client, "t-1")
+        state = client.get("/threads/t-1/state").json()
+        after = row(client, "t-1")
+
+    assert refusals == [(409, "run_active")] * 3
+    assert (during["status"], during["runs"]) == ("running", 1)
+    # Nothing of the refused messages reached the thread, and no run was counted for them.
+    assert [(kind, text) for kind, text, _, _ in said(state)] == [
+        ("human", "The first."),
+        ("ai", "Answered."),
+    ]
+    assert model.calls == 1
+    assert (after["status"], after["runs"]) == ("done", 1)
+
+
+def test_an_edit_shows_in_the_conversation_as_proposed_and_as_changed_by_a_person(
+    make_mcp_app: Callable[..., McpApp],
+) -> None:
+    """US2/AC3: the conversation shows both what was proposed and that a person changed
+    it. The second is the approval library's notice, which nothing here writes: this is
+    what fails if a later version drops or rewords it."""
+    made = make_mcp_app(ScriptedChatModel(script=[NOTIFY], final_text="Sent."), {})
+    with TestClient(made.app) as client:
+        interrupt_id = paused(client, NEW, "t-1")
+        edited = {"channel": "#ops-staging", "message": "hi"}
+        done = stream(
+            client,
+            NEW["resume"].format("t-1"),
+            decide(interrupt_id, {"type": "edit", "args": edited}),
+        )
+        state = client.get("/threads/t-1/state").json()
+
+    assert done[-1] == ("end", {"status": "completed"})
+    proposed, result = state["messages"][1], state["messages"][2]
+    # What Freyja proposed is kept as it was proposed.
+    assert proposed["tool_calls"][0]["args"] == {"channel": "#ops", "message": "hi"}
+    # The result says what was run in its place, and that a person changed it.
+    assert result["type"] == "tool"
+    assert "#ops-staging" in result["content"]
+    assert "a human reviewer replaced this tool call before it ran" in result["content"]
+
+
 def test_a_run_nobody_reads_at_all_goes_on(make_mcp_app: Callable[..., McpApp]) -> None:
     model = ScriptedChatModel(script=[ls("l1"), ls("l2")], final_text="Listed.")
     made = make_mcp_app(model, {})

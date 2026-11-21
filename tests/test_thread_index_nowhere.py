@@ -19,13 +19,15 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from tests.conftest import A2aApp, LlmApp
-from tests.fakes import ScriptedChatModel
+from tests.fakes import FailingChatModel
 from tests.nowhere import MARK, LeakyModel, Seen, logged, no_address, no_key, profile
 from tests.unattended_helpers import Reader, idle
 
 # A port nothing else in the suite uses, so finding it means an address got out.
 PORT = 9781
 URL = f"http://127.0.0.1:{PORT}"
+# What a model's endpoint might answer: an error that repeats an address it was sent.
+LEAKY = f"The provider could not take a request that names {URL}/ and gave up."
 
 NOTIFY = AIMessage(
     content="",
@@ -95,9 +97,12 @@ def test_a_key_is_in_nothing_the_thread_index_returns_or_logs(
 def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    model = ScriptedChatModel(
+    model = FailingChatModel(
         script=[handoff("Left waiting.", "h1"), handoff("Sent once approved.", "h2")],
         final_text="Handed over.",
+        # Its fourth call fails, as a provider might that repeats what it was sent.
+        fail_on_call=4,
+        error=LEAKY,
     )
     # A saved agent on a recognizable port; a message to it needs a person's approval.
     made = make_a2a_app(model, {}, saved={"helper": {"url": URL}})
@@ -116,9 +121,21 @@ def test_an_address_is_in_nothing_the_thread_index_returns_or_logs(
         approved = seen.stream("/threads/a-done/resume", body)
         assert approved[-1] == ("end", {"status": "completed"})
 
-        statuses = index_routes(seen, "a-paused", "a-done")
+        # One that fails, with an error that names the agent's address. Its stream is the
+        # earlier route's own answer and is not searched here: this file is about what the
+        # index returns, and the earlier route sends a model's error with the address in
+        # it, which is for ``api/streaming.py`` to take out
+        # (``tests/test_agents_address_nowhere.py`` has no such run yet).
+        with client.stream(
+            "POST", "/threads/a-failed/runs", json={"message": "This one fails."}
+        ) as response:
+            failed = sse_events(response.iter_lines())
+        assert failed[-1][0] == "error"
 
-    assert statuses == {"a-paused": "needs_decision", "a-done": "done"}
+        statuses = index_routes(seen, "a-paused", "a-done", "a-failed")
+
+    # A run started the earlier way: its error went to its own reader.
+    assert statuses == {"a-paused": "needs_decision", "a-done": "done", "a-failed": "stopped"}
     # The helper did receive the approved message, so the address was in use.
     assert len(made.stub_at(URL).record.messages) == 1
     no_address(seen.texts, PORT)
@@ -186,13 +203,15 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
 def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
     make_a2a_app: Callable[..., A2aApp], sse_events: Any, caplog: pytest.LogCaptureFixture
 ) -> None:
-    model = ScriptedChatModel(
+    model = FailingChatModel(
         script=[
             handoff("Sent once approved.", "h1"),
             AIMessage(content="Handed over."),
             handoff("Left waiting.", "h2"),
         ],
         final_text="Handed over.",
+        fail_on_call=4,
+        error=LEAKY,
     )
     made = make_a2a_app(model, {}, saved={"helper": {"url": URL}})
 
@@ -210,9 +229,20 @@ def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
         assert waiting[-1][0] == "interrupt"
         assert seen.call("POST", "/threads/c-paused/stop").status_code == 409
 
-        statuses = index_routes(seen, "c-done", "c-paused")
+        # One that fails, with an error that names the agent's address: the list gives a
+        # failed console run's reason, the one text of a run it holds.
+        failed = seen.stream("/threads/c-failed/runs/unattended", {"message": "This one fails."})
+        assert failed[-1][0] == "error"
 
-    assert statuses == {"c-done": "done", "c-paused": "needs_decision"}
+        statuses = index_routes(seen, "c-done", "c-paused", "c-failed")
+        failed_row = seen.call("GET", "/threads/c-failed").json()
+
+    assert statuses == {"c-done": "done", "c-paused": "needs_decision", "c-failed": "failed"}
+    # The reason is given, to the run's reader and in the list, and it is the one that named
+    # the address, without the address: a console run's error is cleaned where it passes.
+    assert failed[-1][1]["code"] == "model_error"
+    assert "could not take a request that names" in failed[-1][1]["message"]
+    assert failed_row["error"]["message"] == failed[-1][1]["message"]
     assert len(made.stub_at(URL).record.messages) == 1
     no_address(seen.texts, PORT)
     no_address(logged(caplog), PORT)

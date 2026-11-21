@@ -1,11 +1,12 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import { STAND_IN_PORT } from "../playwright.config";
 import {
   ai,
   END,
   human,
   piece,
+  sse,
   start,
   summary,
   threadState,
@@ -24,6 +25,18 @@ let server: Server;
 // The run's stream, held open until the test has seen what it sent so far.
 let holding: ServerResponse | null = null;
 const finished = new Set<string>();
+// While true, the stand-in accepts a reading of the list and never answers it.
+let silent = false;
+// A task whose run ended another way than the first test's: how it rests, which the
+// stand-in answers a reading of it with.
+const rest = new Map<
+  string,
+  {
+    status: "stopped" | "done";
+    first: string;
+    messages: ReturnType<typeof ai>[];
+  }
+>();
 // What the web app's server passed on of each request to stop a run: the three headers the
 // service reads to tell a page of another origin from the console (api/guards.py).
 const stops: {
@@ -65,12 +78,33 @@ test.beforeAll(async () => {
       });
       // The stand-in refuses nothing: it only shows what reached it.
       response.writeHead(202, { "content-type": "application/json" });
-      response.end(JSON.stringify({ thread_id: stop[1], stopping: true }));
+      response.end(
+        JSON.stringify({ thread_id: stop[1], stopping: true, run: 1 }),
+      );
+      return;
+    }
+    if (request.method === "GET" && path === "/threads" && silent) {
+      // Accepted, and left without an answer.
       return;
     }
     const thread = path.match(/^\/threads\/([^/]+)(\/state)?$/);
     if (request.method === "GET" && thread !== null) {
       const id = thread[1];
+      const rests = rest.get(id);
+      if (rests !== undefined) {
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify(
+            thread[2] === undefined
+              ? summary(id, {
+                  first_message: rests.first,
+                  status: rests.status,
+                })
+              : threadState(id, rests.messages),
+          ),
+        );
+        return;
+      }
       if (!finished.has(id)) {
         response.writeHead(404, { "content-type": "application/json" });
         response.end(
@@ -100,6 +134,8 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   holding?.end();
+  // A request left without an answer is still open.
+  server.closeAllConnections();
   await new Promise<void>((resolve) => server.close(() => resolve()));
 });
 
@@ -125,6 +161,95 @@ test("a run's reply reaches the page through the console's forwarding before the
   holding = null;
   await expect(page.getByText("Done", { exact: true })).toBeVisible();
   await expect(conversation).toContainText(REPLY);
+});
+
+// 007, FR-022, FR-022a, User Story 5: Stop on the page that started the run and is reading
+// its stream, which is where a person most often presses it. The specs that hand a page
+// its answers whole can only show Stop on a run the page follows by reading
+// (tasks-run.spec.ts); here the stream is open while Stop is pressed, and the page learns
+// how the run ended from the run's last event.
+const STOPPING = "The run is stopping. The step under way completes first.";
+const TOO_LATE =
+  "The run ended before the stop took effect. The task is shown as it ended.";
+const conversation = (page: Page) =>
+  page.getByRole("list", { name: "Conversation" });
+const words = (page: Page, text: string) =>
+  page.getByText(text, { exact: true });
+
+/** Start a task from the section and wait for its reply to arrive; the task's id. */
+async function startTask(page: Page, text: string): Promise<string> {
+  await page.goto("/tasks");
+  await page.getByRole("button", { name: "New task" }).click();
+  await page.getByLabel("What should Freyja do?").fill(text);
+  await page.getByRole("button", { name: "Send" }).click();
+  await expect(page).toHaveURL(/\/tasks\/[0-9a-f]{32}$/);
+  await expect(conversation(page)).toContainText(REPLY, { timeout: 10_000 });
+  return new URL(page.url()).pathname.split("/").at(-1) ?? "";
+}
+
+test("Stop on the page that reads the run's stream says stopping, and stopped once the run's last event does", async ({
+  page,
+}) => {
+  const id = await startTask(page, "Read every file.");
+
+  await page
+    .getByRole("button", { name: "Stop the run of the task: Read every file." })
+    .click();
+
+  // Stopping, in words, and no second Stop. The stream is still open: nothing has told
+  // the page how the run ended, so it does not say stopped.
+  await expect(page.getByText(STOPPING)).toBeVisible();
+  await expect(page.getByRole("button", { name: /^Stop/ })).toHaveCount(0);
+  await expect
+    .poll(() => stops.filter(({ thread }) => thread === id))
+    .toHaveLength(1);
+  await expect(words(page, "Stopped")).toBeHidden();
+
+  // The step under way completes, and the run's last event says it ended as stopped.
+  rest.set(id, {
+    status: "stopped",
+    first: "Read every file.",
+    messages: [human("Read every file."), ai(REPLY)],
+  });
+  expect(holding).not.toBeNull();
+  holding?.end(sse("end", { status: "stopped" }));
+  holding = null;
+
+  await expect(words(page, "Stopped")).toBeVisible();
+  await expect(page.getByText(STOPPING)).toBeHidden();
+  await expect(page.getByText(TOO_LATE)).toBeHidden();
+  await expect(conversation(page)).toContainText(REPLY);
+  // One press sent one stop, and a follow-up can continue the task.
+  expect(stops.filter(({ thread }) => thread === id)).toHaveLength(1);
+  await expect(
+    page.getByLabel("Send another message on this task"),
+  ).toBeEnabled();
+});
+
+test("a run that ends by itself after Stop was pressed is shown as it ended, and the page says the stop came too late", async ({
+  page,
+}) => {
+  const id = await startTask(page, "Say hello.");
+
+  await page.getByRole("button", { name: /^Stop/ }).click();
+  await expect(page.getByText(STOPPING)).toBeVisible();
+  await expect
+    .poll(() => stops.filter(({ thread }) => thread === id))
+    .toHaveLength(1);
+
+  // The reply under way asked for nothing more: the run finished before a stop applied.
+  rest.set(id, {
+    status: "done",
+    first: "Say hello.",
+    messages: [human("Say hello."), ai(REPLY)],
+  });
+  holding?.end(END);
+  holding = null;
+
+  await expect(words(page, "Done")).toBeVisible();
+  await expect(page.getByText(TOO_LATE)).toBeVisible();
+  await expect(words(page, "Stopped")).toBeHidden();
+  await expect(page.getByText(STOPPING)).toBeHidden();
 });
 
 // 007, FR-024: the service turns a page of another origin away by what the browser says of
@@ -215,4 +340,31 @@ test("a page cannot choose the name the console tells the service it was asked u
   const seen = stops.find(({ thread }) => thread === "forged-name");
   expect(seen?.asked).toBe(asked);
   expect(hosts.get("forged-name")).toBe(`127.0.0.1:${STAND_IN_PORT}`);
+});
+
+// 007, FR-006 (T083): the service accepts a reading and never answers it. The web app's
+// server gives up forwarding it after 30 seconds, and the page then says what it says of a
+// service that is down: nothing is left shown as if it were current. The test waits those
+// 30 seconds in each browser; nothing shorter shows what the forwarding does.
+test("the section says the service cannot be reached when a reading of the list gets no answer", async ({
+  page,
+}) => {
+  test.setTimeout(90_000);
+  silent = true;
+  try {
+    await page.goto("/tasks");
+    const section = page.getByRole("main");
+    // Until then the list is being read: no row, and no word that there is no task.
+    await expect(section.getByText("Loading tasks")).toBeAttached();
+    await expect(
+      section.getByText("The Freyja service cannot be reached."),
+    ).toBeVisible({ timeout: 60_000 });
+    await expect(
+      section.getByRole("button", { name: "Try again" }),
+    ).toBeVisible();
+    await expect(section.getByRole("list", { name: "Tasks" })).toHaveCount(0);
+    await expect(section.getByText(/There is no task yet/)).toHaveCount(0);
+  } finally {
+    silent = false;
+  }
 });

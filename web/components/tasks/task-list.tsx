@@ -22,6 +22,9 @@ const WHEN = new Intl.DateTimeFormat("en", {
 
 function Row({ task }: { task: ThreadSummary }) {
   const begins = task.first_message ?? "";
+  // The service gives a reason with `failed` only; with any other status it is not shown.
+  const reason =
+    task.status === "failed" ? (task.error?.message ?? null) : null;
   return (
     <li>
       <Link
@@ -29,8 +32,16 @@ function Row({ task }: { task: ThreadSummary }) {
         className="flex flex-col gap-1 rounded-lg border p-3 hover:bg-muted/40 focus-visible:outline-2 sm:flex-row sm:items-center sm:gap-4"
       >
         {/* Plain text: how a message begins is never rendered as markup (FR-012). */}
-        <span className="min-w-0 flex-1 truncate text-sm">
-          {begins === "" ? `Task ${task.thread_id}` : begins}
+        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <span className="truncate text-sm">
+            {begins === "" ? `Task ${task.thread_id}` : begins}
+          </span>
+          {/* Why it failed, in the service's words, as text too (FR-003). */}
+          {reason !== null && (
+            <span className="line-clamp-2 text-xs text-muted-foreground">
+              {reason}
+            </span>
+          )}
         </span>
         <TaskStatus status={task.status} />
         <time
@@ -55,7 +66,11 @@ export function TaskList() {
     unknown
   >(THREADS_KEY, listThreads, { shouldRetryOnError: false });
   useEvery(THREADS_KEY, LIST_SECONDS, () => {
-    void mutate();
+    // Not while a reading is under way: a new one would take its place, and with a
+    // service slower than the period none would ever be shown.
+    if (!isValidating) {
+      void mutate();
+    }
   });
 
   if (error !== undefined) {

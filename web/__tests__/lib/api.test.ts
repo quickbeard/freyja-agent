@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { stubFetch } from "@/__tests__/testing";
-import { ApiError, api, isGone, stream } from "@/lib/api";
+import { ANSWER_SECONDS, ApiError, api, isGone, stream } from "@/lib/api";
 
 async function refusal(run: Promise<unknown>): Promise<ApiError> {
   try {
@@ -237,5 +237,125 @@ describe("stream", () => {
       stream("/threads/t-1/runs/unattended", { message: "hi" }),
     );
     expect([error.status, error.code]).toEqual([500, "unreachable"]);
+  });
+});
+
+// Phase 11 (T083): a request the service accepts and never answers. The web app's own
+// forwarding gives up after 30 seconds, which is "cannot be reached" above; this is the
+// limit of the function itself, for what the forwarding does not end.
+describe("a request that gets no answer", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  /** A `fetch` that answers nothing, and fails as a browser's does once it is given up. */
+  function silentFetch() {
+    const stub = vi.fn(
+      (_input: RequestInfo | URL, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () =>
+            reject(new DOMException("The request was given up.", "AbortError")),
+          );
+        }),
+    );
+    vi.stubGlobal("fetch", stub);
+    return stub;
+  }
+
+  it("is given up after the limit, and said to have had no answer", async () => {
+    vi.useFakeTimers();
+    silentFetch();
+    const asked = refusal(api("/threads"));
+    let settled = false;
+    void asked.then(() => {
+      settled = true;
+    });
+
+    await vi.advanceTimersByTimeAsync(ANSWER_SECONDS * 1000 - 1);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    const error = await asked;
+
+    // The code a page already handles: no answer came, so nothing is known.
+    expect(error.status).toBe(0);
+    expect(error.code).toBe("unreachable");
+    expect(error.message).toBe(
+      `The Freyja service did not answer within ${ANSWER_SECONDS} seconds. Check that it is running, then try again.`,
+    );
+  });
+
+  it("says of a request that changes something that it may have been taken", async () => {
+    vi.useFakeTimers();
+    silentFetch();
+    const asked = refusal(api("/threads/t-1/stop", { method: "POST" }));
+    await vi.advanceTimersByTimeAsync(ANSWER_SECONDS * 1000);
+    const error = await asked;
+    expect(error.code).toBe("unreachable");
+    expect(error.message).toBe(
+      `The Freyja service did not answer within ${ANSWER_SECONDS} seconds. It may still have taken the request: read again before sending it once more.`,
+    );
+  });
+
+  it("is given up too when the answer began and its body never ended", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async (_input: RequestInfo | URL, init?: RequestInit) =>
+          ({
+            ok: true,
+            status: 200,
+            json: () =>
+              new Promise((_resolve, reject) => {
+                init?.signal?.addEventListener("abort", () =>
+                  reject(new DOMException("Given up.", "AbortError")),
+                );
+              }),
+          }) as unknown as Response,
+      ),
+    );
+    const asked = refusal(api("/threads"));
+    await vi.advanceTimersByTimeAsync(ANSWER_SECONDS * 1000);
+    expect((await asked).code).toBe("unreachable");
+  });
+
+  it("leaves no timer behind once an answer came", async () => {
+    vi.useFakeTimers();
+    stubFetch({ json: { status: "ok" } });
+    await api("/healthz");
+    expect(vi.getTimerCount()).toBe(0);
+    stubFetch({ fails: "refused" });
+    await refusal(api("/healthz"));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives a run's stream the same limit until its answer begins, and none after", async () => {
+    vi.useFakeTimers();
+    silentFetch();
+    const asked = refusal(stream("/threads/t-1/runs/unattended", {}));
+    await vi.advanceTimersByTimeAsync(ANSWER_SECONDS * 1000);
+    const error = await asked;
+    expect(error.code).toBe("unreachable");
+    expect(error.message).toMatch(/It may still have taken the request/);
+
+    // Once the answer has begun, the run may last as long as it does: the body is the
+    // caller's to read, and no timer is left to end it.
+    let signal: AbortSignal | null | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+        signal = init?.signal;
+        return new Response("event: end\n\n", {
+          status: 200,
+          headers: { "content-type": "text/event-stream" },
+        });
+      }),
+    );
+    const body = await stream("/threads/t-1/runs/unattended", {});
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(ANSWER_SECONDS * 10_000);
+    expect(signal?.aborted).toBe(false);
+    expect(await new Response(body).text()).toBe("event: end\n\n");
   });
 });

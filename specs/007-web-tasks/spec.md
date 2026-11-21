@@ -24,7 +24,7 @@ Changes made while planning, where the research found that the spec asked for mo
 
 - The reason of a failed run (FR-003) is given for a run started through the console. How a run ended is known only to whoever read its stream; a run another client or the service itself started, and that failed, is listed as stopped ([research.md](research.md) R7).
 - When a task last changed (FR-002) is, while a run is in progress, when that run started (R7).
-- That a stream reaches the page as it is produced (FR-028) was shown by hand in both browsers (R1). It holds only when the service's answer says that it must not be transformed and stays active, which automated tests of the service pin; the end-to-end tests do not repeat the proof.
+- That a stream reaches the page as it is produced (FR-028) was shown by hand in both browsers (R1). It holds only when the service's answer says that it must not be transformed and stays active, which automated tests of the service pin; the end-to-end tests did not repeat the proof when this was written, and do since Phase 4 (`web/e2e/stream.spec.ts`).
 - Two edge cases were added: a stop applied before an approved action started, and the step limit of a run that goes on without a reader (R4).
 - The three things listed as not proven are settled (Assumptions, "Proven in the plan's research").
 
@@ -48,6 +48,16 @@ Changes made after `/speckit-analyze` cross-checked the spec, the plan, and the 
 - FR-027 names the tests of the sidebar as changed, not only as given more setup.
 - FR-022a says which page can tell that a stop came too late: the one that asked for it.
 - The limits list gains the three numbers the plan and the checklist review had added.
+
+### Convergence, 2026-11-21
+
+Changes made in Phase 11, after `/speckit-converge` read the code against this document;
+the plan's "Phase 11 as built" lists every finding.
+
+- FR-001a holds for what this feature adds to the console: the Tasks section, a task's page, and the sidebar's Tasks entry. The owner decided this on 2026-11-21. The Agents section, which feature 005 built before this feature chose its words, still writes "pending task" for an agent task and "thread" for a task; rewording it is that section's to do, and is recorded as open in the plan.
+- FR-013 says what a page that is hidden does: it reads nothing, and reads the task again when it is shown.
+- The edge case of a list that cannot be kept says what holds: a run is never failed for the list, and is held up for it by five seconds at most each time the list is written or looked up for it, which is twice before a run started through the console sends its first event.
+- That a stream reaches the page as it is produced is shown by an end-to-end test since Phase 4 (`web/e2e/stream.spec.ts`); the note of 2026-11-20 below says that it was not.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -188,7 +198,7 @@ The person has the console open and visits another web page in the same browser.
 - **The service is stopped while a run goes on without a page.** Stopped in the ordinary way, the service treats the run as if a person had asked to stop it: the step under way completes and is recorded, no further step starts, and the task is listed as stopped (FR-021). Stopping the service can therefore take as long as one step is allowed to. A page that was reading the run's stream sees it end at once, without its last event, and follows the task by reading once the service is back (FR-010). Nothing starts the run again by itself; a follow-up continues it.
 - **The service is killed or fails while a run goes on.** The step under way is lost, as feature 001 accepts for any run: an action in it can have taken effect without its result being recorded, and its proposal can show as pending again. Steps already completed are kept. Once the run's marker expires, the task is listed as stopped, and a follow-up continues it.
 - **Stop is pressed and the run then pauses on a proposal**, because the reply that was under way asked for an action that needs approval. Nothing ran without approval. The task needs a decision, is not shown as stopped, and the page says that the run ended before the stop took effect (FR-022a).
-- **The list cannot be kept or read.** A run is never held up or failed for it (FR-023). A thread whose run could not be recorded is missing from the list until its next run or until it is opened. While the list cannot be read, the section and the sidebar say so and show nothing as current.
+- **The list cannot be kept or read.** A run is never failed for it, and is held up for it by five seconds at most each time the list is written or looked up for it (FR-023). A thread whose run could not be recorded is missing from the list until its next run or until it is opened. While the list cannot be read, the section and the sidebar say so and show nothing as current.
 - **A page does not keep up with a run's stream**, because its connection is slow. The service disconnects it from the stream; the run goes on, and the page follows the task by reading it again (FR-010, FR-013).
 - **Many tasks are started at once.** Each runs to its end without anyone watching. No limit on how many run at the same time is added in the first version; each is bounded by the step limit, as today.
 - **Two people decide the same proposal.** The first decision is applied. The second is refused by the service, and that person's page says the proposal was already decided and shows the task as it is. Who decided is not recorded, since the service has no users.
@@ -210,7 +220,7 @@ The person has the console open and visits another web page in the same browser.
 **The section and the list**
 
 - **FR-001**: The console MUST have a Tasks section, with an entry in the sidebar beside LLM and Agents. The entry MUST show the number of tasks that need a decision, in every section of the console, in words as well as in a number and never by color alone, and MUST show no number when there are none. The number counts every task of the service, not only the rows the list shows.
-- **FR-001a**: The console MUST call what a person hands Freyja a task, and what a delegate agent works on an agent task, in every place it names either: a heading, a status, a count, a message of its own. It MUST NOT call an agent task a task. What Freyja and the agents write themselves is shown as written. The service's API and its existing names are not changed by the console's choice of word: a task is a thread there.
+- **FR-001a**: In what this feature adds to it, the Tasks section, a task's page, and the sidebar's Tasks entry, the console MUST call what a person hands Freyja a task, and what a delegate agent works on an agent task, in every place it names either: a heading, a status, a count, a message of its own. It MUST NOT call an agent task a task. What Freyja and the agents write themselves is shown as written. The service's API and its existing names are not changed by the console's choice of word: a task is a thread there.
 - **FR-002**: The section MUST list one row per task, with the beginning of the task's first message, its status (FR-003), and when it last changed, which is when the service last recorded a step of it and, while a run is in progress, when that run started. Tasks that need a decision MUST come first, then the others with the most recently changed first. A row MUST open the task's page. With no task, the section MUST say so. The section MUST have a New task control.
 - **FR-003**: A task has exactly one status, the first of these that holds:
   1. **Running**: a run is in progress on it, on any service instance.
@@ -237,7 +247,7 @@ The person has the console open and visits another web page in the same browser.
 - **FR-011**: When a run ends with an error, the page MUST say that it failed and give the service's reason. When the reason is that no usable model is active, it MUST point to the LLM section. The task MUST stay usable: the person can send another message.
 - **FR-012**: All text of a task MUST be shown as plain text, whether it comes from the model, a tool, an agent, a tool server, the service, or a person: messages, action names, descriptions, arguments, results, reasons, and the beginning of a first message in the list. Nothing in it is rendered as markup, loaded, or followed as a link.
 - **FR-012a**: Every control of the section MUST be reachable and usable with the keyboard and MUST carry a name that says what it does and, for a decision, on which action. A status, the number on the sidebar, and that a run is in progress or stopping MUST be given in words and never by color or an icon alone.
-- **FR-013**: A page that is not reading a run's stream, because it was opened or reloaded after the run started or because the run was started elsewhere, cannot join it in the first version. While such a run is in progress the page MUST say so, MUST show the conversation as far as the service holds it, MUST read the task again at least every five seconds until the run has ended, and MUST offer no way to send a message or a decision meanwhile. A page that shows a task with a pending agent task MUST read the task again at least every fifteen seconds.
+- **FR-013**: A page that is not reading a run's stream, because it was opened or reloaded after the run started or because the run was started elsewhere, cannot join it in the first version. While such a run is in progress the page MUST say so, MUST show the conversation as far as the service holds it, MUST read the task again at least every five seconds until the run has ended, and MUST offer no way to send a message or a decision meanwhile. A page that shows a task with a pending agent task MUST read the task again at least every fifteen seconds. A page that is hidden, as a tab in the background is, reads nothing, and MUST read the task again when it is shown.
 
 **Deciding a proposal**
 

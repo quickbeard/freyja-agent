@@ -205,6 +205,10 @@ test("the list shows one row per task, the ones that need a decision first", asy
         summary("failed", {
           first_message: "List the files.",
           status: "failed",
+          error: {
+            code: "step_limit",
+            message: "The run reached the limit of 50 steps and was ended.",
+          },
           changed_at: "2026-11-20T08:30:00Z",
         }),
         summary("done", {
@@ -225,6 +229,10 @@ test("the list shows one row per task, the ones that need a decision first", asy
   await expect(rows(page).nth(0)).toContainText("Needs your decision");
   await expect(rows(page).nth(1)).toContainText("Running");
   await expect(rows(page).nth(2)).toContainText("Failed");
+  // A failed task's row gives the service's reason (FR-003).
+  await expect(rows(page).nth(2)).toContainText(
+    "The run reached the limit of 50 steps and was ended.",
+  );
   await expect(rows(page).nth(3)).toContainText("Done");
   await expect(rows(page).nth(0).getByRole("link")).toHaveAttribute(
     "href",
@@ -243,6 +251,51 @@ test("the sidebar says how many tasks need a decision, on another section", asyn
 
   await expect(tasksItem(page)).toContainText("3 to decide");
   expect(await said(page)).toBe("3 tasks need a decision");
+});
+
+// SC-004, FR-006 (T084): a task that comes to need a decision elsewhere is announced
+// within fifteen seconds, on any section, by the list's timer alone: nothing on this page
+// is pressed and nothing is reloaded. The change is made just after a reading, which is
+// when the next one is furthest away, and the page's clock is paused, so that no time
+// passes but what the test lets pass: thirteen seconds, which leave the reading its own.
+test("the sidebar's number appears within fifteen seconds of a change made elsewhere, by the timer alone", async ({
+  page,
+}) => {
+  await answerProfiles(page, { list: profileList(environmentProfile()) });
+  let waiting = 0;
+  let readings = 0;
+  await page.route("**/api/threads", async (route) => {
+    readings += 1;
+    await route.fulfill({
+      json: {
+        threads: [],
+        needs_decision: waiting,
+        total: waiting,
+        more: false,
+      },
+    });
+  });
+  await page.clock.install();
+  await page.goto("/llm");
+  await expect(tasksEntry(page)).toBeVisible();
+  await expect.poll(() => readings).toBeGreaterThan(0);
+  await expect(tasksItem(page)).not.toContainText("to decide");
+  await page.clock.pauseAt(Date.now() + 2_000);
+
+  // On to the next reading the timer makes, a second at a time.
+  const first = readings;
+  for (let second = 0; readings === first && second < 30; second += 1) {
+    await page.clock.runFor(1_000);
+    await page.waitForTimeout(100);
+  }
+  expect(readings).toBe(first + 1);
+
+  waiting = 1;
+  await page.clock.runFor(13_000);
+
+  await expect(tasksItem(page)).toContainText("1 to decide");
+  expect(await said(page)).toBe("1 task needs a decision");
+  expect(readings).toBe(first + 2);
 });
 
 test("the number goes once the proposal is decided, without a reload", async ({
@@ -271,14 +324,118 @@ test("the number goes once the proposal is decided, without a reload", async ({
   expect(await said(page)).toBeNull();
 });
 
-test("with the service stopped, the list says so and the sidebar shows no number", async ({
+test("with the service stopped, the list says so and the sidebar says the number is not known", async ({
   page,
 }) => {
   await page.goto("/tasks");
   await expect(alerts(page)).toContainText(UNREACHABLE);
   await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
   await expect(page.getByRole("list", { name: "Tasks" })).toBeHidden();
+  // No number, and not the look of "none need a decision" either (T085).
   await expect(tasksItem(page)).not.toContainText("to decide");
+  await expect(tasksItem(page)).toContainText("not known");
+  expect(await said(page)).toBe(
+    "How many tasks need a decision is not known: the list of tasks could not be read.",
+  );
+});
+
+// Edge Cases, "The Tasks section is opened in a narrow window": every control stays
+// reachable, as in the LLM and Agents sections (T094).
+test.describe("the Tasks section in a narrow window", () => {
+  // Under the sidebar's 768-pixel breakpoint, and narrower than a phone held upright.
+  test.use({ viewport: { width: 360, height: 740 } });
+
+  const NARROW = "0123456789abcdef0123456789abcdef";
+  /**
+   * What reaches past the window's right edge, so that part of the page is out of reach:
+   * nothing, when the page fits. Each is named by its tag and how its text begins.
+   */
+  const overflows = (page: Page) =>
+    page.evaluate(() => {
+      const width = document.documentElement.clientWidth;
+      if (document.documentElement.scrollWidth <= width) {
+        return [];
+      }
+      return [...document.querySelectorAll("main *")]
+        .filter((element) => element.getBoundingClientRect().right > width + 1)
+        .map(
+          (element) =>
+            `${element.tagName.toLowerCase()}: ${(element.textContent ?? "").slice(0, 40)}`,
+        );
+    });
+  /** Whether a control lies within the window's width, once it is scrolled to. */
+  async function reachable(page: Page, name: string | RegExp) {
+    const control = page.getByRole("button", { name });
+    await control.scrollIntoViewIfNeeded();
+    await expect(control).toBeVisible();
+    const box = await control.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box?.x ?? -1).toBeGreaterThanOrEqual(0);
+    expect((box?.x ?? 0) + (box?.width ?? 0)).toBeLessThanOrEqual(360);
+  }
+
+  test("the list, New task, and a task with a proposal keep every control within reach", async ({
+    page,
+  }) => {
+    const long =
+      "Tell #ops that the quarterly report is ready, and name every team that still has to read it before Friday.";
+    const task = pausedTask(NARROW, long, proposal("int-1", notify()));
+    const service = new TaskService();
+    service.tasks.set(NARROW, task);
+    service.answerDecisionsWith(() =>
+      continued(task, "Notification to #ops recorded.", "Sent."),
+    );
+    await service.serve(page);
+
+    // The list: the notice, New task, and the row, none wider than the window.
+    await page.goto("/tasks");
+    await expect(rows(page)).toHaveCount(1);
+    await expect(rows(page).first()).toContainText("Needs your decision");
+    expect(await overflows(page)).toEqual([]);
+    await reachable(page, "New task");
+
+    // The sidebar is a sheet here; its Tasks entry says the number in words.
+    await page.locator('[data-sidebar="trigger"]').click();
+    const sheet = page.getByRole("dialog");
+    await expect(sheet.getByRole("link", { name: "Tasks" })).toBeVisible();
+    await expect(sheet).toContainText("1 to decide");
+    await page.keyboard.press("Escape");
+    await expect(sheet).toBeHidden();
+
+    // New task: the box and the button that sends.
+    await page.getByRole("button", { name: "New task" }).click();
+    await expect(page.getByLabel("What should Freyja do?")).toBeVisible();
+    await reachable(page, "Send");
+    expect(await overflows(page)).toEqual([]);
+
+    // A task's page with a proposal, reached from its row: each decision.
+    await page.goto("/tasks");
+    await rows(page).first().getByRole("link").click();
+    await expect(page).toHaveURL(new RegExp(`/tasks/${NARROW}$`));
+    await expect(
+      page.getByRole("article", { name: "Proposed action send_notification" }),
+    ).toBeVisible();
+    expect(await overflows(page)).toEqual([]);
+    await reachable(page, "Approve send_notification");
+    await reachable(page, "Edit the arguments of send_notification");
+    await reachable(page, "Reject send_notification");
+
+    // And a decision can be sent from there.
+    await page
+      .getByRole("button", { name: "Edit the arguments of send_notification" })
+      .click();
+    await expect(
+      page.getByLabel("Arguments for send_notification, as JSON"),
+    ).toBeVisible();
+    await reachable(page, "Approve send_notification with these arguments");
+    expect(await overflows(page)).toEqual([]);
+    await page
+      .getByRole("button", { name: "Approve send_notification as proposed" })
+      .click();
+    await expect(page.getByText("Done", { exact: true })).toBeVisible();
+    expect(service.decided).toHaveLength(1);
+    expect(await overflows(page)).toEqual([]);
+  });
 });
 
 test("a thread another client started is a row like any other, and opens", async ({

@@ -98,6 +98,12 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: the index could not be read. Never an earlier row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /threads/{thread_id}/runs/unattended:
     parameters:
       - $ref: "#/components/parameters/ThreadId"
@@ -137,6 +143,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: this instance cannot run a task without a reader, which no instance
+            the service starts answers. Nothing was started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /threads/{thread_id}/resume/unattended:
     parameters:
       - $ref: "#/components/parameters/ThreadId"
@@ -179,8 +192,15 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: >
-            `run_active`, `nothing_pending`, or `proposal_mismatch`, as for the existing
-            route. Nothing ran and a pending proposal is unchanged.
+            `run_active`, `nothing_pending`, `proposal_mismatch`, or `already_decided`
+            (a step of the paused run has already taken other decisions for the proposal),
+            as for the existing route. Nothing ran and a pending proposal is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: >
+            `internal`: as for `runs/unattended`. Nothing ran.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -223,6 +243,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: the index could not be read or written. Whether the stop was marked
+            is not known; the thread's row says.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   parameters:
     ThreadId:
@@ -266,7 +293,7 @@ components:
       enum: [running, needs_decision, failed, stopped, waiting_for_agent, done]
     ThreadSummary:
       type: object
-      required: [thread_id, first_message, status, error, created_at, changed_at, stoppable, stopping]
+      required: [thread_id, first_message, status, error, created_at, changed_at, stoppable, stopping, runs]
       properties:
         thread_id: { type: string }
         first_message:
@@ -275,7 +302,7 @@ components:
           description: The beginning of the thread's first message from a person. Null until it is known.
         status: { $ref: "#/components/schemas/ThreadStatus" }
         error:
-          description: With `failed`, the code and the message of the run's `error` event, as they were sent. Null otherwise.
+          description: With `failed`, the code and the message of the run's `error` event, as they were sent to the reader of a run started through the unattended routes, with an agent's address taken out of the message. Null otherwise.
           oneOf:
             - type: "null"
             - type: object
@@ -294,6 +321,11 @@ components:
         stopping:
           type: boolean
           description: True when a stop was asked for the run in progress and the run has not ended yet.
+        runs:
+          type: integer
+          description: >
+            How many runs have started on the thread. The status is of the last of them, so
+            a client that asked to stop run `n` knows whether a row still speaks of that run.
     ThreadList:
       type: object
       required: [threads, needs_decision, total, more]
@@ -312,10 +344,13 @@ components:
           description: True when `total` is greater than the number of rows returned.
     StopAnswer:
       type: object
-      required: [thread_id, stopping]
+      required: [thread_id, stopping, run]
       properties:
         thread_id: { type: string }
         stopping: { type: boolean, const: true }
+        run:
+          type: integer
+          description: Which of the thread's runs the stop was asked for, `runs` of its row at that time.
     Error:
       type: object
       required: [detail]

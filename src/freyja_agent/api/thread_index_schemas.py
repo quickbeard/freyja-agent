@@ -34,6 +34,9 @@ class ThreadSummary(BaseModel):
     stoppable: bool
     # True when a stop was asked for the run in progress and the run has not ended yet.
     stopping: bool
+    # How many runs have started on the thread. The status is of the last of them, so a
+    # client that asked to stop run ``n`` knows whether a row still speaks of that run.
+    runs: int
 
 
 class ThreadList(BaseModel):
@@ -49,3 +52,5 @@ class ThreadList(BaseModel):
 class StopAnswer(BaseModel):
     thread_id: str
     stopping: Literal[True] = True
+    # Which of the thread's runs the stop was asked for: ``runs`` of its row at that time.
+    run: int

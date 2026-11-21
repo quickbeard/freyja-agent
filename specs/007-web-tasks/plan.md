@@ -73,8 +73,9 @@ one table, plus one read of a thread's state for each run that ended since the l
 asked for (R6). The first event of a run within one second, as today (001 SC-001).
 
 **Constraints**: nothing of the other session's files changes (R16). No new setting, no new
-dependency, no change to a CI file, `pyproject.toml`, `web/vitest.config.mts`,
-`.gitleaks.toml`, or `web/playwright.config.ts`. The existing thread routes behave as before
+dependency, no change to a CI file, `pyproject.toml`, `web/vitest.config.mts`, or
+`.gitleaks.toml`. `web/playwright.config.ts` was changed once, in Phase 4 and with the
+owner's word, for the two projects of `web/e2e/stream.spec.ts`. The existing thread routes behave as before
 for a client that is not a web page (FR-027). Coverage floors: 88% of the service's lines and
 90% of each web measure.
 
@@ -93,7 +94,7 @@ Checked against constitution 1.5.0.
 | I. Human approval for environment-changing actions | Yes, central | No tool is added or reclassified and the gate is not changed. A decision from the console goes through the existing `resume_run` and its validation: the new route calls that function and adds nothing to it (R3). A run without a reader pauses exactly as one with a reader, because the pause is inside `run_stream` and the graph, which are not changed; it stays resumable after any delay, since the proposal is in the thread as before. A stop is applied only between steps, so it never cuts off an action a person approved and never causes one to run twice (R4); an approved action that had not started when the stop was applied does not start. The page offers the service's three decisions, only those the service lists for an action, and has no way to decide in advance or by itself (R14). | PASS | PASS |
 | II. Protocol-based delegation | No | No delegate is added or reached. Agent tasks are read from the store that exists, and shown. | PASS | PASS |
 | III. One runtime, every environment | Yes, central | `build_agent` stays the only assembly point and `run_stream` the only run loop: an unattended run is the same generator, driven by a task where a response drove it (R2). `SegmentedGraph` wraps the graph `build_agent` made and calls its `astream`; it builds nothing (R4). The web app is a client of the API only: it holds no credential, calls no model, agent, or tool, has no Server Action or Route Handler, and reads a task's status from the service and works none out (R7, R11). Tests run the production routes through the test client. | PASS | PASS |
-| IV. Configuration through settings | Yes | No setting is added, on the service or in the web app, and nothing an operator manages: a task is a thread, which is data, not configuration. Seven numbers are fixed by the specification and are constants beside the code that applies them, as feature 005 fixed its own (twenty agents, 2,000 characters of a card's text, four card reads at once): 100 rows in the list, 200 characters of a first message, 2,000 characters of a failed run's reason, and the pages' 5 and 15 seconds are what a person meets, the same on every deployment. Two are not about what a person meets and are the ones a deployment could want to change: the ping every 10 seconds, which follows from the 30 seconds of the console's own forwarding and not from where the service runs, and the 1,000 events held for a reader that does not keep up, which bounds memory per reader. Both are kept as constants because nothing a deployment configures today changes what they rest on; making them `FREYJA_*` settings is the owner's call and is named in the analysis pull request. | PASS | PASS |
+| IV. Configuration through settings | Yes | No setting is added, on the service or in the web app, and nothing an operator manages: a task is a thread, which is data, not configuration. Seven numbers are fixed by the specification and are constants beside the code that applies them (two more are fixed by what was built and are constants too: `INDEX_WRITE_SECONDS`, the five seconds a lease waits for the index, since Phase 2, and `ANSWER_SECONDS`, the 35 seconds the console waits for an answer, since Phase 11), as feature 005 fixed its own (twenty agents, 2,000 characters of a card's text, four card reads at once): 100 rows in the list, 200 characters of a first message, 2,000 characters of a failed run's reason, and the pages' 5 and 15 seconds are what a person meets, the same on every deployment. Two are not about what a person meets and are the ones a deployment could want to change: the ping every 10 seconds, which follows from the 30 seconds of the console's own forwarding and not from where the service runs, and the 1,000 events held for a reader that does not keep up, which bounds memory per reader. Both are kept as constants because nothing a deployment configures today changes what they rest on; making them `FREYJA_*` settings is the owner's call and is named in the analysis pull request. | PASS | PASS |
 | V. Automated quality gates | Yes | Every requirement has a test (map below). The default suites need no network, database, model, or agent. Store calls are async; SQL is composed with psycopg's `sql` module and carries the `# nosemgrep` mark `AGENTS.md` describes. The web app passes `biome check` and its Vitest suite with coverage. No Ruff suppression is planned. One thing the gates do not measure is said where it applies: CI does not run the Postgres tests, so the Postgres index counts against the coverage number. | PASS | PASS |
 | VI. Deterministic guardrails before model judgment | Yes | Where a run may be stopped is a fixed rule of the run loop's wrapper, the two node names, checked at startup; no model is asked whether a step may be cut. A task's status is a fixed order over recorded facts (R7). The refusal of other origins is a fixed check before any route's work (R9). | PASS | PASS |
 | Technology constraints | Yes | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; streaming over server-sent events through sse-starlette; the Postgres pool; Ruff only. The web app stays Next.js with TypeScript, pnpm, Biome, and Vitest. | PASS | PASS |
@@ -127,9 +128,10 @@ Clarifications under "Plan, 2026-11-20":
 - **FR-002, when a task last changed.** While a run is in progress it is when that run
   started; the time of the last recorded step is read when the run has ended (R7).
 - **FR-028, the proof that a stream arrives as it is produced.** It was made by hand in both
-  browsers (R1). The end-to-end tests cannot repeat it without a change to
-  `web/playwright.config.ts`, which this plan does not make; service tests pin the header and
-  the ping it rests on (R15).
+  browsers (R1). The end-to-end tests could not repeat it without a change to
+  `web/playwright.config.ts`, which this plan did not make; that change was made in Phase 4
+  with the owner's word, and `web/e2e/stream.spec.ts` repeats the proof since. Service tests
+  pin the header and the ping it rests on (R15).
 
 Two edge cases are added: a stop that is applied before an approved action started, and the
 step limit of a run that goes on without a reader (R4).
@@ -1014,3 +1016,96 @@ The next step is `/speckit-converge`.
 
 No violation of the constitution to justify. The three additions that carry complexity are
 justified under Constitution Check.
+
+## Phase 11 as built
+
+Convergence: the twenty tasks `/speckit-converge` appended after Phase 10 (T078 to T097).
+Each has its test, shown to fail without its fix.
+
+**What was built, where it differs from its task or adds to it**:
+
+- **T078**: a failed task's row gives the service's reason, under how the message begins.
+  The reason is shown with `failed` only, since the service gives one with no other status.
+- **T079**: two tests in `web/e2e/stream.spec.ts` press Stop on the page that reads the
+  run's stream, one where the run then ends as stopped and one where it finishes first.
+- **T080**: `parseArguments` refuses text that holds a whole number beyond 2^53, however it
+  is written, or a number too large to hold at all, and names it; the card says when a
+  proposed argument is such a number. The page cannot show such an argument as proposed:
+  a browser has changed it by the time the page has the answer. Reading the answer's text
+  without losing digits was not built; approving sends no arguments, so it stays exact. A
+  number such as `1e30`, which is whole and beyond 2^53, is refused too, though a service
+  would read it as the browser does: the page cannot tell it from a 22-digit id, which a
+  browser writes the same way.
+- **T081**: the owner chose to narrow FR-001a to what this feature adds. No file of
+  feature 005 was edited.
+- **T082**: a row has `runs` and the answer to a stop has `run`. A page that follows a run
+  by reading says "too late" only of the run it stopped; when the row is of a later run it
+  says nothing of how the earlier one ended, since nothing keeps that. A reading of the
+  same run that says "running" and not "stopping" was made before the stop: the page goes
+  on saying "stopping", where it used to drop it.
+- **T083**: `api()` and `stream()` give up after `ANSWER_SECONDS` (35), `stream()` only
+  until its answer begins. Measured first: the console's own forwarding ends a request the
+  service does not answer after 30.0 seconds, with a 500 that the pages already read as
+  "cannot be reached". So the limit of the function is a backstop for what the forwarding
+  does not end. `web/e2e/stream.spec.ts` shows the forwarding's limit in both browsers,
+  waiting the 30 seconds; the function's own limit is shown by unit tests.
+- **T084**: the periods are 10, 4, and 12 seconds, each under its bound. The browser test
+  pauses the page's clock and makes the change just after a reading, the worst moment; an
+  earlier form of it passed with the old period, because Playwright's clock runs on by
+  itself.
+- **T085**: the sidebar's Tasks entry says "not known" while the list cannot be read. The
+  words are not marked up as the number is: the Agents section's browser tests, which this
+  feature does not edit, find the sidebar's numbers by that markup.
+- **T086**: built in the route, not in the stores: `POST .../runs/unattended` opens a
+  thread that has a state and no row before the run starts, as reading it would. No store
+  changed, so there is no Postgres test; the tests are in `tests/test_thread_index_api.py`.
+  A new task pays one reading of the index and one of its state for it.
+- **T087 to T091**: the five assertions, as their tasks say.
+- **T092, T093**: as their tasks say. The card's sentence is now "An approved action runs
+  once at most, and not at all when it is no longer set up on the service".
+- **T094**: the test found a control out of reach at 360 pixels: "Approve ... with these
+  arguments" was wider than the window. The card's decision buttons now wrap.
+- **T095, T096**: the contract's answers, and the sentences of the spec and this plan.
+- **T097**: the stand-in model's `call-tools` id, chat completions only, and an id of its
+  own for every reply of every model id. The quickstart can be walked without a
+  provider's key.
+
+**Found while building, and fixed here**: a run that fails with a model's error which
+names an agent's address sent that address in its `error` event, and the list repeated it
+as the failed task's reason. A console run's error is now cleaned of addresses in
+`runtime/unattended.py`, for the list and for the reader's `error` event.
+
+**Read by a reviewer that had not written it.** No finding was high. Checked in the code
+and fixed, each with a test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| A reading that failed after an accepted stop made the page say "too late" while the run was still stopping. | A reading that failed says nothing of the run. |
+| A proposed whole number of 22 digits or more is written with an exponent by a browser, so an edit of another argument could send a number nobody proposed. | Refused however the number is written. |
+| Each tick of a timer asked for a reading while the one before was under way, which drops the earlier answer: with a service slower than the period no reading would ever be shown. | A tick asks for nothing while its reading is under way. In the task's view this is kept in a ref: reading SWR's `isValidating` there re-renders the view on every reading, which its effects are not written for. |
+| The address fix was described as wider than it is. | The comment, the README, `AGENTS.md`, and the contract say what it does. |
+| A test held the earlier route to sending the address. | Removed. |
+| `_open_first` adds a second wait of five seconds when the index hangs; the spec said five in all. | The spec says five each time; a test of the lookup that never answers was added. |
+
+**Checked by hand** on a check instance, with the repository's stand-in model as
+`call-tools` and the stand-in agent, in a real Chromium: a proposal from `notify` approved;
+an edit with a 20-digit number refused beside the edit with its reason; Stop on the page
+that reads the stream of `steps 8`, "stopping" 36 ms after the press and Stopped 0.8 s
+later with two of eight steps taken; a hand-off from `handoff stub`; a failed task's reason
+on its row; and "not known" on the sidebar 8 seconds after the service was stopped.
+
+**Open after Phase 11**, none of them this feature's to close:
+
+- **A model's error that names an agent's address** is sent as it is by
+  `POST /threads/{id}/runs` and `/resume` in their `error` event, is in the debug stream
+  of every route, and is kept by the checkpointer with the failed step. Features 004 and
+  005 clean a model's error of the profile's key in `llm/guard.py`; the address needs the
+  same there, or in `api/streaming.py`. Neither file is this feature's.
+- **The Agents section's words** for an agent task and a task (FR-001a, narrowed).
+- **A profile's test may take 60 seconds** (`FREYJA_LLM_TEST_TIMEOUT_SECONDS`), and the
+  console's forwarding ends a request after 30: a slow test is cut by the console. Feature
+  004's.
+- **How a stopped run ended is not known** to a page that follows by reading once a later
+  run has started: the page says nothing then.
+- **No browser test** of a decision that gets no answer; unit tests cover it.
+- DNS rebinding, open at the end of Phase 10, is closed (`api/hosts.py`).

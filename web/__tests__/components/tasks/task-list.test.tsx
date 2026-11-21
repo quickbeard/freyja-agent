@@ -107,6 +107,79 @@ describe("the list of tasks", () => {
     expect(rows()[2]).toContain("<b>Markup</b> stays text.");
   });
 
+  it("gives the service's reason on a failed task's row, as text, and on no other row", async () => {
+    const reason =
+      "No usable model is active. <i>Activate</i> a usable LLM profile, then send the message again.";
+    serve(() =>
+      list([
+        summary({
+          thread_id: "failed",
+          first_message: "Summarize the week.",
+          status: "failed",
+          error: { code: "no_usable_model", message: reason },
+        }),
+        // The service gives a reason with `failed` only; one that came with another
+        // status would not be the reason of what the row says.
+        summary({
+          thread_id: "done",
+          first_message: "Say hello.",
+          status: "done",
+          error: { code: "internal", message: "An earlier reason." },
+        }),
+        summary({
+          thread_id: "bare",
+          first_message: "List the files.",
+          status: "failed",
+          error: null,
+        }),
+      ]),
+    );
+    const { container } = renderList();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+
+    expect(rows()[0]).toContain("Failed");
+    expect(rows()[0]).toContain(reason);
+    expect(container.querySelector("li i")).toBeNull();
+    expect(rows()[1]).not.toContain("An earlier reason.");
+    // A failed row the service gave no reason for says that it failed, and no more.
+    expect(rows()[2]).toContain("Failed");
+    // The reason is part of the row, so of what the row's link is called.
+    expect(
+      screen.getByRole("link", { name: /Summarize the week\./ }).textContent,
+    ).toContain(reason);
+  });
+
+  it("shows a reading that took longer than the timer's period, and asks for no other meanwhile", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // The service is slow: the first reading is answered only after two periods.
+      let answer: (reply: Answer) => void = () => {};
+      let asked = 0;
+      serve(() => {
+        asked += 1;
+        return new Promise<Answer>((resolve) => {
+          answer = resolve;
+        });
+      });
+      renderList();
+      await waitFor(() => expect(asked).toBe(1));
+
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      // A reading asked for while one is under way would take its place, and with a
+      // service this slow none would ever be shown.
+      expect(asked).toBe(1);
+      answer(list(FOUR));
+      await waitFor(() => expect(rows()).toHaveLength(4));
+
+      // Once it is answered, the next period reads again.
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(asked).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says so when there is no task", async () => {
     serve(() => list([]));
     renderList();
@@ -138,7 +211,7 @@ describe("the list of tasks", () => {
     await waitFor(() => expect(rows()).toHaveLength(4));
   });
 
-  it("is read again every fifteen seconds, also after a reading failed", async () => {
+  it("is read again by its timer, also after a reading failed", async () => {
     let reads = 0;
     serve(() => {
       reads += 1;

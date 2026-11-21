@@ -31,6 +31,7 @@ import anyio
 from langgraph.errors import GraphRecursionError
 from sse_starlette import ServerSentEvent
 
+from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS
 
 if TYPE_CHECKING:
@@ -318,7 +319,17 @@ class UnattendedRuns:
             return ServerSentEvent(data=json.dumps({"status": "stopped"}), event="end")
         if kind == "error":
             data = _data(event)
-            await self._note(run, "failed", data.get("code"), data.get("message"))
+            # The reason may be text a model's endpoint wrote, and it is kept for the list,
+            # which every page of the console reads: an agent's address is taken out of it
+            # here, for the list and in the ``error`` event the run's reader gets (FR-025).
+            # Only that: a debug stream's events and what the checkpointer keeps of a
+            # failed step hold the error as the model raised it, on every route, until the
+            # model's errors are cleaned where its key is (``llm/guard.py``).
+            message = data.get("message")
+            cleaned = SCRUBBER.scrub(message) if isinstance(message, str) else message
+            await self._note(run, "failed", data.get("code"), cleaned)
+            if cleaned != message:
+                return ServerSentEvent(data=json.dumps({**data, "message": cleaned}), event="error")
         return event
 
     async def _note(

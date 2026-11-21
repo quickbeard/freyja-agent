@@ -35,7 +35,9 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env python -m tests.llm_stub --http 9997` serves the stand-in model
   endpoint for a manual run; use `http://127.0.0.1:9997/v1` as an LLM profile's base URL. It
   behaves by model id: `refuse-conversation`, `reject-key`, `repeat-key`, `never-answer`,
-  `slow`, and any other id answers. A request that asks for a stream is answered as one, so
+  `slow`, `call-tools`, which asks for tools by a keyword at the start of a message
+  (`notify`, `handoff <agent>`, `steps <n>`) and answers chat completions only, and any
+  other id answers. A request that asks for a stream is answered as one, so
   a profile pointing at it can be run on.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
   tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
@@ -202,7 +204,9 @@ startup and exits with an error naming the connection when it is unreachable.
   does not take before it is kept. `unattended.py` is the console's runs (feature
   007): `UnattendedRuns` drives a run that goes on without a reader in a task of its own,
   hands each event to its reader and disconnects one that falls `READER_BACKLOG` events
-  behind, notes in the index how the run ended (`failed` with its error, or `stopped`), and
+  behind, notes in the index how the run ended (`failed` with its error, out of whose
+  message it takes an agent's address for the list and for the reader's `error` event,
+  and from nothing else of the stream, or `stopped`), and
   at shutdown (`close`) asks each run to stop at its next boundary and waits for it;
   `SegmentedGraph`, which `Runtime.begin_run` puts in every context in place of the graph,
   runs an armed thread in segments that end before each `model` and `tools` step, gives each
@@ -225,10 +229,12 @@ startup and exits with an error naming the connection when it is unreachable.
   change no thread, and the three routes of the console's runs:
   `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`,
   which call the handlers of `threads.py`, take the run's events out of the response
-  (`body_iterator`), and hand them to `UnattendedRuns`, answering with
+  (`body_iterator`), and hand them to `UnattendedRuns` (the first opens a thread that has
+  a state and no row before the run starts, so that its row keeps the thread's own first
+  message), answering with
   `Cache-Control: no-store, no-transform` and a ping every `PING_SECONDS`, and
-  `POST /threads/{thread_id}/stop`, which marks the row and answers 202, 404, or 409
-  (`no_run`, `not_stoppable`),
+  `POST /threads/{thread_id}/stop`, which marks the row and answers 202, with the run
+  the stop is for, 404, or 409 (`no_run`, `not_stoppable`),
   with their shapes in `thread_index_schemas.py`;
   `agents.py` the routes of the Agents section under `/agents`: `GET /agents`, the list,
   which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
@@ -282,7 +288,9 @@ startup and exits with an error naming the connection when it is unreachable.
   id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
   sidebar's section links are read inside one too, or the build fails for that route.
   `web/lib/tasks.ts` holds the task types, the calls, and `events`, which reads a run's
-  stream as it arrives; `web/lib/api.ts` has `stream` beside `api` for that answer.
+  stream as it arrives; `web/lib/api.ts` has `stream` beside `api` for that answer, and
+  gives both `ANSWER_SECONDS`, `api` for the whole answer and `stream` for the answer to
+  begin, after which a request counts as one that got none.
   `web/lib/task-runs.ts` holds the runs this browser tab started, outside React, so that a
   run started by New task on the list's page is shown on the task's page as it arrives
   (`useRun`); nothing is stored. The list of tasks and the sidebar's number of tasks that
@@ -295,8 +303,8 @@ startup and exits with an error naming the connection when it is unreachable.
   (`message.tsx`), the status in words (`status.tsx`), and the proposal card
   (`proposal-card.tsx`), which offers each proposed action only the decisions the service
   lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
-  no more than that edited arguments are a JSON object (`parseArguments`) and that a
-  reason is within the service's length, and has its
+  no more than that edited arguments are a JSON object that holds no number a browser
+  would change (`parseArguments`) and that a reason is within the service's length, and has its
   buttons outside any form, so that Enter in a field sends no decision. It also holds the
   follow-up box (`follow-up.tsx`), which sends another message on a task through the same
   `send-box.tsx` and is given why it cannot be sent, a run in progress or a pending
@@ -310,7 +318,8 @@ startup and exits with an error naming the connection when it is unreachable.
   "stopping" until it learns how the run ended, from the run's last event when it reads the
   stream and otherwise from a reading of the row made after the stop, shows a task as
   stopped only when the row does, and says that the stop came too late when the run ended
-  another way (FR-022a).
+  another way (FR-022a). A row names its run (`runs`) and the stop's answer the run it was
+  for, so a page that follows by reading says that only of the run it stopped.
   All text of a task is put in
   text nodes and never rendered as markup. The console has no users, and the section says
   so above its list.
@@ -388,7 +397,9 @@ startup and exits with an error naming the connection when it is unreachable.
   profiles and a model factory. `fakes.py` holds the scripted chat model, a labelled one that
   can hold a call open, and the test model factory; `nowhere.py` what the three proofs
   that no key and no agent address gets out share; `llm_stub.py` the stand-in model
-  endpoint, OpenAI-compatible, which the suite reaches through the real client;
+  endpoint, OpenAI-compatible, which the suite reaches through the real client, and whose
+  model id `call-tools` asks for tools, so that the Tasks section can be tried by hand
+  without a provider's key;
   `mcp_stub.py` the stub MCP server, which
   records every call it
   receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
