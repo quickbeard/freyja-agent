@@ -658,25 +658,25 @@ the section cannot be shown in another origin's frame.
 
 ## Phase 10: Polish & Cross-Cutting Concerns
 
-- [ ] T073 Walk through `specs/007-web-tasks/quickstart.md` from the first section to the
+- [X] T073 Walk through `specs/007-web-tasks/quickstart.md` from the first section to the
       last on a check instance (port 8020, a database `freyja_check_tasks` dropped
       afterwards, the stand-in agent on 9978, the console on 3020), with a model that calls
       tools, and correct the quickstart where the built feature differs. Time two things by
       hand, since no test does: the page showing that a run started within two seconds of
       sending (SC-001), and the list with 100 threads within two seconds (SC-009)
-- [ ] T074 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
+- [X] T074 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
       code: they describe only what exists, name every new file in the Layout, and say that
       the console has no users
-- [ ] T075 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
+- [X] T075 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
       `pyproject.toml` or a threshold in `web/vitest.config.mts` only with the owner's
       word, since both files are on the list to ask about; say in the pull request what the
       Postgres index, which CI does not run, does to the service's number
-- [ ] T076 [P] Say in the last pull request, and record in plan.md, that
+- [X] T076 [P] Say in the last pull request, and record in plan.md, that
       `tests/test_thread_index_nowhere.py` has to be joined with
       `tests/test_llm_secrets_nowhere.py` and `tests/test_agents_address_nowhere.py` once
       feature 005 is done, and that an automated browser proof of a stream arriving as it is
       produced still waits for the owner's answer about `web/playwright.config.ts` (R15)
-- [ ] T077 Run every gate once more on the finished branch: the commit hook over all files,
+- [X] T077 Run every gate once more on the finished branch: the commit hook over all files,
       `pnpm test:e2e` in both browsers, the opt-in Postgres tests against
       `freyja_test_tasks`, Semgrep, and Trivy as `AGENTS.md` gives them
 
