@@ -637,17 +637,17 @@ the section cannot be shown in another origin's frame.
 
 ### Tests for User Story 6
 
-- [ ] T070 [P] [US6] Extend `tests/test_threads_other_origins.py`, part 2: every route of
+- [X] T070 [P] [US6] Extend `tests/test_threads_other_origins.py`, part 2: every route of
       contracts/openapi.yaml that changes something, with each of the two headers, is
       refused before a lease is taken or a stop is marked; the refusal's sentence names
       threads and repeats nothing that was sent (FR-024, SC-007)
-- [ ] T071 [P] [US6] Extend `web/e2e/tasks.spec.ts`, part 3: a page of another origin that
+- [X] T071 [P] [US6] Extend `web/e2e/tasks.spec.ts`, part 3: a page of another origin that
       holds `/tasks` and `/tasks/<id>` in a frame shows nothing of the console, in both
       browsers, by the headers the console sends for every path
 
 ### Implementation for User Story 6
 
-- [ ] T072 [US6] Fix what T070 and T071 find; none is expected, since the router was made
+- [X] T072 [US6] Fix what T070 and T071 find; none is expected, since the router was made
       with the refusal in Phase 2 and `web/next.config.ts` sends the frame headers for every
       path. Say in `README.md` ("Web console") what a page of another origin cannot do with
       tasks

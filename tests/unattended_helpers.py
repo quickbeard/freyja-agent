@@ -84,14 +84,22 @@ def leave(client: TestClient, path: str, body: dict[str, Any], at: str | None = 
 class Reader(threading.Thread):
     """Reads a run's stream to its end in a thread of its own."""
 
-    def __init__(self, client: TestClient, path: str, body: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        client: TestClient,
+        path: str,
+        body: dict[str, Any],
+        headers: dict[str, str] | None = None,
+    ) -> None:
         super().__init__(daemon=True)
-        self.client, self.path, self.body = client, path, body
+        self.client, self.path, self.body, self.headers = client, path, body, headers
         self.events: Events = []
         self.started_reading = threading.Event()
 
     def run(self) -> None:
-        with self.client.stream("POST", self.path, json=self.body) as response:
+        with self.client.stream(
+            "POST", self.path, json=self.body, headers=self.headers
+        ) as response:
             assert response.status_code == 200, response.read()
             lines = []
             for line in response.iter_lines():
