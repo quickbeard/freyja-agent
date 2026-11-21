@@ -1,4 +1,5 @@
 import ipaddress
+import re
 from typing import Annotated, Self
 from urllib.parse import SplitResult, urlsplit
 
@@ -18,6 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Shown in proposals, logs, and the catalog, so it is kept short and plain (FR-001).
 SERVER_NAME_PATTERN = r"^[a-z][a-z0-9_-]{0,31}$"
 ServerName = Annotated[str, StringConstraints(pattern=SERVER_NAME_PATTERN)]
+# One entry of FREYJA_ALLOWED_HOSTS: labels of letters, digits, hyphens, and underscores,
+# with dots between them. A name with other letters is written as a browser sends it, in
+# its ``xn--`` form.
+HOST_NAME = re.compile(r"[a-z0-9_-]+(\.[a-z0-9_-]+)*")
 
 
 def is_local_host(host: str | None) -> bool:
@@ -215,6 +220,12 @@ class Settings(BaseSettings):
     # Local runs listen only on this machine. Containers set FREYJA_HOST=0.0.0.0.
     host: str = "127.0.0.1"
     port: int = 8000
+    # The host names the service answers for, beside ``localhost`` and every IP address
+    # written as one, which need no entry. A request made for any other name is refused
+    # (api/hosts.py): a name is what a hostile page can point at this machine. Empty is the
+    # safe local choice. A deployment lists the name its console is opened under and, where
+    # the console reaches the service by a name, that name.
+    allowed_hosts: list[str] = Field(default_factory=list)
     # Carries credentials, so it has no default: startup fails until FREYJA_DATABASE_URI is set.
     database_uri: str
     model: str = "anthropic:claude-sonnet-5-5"
@@ -257,6 +268,20 @@ class Settings(BaseSettings):
     background_retry_seconds: Annotated[float, Field(gt=0)] = 60
     # Background runs under way at once on one instance; further ones wait (003 SC-003).
     background_run_concurrency: Annotated[int, Field(gt=0)] = 4
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def _host_names_only(cls, value: list[str]) -> list[str]:
+        # Kept as a request's ``Host`` is compared: lowercase, without the dot a fully
+        # qualified name may end with. An entry that could never equal one, such as an
+        # address with its scheme or its port, stops startup instead of allowing nothing.
+        names = [entry.strip().lower().removesuffix(".") for entry in value]
+        if not all(HOST_NAME.fullmatch(name) for name in names):
+            raise ValueError(
+                "each entry must be a host name alone, such as console.example.com: no "
+                "scheme, no port, no path, and no wildcard"
+            )
+        return names
 
     @field_validator("secret_key", mode="before")
     @classmethod

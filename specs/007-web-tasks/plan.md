@@ -994,7 +994,9 @@ test is added: the change is documentation.
 **Open at the end of the feature**, each recorded where it arose:
 
 - DNS rebinding is not covered by the refusal of other origins (Phase 9; the owner's to
-  decide, for the LLM and Agents routes as well).
+  decide, for the LLM and Agents routes as well). Closed after this phase, in a change of
+  its own: the service refuses a request made for a host name it does not answer for
+  (`src/freyja_agent/api/hosts.py`, `FREYJA_ALLOWED_HOSTS`, `tests/test_allowed_hosts.py`).
 - A page that follows a run by reading cannot tell a stop that came too late from a stopped
   run followed by another run: the row names no run (Phase 8).
 - `api()` in `web/lib/api.ts` has no time limit, so a reading that hangs is never a failure

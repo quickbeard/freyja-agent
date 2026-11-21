@@ -83,7 +83,8 @@ startup and exits with an error naming the connection when it is unreachable.
 - `src/freyja_agent/config.py`: the `Settings` class (pydantic-settings, `FREYJA_*` prefix) and
   the shared `settings` instance. `FREYJA_MODEL` names the model, and
   `FREYJA_OPENAI_RESPONSES_API` says whether an `openai:` model is called through the Responses
-  API or through chat completions. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
+  API or through chat completions. `FREYJA_ALLOWED_HOSTS` lists the host names the service
+  answers for beside `localhost` and IP addresses. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
   `FREYJA_MCP_CALL_TIMEOUT_SECONDS` and `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` are the two time
   limits for tool servers. `A2aAgentConfig` is one entry of `FREYJA_A2A_AGENTS` (a loopback
   `url` and `read_only`); agent and server names share one namespace. Seven limits go with it:
@@ -209,7 +210,9 @@ startup and exits with an error naming the connection when it is unreachable.
   whether to stop. Every other thread is passed straight to the graph. `Runtime.unattended`
   is the console's runs of this instance.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
-  `freyja-api` entry point; `threads.py` the three thread routes (runs, state, resume),
+  `freyja-api` entry point; `hosts.py` is `AllowedHosts`, the middleware `create_app` puts
+  before every route, which refuses a request made for a host name the service does not
+  answer for (403 `unknown_host`); `threads.py` the three thread routes (runs, state, resume),
   each of which takes a context, the two that run under the thread's lease, and validates
   a decision on the orchestrator that then carries it out;
   `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
@@ -348,7 +351,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
   to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
   forwards to), to see a run's events arrive as they are produced, and that the forwarding
-  passes on the three headers the service's refusal of other origins reads. It runs in projects of
+  passes on the three headers the service's refusal of other origins reads, and replaces an
+  `X-Forwarded-Host` a page wrote with the name the console was asked under, which the
+  service's refusal of unknown host names rests on. It runs in projects of
   its own, `stream-chromium` and then `stream-firefox`, after every other spec; `api.ts`
   holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
   `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
@@ -467,7 +472,16 @@ startup and exits with an error naming the connection when it is unreachable.
   marked as another origin's, when it meets a kind of route it does not know, such as a
   WebSocket route or a mounted application, and when the feature's contract has a route the
   table lacks. The rule does not cover a request that reaches the service under a name an
-  attacker controls (DNS rebinding); features 004, 005, and 007 each record that.
+  attacker controls (DNS rebinding), which features 004, 005, and 007 each recorded as left
+  open; the next rule does.
+- Every request is held to the host names the service answers for, a request that only
+  reads included: `AllowedHosts` (`api/hosts.py`) is added in `create_app`, before any
+  route, and refuses one whose `Host`, or whose `X-Forwarded-Host`, names anything but
+  `localhost`, an IP address, or a name in `FREYJA_ALLOWED_HOSTS`. Only `/healthz` is
+  answered under any name. Nothing is added per route: a new route, router, or mounted
+  application is covered because it is behind the middleware, and
+  `tests/test_allowed_hosts.py` walks every route the application serves to show it. The
+  suite lists `testserver`, the name FastAPI's test client asks for, in `tests/conftest.py`.
 - The index of threads returns text from threads, so `tests/test_thread_index_nowhere.py`
   searches its answers and the log for a recognizable key and a recognizable agent address.
   A new route of the index is added to it. The three proofs share their tools in
