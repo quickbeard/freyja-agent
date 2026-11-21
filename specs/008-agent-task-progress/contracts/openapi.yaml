@@ -1,0 +1,134 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.8.0
+  description: >
+    Changes made by feature 008, progress of pending agent tasks. No path is added, and no
+    path, request, or status code changes; see ../../001-thread-runs-api/contracts/ and
+    ../../003-a2a-agent-delegation/contracts/ for them. This file defines the one changed
+    schema: an agent task in the thread's state gains `progress`. By the compatibility rule
+    of feature 001, a key may be added without notice and a client ignores what it does not
+    recognize; nothing is removed or renamed.
+
+    Reading the state contacts no agent. The progress it returns is what the service last
+    learned in a hand-off or in a regular check of a pending task, and it is the same on
+    every instance that shares the database.
+paths:
+  /threads/{thread_id}/state:
+    get:
+      summary: Read a thread's transcript, pending proposal, and agent tasks
+      description: >
+        Unchanged from 003 except that each entry of `agent_tasks` has `progress`.
+      parameters:
+        - name: thread_id
+          in: path
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 128 }
+      responses:
+        "200":
+          description: The thread state
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadState" }
+              example:
+                thread_id: inc-2041
+                run_active: false
+                messages: []
+                pending: null
+                updated_at: "2026-11-21T10:02:11.004000+00:00"
+                agent_tasks:
+                  - agent: stub
+                    task_id: 3f1c2b7e-0d1a-4c55-9a8e-6f2b1d0c9e44
+                    message: "steps 12 30: compile the weekly report"
+                    status: working
+                    started_at: "2026-11-21T10:00:41.512000+00:00"
+                    last_checked_at: "2026-11-21T10:04:01.990000+00:00"
+                    ended_at: null
+                    outcome_delivered: false
+                    progress:
+                      text: "Step 7 of 12"
+                      learned_at: "2026-11-21T10:03:51.871000+00:00"
+                  - agent: stub
+                    task_id: 9b0e61c4-52aa-4a0f-8c11-0f6f3f2a7d10
+                    message: "hold: a task of an agent that reports no text"
+                    status: working
+                    started_at: "2026-11-21T10:01:05.100000+00:00"
+                    last_checked_at: "2026-11-21T10:04:01.992000+00:00"
+                    ended_at: null
+                    outcome_delivered: false
+                    progress: null
+components:
+  schemas:
+    ThreadState:
+      type: object
+      description: >
+        As in feature 003. Only `agent_tasks` is described here; the other keys are 001's
+        and 003's.
+      required: [agent_tasks]
+      properties:
+        agent_tasks:
+          type: array
+          description: >
+            Every agent task the thread has started, pending or ended, oldest first.
+          items: { $ref: "#/components/schemas/AgentTask" }
+    AgentTask:
+      type: object
+      required:
+        [agent, task_id, message, status, started_at, last_checked_at, ended_at, outcome_delivered, progress]
+      description: Changed from 003 by adding `progress`.
+      properties:
+        agent: { type: string, pattern: "^[a-z][a-z0-9_-]{0,31}$" }
+        task_id:
+          type: string
+          description: The agent's own id for the task.
+        message:
+          type: string
+          description: The task message the task was started with.
+        status:
+          type: string
+          enum: [working, input_required, completed, failed, rejected, canceled, given_up]
+          description: As in 003. `working` and `input_required` are pending.
+        started_at: { type: string, format: date-time }
+        last_checked_at: { type: string, format: date-time }
+        ended_at:
+          type: [string, "null"]
+          format: date-time
+          description: Null while the task is pending.
+        outcome_delivered:
+          type: boolean
+          description: As in 003.
+        progress:
+          description: >
+            The progress the agent last reported for this task, or null when the service has
+            learned none: the agent attached no text to a working status, or the task was
+            recorded before feature 008. It is kept, and returned, for a task of any status:
+            for a task that ended, was given up, or waits for input, it is the last progress
+            learned while the task was working. A client decides when to show it; the web
+            console shows it only while `status` is `working`.
+          oneOf:
+            - { $ref: "#/components/schemas/AgentTaskProgress" }
+            - { type: "null" }
+    AgentTaskProgress:
+      type: object
+      required: [text, learned_at]
+      description: >
+        An agent's own claim about its work. It is shown, and it decides nothing: `status`
+        alone says whether the task is working, has ended, or waits for input.
+      properties:
+        text:
+          type: string
+          minLength: 1
+          maxLength: 2000
+          description: >
+            The text parts of the status message the agent attached to a working status,
+            joined by line breaks and cut to 2,000 characters. Untrusted text in the agent's
+            own words: it may hold several lines, markup, links, or an address, and passes
+            as the agent wrote it. A client shows it as plain text and renders none of it.
+        learned_at:
+          type: string
+          format: date-time
+          description: >
+            When the service first learned this text, on the database's clock, never a time
+            the agent supplied. It stays while the agent repeats the same text, so it says
+            since when the agent has reported nothing new. `last_checked_at` says when the
+            task was last checked.
