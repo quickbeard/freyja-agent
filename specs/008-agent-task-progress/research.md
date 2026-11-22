@@ -14,13 +14,15 @@ away; each is described well enough here to be written again, and the tests of t
 implementation repeat them. What could not be checked, and what is knowingly not covered, is
 listed at the end.
 
-Feature 007 was finished while the spec was written (its tenth phase is #123). The spec asks
-that User Story 2 be read again if the task's page was built differently from its
-specification. It was read against the code: `web/components/tasks/agent-tasks.tsx` lists
-each agent task with its agent, its status in words, and its message; `task-view.tsx` reads
-the task again every 15 seconds while an agent task is awaited (`AGENT_SECONDS`) and reads
-nothing while the page is hidden. That is what the spec assumed, so the story stands as
-written.
+The spec asks that User Story 2 be read again if feature 007's task page was built
+differently from its specification. It was read against the code when this plan was
+written, and again at the checklist review on 2026-11-22, after feature 007's last phases
+(#127, #128): `web/components/tasks/agent-tasks.tsx` lists each agent task with its agent,
+its status in words, and its message; `task-view.tsx` reads the task again every 12 seconds
+while an agent task is awaited (`AGENT_SECONDS`, 15 when this plan was first written), reads
+nothing while the page is hidden, and reads at once when it is shown again. That is what
+the spec assumed, so the story stands as written, and SC-001's 30 seconds for the page still
+hold: 10 seconds to a check, 12 to a reading.
 
 No reviewer other than the author has read this plan.
 
@@ -124,10 +126,14 @@ statement is today's and the two columns are not named, so the time stays (FR-00
 
 **The comparison is made in the service, not in the statement.** Between the reading and the
 update, another writer could keep another text, and the time could then be a few seconds
-off. The only other writer of a working task's progress is a hand-off that answers the task,
-and while one is under way the worker writes nothing (above). One instance watches a task at
-a time (003 FR-019). A wrong time of a few seconds in a case that needs two rare things at
-once does not justify a store method and a statement of its own.
+off. The only other writer of a working task's progress is a hand-off that sends a message
+on the task (R4). An answer to a question is not one: while the row waits for input the
+worker writes nothing (above). A message on a task that is still working is: the model can
+hand off with the id of a working task. One instance watches a task at a time (003 FR-019).
+A wrong time of a few seconds in a case that needs two rare things at once does not justify
+a store method and a statement of its own. A worker's text is always the one learned last
+when it is written, since it was learned at the check itself; the spec's rule, that the text
+learned last is kept, then holds.
 
 **Alternatives set aside**: a store method with `WHERE progress IS DISTINCT FROM %(text)s`,
 for the reason above. Setting `progress_at` at every check: clarified, the time says since
@@ -147,6 +153,14 @@ text and the row does not already hold the same one (FR-006). This holds for a t
 as pending and for one recorded as ended, and for a hand-off whose stream broke after the
 agent acknowledged.
 
+A hand-off that sends a message on a task the row already holds (an answer, or a message on
+a task still working) updates that row. It writes its progress only when the row, which
+`_record` reads before it writes (`known_task`), holds no progress or progress learned
+earlier than the hand-off's. A check may have kept a later text while the hand-off was under
+way, and the spec keeps the text learned last, not the one written last (Edge Cases). The
+read and the write are two statements; a check that writes between them is the same rare
+case R3 accepts.
+
 **The time** is the store's clock, never the agent's and never this instance's wall clock
 (FR-005): `_record` already reads `store.now()`, and `progress_at` is that time less the
 seconds that passed on the event loop's clock since `progress_seen`. No statement is added
@@ -164,9 +178,10 @@ seconds by default.
 **Decision**: `_poll` remembers the last text it saw beside the last state. It puts a
 progress update in the stream when a read finds another state, as today, and also when it
 finds the same state with a text that is neither blank nor the one it last saw (FR-019). The
-text compared is `_text` of the status message, the text the update carries today, not the
-cut and cleaned one of R1. A read with no text changes neither what was last seen nor the
-stream. The text it starts from is the one of the status the send returned.
+texts are compared as `progress_text` makes them (R1), so the rule is the kept text's: two
+texts that differ only after their first 2,000 characters are the same, and blank is none.
+The update still carries `_text` of the status message, as today, not cut. A read with no
+text changes neither what was last seen nor the stream. The text it starts from is the one of the status the send returned.
 
 - *verified* The update's shape (`agent`, `task_id`, `state`, `text`) and where it appears in
   the stream do not change. `contracts/sse-events.md` says what changed.
@@ -211,6 +226,10 @@ result of the check (FR-013, FR-014). The exact result is
   by `task_line`, and does not change.
 - The whole kept text is listed, up to its 2,000 characters. A cut for the model would be a
   second limit with nothing in the spec behind it.
+- **Set apart** (FR-013): the text follows the progress line with every one of its lines
+  indented by four spaces. An entry of the result starts at the beginning of a line with
+  `- Agent`, so no line of an agent's text, whatever it holds, can pass for another entry,
+  for an entry's status, or for the service's own words.
 
 **Trust**: the text reaches the model as a tool result, the place an agent's reply has
 always reached it. Whether an action pauses for a person is decided by the catalog and the
@@ -230,8 +249,17 @@ still pauses (FR-017, SC-007).
   (FR-010, clarified).
 - The text is a text node in an element with `whitespace-pre-wrap` and `break-words`, as
   the task's message beside it is, so line breaks are kept and nothing is rendered (FR-012).
-  It sits in a box with a greatest height that scrolls inside itself, reachable by keyboard,
-  so 2,000 characters neither hide the rest of the page nor are cut.
+  It sits in a box with a greatest height that scrolls inside itself, so 2,000 characters
+  neither hide the rest of the page nor are cut. The box can be reached by keyboard
+  (`tabIndex={0}`) and is named for a screen reader as the progress the agent reported.
+- The element takes its direction from its own text and isolates it (`dir="auto"`), so a
+  direction mark in an agent's text cannot reorder the words around it (FR-012).
+- A change of the text is not announced: a live region read again every 12 seconds would
+  interrupt a person using a screen reader each time an agent moves on. The text is there
+  when they come to it.
+- When a reading of the task fails, the view says so as feature 007 built it, above what it
+  last read; the progress it shows is that reading's, and its age goes on from the browser's
+  clock, so it never claims to be newer than it is (Edge Cases).
 - **How long ago** is worked out by a function of its own, `ago` in `web/lib/ago.ts`, from
   `learned_at` and a time it is given: "just now" under a minute, then whole minutes, hours,
   and days. The exact time is in a `<time>` element's `dateTime` and its title, formatted as
@@ -365,7 +393,12 @@ but tests. The files and why are in [plan.md](plan.md), "Source Code". Two thing
   from the growing age. That is the most this feature can say: the agent's own words and
   when they last changed.
 - **A browser with a wrong clock** shows a wrong age (R8).
-- **A library's debug log** may hold an update's text, as today (R9).
+- **A library's debug log** may hold an update's text, as today (R9). So may the message of
+  an error a library raises about a reply it could not read, which the service logs as it
+  does today; nothing was learned from such a reply, so it is no kept progress.
+- **The check's result has no overall size limit**, as today: each working task adds up to
+  2,000 characters of progress. A thread with many working tasks gives the model a long
+  result.
 - **The task's page shows no agent update of a run it streams.** It shows that Freyja wrote
   a reply or ran its actions (`STEPS` in `task-view.tsx`), and this feature does not add to
   that. User Story 4 is about the run's stream, and is seen by a client that reads it.

@@ -88,7 +88,7 @@ Send `Hand this to the stub agent: steps 30 10` and approve. Stay on the task's 
   how long ago, "just now".
 - Without a reload and without touching the page, the text changes to a later step within
   about half a minute of the agent reporting it: the service looks every ten seconds and the
-  page reads every fifteen.
+  page reads every twelve.
 - Stop the stand-in (Ctrl+C in terminal 3). The text stays, and its age grows: "1 minute
   ago", "2 minutes ago". The agent task stays pending. Hover over the age: the exact time
   is shown.
@@ -105,8 +105,9 @@ and shows the progress as it then is.
 
 With a task pending as in section 2, send a follow-up on it: `How far is the agent?`
 
-- The run shows a call of `check_agent_tasks`. Its result lists the agent task with a second
-  line, "Progress the agent reported, in its own words (learned ...): Step ... of 30".
+- The run shows a call of `check_agent_tasks`. Its result lists the agent task, then the
+  line "Progress the agent reported, in its own words (learned ...):", then "Step ... of 30"
+  indented by four spaces.
 - Freyja answers in its own words with that step.
 - Terminal 3 shows no request made because of the question: only the checks every ten
   seconds.

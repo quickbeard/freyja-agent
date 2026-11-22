@@ -45,7 +45,7 @@ row and never searched.
 
 | Writer | When | What |
 |---|---|---|
-| The hand-off (`a2a_tools._record`) | Once, when it records the task it followed: as pending, as ended, or after an answer | The last progress text it received, if any, and if the row does not hold the same text already (FR-006) |
+| The hand-off (`a2a_tools._record`) | Once, when it records the task it followed: as pending, as ended, or after a message on a task the row already holds | The last progress text it received, if any, and if the row does not hold the same text already. On a row it updates, only when the row holds no progress or progress learned earlier (FR-006, research R4) |
 | The worker (`DelegationWorker._check`) | At each check that finds the task working | The text the status carries, if any and if it is not the text kept, in the statement that sets `last_checked_at` (R3) |
 
 Nothing else writes it. Neither writer makes a request for it or adds a statement.
@@ -64,6 +64,7 @@ while the row says working, at each check:
 
 row comes to wait for input           -> unchanged; the worker keeps nothing while it waits
 answered, hand-off records it working -> progress = last text that hand-off received, if new
+                                         and learned later than the kept one
 task ends, or is given up             -> unchanged, for as long as the row exists
 ```
 
