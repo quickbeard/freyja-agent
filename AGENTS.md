@@ -299,12 +299,16 @@ startup and exits with an error naming the connection when it is unreachable.
   (`useRun`); nothing is stored. The list of tasks and the sidebar's number of tasks that
   need a decision are one reading of `GET /threads` under `THREADS_KEY`, read again every
   `LIST_SECONDS` by `web/hooks/use-every.ts`, a timer that goes on past a reading that
-  failed, and at once by a task's view when a run it shows ends. So every page of the
-  console asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
+  failed, and at once by a task's view when a run it shows ends. Every reading of tasks
+  takes `READING`, so that a page that was hidden is read as soon as it is shown. So every
+  page of the console asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
   the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
   run as it streams, joining a reply's pieces as the service's own library joins them,
   whether they arrive as text or as blocks (`streamed`, with `web/lib/merge.ts`, a port
-  of LangChain's `merge_content`), and the service's conversation once it ended, a message
+  of LangChain's `merge_content`), each action from the piece that names it and with its
+  arguments from the model step's `update`, which the stream carries for Freyja's own steps
+  and not for a subagent's, and the service's conversation once it ended,
+  a message
   (`message.tsx`), the status in words (`status.tsx`), and the proposal card
   (`proposal-card.tsx`), which offers each proposed action only the decisions the service
   lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
@@ -316,7 +320,9 @@ startup and exits with an error naming the connection when it is unreachable.
   proposal, by the view, and the list of a task's agent tasks (`agent-tasks.tsx`), whose
   `awaited` says whether a task still waits for one. The view reads its task again by one
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
-  every `AGENT_SECONDS` while an agent task is awaited, and never while the page is hidden.
+  every `AGENT_SECONDS` while an agent task is awaited, its row alone every
+  `FOLLOW_SECONDS` while it reads its own run's stream, so that a stop asked in another
+  window is said, and never while the page is hidden.
   Stop (`stop-button.tsx`) is offered by the view for a run the console started that is in
   progress: a run of this tab once its `start` event arrived, and a run it follows when the
   row says `stoppable`. It sends `stopRun` on a press, never otherwise; the view says

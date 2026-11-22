@@ -95,7 +95,7 @@ Checked against constitution 1.5.0.
 | II. Protocol-based delegation | No | No delegate is added or reached. Agent tasks are read from the store that exists, and shown. | PASS | PASS |
 | III. One runtime, every environment | Yes, central | `build_agent` stays the only assembly point and `run_stream` the only run loop: an unattended run is the same generator, driven by a task where a response drove it (R2). `SegmentedGraph` wraps the graph `build_agent` made and calls its `astream`; it builds nothing (R4). The web app is a client of the API only: it holds no credential, calls no model, agent, or tool, has no Server Action or Route Handler, and reads a task's status from the service and works none out (R7, R11). Tests run the production routes through the test client. | PASS | PASS |
 | IV. Configuration through settings | Yes | No setting is added, on the service or in the web app, and nothing an operator manages: a task is a thread, which is data, not configuration. Seven numbers are fixed by the specification and are constants beside the code that applies them (two more are fixed by what was built and are constants too: `INDEX_WRITE_SECONDS`, the five seconds a lease waits for the index, since Phase 2, and `ANSWER_SECONDS`, the 35 seconds the console waits for an answer, since Phase 11), as feature 005 fixed its own (twenty agents, 2,000 characters of a card's text, four card reads at once): 100 rows in the list, 200 characters of a first message, 2,000 characters of a failed run's reason, and the pages' 5 and 15 seconds are what a person meets, the same on every deployment. Two are not about what a person meets and are the ones a deployment could want to change: the ping every 10 seconds, which follows from the 30 seconds of the console's own forwarding and not from where the service runs, and the 1,000 events held for a reader that does not keep up, which bounds memory per reader. Both are kept as constants because nothing a deployment configures today changes what they rest on; making them `FREYJA_*` settings is the owner's call and is named in the analysis pull request. | PASS | PASS |
-| V. Automated quality gates | Yes | Every requirement has a test (map below). The default suites need no network, database, model, or agent. Store calls are async; SQL is composed with psycopg's `sql` module and carries the `# nosemgrep` mark `AGENTS.md` describes. The web app passes `biome check` and its Vitest suite with coverage. No Ruff suppression is planned. One thing the gates do not measure is said where it applies: CI does not run the Postgres tests, so the Postgres index counts against the coverage number. | PASS | PASS |
+| V. Automated quality gates | Yes | Every requirement has a test (map below). The default suites need no network, database, model, or agent. Store calls are async; the index's statements are fixed strings with named parameters, so they are composed with no `sql` module and carry no `# nosemgrep` mark, and Semgrep finds nothing in them. The web app passes `biome check` and its Vitest suite with coverage. No Ruff suppression is planned. One thing the gates do not measure is said where it applies: CI does not run the Postgres tests, so the Postgres index counts against the coverage number. | PASS | PASS |
 | VI. Deterministic guardrails before model judgment | Yes | Where a run may be stopped is a fixed rule of the run loop's wrapper, the two node names, checked at startup; no model is asked whether a step may be cut. A task's status is a fixed order over recorded facts (R7). The refusal of other origins is a fixed check before any route's work (R9). | PASS | PASS |
 | Technology constraints | Yes | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; streaming over server-sent events through sse-starlette; the Postgres pool; Ruff only. The web app stays Next.js with TypeScript, pnpm, Biome, and Vitest. | PASS | PASS |
 
@@ -1188,3 +1188,61 @@ Both now wait in real time (`forgotten`).
 - **The Agents section's words** for an agent task and a task (FR-001a, narrowed).
 - **A profile's test may take 60 seconds**, and the console's forwarding ends a request
   after 30: feature 004's.
+
+## Phase 13 as built
+
+The third convergence: eight low tasks (T112 to T119), nothing critical, high, or medium.
+Each code task has its test, shown to fail without its fix.
+
+- **T112**: an action is shown from the piece that names it, and a reply that asks for two
+  shows both while it streams: a named action is added, or takes the place of the one of
+  its id, and one that names nothing is left out. Once the model's step is done, its
+  `update` event holds the reply whole, and each action shown takes its arguments from it,
+  matched by the action's id. The id and not the message's is matched: through the
+  Responses API, the reply the update holds keeps the provider's id while most pieces
+  streamed under the run's. The update's shape was read from a run of the stand-in model
+  through the service (`{"node": "model", "data": {"messages": [...]}}`). Before the step
+  is done, an action whose arguments arrive in pieces is still shown with `{}`: the
+  service sends no piece's part of the arguments, only what each piece alone makes of them.
+  A subagent's actions keep `{}` until the run has ended: the stream carries no update from
+  inside a subagent (`api/streaming.py`, feature 003).
+- **T113**: every reading of tasks takes `READING` (`web/lib/tasks.ts`), which sets the
+  reading library's focus throttle to zero, so a page that was hidden is read as soon as it
+  is shown, also within five seconds of being opened. Being shown fires two events; the
+  second finds the first's reading under way. The list's and the view's unit tests no
+  longer set the throttle themselves, so their tests of a page shown again prove it.
+- **T114**: while the page reads its own run's stream, the view's timer reads the row, and
+  only the row, every `FOLLOW_SECONDS`. A stop asked in another window is then said, and
+  Stop is no longer offered. How the run ended is still the stream's last event to say: a
+  row read while the page streams does not settle a stop the page asked for, since the row
+  can say the run is over before that event arrives.
+- **T115**: a decision refused because a run is in progress says that the proposal was most
+  likely decided in another window.
+- **T116**: the spec says a number is kept by its value: `5.0` is shown and sent as `5`.
+  Only a whole number beyond 2^53 is kept as it was written, since its value would change.
+- **T117 to T119**: the contract's example rows carry `runs`; its other reasons for `500`,
+  the `422` that comes before `403`, and the cleaning of a console run's events are said
+  (`openapi.yaml`, `sse-events.md`); and the Constitution Check's row for principle V says
+  that the index's statements are fixed strings with named parameters, with no `sql`
+  module and no `# nosemgrep` mark.
+
+**Read by a reviewer that had not written it.** No high or medium finding. Each low one was
+checked in the code and fixed, with a test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| Low: on the render the stream's last event arrives in, the effect that settles a stop from the row still acted on a row read during the stream; a row that disagreed with the stream, as one whose note of the stop was lost, made the page say "too late" of a run the stream said stopped. | A stop records whether the page read the run's stream when it was asked; only a stream that was cut leaves such a stop to the row. |
+| Low: one failed reading of the row while the page streams its own run showed "could not be loaded", now that the row is read every four seconds then. | Not said while the page reads its own run's stream; the row is read again a few seconds later. |
+| Low: between its own run's last event and the reading after it, the page said that a run is in progress, from the row read during the stream, and read the conversation once more, which replaced the reading made at the end. | Neither for the page's own run while it is shown as it streamed. |
+| Low: the join trusted actions' ids to be non-empty and unique across replies. | An empty id is no id, and a step's update fills only the replies streamed since the previous one. |
+| Low: README and `AGENTS.md` said an action's arguments appear once the reply is complete, which holds for Freyja's own replies only. | Both say so. |
+
+**Checked by hand** on a check instance, with the stand-in model as a saved profile whose
+one model call takes 20 seconds: window A started a run and read its stream, window B
+opened the task and pressed Stop. Window A said "stopping" 3.8 seconds after the press,
+after one reading of the row, and offered Stop no more. The stop came during the reply's
+only model call, so the run ended by itself, as the spec has it: both windows showed the
+task done, window B said that the stop came too late, and window A, which had not asked,
+said nothing of it.
+
+**Open after Phase 13**, none of them this feature's to close: the three of Phase 12 above.

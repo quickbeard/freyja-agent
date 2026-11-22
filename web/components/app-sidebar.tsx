@@ -27,6 +27,7 @@ import {
 import {
   LIST_SECONDS,
   listThreads,
+  READING,
   THREADS_KEY,
   type ThreadList,
 } from "@/lib/tasks";
@@ -102,7 +103,7 @@ function useTasksWaiting(): number | null {
   const { data, error, isValidating, mutate } = useSWR<ThreadList, unknown>(
     THREADS_KEY,
     listThreads,
-    { shouldRetryOnError: false },
+    READING,
   );
   useEvery(THREADS_KEY, LIST_SECONDS, () => {
     // Not while a reading is under way: a new one would take its place.

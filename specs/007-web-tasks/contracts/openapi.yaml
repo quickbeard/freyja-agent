@@ -15,8 +15,10 @@ info:
     a response nor send a JSON body; a body that is not sent as JSON is refused with 422. A
     request that changes something (POST) and that a browser marks as made by a page of
     another origin is refused with 403 and the code `other_origin`, on every path here and,
-    from this feature on, on the thread routes of feature 001, before anything else is looked
-    at, by the rule the LLM and Agents routes apply (feature 004, contracts/openapi.yaml).
+    from this feature on, on the thread routes of feature 001, by the rule the LLM and Agents
+    routes apply (feature 004, contracts/openapi.yaml). Nothing else is looked at before,
+    apart from a body that cannot be read as JSON: that one is answered with 422 first, and
+    changes nothing either.
 paths:
   /threads:
     get:
@@ -51,6 +53,7 @@ paths:
                     changed_at: "2026-11-20T08:00:04Z"
                     stoppable: false
                     stopping: false
+                    runs: 1
                   - thread_id: 0b6d4e2f8a1c4f7e9d3b5a7c9e1f2a4b
                     first_message: Summarize what changed in the workspace this week.
                     status: running
@@ -59,6 +62,7 @@ paths:
                     changed_at: "2026-11-20T08:10:00Z"
                     stoppable: true
                     stopping: false
+                    runs: 3
                   - thread_id: demo-1
                     first_message: Summarize what you can do.
                     status: failed
@@ -67,6 +71,7 @@ paths:
                     changed_at: "2026-11-19T16:02:11Z"
                     stoppable: false
                     stopping: false
+                    runs: 1
         "500":
           description: >
             `internal`: the index could not be read. The list never answers with an earlier
@@ -100,7 +105,9 @@ paths:
         "422": { $ref: "#/components/responses/Invalid" }
         "500":
           description: >
-            `internal`: the index could not be read. Never an earlier row.
+            `internal`: the index or the thread's state could not be read, or runs kept
+            starting and ending on the thread while its row was read; the next request reads
+            it again. Never an earlier row.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -112,11 +119,13 @@ paths:
       summary: Start a run that goes on when its reader leaves
       description: >
         The same request, the same refusals, and the same events as
-        `POST /threads/{thread_id}/runs` (feature 001), from the same code. Two things
+        `POST /threads/{thread_id}/runs` (feature 001), from the same code. Three things
         differ. The run goes on to its end whether or not anyone reads the stream: a client
-        that disconnects, or never reads, changes nothing about how the run ends. And the run
-        can be stopped with `POST /threads/{thread_id}/stop`. See sse-events.md for the
-        stream.
+        that disconnects, or never reads, changes nothing about how the run ends. The run can
+        be stopped with `POST /threads/{thread_id}/stop`. And every text of every event,
+        the debug events included, is cleaned of every agent's address before it is sent,
+        as a model's error that repeats one; the earlier route's events are not. See
+        sse-events.md for the stream.
       requestBody:
         required: true
         content:
@@ -160,8 +169,8 @@ paths:
         The same request, the same refusals, and the same events as
         `POST /threads/{thread_id}/resume` (feature 001), from the same code: the proposal's
         id, one decision per proposed action, and every check of a decision are the existing
-        ones. The continuation goes on without a reader and can be stopped, as a run started
-        through `runs/unattended`.
+        ones. The continuation goes on without a reader, can be stopped, and has its events
+        cleaned of every agent's address, as a run started through `runs/unattended`.
       requestBody:
         required: true
         content:
@@ -200,7 +209,9 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "500":
           description: >
-            `internal`: as for `runs/unattended`. Nothing ran.
+            `internal`: as for `runs/unattended`, or as for the existing route: the
+            proposed calls could not be read, or the thread is paused on more than one
+            interrupt at once. Nothing ran.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }

@@ -260,6 +260,24 @@ describe("the proposal card", () => {
     expect(onStale.mock.calls[0][0]).toMatch(said);
   });
 
+  // Edge Cases, "Two people decide the same proposal" (T115): a run starts on a proposal
+  // only when it is decided, so one in progress most likely carries out another window's.
+  it("says that a proposal refused for a run in progress was most likely decided in another window", async () => {
+    const send = vi.fn(async () => {
+      throw new ApiError(
+        "A run is already active on this thread.",
+        409,
+        "run_active",
+      );
+    });
+    const { onStale } = renderCard(proposal(NOTIFY), send);
+    fireEvent.click(button("Approve send_notification"));
+    await waitFor(() => expect(onStale).toHaveBeenCalledTimes(1));
+    expect(onStale.mock.calls[0][0]).toBe(
+      "A run is in progress on this task, so the decision was not applied: the proposal was most likely decided in another window. Nothing ran because of this decision. The task is shown as it is now.",
+    );
+  });
+
   it("says that the outcome is not known when no answer came", async () => {
     const send = vi.fn(async () => {
       throw new ApiError(

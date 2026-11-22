@@ -56,7 +56,8 @@ function renderView(threadId = "t-1") {
       value={{
         provider: () => new Map(),
         dedupingInterval: 0,
-        focusThrottleInterval: 0,
+        // The reading library's own wait before it reads a page shown again, five seconds
+        // after the page was opened, is left as it is: the console sets it aside itself.
       }}
     >
       <TaskView threadId={threadId} />
@@ -1430,6 +1431,7 @@ describe("a task's page and its agent tasks", () => {
 // back showing what it held when it was left.
 
 describe("a task's page that is shown again", () => {
+  // T113: within five seconds of the page being opened, as here, too.
   it("reads the task again at once, by no timer", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const visibility = vi.spyOn(document, "visibilityState", "get");
@@ -2056,6 +2058,253 @@ describe("a task's page and Stop", () => {
     renderView();
     expect(await screen.findByText(STOPPING)).toBeTruthy();
     expect(stop()).toBeNull();
+  });
+
+  // Phase 13 (T114): a page that reads its own run's stream reads the row too, on the same
+  // timer, so that a stop asked in another window is said there as well (FR-022).
+  it("says that its own run is stopping when the stop was asked in another window, and offers Stop no more", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const answer = openBody();
+      let elsewhere = false;
+      const asked = serve((_method, path) =>
+        path.endsWith("/state")
+          ? { json: state([human("List the files.")], { run_active: true }) }
+          : {
+              json: summary({
+                status: "running",
+                stoppable: true,
+                stopping: elsewhere,
+              }),
+            },
+      );
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START, chunk("Here is the first"));
+      expect(await screen.findByRole("button", { name: /^Stop/ })).toBeTruthy();
+      const readings = (end: string) =>
+        asked.filter(({ path }) => path.endsWith(end)).length;
+      const states = readings("/state");
+      const rows = readings("/t-1");
+
+      // Stop is pressed in another window.
+      elsewhere = true;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+      expect(stop()).toBeNull();
+      expect(readings("/t-1")).toBe(rows + 1);
+      // Only the row: the stream says the rest.
+      expect(readings("/state")).toBe(states);
+      expect(stops(asked)).toEqual([]);
+      answer.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("learns how its own run ended from the stream, not from a reading of the row made while it streams", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const answer = openBody();
+      let ended = false;
+      let pressed = false;
+      const asked = serve((method, path) => {
+        if (method === "POST") {
+          pressed = true;
+          return ACCEPTED;
+        }
+        return path.endsWith("/state")
+          ? {
+              json: state(
+                ended
+                  ? [human("List the files."), ai("Here they are.")]
+                  : [human("List the files.")],
+                { run_active: !ended },
+              ),
+            }
+          : {
+              json: summary({
+                status: ended ? "done" : "running",
+                stoppable: !ended,
+                stopping: pressed && !ended,
+              }),
+            };
+      });
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START, chunk("Here they"));
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+      expect(stops(asked)).toHaveLength(1);
+
+      // The run finishes before the stop takes effect. The row says so before the stream's
+      // last event arrives; the page goes on saying stopping until that event.
+      ended = true;
+      const rows = asked.filter(({ path }) => path === "/threads/t-1").length;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(
+          asked.filter(({ path }) => path === "/threads/t-1").length,
+        ).toBeGreaterThan(rows),
+      );
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+      answer.send(chunk(" are."), END);
+      answer.close();
+
+      expect(await screen.findByText(new RegExp(TOO_LATE))).toBeTruthy();
+      await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+      expect(screen.queryByText(STOPPING)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // From the review of Phase 13: three things a reading of the row made while the page
+  // reads its own run's stream must not do.
+  it("learns that its own run stopped from the stream, also when a row read while it streamed says otherwise", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const answer = openBody();
+      let pressed = false;
+      const asked = serve((method, path) => {
+        if (method === "POST") {
+          pressed = true;
+          return ACCEPTED;
+        }
+        return path.endsWith("/state")
+          ? {
+              json: state([human("List the files."), ai("Here")], {
+                run_active: !pressed,
+              }),
+            }
+          : // Once the stop is asked, the row says done: its note of the stop was lost.
+            {
+              json: summary({
+                status: pressed ? "done" : "running",
+                stoppable: !pressed,
+              }),
+            };
+      });
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START, chunk("Here"));
+      fireEvent.click(await screen.findByRole("button", { name: /^Stop/ }));
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+      const rows = asked.filter(({ path }) => path === "/threads/t-1").length;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(
+          asked.filter(({ path }) => path === "/threads/t-1").length,
+        ).toBeGreaterThan(rows),
+      );
+
+      answer.send(STOPPED);
+      answer.close();
+      await forgotten();
+      expect(screen.queryByText(new RegExp(TOO_LATE))).toBeNull();
+      expect(screen.queryByText(STOPPING)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says nothing of a reading of the row that failed while it reads its own run's stream", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const answer = openBody();
+      let fail = false;
+      const asked = serve((_method, path) =>
+        path.endsWith("/state")
+          ? { json: state([human("List the files.")], { run_active: true }) }
+          : fail
+            ? { fails: "Failed to fetch" }
+            : { json: summary({ status: "running", stoppable: true }) },
+      );
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START, chunk("Here"));
+      expect(await screen.findByRole("button", { name: /^Stop/ })).toBeTruthy();
+
+      fail = true;
+      const rows = asked.filter(({ path }) => path === "/threads/t-1").length;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(asked.filter(({ path }) => path === "/threads/t-1").length).toBe(
+          rows + 1,
+        ),
+      );
+      // The failed answer has been taken in by the time the next piece is shown.
+      await pause(50);
+      answer.send(chunk(" they are."));
+      await waitFor(() => expect(conversation()).toContain("Here they are."));
+      expect(screen.queryByRole("alert")).toBeNull();
+      expect(screen.queryByText(/cannot be reached/)).toBeNull();
+      answer.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("says that its own run has ended, not that one is in progress, until the task is read after it, and reads the conversation once", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const answer = openBody();
+      let over = false;
+      let release: () => void = () => {};
+      const released = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const asked = serve(async (_method, path) => {
+        if (over) {
+          await released;
+        }
+        if (path.endsWith("/state")) {
+          return {
+            json: state(
+              over
+                ? [human("List the files."), ai("Here they are.")]
+                : [human("List the files.")],
+              { run_active: !over },
+            ),
+          };
+        }
+        return { json: summary({ status: over ? "done" : "running" }) };
+      });
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START, chunk("Here"));
+      expect(await screen.findByRole("button", { name: /^Stop/ })).toBeTruthy();
+      // The row is read while the page streams, and says that the run is in progress.
+      const rows = asked.filter(({ path }) => path === "/threads/t-1").length;
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(asked.filter(({ path }) => path === "/threads/t-1").length).toBe(
+          rows + 1,
+        ),
+      );
+      await pause(50);
+
+      over = true;
+      const states = asked.filter(({ path }) => path.endsWith("/state")).length;
+      answer.send(chunk(" they are."), END);
+      answer.close();
+      await waitFor(() => expect(get("t-1")?.ended?.kind).toBe("event"));
+      const status = () => document.querySelector("section > output");
+      await waitFor(() =>
+        expect(status()?.textContent).toBe("The run has ended."),
+      );
+
+      release();
+      await forgotten();
+      await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+      await pause(50);
+      expect(status()?.textContent).toBe("The run has ended.");
+      expect(
+        asked.filter(({ path }) => path.endsWith("/state")).length - states,
+      ).toBe(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("offers no Stop for a run in progress that the console did not start, and says why", async () => {
@@ -2835,6 +3084,121 @@ describe("a reply that streams in blocks", () => {
         { id: "toolu_1", name: "send_notification", args: {} },
       ]);
     }
+  });
+
+  // Phase 13 (T112): the arguments arrive in pieces that name nothing. Once the model's step
+  // is done, its update holds the reply whole, as the service sends it, and the page shows
+  // each action with all of its arguments, before the run has ended (FR-010).
+  const modelUpdate = (calls: unknown[], node = "model") =>
+    sse("update", {
+      node,
+      data: {
+        messages: [
+          {
+            id: RUN,
+            type: "ai",
+            content: [],
+            name: "freyja",
+            tool_calls: calls,
+          },
+        ],
+        _skill_tools_disclosed: {},
+      },
+    });
+  const WHOLE = {
+    id: "toolu_1",
+    name: "send_notification",
+    args: { channel: "#ops", text: "hi" },
+  };
+
+  it("shows an action's arguments once the model's step is done, before the run has ended", () => {
+    const [, reply] = joined(...ANTHROPIC, modelUpdate([WHOLE]));
+    expect(reply.tool_calls).toEqual([WHOLE]);
+    expect(contentText(reply.content).startsWith("I will tell #ops.\n")).toBe(
+      true,
+    );
+  });
+
+  it("shows every action of a reply that asks for two, each from the piece that names it", () => {
+    const first = blocks(RUN, [], [{ id: "call_1", name: "ls", args: {} }]);
+    const part = blocks(RUN, [], [{ id: null, name: "", args: { path: "/" } }]);
+    const second = blocks(
+      RUN,
+      [],
+      [{ id: "call_2", name: "read_file", args: {} }],
+    );
+    expect(joined(first, part, second)[1].tool_calls).toEqual([
+      { id: "call_1", name: "ls", args: {} },
+      { id: "call_2", name: "read_file", args: {} },
+    ]);
+    const whole = [
+      { id: "call_1", name: "ls", args: { path: "/" } },
+      { id: "call_2", name: "read_file", args: { file_path: "/a" } },
+    ];
+    expect(
+      joined(first, part, second, modelUpdate(whole))[1].tool_calls,
+    ).toEqual(whole);
+  });
+
+  // From the review of Phase 13: an empty id is no id, and a step's update is about the
+  // reply of that step, since a provider may give the actions of two replies the same ids.
+  it("shows both actions of a reply whose actions have empty ids", () => {
+    const first = blocks(RUN, [], [{ id: "", name: "ls", args: {} }]);
+    const second = blocks(RUN, [], [{ id: "", name: "read_file", args: {} }]);
+    expect(joined(first, second)[1].tool_calls).toEqual([
+      { id: "", name: "ls", args: {} },
+      { id: "", name: "read_file", args: {} },
+    ]);
+  });
+
+  it("gives each reply the arguments of its own step's update, when two replies' actions share an id", () => {
+    const ls = (path?: string) => [
+      { id: "call_0", name: "ls", args: path === undefined ? {} : { path } },
+    ];
+    const messages = joined(
+      blocks("reply-1", [], ls()),
+      modelUpdate(ls("/")),
+      sse("message", {
+        message: {
+          id: "result-1",
+          type: "tool",
+          content: "a b",
+          name: "ls",
+          tool_call_id: "call_0",
+        },
+        metadata: {},
+      }),
+      blocks("reply-2", [], ls()),
+      modelUpdate(ls("/tmp")),
+    );
+    expect(messages.map((message) => message.tool_calls)).toEqual([
+      undefined,
+      ls("/"),
+      undefined,
+      ls("/tmp"),
+    ]);
+  });
+
+  it("takes from an update only the actions the page shows, and only from the model's step", () => {
+    const shown = [{ id: "toolu_1", name: "send_notification", args: {} }];
+    // Another step's update says nothing of the reply.
+    expect(
+      joined(...ANTHROPIC, modelUpdate([WHOLE], "tools"))[1].tool_calls,
+    ).toEqual(shown);
+    // An action the page does not show is not added from an update.
+    expect(
+      joined(...ANTHROPIC, modelUpdate([{ ...WHOLE, id: "toolu_2" }]))[1]
+        .tool_calls,
+    ).toEqual(shown);
+    // An update that holds no messages changes nothing.
+    expect(
+      joined(...ANTHROPIC, sse("update", { node: "model", data: {} }))[1]
+        .tool_calls,
+    ).toEqual(shown);
+    expect(
+      joined(...ANTHROPIC, sse("update", { node: "model", data: null }))[1]
+        .tool_calls,
+    ).toEqual(shown);
   });
 
   it("joins plain text and blocks as the service's library does", () => {

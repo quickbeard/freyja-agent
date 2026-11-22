@@ -430,6 +430,18 @@ describe("AppSidebar, the Tasks entry", () => {
     }
   });
 
+  // T113: the reading library waits five seconds after a page was opened before it reads
+  // on the page being shown; the console sets that wait aside.
+  it("reads the list again at once when the page is shown, also within five seconds of it being opened", async () => {
+    threadReplies = [waiting(0), waiting(2)];
+    stubFetch(list(HELLO));
+    renderSidebar();
+    await waitFor(() => expect(threadAsks).toBe(1));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(tasksSaid()).toBe("2 tasks need a decision"));
+    expect(threadAsks).toBe(2);
+  });
+
   it("reads the list again by itself, by its timer, on another section", async () => {
     threadReplies = [waiting(0), waiting(1)];
     stubFetch(list(HELLO));

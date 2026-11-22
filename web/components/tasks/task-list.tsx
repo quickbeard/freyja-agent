@@ -9,6 +9,7 @@ import { ApiError } from "@/lib/api";
 import {
   LIST_SECONDS,
   listThreads,
+  READING,
   THREADS_KEY,
   type ThreadList,
   type ThreadSummary,
@@ -64,7 +65,7 @@ export function TaskList() {
   const { data, error, isLoading, isValidating, mutate } = useSWR<
     ThreadList,
     unknown
-  >(THREADS_KEY, listThreads, { shouldRetryOnError: false });
+  >(THREADS_KEY, listThreads, READING);
   useEvery(THREADS_KEY, LIST_SECONDS, () => {
     // Not while a reading is under way: a new one would take its place, and with a
     // service slower than the period none would ever be shown.

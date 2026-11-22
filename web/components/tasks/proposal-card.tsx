@@ -26,8 +26,11 @@ const STALE: Record<string, string> = {
     "This proposal is no longer the pending one: it was decided elsewhere, or another took its place. Nothing ran because of this decision. The task is shown as it is now.",
   nothing_pending:
     "Nothing is pending on this task any more: the proposal was decided elsewhere. Nothing ran because of this decision. The task is shown as it is now.",
+  // A run starts on a proposal only when it is decided: one in progress most likely carries
+  // out a decision made in another window (Edge Cases, "Two people decide the same
+  // proposal").
   run_active:
-    "A run is in progress on this task, so the decision was not applied. The task is shown as it is now.",
+    "A run is in progress on this task, so the decision was not applied: the proposal was most likely decided in another window. Nothing ran because of this decision. The task is shown as it is now.",
   thread_not_found: "This task no longer exists.",
 };
 

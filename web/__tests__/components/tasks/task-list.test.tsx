@@ -59,9 +59,8 @@ function renderList(withSidebar = false) {
       value={{
         provider: () => new Map(),
         dedupingInterval: 0,
-        // A page shown again reads at once in a test too: the reading library waits five
-        // seconds after a page was mounted before it reads on that account.
-        focusThrottleInterval: 0,
+        // The reading library's own wait before it reads a page shown again, five seconds
+        // after the page was opened, is left as it is: the console sets it aside itself.
       }}
     >
       {withSidebar && (
@@ -214,6 +213,7 @@ describe("the list of tasks", () => {
     }
   });
 
+  // T113: within five seconds of the page being opened, as here, too.
   it("is read again at once when the page is shown again, by no timer", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     const visibility = vi.spyOn(document, "visibilityState", "get");

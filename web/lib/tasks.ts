@@ -126,6 +126,19 @@ export const THREADS_KEY = "/threads";
  */
 export const LIST_SECONDS = 10;
 
+/**
+ * How the console reads tasks: the list, a task's row, and its conversation. A reading that
+ * fails is not tried again by itself; the timers that follow a task read it again. A page
+ * that was hidden is read as soon as it is shown (FR-006, FR-013): the reading library
+ * otherwise waits five seconds after a page was opened, and after each such reading, before
+ * it reads on being shown. Being shown is told twice, as focus and as visibility; the
+ * second finds the first one's reading under way and adds none.
+ */
+export const READING = {
+  shouldRetryOnError: false,
+  focusThrottleInterval: 0,
+} as const;
+
 function path(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}`;
 }
