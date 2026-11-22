@@ -1060,36 +1060,36 @@ rules above hold for each task: its test first, shown to fail.
       loopback, as the README's section on the containers describes, New task throws
       before its dialog opens (`web/lib/tasks.ts`, `newThreadId`), with a unit test where
       `randomUUID` is missing, per FR-007, US1/AC1 (partial)
-- [ ] T121 Read the task again shortly after the reading made at the end of the page's own
+- [X] T121 Read the task again shortly after the reading made at the end of the page's own
       run when that reading still says a run is in progress: the service sends the run's
       last event before it gives the lease back (`runtime/unattended.py`, `_drive`), so
       until the next reading, four seconds later, the page can show Running, offer Stop,
       hide a proposal the run paused on, and block the follow-up box
       (`web/components/tasks/task-view.tsx`), with a test where that reading says running,
       per FR-010, FR-019, FR-020 (partial)
-- [ ] T122 Show no earlier run's failure while the page streams its own run
+- [X] T122 Show no earlier run's failure while the page streams its own run
       (`web/components/tasks/task-view.tsx`, `rowFailure`): the row held from before says
       `failed` until the next reading of the row, up to four seconds into a follow-up's
       run, per FR-011, FR-003 (partial)
-- [ ] T123 Say in the console's own words, as the proposal card does, the service's
+- [X] T123 Say in the console's own words, as the proposal card does, the service's
       sentences that name a thread: `run_active` and `decision_pending` on the follow-up
       box (`follow-up.tsx`, `send-box.tsx`), and "The list of threads could not be read."
       on the list and on a task's page (`task-list.tsx`, `task-view.tsx`), per FR-001a
       (partial)
-- [ ] T124 Do not say that every task that needs a decision is listed when the service left
+- [X] T124 Do not say that every task that needs a decision is listed when the service left
       rows out because they could not be read (`web/components/tasks/task-list.tsx`):
       `more` is true then too (`api/thread_index.py`, `more = total > len(threads)`), per
       FR-005, FR-023 (partial)
-- [ ] T125 Clean a failed run's stored reason again when a row is answered
+- [X] T125 Clean a failed run's stored reason again when a row is answered
       (`api/thread_index.py`, `_summary`, through `SCRUBBER`), so that an address that
       became an agent's after the run failed is not returned, as card details are cleaned
       again where they are used, with a test that saves the agent after the run failed,
       per FR-025, SC-008 (partial)
-- [ ] T126 Add the service's `403` `unknown_host` refusal of a request made for a name it
+- [X] T126 Add the service's `403` `unknown_host` refusal of a request made for a name it
       does not answer for to the contract (`contracts/openapi.yaml`, its introduction and
       every path), and say in FR-024 and FR-027 that such a request is the one exception
       to a client that is not a web page being served as before, per contract, FR-024,
       FR-027 (contradicts)
-- [ ] T127 Give a row opened while the thread's lease is held the time it was opened as
+- [X] T127 Give a row opened while the thread's lease is held the time it was opened as
       `changed_at`, not its last checkpoint's (`runtime/thread_index.py`, `open_thread`),
       or narrow FR-002 to what data-model.md's "Opened" rule says, per FR-002 (partial)

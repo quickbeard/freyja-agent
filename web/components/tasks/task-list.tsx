@@ -57,6 +57,26 @@ function Row({ task }: { task: ThreadSummary }) {
 }
 
 /**
+ * What the list leaves out, past the tasks it shows. Every task that needs a decision is
+ * listed, unless the service left some out because it could not read them (FR-023): it says
+ * `more` then too, and counts them among those that need a decision. A task can also be
+ * counted and shown otherwise when it changed while the list was read, as when a run took
+ * its lease: the words cover both.
+ */
+function unlisted(data: ThreadList): string {
+  const listed = data.threads.filter(
+    (task) => task.status === "needs_decision",
+  ).length;
+  const left = data.needs_decision - listed;
+  if (left <= 0) {
+    return "Every task that needs a decision is listed, then the most recently changed of the others.";
+  }
+  return left === 1
+    ? "1 task that needs a decision is not listed as one: it could not be read just now, or it changed while the list was read. It is read again by itself."
+    : `${left} tasks that need a decision are not listed as such: they could not be read just now, or they changed while the list was read. They are read again by themselves.`;
+}
+
+/**
  * Every task, the ones that need a decision first, as the service orders them (FR-002 to
  * FR-006). A reading that fails is said, with a way to try again, and no row is shown as if
  * it were current.
@@ -82,7 +102,10 @@ export function TaskList() {
       >
         <p className="text-sm">
           {error instanceof ApiError
-            ? error.message
+            ? error.code === "internal"
+              ? // The service's sentence speaks of the list of threads (FR-001a).
+                "The list of tasks could not be read."
+              : error.message
             : "The tasks could not be loaded."}
         </p>
         <Button
@@ -132,7 +155,7 @@ export function TaskList() {
       </ol>
       {data.more && (
         <p className="text-sm text-muted-foreground">
-          {`More tasks exist than are listed here: ${data.total} in all. Every task that needs a decision is listed, then the most recently changed of the others.`}
+          {`More tasks exist than are listed here: ${data.total} in all. ${unlisted(data)}`}
         </p>
       )}
     </div>

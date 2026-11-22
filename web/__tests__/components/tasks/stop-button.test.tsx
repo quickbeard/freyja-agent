@@ -144,11 +144,32 @@ describe("the Stop control", () => {
   });
 
   it("gives the service's own sentence for any other refusal", async () => {
-    serve(() => refusal(404, "thread_not_found", "No such thread is listed."));
+    serve(() => refusal(400, "unexpected", "Something else was refused."));
     const { onStale } = show("stoppable");
     fireEvent.click(stop() as HTMLButtonElement);
     await waitFor(() =>
-      expect(onStale).toHaveBeenCalledWith("No such thread is listed."),
+      expect(onStale).toHaveBeenCalledWith("Something else was refused."),
     );
+  });
+
+  // Phase 14's review: the service's sentences for these name a thread.
+  it.each([
+    [
+      404,
+      "thread_not_found",
+      "No run on this thread is known.",
+      "The service knows no run of this task, so nothing was stopped. The task is shown as it is now.",
+    ],
+    [
+      500,
+      "internal",
+      "The list of threads could not be read.",
+      "The service could not read or mark the task, so whether the stop was asked for is not known. The task is read again.",
+    ],
+  ])("says a %s %s refusal in its own words", async (status, code, message, said) => {
+    serve(() => refusal(status, code, message));
+    const { onStale } = show("stoppable");
+    fireEvent.click(stop() as HTMLButtonElement);
+    await waitFor(() => expect(onStale).toHaveBeenCalledWith(said));
   });
 });

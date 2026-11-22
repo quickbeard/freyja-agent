@@ -1247,9 +1247,31 @@ said nothing of it.
 
 **Open after Phase 13**, none of them this feature's to close: the three of Phase 12 above.
 
-**Phase 14, T120 only, as built.** A new task's id is 16 bytes from
+**Phase 14 as built.** T120 first, on its own: a new task's id is 16 bytes from
 `crypto.getRandomValues`, which a browser gives every page, in place of
 `crypto.randomUUID`, which it gives a secure origin only (https, `localhost`, `127.0.0.1`):
 a console reached over http by a name or another address threw at New task before its
-dialog opened. A unit test takes `randomUUID` away and asks for 200 ids. T121 to T127, all
-low, are left open.
+dialog opened. A unit test takes `randomUUID` away and asks for 200 ids. Then T121 to T127:
+
+| Task | As built |
+|------|----------|
+| T121 | When the row or the conversation read at the end of the page's own run still says a run is in progress, the view reads both once more `AGAIN_SECONDS` (1) later. The timer is kept in a ref, cleared only when the page goes, since the page forgets its run once the first reading is answered. |
+| T122 | `rowFailure` is not shown while the row the page holds may be from before its own run: from the run's start until the reading made at its end was answered (`rowFromBefore`). |
+| T123 | The follow-up box and the box that sends a failed first message again say `run_active` and `decision_pending` in the console's words (`inWords` in `follow-up.tsx`); Stop says `thread_not_found` and `internal` in its own; the list says "The list of tasks could not be read." and a task's page "The task could not be read." for the service's `internal` answer to a reading of the list or of the row. `send-box.tsx` is unchanged. |
+| T124 | The list compares the tasks it shows that need a decision with the service's count of them; when fewer are shown as such, it says how many, and that they could not be read just now or changed while the list was read, in place of saying that every one is listed. No change to the service or the contract. |
+| T125 | `_summary` passes a failed run's stored reason through `SCRUBBER` again. |
+| T126 | The contract's introduction says the `unknown_host` refusal comes before anything else, on every path but `/healthz`, for every client, also for a request whose `Host` names no host; each GET has a `403` for it, and each POST's `403` names both refusals. FR-024 and FR-027 name it as the one change for a client that is not a web page. |
+| T127 | FR-002 is narrowed to what data-model.md's "Opened" says, the second of the two ways the task gave: the time the row is opened is not when the run started either, and LangGraph writes a checkpoint as a run starts, so the last recorded step is the nearer of the two. No code changed. |
+
+An independent reviewer read the diff. It found nothing high, one medium that Phase 13 had
+left, and four low; each was checked in the code and fixed, with a test:
+
+| Finding | Fixed by |
+|---------|----------|
+| Medium: a stop asked while the page read its own stream, and the stream then cut, was never settled: once the page forgot its run, the guard that leaves an own run to its last event skipped every reading of the row. The page said "stopping" on, and never that the stop came too late. | A cut stream makes the stop the row's to settle (`own: false`), as for a run the page follows. |
+| Low: Stop, and the box that sends a failed first message again, still gave service sentences that name a thread. | Both say them in the console's words. |
+| Low: T124's words were untrue for a task whose run took the lease while the list was read, which is listed as Running. | The words name both causes. |
+| Low: T122 hid a failure the row read after a cut stream reported, while the conversation could not be read. | The row's failure is hidden only until the reading made at the run's end was answered. |
+| Low: the contract's `unknown_host` left out a request whose `Host` names no host, and FR-027 left out `/healthz`. | Both say so. |
+
+Each fix was taken away in turn and its tests failed every time: 17 mutation checks.

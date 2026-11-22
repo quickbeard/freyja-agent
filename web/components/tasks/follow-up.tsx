@@ -20,6 +20,22 @@ const WHY: Record<Exclude<Blocked, null>, string> = {
 // accepted all the same.
 const MOVED = ["run_active", "decision_pending", "unreachable"];
 
+// The service's sentences for the two refusals name a thread; these are the console's
+// (FR-001a), as the proposal card has its own.
+const SAID: Record<string, string> = {
+  run_active:
+    "A run is already in progress on this task, so the message was not sent. It can be sent once the run has ended.",
+  decision_pending:
+    "This task waits for a decision on a proposal, so the message was not sent. It can be sent once the proposal is decided.",
+};
+
+/** A refusal of a message, in the console's words where the service's name a thread. */
+export function inWords(refused: unknown): unknown {
+  return refused instanceof ApiError && refused.code in SAID
+    ? new ApiError(SAID[refused.code], refused.status, refused.code)
+    : refused;
+}
+
 /**
  * The box that sends another message on the same task (FR-020). The run it starts is held
  * as this tab's, with the conversation as it was (`before`), and the task's page shows it as
@@ -57,7 +73,7 @@ export function FollowUp({
       if (refused instanceof ApiError && MOVED.includes(refused.code)) {
         onMoved?.();
       }
-      throw refused;
+      throw inWords(refused);
     }
     begin(threadId, text, answer, before);
     setSent((count) => count + 1);

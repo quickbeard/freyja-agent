@@ -32,6 +32,7 @@ from freyja_agent.api.thread_index_schemas import (
     ThreadSummary,
 )
 from freyja_agent.api.threads import DebugQuery, ThreadIdPath
+from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.thread_index import (
     INDEX_WRITE_SECONDS,
@@ -75,8 +76,14 @@ def _summary(record: ThreadRecord, lease_active: bool) -> ThreadSummary:
         thread_id=record.thread_id,
         first_message=record.first_message,
         status=status,
+        # The reason was cleaned when the run failed, of the addresses agents had then. One
+        # that became an agent's since is taken out here, as a card's details are cleaned
+        # again where they are used (spec FR-025).
         error=(
-            RunError(code=record.error_code or "internal", message=record.error_message or "")
+            RunError(
+                code=record.error_code or "internal",
+                message=SCRUBBER.scrub(record.error_message or ""),
+            )
             if status == "failed"
             else None
         ),

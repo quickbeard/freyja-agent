@@ -322,7 +322,9 @@ startup and exits with an error naming the connection when it is unreachable.
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
   every `AGENT_SECONDS` while an agent task is awaited, its row alone every
   `FOLLOW_SECONDS` while it reads its own run's stream, so that a stop asked in another
-  window is said, and never while the page is hidden.
+  window is said, and never while the page is hidden. When the reading made at the end of
+  its own run still says a run is in progress, as it can while the service gives the lease
+  back, it reads once more `AGAIN_SECONDS` later.
   Stop (`stop-button.tsx`) is offered by the view for a run the console started that is in
   progress: a run of this tab once its `start` event arrived, and a run it follows when the
   row says `stoppable`. It sends `stopRun` on a press, never otherwise; the view says

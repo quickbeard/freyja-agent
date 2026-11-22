@@ -20,6 +20,11 @@ const REFUSED: Record<string, string> = {
     "No run is in progress on this task any more, so nothing was stopped. The task is shown as it is now.",
   not_stoppable:
     "The service did not stop this run: the console did not start it, or it has only just started. The task is shown as it is now.",
+  // The service's sentences for these two name a thread (FR-001a).
+  thread_not_found:
+    "The service knows no run of this task, so nothing was stopped. The task is shown as it is now.",
+  internal:
+    "The service could not read or mark the task, so whether the stop was asked for is not known. The task is read again.",
 };
 
 const UNKNOWN =

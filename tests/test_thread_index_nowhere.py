@@ -18,9 +18,10 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
+from tests.a2a_stub import make_stub
 from tests.conftest import A2aApp, LlmApp
 from tests.fakes import FailingChatModel
-from tests.nowhere import MARK, LeakyModel, Seen, logged, no_address, no_key, profile
+from tests.nowhere import MARK, LeakyModel, Seen, found, logged, no_address, no_key, profile
 from tests.unattended_helpers import Reader, idle
 
 # A port nothing else in the suite uses, so finding it means an address got out.
@@ -285,3 +286,42 @@ def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
     assert len(made.stub_at(URL).record.messages) == 1
     no_address(seen.texts, PORT)
     no_address(logged(caplog), PORT)
+
+
+# Phase 14, T125: an address that became an agent's after a run failed. The reason was kept
+# when the address was no agent's, so nothing took it out then; it is cleaned again where a
+# row is answered, as a card's details are cleaned again where they are used.
+LATER_PORT = 9783
+LATER_URL = f"http://127.0.0.1:{LATER_PORT}"
+
+
+def test_an_address_saved_as_an_agent_after_a_run_failed_is_not_in_its_row(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any
+) -> None:
+    model = FailingChatModel(
+        script=[],
+        fail_on_call=1,
+        error=f"The provider could not take a request that names {LATER_URL}/ and gave up.",
+    )
+    made = make_a2a_app(model, {})
+    made.add_stub(LATER_URL, make_stub("later"))
+
+    with TestClient(made.app) as client:
+        seen = Seen(client, sse_events)
+        failed = seen.stream("/threads/l-failed/runs/unattended", {"message": "This one fails."})
+        assert failed[-1][0] == "error"
+        # No agent has the address yet: the reason is kept and given as it was.
+        before = seen.call("GET", "/threads/l-failed").json()
+        assert found(before["error"]["message"], LATER_PORT)
+
+        added = client.post("/agents", json={"name": "later", "url": LATER_URL})
+        assert added.status_code == 201, added.text
+
+        after = Seen(client, sse_events)
+        statuses = index_routes(after, "l-failed")
+        row = after.call("GET", "/threads/l-failed").json()
+
+    assert statuses == {"l-failed": "failed"}
+    assert row["error"]["code"] == "model_error"
+    assert "could not take a request that names" in row["error"]["message"]
+    no_address(after.texts, LATER_PORT)

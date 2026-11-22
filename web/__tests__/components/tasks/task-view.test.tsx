@@ -188,6 +188,27 @@ describe("a task's page", () => {
     await waitFor(() => expect(get("t-1")?.ended?.kind).toBe("event"));
   });
 
+  // Phase 14's review: the box that sends a failed first message again says a refusal whose
+  // sentence names a thread in the console's words, as the follow-up box does.
+  it("says in its own words that a run is in progress when the text is sent again", async () => {
+    serve((method) =>
+      method === "POST"
+        ? refusal(409, "run_active", "A run is already active on this thread.")
+        : NOT_USED,
+    );
+    begin("t-1", "Summarize the week.", body(START, NO_USABLE_MODEL));
+    renderView();
+    fireEvent.click(await screen.findByRole("button", { name: "Send again" }));
+    expect(
+      await screen.findByText(/^A run is already in progress on this task/),
+    ).toBeTruthy();
+    expect(screen.queryByText(/thread/)).toBeNull();
+    expect(
+      (screen.getByLabelText("Send the message again") as HTMLTextAreaElement)
+        .value,
+    ).toBe("Summarize the week.");
+  });
+
   it("says the connection ended without saying the run failed", async () => {
     service({
       row: () => ({ json: summary({ status: "running" }) }),
@@ -1990,6 +2011,67 @@ describe("a task's page and Stop", () => {
     }
   });
 
+  // Phase 14's review: a stop asked while the page read its own stream, and then the stream
+  // was cut before the run's last event. How the run ends is the row's to say, also once the
+  // page has forgotten its run.
+  it("says that a stop came too late when its own stream was cut and the run then paused", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let phase: "streaming" | "cut" | "paused" = "streaming";
+      serve((method, path) => {
+        if (method === "POST") {
+          return ACCEPTED;
+        }
+        if (phase === "streaming") {
+          return NOT_USED;
+        }
+        if (phase === "cut") {
+          return path.endsWith("/state")
+            ? { json: state([human("List the files.")], { run_active: true }) }
+            : {
+                json: summary({
+                  status: "running",
+                  stoppable: true,
+                  stopping: true,
+                }),
+              };
+        }
+        return path.endsWith("/state")
+          ? {
+              json: state([human("List the files."), ASKED], {
+                pending: PROPOSAL("int-1"),
+              }),
+            }
+          : { json: summary({ status: "needs_decision" }) };
+      });
+      const answer = openBody();
+      begin("t-1", "List the files.", answer.stream);
+      renderView();
+      answer.send(START);
+      fireEvent.click(
+        await screen.findByRole("button", {
+          name: "Stop the run of the task: List the files.",
+        }),
+      );
+      expect(await screen.findByText(STOPPING)).toBeTruthy();
+
+      phase = "cut";
+      answer.close();
+      await forgotten();
+      expect(screen.getByText(STOPPING)).toBeTruthy();
+
+      phase = "paused";
+      vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
+      await waitFor(() =>
+        expect(screen.getByText("Needs your decision")).toBeTruthy(),
+      );
+      expect(await screen.findByText(new RegExp(TOO_LATE))).toBeTruthy();
+      expect(screen.queryByText(STOPPING)).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("says that a stop came too late for a run it followed by reading, which paused on a proposal", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
@@ -2616,7 +2698,7 @@ describe("a task's page, Stop, and the run a row is of", () => {
       step = 2;
       vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
       expect(
-        await screen.findByText("The list of threads could not be read.", {
+        await screen.findByText("The task could not be read.", {
           exact: false,
         }),
       ).toBeTruthy();
@@ -3342,5 +3424,154 @@ describe("a reply that streams in blocks", () => {
     // One reply of Freyja's, not one for each piece or each id.
     expect(screen.getAllByRole("article", { name: "Freyja" })).toHaveLength(1);
     expect(screen.getByText("Running")).toBeTruthy();
+  });
+});
+
+describe("a task's page and the end of its own run", () => {
+  // T121: the service sends a run's last event before it gives the run's lease back, so the
+  // reading made at the end of this page's own run can still say a run is in progress.
+  // The page reads the task again shortly, not at the follow timer's next turn.
+  // Either reading can say it: each is asked for at the end, and each is answered by itself.
+  it.each([
+    ["the row", true, false],
+    ["the conversation", false, true],
+    ["both", true, true],
+  ])("reads the task again shortly when %s, read at the end of its own run, still says running", async (_which, rowSays, stateSays) => {
+    let ended = false;
+    let rowsAfter = 0;
+    let statesAfter = 0;
+    service({
+      row: () => {
+        if (!ended) {
+          return { json: summary({ status: "running", stoppable: true }) };
+        }
+        rowsAfter += 1;
+        return rowsAfter === 1 && rowSays
+          ? { json: summary({ status: "running", stoppable: true }) }
+          : { json: summary({ status: "done" }) };
+      },
+      state: () => {
+        const messages = [human("Summarize the week."), ai("Hello there.")];
+        if (!ended) {
+          return { json: state(messages.slice(0, 1), { run_active: true }) };
+        }
+        statesAfter += 1;
+        return {
+          json: state(messages, { run_active: statesAfter === 1 && stateSays }),
+        };
+      },
+    });
+    const answer = openBody();
+    begin("t-1", "Summarize the week.", answer.stream);
+    renderView();
+    answer.send(START, chunk("Hello there."));
+    await waitFor(() => expect(conversation()).toContain("Hello there."));
+
+    ended = true;
+    answer.send(END);
+    answer.close();
+    // Well before the follow timer's period: only a reading made sooner shows the end, and
+    // opens the follow-up box, which a run in progress keeps shut.
+    await waitFor(
+      () => {
+        expect(screen.getByText("Done")).toBeTruthy();
+        expect(
+          screen.queryByText(/A message can be sent once it has ended/),
+        ).toBeNull();
+      },
+      { timeout: (FOLLOW_SECONDS * 1000) / 2 },
+    );
+    expect(rowsAfter).toBeGreaterThanOrEqual(2);
+    expect(statesAfter).toBeGreaterThanOrEqual(2);
+    expect(screen.queryByRole("button", { name: "Stop" })).toBeNull();
+  });
+
+  // T122: the row the page held from before says the earlier run failed until it is read
+  // again; while the page shows its own run, that failure is not shown.
+  it("shows no earlier run's failure while it streams a follow-up", async () => {
+    service({
+      row: () => ({
+        json: summary({
+          status: "failed",
+          error: { code: "model_error", message: "The provider gave up." },
+        }),
+      }),
+      state: () => ({ json: state([human("First.")]) }),
+    });
+    renderView();
+    expect(await screen.findByText("The provider gave up.")).toBeTruthy();
+
+    const answer = openBody();
+    act(() => {
+      begin("t-1", "Again.", answer.stream, [human("First.")]);
+    });
+    answer.send(START);
+    expect(
+      await screen.findByText(
+        "The run has started. Freyja's reply appears as it is written.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText("The provider gave up.")).toBeNull();
+    expect(screen.queryByText("The run failed.")).toBeNull();
+    answer.close();
+  });
+
+  // Phase 14's review: once the row has been read after the page's own run, its failure is
+  // this run's, and is shown also while the page still shows the run as it streamed, as when
+  // the stream was cut and the conversation cannot be read.
+  it("shows the row's failure read after its own run, when the stream was cut and the conversation cannot be read", async () => {
+    let ended = false;
+    service({
+      row: () =>
+        ended
+          ? {
+              json: summary({
+                status: "failed",
+                error: {
+                  code: "model_error",
+                  message: "The provider gave up.",
+                },
+              }),
+            }
+          : { json: summary({ status: "running" }) },
+      state: () =>
+        ended
+          ? refusal(500, "internal", "The state could not be read.")
+          : { json: state([human("First.")]) },
+    });
+    const answer = openBody();
+    begin("t-1", "Again.", answer.stream, [human("First.")]);
+    renderView();
+    answer.send(START);
+    expect(
+      await screen.findByText(
+        "The run has started. Freyja's reply appears as it is written.",
+      ),
+    ).toBeTruthy();
+
+    ended = true;
+    answer.close();
+    expect(await screen.findByText("The provider gave up.")).toBeTruthy();
+  });
+
+  // T123: the service's sentence for a row it could not read names the list of threads.
+  it("says in its own words that the task could not be read", async () => {
+    service({
+      row: () => ({
+        status: 500,
+        json: {
+          detail: {
+            code: "internal",
+            message: "The list of threads could not be read.",
+          },
+        },
+      }),
+      state: () => ({ json: state([human("First.")]) }),
+    });
+    renderView();
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /^The task could not be read\./,
+    );
+    expect(screen.queryByText(/thread/)).toBeNull();
   });
 });

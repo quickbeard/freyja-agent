@@ -198,7 +198,7 @@ describe("the follow-up box", () => {
     type("Too late.");
     fireEvent.click(send());
     expect((await screen.findByRole("alert")).textContent).toContain(
-      "A run is already active.",
+      "A run is already in progress on this task",
     );
 
     // The task was read again: a run is in progress, and then it has ended.
@@ -221,10 +221,19 @@ describe("the follow-up box", () => {
     expect(box().value).toBe("Is anyone there?");
   });
 
+  // T123: the service's sentences name a thread; the console says them in its own words.
   it.each([
-    ["run_active", "A run is already active on this thread."],
-    ["decision_pending", "This thread has a pending decision."],
-  ])("has the task read again when the service refuses with %s, and keeps the text", async (code, message) => {
+    [
+      "run_active",
+      "A run is already active on this thread.",
+      "A run is already in progress on this task, so the message was not sent. It can be sent once the run has ended.",
+    ],
+    [
+      "decision_pending",
+      "This thread is paused on a proposal; decide it through resume first.",
+      "This task waits for a decision on a proposal, so the message was not sent. It can be sent once the proposal is decided.",
+    ],
+  ])("has the task read again when the service refuses with %s, says why in its own words, and keeps the text", async (code, message, said) => {
     serve(() => refusal(409, code, message));
     const onMoved = vi.fn();
     render(
@@ -238,7 +247,9 @@ describe("the follow-up box", () => {
     type("Too late.");
     fireEvent.click(send());
 
-    expect((await screen.findByRole("alert")).textContent).toContain(message);
+    const alert = (await screen.findByRole("alert")).textContent;
+    expect(alert).toBe(said);
+    expect(alert).not.toContain(message);
     expect(onMoved).toHaveBeenCalledTimes(1);
     expect(box().value).toBe("Too late.");
     expect(get("t-1")).toBeUndefined();

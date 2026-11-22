@@ -284,6 +284,50 @@ describe("the list of tasks", () => {
     );
   });
 
+  // T124: the service leaves a row out that it cannot read, and `more` is then true too.
+  // When the left-out rows include tasks that need a decision, they are not all listed.
+  it("does not say that every task that needs a decision is listed when some were left out", async () => {
+    serve(() =>
+      list(FOUR.slice(0, 2), { needs_decision: 3, total: 6, more: true }),
+    );
+    renderList();
+    expect(
+      (await screen.findByText(/More tasks exist than are listed here/))
+        .textContent,
+    ).toBe(
+      "More tasks exist than are listed here: 6 in all. 2 tasks that need a decision are not listed as such: they could not be read just now, or they changed while the list was read. They are read again by themselves.",
+    );
+  });
+
+  it("says one task that needs a decision in the singular when it was left out", async () => {
+    serve(() => list([FOUR[1]], { needs_decision: 1, total: 2, more: true }));
+    renderList();
+    expect(
+      (await screen.findByText(/More tasks exist than are listed here/))
+        .textContent,
+    ).toBe(
+      "More tasks exist than are listed here: 2 in all. 1 task that needs a decision is not listed as one: it could not be read just now, or it changed while the list was read. It is read again by itself.",
+    );
+  });
+
+  // T123: the service's sentence names the list of threads; the console says task.
+  it("says in its own words that the list could not be read", async () => {
+    serve(() => ({
+      status: 500,
+      json: {
+        detail: {
+          code: "internal",
+          message: "The list of threads could not be read.",
+        },
+      },
+    }));
+    renderList();
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /^The list of tasks could not be read\./,
+    );
+    expect(screen.queryByText(/thread/)).toBeNull();
+  });
+
   it("says the service cannot be reached, shows no row, and reads again on request", async () => {
     let down = true;
     serve(() => (down ? { fails: "refused" } : list(FOUR)));

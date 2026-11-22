@@ -31,7 +31,7 @@ import {
   threadKey,
 } from "@/lib/tasks";
 import { AgentTasks, awaited } from "./agent-tasks";
-import { type Blocked, FollowUp } from "./follow-up";
+import { type Blocked, FollowUp, inWords } from "./follow-up";
 import { contentText, MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
@@ -46,6 +46,22 @@ export const FOLLOW_SECONDS = 4;
 // How often a page reads a task again while one of its agent tasks is pending, or has ended
 // with its outcome not yet in the conversation. FR-013 gives fifteen seconds as the most.
 export const AGENT_SECONDS = 12;
+
+// How soon a task is read again when the reading made at the end of this page's own run
+// still says a run is in progress: the service sends the run's last event before it gives
+// the run's lease back, which takes it a moment more.
+export const AGAIN_SECONDS = 1;
+
+/** Whether a reading made at the end of a run still says a run is in progress. */
+function stillRunning(
+  row: PromiseSettledResult<ThreadSummary | undefined>,
+  state: PromiseSettledResult<ThreadState | undefined>,
+): boolean {
+  return (
+    (row.status === "fulfilled" && row.value?.status === "running") ||
+    (state.status === "fulfilled" && state.value?.run_active === true)
+  );
+}
 
 const NO_USABLE_MODEL = "no_usable_model";
 
@@ -331,21 +347,43 @@ export function TaskView({ threadId }: { threadId: string }) {
   // again (FR-008's rule for a new task, kept for a follow-up).
   const [draft, setDraft] = useState({ box: 0, text: "" });
 
-  // When a run this page shows ends, in whichever way, the task is read again once.
+  // When a run this page shows ends, in whichever way, the task is read again once, and once
+  // more `AGAIN_SECONDS` later when that reading still says a run is in progress (FR-010,
+  // FR-019, FR-020). Until then the page would show the run in progress, offer Stop, hide a
+  // proposal the run paused on, and keep the follow-up box shut. The second reading's timer
+  // outlives the run, which the page forgets once the first is answered.
+  const again = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(again.current), []);
   useEffect(() => {
     if (ended === null) {
       return;
     }
     if (ended.kind === "connection_ended") {
       setCut(rowReadsNow.current);
+      // No last event will say how the run ended: a stop asked while the page read the
+      // stream is settled by the row, as for a run the page follows, also once the page has
+      // forgotten the run.
+      setStopAsked((asked) =>
+        asked === null ? null : { ...asked, own: false },
+      );
     }
     let current = true;
     const states = stateReadsNow.current;
-    void Promise.allSettled([readRowAgain(), readStateAgain()]).then(() => {
-      if (current) {
+    void Promise.allSettled([readRowAgain(), readStateAgain()]).then(
+      ([rowAnswer, stateAnswer]) => {
+        if (!current) {
+          return;
+        }
         setReadFor({ end: ended, states });
-      }
-    });
+        if (stillRunning(rowAnswer, stateAnswer)) {
+          clearTimeout(again.current);
+          again.current = setTimeout(() => {
+            void readRowAgain().catch(() => undefined);
+            void readStateAgain().catch(() => undefined);
+          }, AGAIN_SECONDS * 1000);
+        }
+      },
+    );
     // The list and the sidebar's number follow at once, not at their next reading.
     void readListAgain(THREADS_KEY);
     return () => {
@@ -637,7 +675,12 @@ export function TaskView({ threadId }: { threadId: string }) {
   }
 
   async function sendAgain(text: string) {
-    const answer = await startRun(threadId, text);
+    let answer: ReadableStream<Uint8Array>;
+    try {
+      answer = await startRun(threadId, text);
+    } catch (refused) {
+      throw inWords(refused);
+    }
     setStopAsked(null);
     clear(threadId);
     begin(threadId, text, answer);
@@ -682,7 +725,10 @@ export function TaskView({ threadId }: { threadId: string }) {
     >
       <p className="text-sm">
         {readError instanceof ApiError
-          ? readError.message
+          ? readError === row.error && readError.code === "internal"
+            ? // The service's sentence speaks of the list of threads (FR-001a).
+              "The task could not be read."
+            : readError.message
           : "The task could not be loaded."}
         {following && " This page reads the task again until it can."}
       </p>
@@ -719,8 +765,14 @@ export function TaskView({ threadId }: { threadId: string }) {
       ? row.data?.status
       : undefined;
   const live = showLive && run !== undefined ? streamed(run) : null;
+  // Not while the row the page holds may be from before its own run, and say how an earlier
+  // one failed: from the run's start until the reading made at its end was answered.
+  const rowFromBefore = streaming || (ended !== null && readFor?.end !== ended);
   const rowFailure =
-    failed === null && row.error === undefined && row.data?.status === "failed"
+    failed === null &&
+    !rowFromBefore &&
+    row.error === undefined &&
+    row.data?.status === "failed"
       ? row.data.error
       : null;
   // A proposal is decided only on a page that is not showing a run in progress.
