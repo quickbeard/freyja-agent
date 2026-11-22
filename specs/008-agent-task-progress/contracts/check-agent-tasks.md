@@ -13,21 +13,26 @@ The result lists one agent task per entry. An entry is one line, as in feature 0
 ```
 
 From this feature on, an entry for a task whose status is `working` and that has kept
-progress is followed by one more line, indented by two spaces:
+progress is followed by a line, indented by two spaces, and then by the kept text, every
+line of which is indented by four spaces:
 
 ```text
-  Progress the agent reported, in its own words (learned <time>): <progress text>
+  Progress the agent reported, in its own words (learned <time>):
+    <first line of the progress text>
+    <each later line, as the agent wrote it>
 ```
 
 `<time>` is `progress.learned_at` of the thread's state, in the form the entry's other times
-have. `<progress text>` is the kept text, whole, up to its 2,000 characters; when it has
-several lines, the later ones follow as the agent wrote them.
+have. The text is whole, up to its 2,000 characters. Every entry of the result starts at the
+beginning of a line with `- Agent`, and every line of an agent's text starts with four
+spaces, so no line of it can be read as another entry, whatever it holds (FR-013).
 
 Example, a thread with one task that is working and one that completed:
 
 ```text
 - Agent 'stub', task 3f1c2b7e: working, started 2026-11-21T10:00:41.512000+00:00, last checked 2026-11-21T10:04:01.990000+00:00. Task message: steps 12 30: compile the weekly report
-  Progress the agent reported, in its own words (learned 2026-11-21T10:03:51.871000+00:00): Step 7 of 12
+  Progress the agent reported, in its own words (learned 2026-11-21T10:03:51.871000+00:00):
+    Step 7 of 12
 - Agent 'stub', task 9b0e61c4: completed, started 2026-11-21T09:40:00+00:00, last checked 2026-11-21T09:41:12+00:00, ended 2026-11-21T09:41:12+00:00. Task message: summarize the notes
 ```
 

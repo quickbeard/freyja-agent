@@ -13,7 +13,8 @@ of:
 
 - another state than the read before, as before, whatever the text; or
 - the same state with a text that is not blank and is not the text the hand-off last saw
-  (FR-019).
+  (FR-019). The two are compared as kept texts are made (FR-004): two texts that differ only
+  after their first 2,000 characters are the same.
 
 A read that finds the same state and the same text, or no text, sends nothing. A read with
 no text does not change what the hand-off last saw, so a text that comes back after a status

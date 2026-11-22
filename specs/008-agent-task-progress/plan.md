@@ -65,8 +65,9 @@ browser for the console, as in features 004 to 007.
 **Project Type**: a web service and the web app that is its client.
 
 **Performance Goals**: a progress text an agent starts to report is in the thread's state
-within 15 seconds and on an open page within 30, at the default intervals (SC-001): one
-check interval of 10 seconds, plus one reading of the page every 15. A check costs what it
+within 15 seconds and on an open page within 30, at the default intervals and for an agent
+that answers a status read within a second (SC-001): one
+check interval of 10 seconds, plus one reading of the page every 12. A check costs what it
 costs today: one request to the agent and one statement, which now may set two more columns.
 A reading of the thread's state costs what it costs today.
 
@@ -102,8 +103,9 @@ asks to justify: no new module on the service, no new table, no new object of th
 
 ### Changes to the spec
 
-None. The research found nothing the spec asks for that cannot be known or shown. Three
-things the spec leaves to the plan are settled here and recorded in the research:
+None when the plan was written: the research found nothing the spec asks for that cannot be
+known or shown. The checklist review changed it; see below. Three things the spec leaves to
+the plan are settled here and recorded in the research:
 
 - **No log line is added** (R9). FR-018a allows one that says a task's progress changed,
   without the text; the plan adds none.
@@ -112,6 +114,26 @@ things the spec leaves to the plan are settled here and recorded in the research
   update's text today, and the spec's assumptions leave that as it is.
 - **How long ago** is worded from the browser's clock (R8). A browser whose clock is wrong
   shows a wrong age; the exact time is beside it.
+
+### Checklist review (2026-11-22)
+
+[checklists/security-reliability.md](checklists/security-reliability.md) was reviewed
+against the spec and this plan; its "Review record" lists 12 findings and what each changed.
+None changes the design. Three change what a reviewer would read differently:
+
+- **A hand-off that writes over a later text.** The spec kept the text learned last, and the
+  plan had the hand-off write when it records its task, whatever a check had kept meanwhile.
+  The hand-off now writes over a row's progress only when that progress was learned earlier
+  (research R4), and the spec's edge case says when the two can meet: a message on a task
+  still working, never an answer.
+- **An agent's text in the check's result** is indented line by line, so a text of several
+  lines cannot pass for another entry (FR-013, contracts/check-agent-tasks.md).
+- **SC-005** is measured on the check's result, which a scripted model cannot spoil.
+
+Feature 007's last phases (#127, #128) were merged after this plan was written. They change
+one number it used, the page's reading interval while an agent task is awaited, from 15
+seconds to 12, and nothing it relies on. The bound of SC-001 still holds. No principle's
+verdict changes.
 
 ## Project Structure
 
@@ -207,7 +229,7 @@ Each phase is one pull request, and leaves the suite passing and the README true
 | 1 | The stand-in agent reports and changes a progress text. The record's two fields in both stores, and the two columns. `progress_text`. The hand-off notes its last progress and records it with the task. The worker keeps a new text at a check. The thread's state returns `progress`. | 1 | [quickstart.md](quickstart.md) section 1; `tests/test_a2a_progress.py`, `test_agent_task_store.py`, `test_state.py`, and the opt-in Postgres test |
 | 2 | The task's page shows the progress of a working agent task and how long ago it was learned. | 2 | Section 2; the Vitest files and `web/e2e/tasks-progress.spec.ts` |
 | 3 | The check's result lists progress. A hand-off to an agent that does not stream reports a changed text. | 3, 4 | Sections 3 and 4; `tests/test_a2a_progress.py` |
-| 4 | The quickstart walked by hand against a real model and corrected; `README.md` and `AGENTS.md` read against the code. | all | Every section of the quickstart |
+| 4 | The quickstart walked by hand against a real model and corrected; `README.md` and `AGENTS.md` read against the code, and the rule on agents' addresses in `AGENTS.md` given the exception feature 005 already makes for an agent's own words, kept progress among them. | all | Every section of the quickstart |
 
 Phase 1 is the one the others read from, and it already serves every client of the API.
 Phases 2 and 3 do not depend on each other and can be built in either order. Stories 3 and 4
@@ -224,13 +246,13 @@ its column fails every reading of a task on Postgres.
 | FR-001, FR-002, FR-003 (kept, replaced, the time stays, no text keeps) | `tests/test_a2a_progress.py`: checks of a held task whose stand-in changes, repeats, and drops its text |
 | FR-004 (text parts only, 2,000 characters, characters that cannot be kept, an address passes) | `tests/test_a2a_progress.py`, on `progress_text` and through a check |
 | FR-005 (the store's clock) | `tests/test_a2a_progress.py`, with the suite's clock that a test moves |
-| FR-006 (a task starts with its hand-off's last progress) | `tests/test_a2a_progress.py`: the state right after a hand-off ends as pending, before any check |
+| FR-006 (a task starts with its hand-off's last progress; a message on a task it has) | `tests/test_a2a_progress.py`: the state right after a hand-off ends as pending, before any check; a message on a working task whose row holds a later text |
 | FR-007 (stays when a task ends, is given up, waits for input) | `tests/test_a2a_progress.py`, one case per ending of the stand-in's `hold` |
 | FR-008, SC-008 (every instance, a restart) | `tests/test_a2a_progress.py` with a second runtime and a reopened one; `tests/integration/test_a2a_tasks_postgres.py` |
 | FR-009, FR-021 (the state's shape, a task recorded before) | `tests/test_state.py`; `tests/test_agent_task_store.py`; the Postgres test with a row written before the columns |
-| FR-010, FR-012 (shown only when working, as text, whole, usable) | `web/__tests__/components/tasks/agent-tasks.test.tsx`; `web/e2e/tasks-progress.spec.ts` |
+| FR-010, FR-012 (shown only when working, as text, whole, usable, by keyboard, isolated in direction) | `web/__tests__/components/tasks/agent-tasks.test.tsx`; `web/e2e/tasks-progress.spec.ts` |
 | FR-011 (no reload, no new reading or timer, nothing while hidden) | `web/__tests__/components/tasks/task-view.test.tsx`; `web/e2e/tasks-progress.spec.ts` with the page's clock |
-| FR-013, FR-014 (the check lists it; the start of a run does not) | `tests/test_a2a_progress.py`: the check's result, and the system message the scripted model received |
+| FR-013, FR-014 (the check lists it, set apart; the start of a run does not) | `tests/test_a2a_progress.py`: the check's result with a text of several lines that imitates an entry, and the system message the scripted model received |
 | FR-015, SC-002 (no request more) | `tests/test_a2a_progress.py`: the requests the stand-in's transport recorded, with progress and without |
 | FR-016, SC-003 (nothing in the thread, no run, no proposal) | `tests/test_a2a_progress.py`: the thread before and after, also while the lease is held and while a proposal waits |
 | FR-017, SC-007 (a text that reads like an instruction) | `tests/test_a2a_progress.py`: a gated action still pauses after the check returned such a text |
@@ -239,8 +261,8 @@ its column fails every reading of a task on Postgres.
 | FR-019, FR-020, SC-010 (the stream of an agent that does not stream; one that streams unchanged) | `tests/test_a2a_progress.py`; the existing stream tests of `tests/test_a2a_handoff.py` pass unchanged for an agent that streams |
 | FR-022, SC-009 (everything else as it was) | the whole existing suite, changed only where FR-022 lists |
 | FR-023 (the tests the spec names) | the rows above; the console's end-to-end test is `web/e2e/tasks-progress.spec.ts` |
-| SC-001 (15 and 30 seconds) | follows from one check and one reading at the default intervals; walked in the quickstart, sections 1 and 2 |
-| SC-004, SC-005, SC-006 | the console's tests; the check's tests; `agent-tasks.test.tsx` and the end-to-end test with a text that holds markup |
+| SC-001 (15 and 30 seconds) | follows from one check (10 seconds) and one reading of the page (12 seconds) at the default intervals; walked in the quickstart, sections 1 and 2 |
+| SC-004, SC-005, SC-006 | the console's tests; the check's result in `tests/test_a2a_progress.py`, and a real model's answer in the quickstart, section 3; `agent-tasks.test.tsx` and the end-to-end test with a text that holds markup |
 
 ## Complexity Tracking
 
