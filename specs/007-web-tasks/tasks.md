@@ -999,3 +999,49 @@ above hold for each task: its test first, shown to fail.
       thread's lease was taken, a refused request included; and `research.md`, which still
       says the stream's arrival cannot be shown by an automated test, per FR-006, FR-007,
       FR-022a, T096, plan: contracts (contradicts)
+
+---
+
+## Phase 13: Convergence
+
+Appended by `/speckit-converge` on 2026-11-22, after Phase 12: a third reading of every
+requirement, acceptance scenario, edge case, the contract, and the tasks of Phases 11 and
+12 against the code. Every finding is low: nothing critical, high, or medium remains. The
+standing rules above hold for each task: its test first, shown to fail.
+
+- [ ] T112 Show an action's arguments as they arrive while a run streams
+      (`web/components/tasks/task-view.tsx`, `streamed`): each piece carries the action as
+      that piece alone makes it, so an action is shown with `{}` until the run has ended,
+      and of two actions in one reply only the last named one. Join the pieces of the
+      actions by their place, as the library joins `tool_call_chunks`, or take the reply's
+      actions from the model step's `update` event, and test with the pieces the service
+      sends, per FR-010, T098 (partial)
+- [ ] T113 Read the task and the list again as soon as a hidden page is shown, also within
+      five seconds of the page being opened (`web/components/tasks/task-view.tsx`,
+      `task-list.tsx`, `web/components/app-sidebar.tsx`): the reading library waits five
+      seconds after a page was mounted before it reads on being shown, and the tests set
+      that to zero, so they do not hold the console as it runs, per FR-006, FR-013, T100
+      (partial)
+- [ ] T114 Read the task's row while the page reads its own run's stream, so that a stop
+      asked in another window is said ("stopping") and Stop is no longer offered
+      (`web/components/tasks/task-view.tsx`): today the page learns of it only from the
+      run's last event, per FR-022 (partial)
+- [ ] T115 Say, when a decision is refused because a run is in progress, that the proposal
+      was most likely decided in another window (`web/components/tasks/proposal-card.tsx`),
+      with a unit test, per Edge Cases "Two people decide the same proposal" (partial)
+- [ ] T116 Keep the spelling of a number the service sent or a person entered, where it is
+      not the browser's own, such as `5.0` (`web/lib/json.ts`), or say in spec.md that only
+      a number's value is kept: `5.0` is shown and sent back as `5`, the same number, per
+      FR-014, FR-015, T099 (partial)
+- [ ] T117 [P] Add `runs` to each row of the contract's example list
+      (`specs/007-web-tasks/contracts/openapi.yaml`), where the field is required, per
+      plan: contracts (contradicts)
+- [ ] T118 [P] Correct four sentences of the contract the code does not bear out: the other
+      reasons for `500` on `resume/unattended` and on `GET /threads/{thread_id}`; that a
+      body that is not JSON is refused with `422` before `403`; and that a console run's
+      events are cleaned of agents' addresses, which the earlier routes' are not, per plan:
+      contracts (partial)
+- [ ] T119 [P] Correct the Constitution Check's row for principle V in
+      `specs/007-web-tasks/plan.md`: the index's statements are fixed strings with
+      parameters, composed with no `sql` module and carrying no `# nosemgrep` mark, per
+      plan: Constitution Check (contradicts)
