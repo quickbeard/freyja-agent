@@ -160,8 +160,9 @@ client yet.
       task's status reads "Working on it." (`StubAgent.working_text`'s default);
       `report("Half done")` makes the next `get_task` return a working status with that
       text, and `report(None)` one with no message; with `working_text = None` the first
-      working status has no message; the keyword `steps 3 0.05` reports "Step 1 of 3",
-      "Step 2 of 3", "Step 3 of 3" and completes; `release()` still completes a `hold` task
+      working status has no message; the keyword `steps 3 0.05` sends its first working
+      status with `working_text`, then "Step 1 of 3", "Step 2 of 3", "Step 3 of 3", each
+      0.05 seconds after the one before, and completes; `release()` still completes a `hold` task
       after reports; an answer `slow 0.5: Friday` to an `ask` task reads working with
       `working_text` while it takes its time
 
@@ -178,8 +179,8 @@ client yet.
       with one paragraph on feature 008. No statement is added
 - [ ] T008 [P] In `src/freyja_agent/delegates/a2a_agents.py`: add `PROGRESS_LIMIT = 2000`
       and `progress_text(status: TaskStatus) -> str | None`, beside `state_name` and
-      `_text`, in R1's order: `None` unless `state_name(status.state) == "working"` or the
-      status has no message; the message's text parts joined by `"\n"` (`_text`); NUL
+      `_text`, in R1's order: `None` when `state_name(status.state)` is not `"working"`, and
+      `None` when the status has no message; the message's text parts joined by `"\n"` (`_text`); NUL
       characters removed and lone surrogates dropped (`encode("utf-8", "ignore")` after
       `surrogatepass`, or an equivalent that keeps every other character); cut to
       `PROGRESS_LIMIT` characters; `None` when the result is empty or only blank space.
@@ -189,9 +190,11 @@ client yet.
       `StubAgent.report(text: str | None)`, callable from the test's own thread as
       `release()` is, after which every `hold` task that is waiting sends one working status
       with that text, or with no message when it is `None`, and goes on waiting for its
-      release, its cancel, or the next report; add the keyword `steps <n> <seconds>`: the
-      task stays working, sends a working status "Step k of n" every `<seconds>` for k = 1
-      to n, then completes with an artifact as the default keyword does; an answer to a
+      release, its cancel, or the next report; add the keyword `steps <n> <seconds>`: after
+      the first working status, with `working_text` as every task sends it, the task stays
+      working and sends a working status "Step k of n" for k = 1 to n, the first `<seconds>`
+      after that status and each later one `<seconds>` after the one before, then completes
+      right after the last with an artifact as the default keyword does; an answer to a
       question that starts with `slow` sends its working status with `working_text` too, where
       it sends none today (no message when `None`). Document the method, the keyword, and the
       answer's text in the module docstring. The `--http` command line is
@@ -226,16 +229,26 @@ The stand-in received exactly the requests it receives without this feature.
       `learned_at` is unchanged while `last_checked_at` moved (FR-003); after `report(None)`
       and a tick, and after a report of only spaces and a tick, the progress is unchanged;
       with `working_text = None` and no report, `progress` is `null` (US1 scenario 6); a
-      report of 2,500 characters is kept as its first 2,000
+      report of 2,500 characters is kept as its first 2,000; a `steps 2 0.05` hand-off that
+      completes within the call time limit records its task as completed with
+      `progress.text` "Step 2 of 2", the last text it saw while the task was working
+      (FR-006: a task its hand-off records as ended carries that progress too)
 - [ ] T011 [US1] Add part 4 to `tests/test_a2a_progress.py`, endings and edge cases, each
       starting from a pending task with kept progress: the task ends completed (`hold`
       released), failed, rejected, canceled by the agent, and asking for authentication
       (`hold fail`, `hold reject`, `hold cancel`, `hold auth`), and in each case the state
       keeps the last progress learned while it was working, not the ending's text (FR-002,
-      FR-007); it asks for input (`hold ask`): the progress stays, and a report while the row
-      waits for input is not kept by a tick; with `working_text` set to "Answer under way"
-      before an answer `slow 1: Friday` (a hand-off with `task_id`) that is still working at
-      the call limit, the row is working again with "Answer under way" (FR-006); the guard of
+      FR-007); it asks for input (`hold ask`): the progress stays; a held task whose row the
+      test sets to `input_required` through the store, while the stand-in still holds it,
+      keeps its progress through a `report("Half done")` and a tick, since the worker writes
+      nothing while a row waits for input (R3; a task that has asked takes no `report`, so
+      `hold ask` alone cannot show this); with `working_text` set to "Answer under way" and
+      the suite's clock advanced by more than the call time limit after the question was
+      recorded, an answer `slow 1: Friday` (a hand-off with `task_id`) that is still working
+      at the call limit leaves the row working again with "Answer under way" (FR-006). The
+      clock must move: the hand-off dates its text by the store's clock less the real
+      seconds since it saw it (R4), so with a clock that stands still the answer's text
+      would date from before the row's, and the guard would rightly keep the row's; the guard of
       `_record` (R4), tested on `_record` itself with an `InMemoryAgentTaskStore` row whose
       progress was learned later than the outcome's: the row keeps its text, and with a row
       whose progress was learned earlier, the outcome's text replaces it (edge case "learn
@@ -301,7 +314,11 @@ The stand-in received exactly the requests it receives without this feature.
       agent task's keys) gains `progress`, what it holds, that its time stays while the
       agent repeats itself, and that it is learned with no request to the agent; the startup
       paragraph's account of the agent tables needs no change. In `AGENTS.md`, Layout:
-      `a2a_agents.py` gains `progress_text`, and `agent_tasks.py` (runtime) the two columns
+      `a2a_agents.py` gains `progress_text`, and `agent_tasks.py` (runtime) the two columns;
+      and in its convention on agents' addresses, that an agent's own words, its replies,
+      its progress updates, and its kept progress, pass as written and are not searched, as
+      feature 005, FR-028, has it, since this request already returns kept progress
+      unsearched in the thread's state
 - [ ] T021 [US1] Walk `specs/008-agent-task-progress/quickstart.md`, section 1, on a check
       instance by the standing rules, and correct the section where the built feature
       differs
@@ -347,7 +364,8 @@ shows it without a reload; an ended agent task shows none.
 - [ ] T025 [P] [US2] Add to `web/__tests__/components/tasks/task-view.test.tsx`, with fake
       timers and a task whose agent task is working with progress learned 30 seconds
       earlier: the page shows "just now"; after five of the view's readings
-      (`AGENT_SECONDS` each) that answer the same task, it shows "2 minutes ago" (the age
+      (`AGENT_SECONDS` each, 90 seconds after the text was learned) that answer the same
+      task, it shows "1 minute ago", and after eight (126 seconds) "2 minutes ago" (the age
       moves although the data did not); while `document.visibilityState` is `hidden` the
       timer reads nothing and the age does not move, and once the page is shown it reads
       the task; a reading that brings another text shows it; the view starts no timer more
@@ -383,8 +401,10 @@ shows it without a reload; an ended agent task shows none.
       completed shows no progress. Runs in Chromium and Firefox
 - [ ] T030 [P] [US2] In `web/README.md` and `README.md`'s account of the Tasks section: a
       working agent task shows what the agent last reported and how long ago. In
-      `AGENTS.md`, Layout: `web/lib/ago.ts`, and `agent-tasks.tsx` showing progress; in the
-      list of end-to-end specs, `tasks-progress.spec.ts`
+      `web/README.md`, also `ago.ts` in its list of `lib/` and `tasks-progress.spec.ts` in
+      its list of end-to-end tests. In `AGENTS.md`, Layout: `web/lib/ago.ts`, and
+      `agent-tasks.tsx` showing progress; in the list of end-to-end specs,
+      `tasks-progress.spec.ts`
 - [ ] T031 [US2] Walk the quickstart's section 2 on a check instance by the standing rules,
       with the console on port 3010, and correct the section where the built feature
       differs
@@ -432,7 +452,9 @@ stand-in receives nothing because of it.
       line of the text on a line of its own after four spaces; every other task as today.
       `pending_line` is not changed (FR-014). The tool's description ends with "For a task
       an agent is working on, it also gives the progress the agent last reported, in the
-      agent's own words." (R7)
+      agent's own words." (R7). Then run `uv run pytest`: change only the tests FR-022
+      allows, those that pin the whole result of the check, and name each in request 3's
+      Tests section
 - [ ] T035 [P] [US3] In `README.md`, where `check_agent_tasks` is described: its result
       gives a working task's last progress, in the agent's own words, read from the
       service's database with no request to the agent
@@ -455,8 +477,9 @@ that found nothing new.
 - [ ] T036 [US4] Add part 8 to `tests/test_a2a_progress.py`, with `POLL_SECONDS`
       monkeypatched to 0.05 as `tests/test_a2a_handoff.py` does and a stand-in made with
       `stub_card(streaming=False)`: a `steps 3 0.2` task gives updates with `node: "agent"`
-      for working "Step 1 of 3", "Step 2 of 3", "Step 3 of 3", then completed, in that order
-      and once each, although each text is read several times (FR-019, SC-010); a status with
+      for working "Working on it." (the change from submitted), then working "Step 1 of 3",
+      "Step 2 of 3", "Step 3 of 3", then completed, in that order and once each, although
+      each text is read several times (FR-019, SC-010); a status with
       no text, then the same text again, adds nothing; two texts that differ only after
       their first 2,000 characters count as one; the update for a text of 2,500 characters
       carries all 2,500 (contracts/sse-events.md); a change of state still gives its update
@@ -466,11 +489,16 @@ that found nothing new.
 ### Implementation for User Story 4
 
 - [ ] T037 [US4] In `src/freyja_agent/delegates/a2a_agents.py`, `_poll`: keep the last text
-      seen, starting from `progress_text` of the status the send returned; at each read,
-      a change of state gives the update it gives today; the same state with a
-      `progress_text` that is not `None` and not the last text seen gives an update with the
-      status's `_text`, uncut; a read whose `progress_text` is `None` changes neither the
-      last text seen nor the stream (R5, contracts/sse-events.md)
+      seen, starting from `progress_text` of the status the send returned. At each read,
+      the last text seen becomes the read's `progress_text` whenever that is not `None`,
+      whether or not the state changed. A read that finds another state gives the update it
+      gives today, whatever its text, an ending's included (`progress_text` is `None` for
+      every ending). A read in the same state gives an update with the status's `_text`,
+      uncut, when its `progress_text` is not `None` and is not the last text seen before
+      this read; a read in the same state whose `progress_text` is `None` gives none and
+      leaves the last text seen as it was (R5, contracts/sse-events.md). Then run `uv run
+      pytest`: change only the tests FR-022 allows, those that pin the updates of a
+      hand-off to an agent that does not stream, and name each in request 3's Tests section
 - [ ] T038 [P] [US4] In `README.md`, where the stream's `update` events with `node: "agent"`
       are described: for an agent that does not stream, one event per change of state or of
       its text, about once a second
@@ -490,10 +518,10 @@ that found nothing new.
       since no test does: a new text in the thread's state within 15 seconds, and on the
       open page within 30
 - [ ] T041 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
-      code: they describe only what exists and name every file this feature added. In
-      `AGENTS.md`'s convention on agents' addresses, add that an agent's own words, its
-      replies, its progress updates, and its kept progress, pass as written and are not
-      searched, as feature 005, FR-028, has it (plan, phase 4)
+      code: they describe only what exists and name every file this feature added, and
+      `AGENTS.md`'s convention on agents' addresses still says, as T020 wrote, that an
+      agent's own words, its replies, its progress updates, and its kept progress, pass as
+      written and are not searched (feature 005, FR-028)
 - [ ] T042 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
       `pyproject.toml` or a threshold in `web/vitest.config.mts` only with the owner's
       word, since both files are on the list to ask about; say in the request what the

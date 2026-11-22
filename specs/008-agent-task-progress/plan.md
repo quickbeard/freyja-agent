@@ -79,7 +79,7 @@ reading and no timer (FR-011). No new setting, no change to a CI file, `pyprojec
 88% of the service's lines and 90% of each web measure.
 
 **Scale/Scope**: one text of at most 2,000 characters per agent task. About seven service
-modules change by a few lines each, two web components and one web module change, one web
+modules change by a few lines each, three web components and one web module change, one web
 module is new, and there is one new test file on the service and two on the web.
 
 ## Constitution Check
@@ -135,6 +135,21 @@ one number it used, the page's reading interval while an agent task is awaited, 
 seconds to 12, and nothing it relies on. The bound of SC-001 still holds. No principle's
 verdict changes.
 
+### Analysis (2026-11-22)
+
+`/speckit-analyze` read the spec, this plan, and `tasks.md` against each other and the code
+on `main`. It found no conflict with the constitution and no requirement without a task.
+Most fixes went to `tasks.md`, and the quickstart's sections 2 and 4 now name the statuses
+the stand-in sends. Three changed this plan:
+
+- **The rule on agents' addresses in `AGENTS.md`** gains its exception for an agent's own
+  words in phase 1, not phase 4, since phase 1 already returns kept progress unsearched in
+  the thread's state, and each request leaves the documents true.
+- **The stand-in's `slow` answer** changes in one existing behavior. It is recorded below and
+  in research R10.
+- **`task-list.tsx`** is a third web component that changes, since its time formatter moves
+  to `web/lib/ago.ts`.
+
 ## Project Structure
 
 ### Documentation (this feature)
@@ -150,7 +165,8 @@ specs/008-agent-task-progress/
 │   ├── check-agent-tasks.md   # the result of the orchestrator's check
 │   └── sse-events.md          # when a hand-off to an agent that does not stream sends an update
 ├── checklists/
-│   └── requirements.md  # the spec quality checklist, from /speckit-specify
+│   ├── requirements.md            # the spec quality checklist, from /speckit-specify
+│   └── security-reliability.md    # from /speckit-checklist, all 43 items reviewed
 └── tasks.md             # Phase 2 output (/speckit-tasks; not created by /speckit-plan)
 ```
 
@@ -193,6 +209,7 @@ web/
 │   └── ago.ts                 # new: how long ago a time was, in words (R8)
 ├── components/tasks/
 │   ├── agent-tasks.tsx        # the progress of a working agent task, as text, with its age
+│   ├── task-list.tsx          # its own time formatter replaced by exactTime from ago.ts
 │   └── task-view.tsx          # the current time in the view's state, set by the timer it has
 ├── __tests__/
 │   ├── lib/ago.test.ts        # new
@@ -218,7 +235,10 @@ Two groups of these files belong to features whose owners should know:
   console phase is built on the `main` of its day (research R12).
 - `tests/a2a_stub.py` is shared by every feature that hands work to an agent. What is added
   to it changes nothing an existing test relies on: the first working status keeps its
-  text, and the new keyword and the new method are used by this feature's tests only.
+  text, and the new keyword and the new method are used by this feature's tests only. One
+  existing behavior changes: an answer that starts with `slow` sends its working status with
+  the stand-in's working text, where it sent none, so that an answer's hand-off has progress
+  to keep. The existing tests that send such an answer check only its result.
 
 ### Phases
 
@@ -226,10 +246,10 @@ Each phase is one pull request, and leaves the suite passing and the README true
 
 | Phase | What it builds | Stories | Shown working by |
 |---|---|---|---|
-| 1 | The stand-in agent reports and changes a progress text. The record's two fields in both stores, and the two columns. `progress_text`. The hand-off notes its last progress and records it with the task. The worker keeps a new text at a check. The thread's state returns `progress`. | 1 | [quickstart.md](quickstart.md) section 1; `tests/test_a2a_progress.py`, `test_agent_task_store.py`, `test_state.py`, and the opt-in Postgres test |
+| 1 | The stand-in agent reports and changes a progress text. The record's two fields in both stores, and the two columns. `progress_text`. The hand-off notes its last progress and records it with the task. The worker keeps a new text at a check. The thread's state returns `progress`. The rule on agents' addresses in `AGENTS.md` given the exception feature 005 already makes for an agent's own words, kept progress among them. | 1 | [quickstart.md](quickstart.md) section 1; `tests/test_a2a_progress.py`, `test_agent_task_store.py`, `test_state.py`, and the opt-in Postgres test |
 | 2 | The task's page shows the progress of a working agent task and how long ago it was learned. | 2 | Section 2; the Vitest files and `web/e2e/tasks-progress.spec.ts` |
 | 3 | The check's result lists progress. A hand-off to an agent that does not stream reports a changed text. | 3, 4 | Sections 3 and 4; `tests/test_a2a_progress.py` |
-| 4 | The quickstart walked by hand against a real model and corrected; `README.md` and `AGENTS.md` read against the code, and the rule on agents' addresses in `AGENTS.md` given the exception feature 005 already makes for an agent's own words, kept progress among them. | all | Every section of the quickstart |
+| 4 | The quickstart walked by hand against a real model and corrected; `README.md` and `AGENTS.md` read against the code. | all | Every section of the quickstart |
 
 Phase 1 is the one the others read from, and it already serves every client of the API.
 Phases 2 and 3 do not depend on each other and can be built in either order. Stories 3 and 4
