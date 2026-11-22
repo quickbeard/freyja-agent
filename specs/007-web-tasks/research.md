@@ -389,8 +389,10 @@ over "not found" there. A thread with no state and no run in the store is "not f
 A page that finds no run in the store for a thread that is running, after a reload or in
 another tab, follows it by reading (FR-013).
 
-The id is `crypto.randomUUID()` without its hyphens: 32 characters, which the service's rule
-for a thread id allows.
+The id is 16 bytes from `crypto.getRandomValues()`, written as 32 hexadecimal characters,
+which the service's rule for a thread id allows. Not `crypto.randomUUID()`: a browser gives
+that only to a secure origin (https, `localhost`, `127.0.0.1`), and a console reached over
+http by a name or another address would fail at New task (T120).
 
 ## R13. Web: pages, components, and keeping up
 

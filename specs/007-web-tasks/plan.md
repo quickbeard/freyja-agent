@@ -1246,3 +1246,10 @@ task done, window B said that the stop came too late, and window A, which had no
 said nothing of it.
 
 **Open after Phase 13**, none of them this feature's to close: the three of Phase 12 above.
+
+**Phase 14, T120 only, as built.** A new task's id is 16 bytes from
+`crypto.getRandomValues`, which a browser gives every page, in place of
+`crypto.randomUUID`, which it gives a secure origin only (https, `localhost`, `127.0.0.1`):
+a console reached over http by a name or another address threw at New task before its
+dialog opened. A unit test takes `randomUUID` away and asks for 200 ids. T121 to T127, all
+low, are left open.

@@ -155,10 +155,14 @@ export function stateKey(threadId: string): string {
 
 /**
  * A new task's id: random, 32 hexadecimal characters, which the service's rule for a thread
- * id accepts. It says nothing about the task.
+ * id accepts. It says nothing about the task. It is made from `getRandomValues`, which a
+ * browser gives every page: `randomUUID` is given only to a secure origin (https,
+ * `localhost`, `127.0.0.1`), not to a console reached over http by a name or another address.
  */
 export function newThreadId(): string {
-  return crypto.randomUUID().replaceAll("-", "");
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0"));
+  return hex.join("");
 }
 
 export function listThreads(): Promise<ThreadList> {

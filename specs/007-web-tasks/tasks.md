@@ -1054,7 +1054,7 @@ tasks of Phases 11 to 13 against the code, by three readers, one per slice. One 
 high, on a deployment the default one does not show; the other seven are low. The standing
 rules above hold for each task: its test first, shown to fail.
 
-- [ ] T120 Build a new task's id from `crypto.getRandomValues`, which every origin has, in
+- [X] T120 Build a new task's id from `crypto.getRandomValues`, which every origin has, in
       place of `crypto.randomUUID`, which a browser gives only to a secure origin (https,
       `localhost`, `127.0.0.1`): over plain http under a name or an address other than
       loopback, as the README's section on the containers describes, New task throws

@@ -114,6 +114,24 @@ describe("newThreadId", () => {
       expect(id).toMatch(/^[0-9a-f]{32}$/);
     }
   });
+
+  it("gives one on a page served over plain http, where a browser has no randomUUID", () => {
+    // A browser gives randomUUID only to a secure origin (https, localhost, 127.0.0.1); a
+    // console reached by a name or another address over http has getRandomValues alone.
+    const { getRandomValues } = globalThis.crypto;
+    vi.stubGlobal("crypto", {
+      getRandomValues: getRandomValues.bind(globalThis.crypto),
+    });
+    try {
+      const ids = new Set(Array.from({ length: 200 }, () => newThreadId()));
+      expect(ids.size).toBe(200);
+      for (const id of ids) {
+        expect(id).toMatch(/^[0-9a-f]{32}$/);
+      }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
 });
 
 describe("the calls", () => {
