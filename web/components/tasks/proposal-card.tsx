@@ -8,6 +8,7 @@ import {
   type ActionRequest,
   type Decision,
   type DecisionSent,
+  inexact,
   type PendingDecision,
   parseArguments,
   REJECT_REASON_LIMIT,
@@ -25,8 +26,11 @@ const STALE: Record<string, string> = {
     "This proposal is no longer the pending one: it was decided elsewhere, or another took its place. Nothing ran because of this decision. The task is shown as it is now.",
   nothing_pending:
     "Nothing is pending on this task any more: the proposal was decided elsewhere. Nothing ran because of this decision. The task is shown as it is now.",
+  // A run starts on a proposal only when it is decided: one in progress most likely carries
+  // out a decision made in another window (Edge Cases, "Two people decide the same
+  // proposal").
   run_active:
-    "A run is in progress on this task, so the decision was not applied. The task is shown as it is now.",
+    "A run is in progress on this task, so the decision was not applied: the proposal was most likely decided in another window. Nothing ran because of this decision. The task is shown as it is now.",
   thread_not_found: "This task no longer exists.",
 };
 
@@ -113,18 +117,26 @@ function reasons(error: ApiError): {
   return { byAction, card };
 }
 
+// A decision's button carries the action's name, which can be long. In a narrow window its
+// words wrap inside the card, where a button that kept to one line would reach past the
+// window's edge and out of reach (Edge Cases, "opened in a narrow window").
+const WRAPS = "h-auto min-h-8 max-w-full shrink whitespace-normal text-left";
+
 type Refusal = { byAction: Map<number, string[]>; card: string[] };
 
 export function ProposalCard({
   pending,
   send,
   onStale,
+  onRefused,
 }: {
   pending: PendingDecision;
   /** Sends the decisions; a refusal is raised as an `ApiError`. */
   send: (decisions: DecisionSent[]) => Promise<void>;
   /** Told why the page no longer shows the task as it is; the task is read again. */
   onStale: (said: string) => void;
+  /** Called when the service refused a decision's values; the task is read again. */
+  onRefused?: () => void;
 }) {
   const actions = pending.action_requests;
   const [choices, setChoices] = useState<Choice[]>(() =>
@@ -166,8 +178,11 @@ export function ProposalCard({
       await send(decisions as DecisionSent[]);
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "invalid") {
-        // Each edit stays, with the service's reason beside it (FR-015).
+        // Each edit stays, with the service's reason beside it (FR-015). The reason can be
+        // that a decision is no longer allowed for the action: the task is read again, so
+        // that the card offers what the service lists now (FR-014).
         setRefused(reasons(failure));
+        onRefused?.();
       } else if (failure instanceof ApiError && failure.code in STALE) {
         onStale(STALE[failure.code]);
       } else if (
@@ -191,7 +206,29 @@ export function ProposalCard({
     }
   }
 
-  const ready = choices.map(sent);
+  // A decision is offered only while the service lists it for the action (FR-014). The
+  // service works its list out from what is configured now, so a later reading of the
+  // same proposal can list fewer: a decision that was chosen, or whose form is open, and
+  // is no longer listed counts as not chosen.
+  const kept = choices.map((choice, index) =>
+    choice.decision !== null &&
+    !actions[index]?.allowed_decisions.includes(choice.decision)
+      ? { ...choice, decision: null }
+      : choice,
+  );
+  // It is dropped for good, not hidden: were the decision listed again later, it would
+  // otherwise be chosen again, and its form open, by no press of anyone's (FR-017).
+  if (kept.some((choice, index) => choice !== choices[index])) {
+    setChoices(kept);
+  }
+  const ready = kept.map(sent);
+  // A control's name says on which action (FR-012a): where two actions of a proposal have
+  // one name, each is called by its place as well.
+  const called = actions.map((action, index) =>
+    actions.filter(({ name }) => name === action.name).length > 1
+      ? `${action.name} (action ${index + 1} of ${actions.length})`
+      : action.name,
+  );
   const complete = ready.every(
     (decision) => decision !== null && !("error" in decision),
   );
@@ -208,8 +245,8 @@ export function ProposalCard({
             : `Freyja proposes ${actions.length} actions that need your decision`}
         </h2>
         <p className="text-sm text-muted-foreground">
-          Nothing has run. An approved action runs once; a rejected one never
-          runs.
+          Nothing has run. An approved action runs once at most, and not at all
+          when it is no longer set up on the service; a rejected one never runs.
         </p>
       </div>
       <ol className="flex flex-col gap-4">
@@ -217,12 +254,13 @@ export function ProposalCard({
           <li key={`${action.name}-${index}`}>
             <ActionDecision
               action={action}
-              choice={choices[index]}
+              called={called[index]}
+              choice={kept[index]}
               single={single}
               sending={sending}
               refused={refused?.byAction.get(index)?.join(" ") ?? null}
               onChoose={(values) => choose(index, values)}
-              onSend={(values) => submit([{ ...choices[index], ...values }])}
+              onSend={(values) => submit([{ ...kept[index], ...values }])}
             />
           </li>
         ))}
@@ -242,7 +280,7 @@ export function ProposalCard({
           <Button
             type="button"
             disabled={!complete || sending}
-            onClick={() => submit(choices)}
+            onClick={() => submit(kept)}
           >
             {sending ? "Sending…" : `Send the ${actions.length} decisions`}
           </Button>
@@ -254,6 +292,7 @@ export function ProposalCard({
 
 function ActionDecision({
   action,
+  called,
   choice,
   single,
   sending,
@@ -262,6 +301,8 @@ function ActionDecision({
   onSend,
 }: {
   action: ActionRequest;
+  /** What the action's controls call it: its name, and its place where the name repeats. */
+  called: string;
   choice: Choice;
   single: boolean;
   sending: boolean;
@@ -281,7 +322,7 @@ function ActionDecision({
   const length = characters(choice.reason);
   const tooLong = length > REJECT_REASON_LIMIT;
   const goesTo = where(action);
-  const name = action.name;
+  const name = called;
   const editing = choice.decision === "edit";
   const rejecting = choice.decision === "reject";
   // With one action, Edit and Reject open what they need, and the button that sends is
@@ -295,7 +336,7 @@ function ActionDecision({
       className="flex flex-col gap-3 rounded-md border p-3"
     >
       <div className="flex flex-col gap-1">
-        <h3 className="font-mono text-sm font-semibold">{name}</h3>
+        <h3 className="font-mono text-sm font-semibold">{action.name}</h3>
         {goesTo !== null && (
           <p className="text-xs text-muted-foreground">{goesTo}</p>
         )}
@@ -310,12 +351,22 @@ function ActionDecision({
         <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded bg-muted/40 p-2 font-mono text-xs">
           {argumentsText(action.args)}
         </pre>
+        {inexact(action.args) && (
+          <p className="text-xs text-muted-foreground">
+            An argument is a whole number too large for a browser to hold
+            exactly, so its last digits here may differ from what was proposed.
+            Approving runs the action as it was proposed. This page cannot send
+            such a number, so these arguments are edited through the service's
+            API.
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap gap-2">
         {allowed("approve") &&
           (single ? (
             <Button
+              className={WRAPS}
               type="button"
               variant={editing || rejecting ? "outline" : "default"}
               disabled={sending}
@@ -327,6 +378,7 @@ function ActionDecision({
             </Button>
           ) : (
             <Button
+              className={WRAPS}
               type="button"
               variant={choice.decision === "approve" ? "default" : "outline"}
               aria-pressed={choice.decision === "approve"}
@@ -338,6 +390,7 @@ function ActionDecision({
           ))}
         {allowed("edit") && (
           <Button
+            className={WRAPS}
             type="button"
             variant={editing ? "default" : "outline"}
             {...state(editing)}
@@ -349,6 +402,7 @@ function ActionDecision({
         )}
         {allowed("reject") && (
           <Button
+            className={WRAPS}
             type="button"
             variant={rejecting ? "destructive" : "outline"}
             {...state(rejecting)}
@@ -383,6 +437,7 @@ function ActionDecision({
           {single && (
             <div>
               <Button
+                className={WRAPS}
                 type="button"
                 disabled={sending || notObject !== null}
                 onClick={() => onSend({})}
@@ -425,6 +480,7 @@ function ActionDecision({
           {single && (
             <div>
               <Button
+                className={WRAPS}
                 type="button"
                 variant="destructive"
                 disabled={sending || tooLong}

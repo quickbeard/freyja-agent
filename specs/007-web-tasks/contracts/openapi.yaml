@@ -15,8 +15,22 @@ info:
     a response nor send a JSON body; a body that is not sent as JSON is refused with 422. A
     request that changes something (POST) and that a browser marks as made by a page of
     another origin is refused with 403 and the code `other_origin`, on every path here and,
-    from this feature on, on the thread routes of feature 001, before anything else is looked
-    at, by the rule the LLM and Agents routes apply (feature 004, contracts/openapi.yaml).
+    from this feature on, on the thread routes of feature 001, by the rule the LLM and Agents
+    routes apply (feature 004, contracts/openapi.yaml). Nothing else is looked at before,
+    apart from a body that cannot be read as JSON: that one is answered with 422 first, and
+    changes nothing either, and apart from the name the request was made for.
+
+    Before anything else, a request made for a host name the service does not answer for, or
+    whose `Host` names no host (it has none, or a port that is not a number), is refused with
+    403 and the code `unknown_host`, on every path here and on every other
+    route of the service but `/healthz`, a request that only reads included, and whatever
+    the client (`src/freyja_agent/api/hosts.py`). The name is read from `Host` and from
+    every `X-Forwarded-Host`, which the console's server sets to the name its page was asked
+    under; each has to be `localhost`, an IP address, or a name listed in
+    `FREYJA_ALLOWED_HOSTS`. This is what keeps a page served under a name its author
+    controls, and pointed at this machine once loaded (DNS rebinding), from reading the
+    answers and from passing the refusal of other origins. Nothing was looked at and nothing
+    changed.
 paths:
   /threads:
     get:
@@ -51,6 +65,7 @@ paths:
                     changed_at: "2026-11-20T08:00:04Z"
                     stoppable: false
                     stopping: false
+                    runs: 1
                   - thread_id: 0b6d4e2f8a1c4f7e9d3b5a7c9e1f2a4b
                     first_message: Summarize what changed in the workspace this week.
                     status: running
@@ -59,6 +74,7 @@ paths:
                     changed_at: "2026-11-20T08:10:00Z"
                     stoppable: true
                     stopping: false
+                    runs: 3
                   - thread_id: demo-1
                     first_message: Summarize what you can do.
                     status: failed
@@ -67,6 +83,8 @@ paths:
                     changed_at: "2026-11-19T16:02:11Z"
                     stoppable: false
                     stopping: false
+                    runs: 1
+        "403": { $ref: "#/components/responses/UnknownHost" }
         "500":
           description: >
             `internal`: the index could not be read. The list never answers with an earlier
@@ -90,6 +108,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ThreadSummary" }
+        "403": { $ref: "#/components/responses/UnknownHost" }
         "404":
           description: >
             `thread_not_found`: the index has no row for the thread and the thread has no
@@ -98,6 +117,14 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: the index or the thread's state could not be read, or runs kept
+            starting and ending on the thread while its row was read; the next request reads
+            it again. Never an earlier row.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /threads/{thread_id}/runs/unattended:
     parameters:
       - $ref: "#/components/parameters/ThreadId"
@@ -106,11 +133,13 @@ paths:
       summary: Start a run that goes on when its reader leaves
       description: >
         The same request, the same refusals, and the same events as
-        `POST /threads/{thread_id}/runs` (feature 001), from the same code. Two things
+        `POST /threads/{thread_id}/runs` (feature 001), from the same code. Three things
         differ. The run goes on to its end whether or not anyone reads the stream: a client
-        that disconnects, or never reads, changes nothing about how the run ends. And the run
-        can be stopped with `POST /threads/{thread_id}/stop`. See sse-events.md for the
-        stream.
+        that disconnects, or never reads, changes nothing about how the run ends. The run can
+        be stopped with `POST /threads/{thread_id}/stop`. And every text of every event,
+        the debug events included, is cleaned of every agent's address before it is sent,
+        as a model's error that repeats one; the earlier route's events are not. See
+        sse-events.md for the stream.
       requestBody:
         required: true
         content:
@@ -128,7 +157,7 @@ paths:
               schema: { type: string, const: "no-store, no-transform" }
           content:
             text/event-stream: {}
-        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "403": { $ref: "#/components/responses/Refused" }
         "409":
           description: >
             `run_active` or `decision_pending`, as for the existing route. Nothing was
@@ -137,6 +166,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: this instance cannot run a task without a reader, which no instance
+            the service starts answers. Nothing was started.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
   /threads/{thread_id}/resume/unattended:
     parameters:
       - $ref: "#/components/parameters/ThreadId"
@@ -147,8 +183,8 @@ paths:
         The same request, the same refusals, and the same events as
         `POST /threads/{thread_id}/resume` (feature 001), from the same code: the proposal's
         id, one decision per proposed action, and every check of a decision are the existing
-        ones. The continuation goes on without a reader and can be stopped, as a run started
-        through `runs/unattended`.
+        ones. The continuation goes on without a reader, can be stopped, and has its events
+        cleaned of every agent's address, as a run started through `runs/unattended`.
       requestBody:
         required: true
         content:
@@ -171,7 +207,7 @@ paths:
               schema: { type: string, const: "no-store, no-transform" }
           content:
             text/event-stream: {}
-        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "403": { $ref: "#/components/responses/Refused" }
         "404":
           description: "`thread_not_found`, as for the existing route."
           content:
@@ -179,8 +215,17 @@ paths:
               schema: { $ref: "#/components/schemas/Error" }
         "409":
           description: >
-            `run_active`, `nothing_pending`, or `proposal_mismatch`, as for the existing
-            route. Nothing ran and a pending proposal is unchanged.
+            `run_active`, `nothing_pending`, `proposal_mismatch`, or `already_decided`
+            (a step of the paused run has already taken other decisions for the proposal),
+            as for the existing route. Nothing ran and a pending proposal is unchanged.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "500":
+          description: >
+            `internal`: as for `runs/unattended`, or as for the existing route: the
+            proposed calls could not be read, or the thread is paused on more than one
+            interrupt at once. Nothing ran.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
@@ -207,7 +252,7 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/StopAnswer" }
-        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "403": { $ref: "#/components/responses/Refused" }
         "404":
           description: "`thread_not_found`: no run on this thread is known to the index."
           content:
@@ -223,6 +268,13 @@ paths:
             application/json:
               schema: { $ref: "#/components/schemas/Error" }
         "422": { $ref: "#/components/responses/Invalid" }
+        "500":
+          description: >
+            `internal`: the index could not be read or written. Whether the stop was marked
+            is not known; the thread's row says.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
 components:
   parameters:
     ThreadId:
@@ -238,10 +290,21 @@ components:
       description: As in feature 001. Adds debug events; never changes the run.
       schema: { type: boolean, default: false }
   responses:
-    OtherOrigin:
+    UnknownHost:
       description: >
-        `other_origin`: a browser marked the request as made by a page of another origin.
-        Nothing was looked at and nothing changed.
+        `unknown_host`: the request was made for a host name the service does not answer
+        for, in `Host` or in an `X-Forwarded-Host`, or its `Host` names no host. Nothing was
+        looked at and nothing changed.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Refused:
+      description: >
+        `unknown_host`: the request was made for a host name the service does not answer
+        for, in `Host` or in an `X-Forwarded-Host`, or its `Host` names no host; this comes
+        first. `other_origin`: a
+        browser marked the request as made by a page of another origin. Either way nothing
+        was looked at and nothing changed.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -266,7 +329,7 @@ components:
       enum: [running, needs_decision, failed, stopped, waiting_for_agent, done]
     ThreadSummary:
       type: object
-      required: [thread_id, first_message, status, error, created_at, changed_at, stoppable, stopping]
+      required: [thread_id, first_message, status, error, created_at, changed_at, stoppable, stopping, runs]
       properties:
         thread_id: { type: string }
         first_message:
@@ -275,7 +338,7 @@ components:
           description: The beginning of the thread's first message from a person. Null until it is known.
         status: { $ref: "#/components/schemas/ThreadStatus" }
         error:
-          description: With `failed`, the code and the message of the run's `error` event, as they were sent. Null otherwise.
+          description: With `failed`, the code and the message of the run's `error` event, as they were sent to the reader of a run started through the unattended routes, with an agent's address taken out of the message. Null otherwise.
           oneOf:
             - type: "null"
             - type: object
@@ -294,6 +357,15 @@ components:
         stopping:
           type: boolean
           description: True when a stop was asked for the run in progress and the run has not ended yet.
+        runs:
+          type: integer
+          description: >
+            How many times the thread's run lease was taken: every run, and every request
+            refused after taking it, such as a decision for a proposal that is no longer
+            pending. The status is of the last run, so a client that asked to stop run `n`
+            knows whether a row still speaks of that run; a number that moved on may also
+            mean only a refused request, and the client then says nothing of how the run
+            ended.
     ThreadList:
       type: object
       required: [threads, needs_decision, total, more]
@@ -312,10 +384,13 @@ components:
           description: True when `total` is greater than the number of rows returned.
     StopAnswer:
       type: object
-      required: [thread_id, stopping]
+      required: [thread_id, stopping, run]
       properties:
         thread_id: { type: string }
         stopping: { type: boolean, const: true }
+        run:
+          type: integer
+          description: Which of the thread's runs the stop was asked for, `runs` of its row at that time.
     Error:
       type: object
       required: [detail]

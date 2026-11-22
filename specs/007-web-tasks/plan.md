@@ -73,8 +73,9 @@ one table, plus one read of a thread's state for each run that ended since the l
 asked for (R6). The first event of a run within one second, as today (001 SC-001).
 
 **Constraints**: nothing of the other session's files changes (R16). No new setting, no new
-dependency, no change to a CI file, `pyproject.toml`, `web/vitest.config.mts`,
-`.gitleaks.toml`, or `web/playwright.config.ts`. The existing thread routes behave as before
+dependency, no change to a CI file, `pyproject.toml`, `web/vitest.config.mts`, or
+`.gitleaks.toml`. `web/playwright.config.ts` was changed once, in Phase 4 and with the
+owner's word, for the two projects of `web/e2e/stream.spec.ts`. The existing thread routes behave as before
 for a client that is not a web page (FR-027). Coverage floors: 88% of the service's lines and
 90% of each web measure.
 
@@ -93,8 +94,8 @@ Checked against constitution 1.5.0.
 | I. Human approval for environment-changing actions | Yes, central | No tool is added or reclassified and the gate is not changed. A decision from the console goes through the existing `resume_run` and its validation: the new route calls that function and adds nothing to it (R3). A run without a reader pauses exactly as one with a reader, because the pause is inside `run_stream` and the graph, which are not changed; it stays resumable after any delay, since the proposal is in the thread as before. A stop is applied only between steps, so it never cuts off an action a person approved and never causes one to run twice (R4); an approved action that had not started when the stop was applied does not start. The page offers the service's three decisions, only those the service lists for an action, and has no way to decide in advance or by itself (R14). | PASS | PASS |
 | II. Protocol-based delegation | No | No delegate is added or reached. Agent tasks are read from the store that exists, and shown. | PASS | PASS |
 | III. One runtime, every environment | Yes, central | `build_agent` stays the only assembly point and `run_stream` the only run loop: an unattended run is the same generator, driven by a task where a response drove it (R2). `SegmentedGraph` wraps the graph `build_agent` made and calls its `astream`; it builds nothing (R4). The web app is a client of the API only: it holds no credential, calls no model, agent, or tool, has no Server Action or Route Handler, and reads a task's status from the service and works none out (R7, R11). Tests run the production routes through the test client. | PASS | PASS |
-| IV. Configuration through settings | Yes | No setting is added, on the service or in the web app, and nothing an operator manages: a task is a thread, which is data, not configuration. Seven numbers are fixed by the specification and are constants beside the code that applies them, as feature 005 fixed its own (twenty agents, 2,000 characters of a card's text, four card reads at once): 100 rows in the list, 200 characters of a first message, 2,000 characters of a failed run's reason, and the pages' 5 and 15 seconds are what a person meets, the same on every deployment. Two are not about what a person meets and are the ones a deployment could want to change: the ping every 10 seconds, which follows from the 30 seconds of the console's own forwarding and not from where the service runs, and the 1,000 events held for a reader that does not keep up, which bounds memory per reader. Both are kept as constants because nothing a deployment configures today changes what they rest on; making them `FREYJA_*` settings is the owner's call and is named in the analysis pull request. | PASS | PASS |
-| V. Automated quality gates | Yes | Every requirement has a test (map below). The default suites need no network, database, model, or agent. Store calls are async; SQL is composed with psycopg's `sql` module and carries the `# nosemgrep` mark `AGENTS.md` describes. The web app passes `biome check` and its Vitest suite with coverage. No Ruff suppression is planned. One thing the gates do not measure is said where it applies: CI does not run the Postgres tests, so the Postgres index counts against the coverage number. | PASS | PASS |
+| IV. Configuration through settings | Yes | No setting is added, on the service or in the web app, and nothing an operator manages: a task is a thread, which is data, not configuration. Seven numbers are fixed by the specification and are constants beside the code that applies them (two more are fixed by what was built and are constants too: `INDEX_WRITE_SECONDS`, the five seconds a lease waits for the index, since Phase 2, and `ANSWER_SECONDS`, the 35 seconds the console waits for an answer, since Phase 11), as feature 005 fixed its own (twenty agents, 2,000 characters of a card's text, four card reads at once): 100 rows in the list, 200 characters of a first message, 2,000 characters of a failed run's reason, and the pages' 5 and 15 seconds are what a person meets, the same on every deployment. Two are not about what a person meets and are the ones a deployment could want to change: the ping every 10 seconds, which follows from the 30 seconds of the console's own forwarding and not from where the service runs, and the 1,000 events held for a reader that does not keep up, which bounds memory per reader. Both are kept as constants because nothing a deployment configures today changes what they rest on; making them `FREYJA_*` settings is the owner's call and is named in the analysis pull request. | PASS | PASS |
+| V. Automated quality gates | Yes | Every requirement has a test (map below). The default suites need no network, database, model, or agent. Store calls are async; the index's statements are fixed strings with named parameters, so they are composed with no `sql` module and carry no `# nosemgrep` mark, and Semgrep finds nothing in them. The web app passes `biome check` and its Vitest suite with coverage. No Ruff suppression is planned. One thing the gates do not measure is said where it applies: CI does not run the Postgres tests, so the Postgres index counts against the coverage number. | PASS | PASS |
 | VI. Deterministic guardrails before model judgment | Yes | Where a run may be stopped is a fixed rule of the run loop's wrapper, the two node names, checked at startup; no model is asked whether a step may be cut. A task's status is a fixed order over recorded facts (R7). The refusal of other origins is a fixed check before any route's work (R9). | PASS | PASS |
 | Technology constraints | Yes | Python 3.12, uv, src layout; Deep Agents over LangGraph; FastAPI; streaming over server-sent events through sse-starlette; the Postgres pool; Ruff only. The web app stays Next.js with TypeScript, pnpm, Biome, and Vitest. | PASS | PASS |
 
@@ -127,9 +128,10 @@ Clarifications under "Plan, 2026-11-20":
 - **FR-002, when a task last changed.** While a run is in progress it is when that run
   started; the time of the last recorded step is read when the run has ended (R7).
 - **FR-028, the proof that a stream arrives as it is produced.** It was made by hand in both
-  browsers (R1). The end-to-end tests cannot repeat it without a change to
-  `web/playwright.config.ts`, which this plan does not make; service tests pin the header and
-  the ping it rests on (R15).
+  browsers (R1). The end-to-end tests could not repeat it without a change to
+  `web/playwright.config.ts`, which this plan did not make; that change was made in Phase 4
+  with the owner's word, and `web/e2e/stream.spec.ts` repeats the proof since. Service tests
+  pin the header and the ping it rests on (R15).
 
 Two edge cases are added: a stop that is applied before an approved action started, and the
 step limit of a run that goes on without a reader (R4).
@@ -1014,3 +1016,262 @@ The next step is `/speckit-converge`.
 
 No violation of the constitution to justify. The three additions that carry complexity are
 justified under Constitution Check.
+
+## Phase 11 as built
+
+Convergence: the twenty tasks `/speckit-converge` appended after Phase 10 (T078 to T097).
+Each has its test, shown to fail without its fix.
+
+**What was built, where it differs from its task or adds to it**:
+
+- **T078**: a failed task's row gives the service's reason, under how the message begins.
+  The reason is shown with `failed` only, since the service gives one with no other status.
+- **T079**: two tests in `web/e2e/stream.spec.ts` press Stop on the page that reads the
+  run's stream, one where the run then ends as stopped and one where it finishes first.
+- **T080**: `parseArguments` refuses text that holds a whole number beyond 2^53, however it
+  is written, or a number too large to hold at all, and names it; the card says when a
+  proposed argument is such a number. The page cannot show such an argument as proposed:
+  a browser has changed it by the time the page has the answer. Reading the answer's text
+  without losing digits was not built; approving sends no arguments, so it stays exact. A
+  number such as `1e30`, which is whole and beyond 2^53, is refused too, though a service
+  would read it as the browser does: the page cannot tell it from a 22-digit id, which a
+  browser writes the same way.
+- **T081**: the owner chose to narrow FR-001a to what this feature adds. No file of
+  feature 005 was edited.
+- **T082**: a row has `runs` and the answer to a stop has `run`. A page that follows a run
+  by reading says "too late" only of the run it stopped; when the row is of a later run it
+  says nothing of how the earlier one ended, since nothing keeps that. A reading of the
+  same run that says "running" and not "stopping" was made before the stop: the page goes
+  on saying "stopping", where it used to drop it.
+- **T083**: `api()` and `stream()` give up after `ANSWER_SECONDS` (35), `stream()` only
+  until its answer begins. Measured first: the console's own forwarding ends a request the
+  service does not answer after 30.0 seconds, with a 500 that the pages already read as
+  "cannot be reached". So the limit of the function is a backstop for what the forwarding
+  does not end. `web/e2e/stream.spec.ts` shows the forwarding's limit in both browsers,
+  waiting the 30 seconds; the function's own limit is shown by unit tests.
+- **T084**: the periods are 10, 4, and 12 seconds, each under its bound. The browser test
+  pauses the page's clock and makes the change just after a reading, the worst moment; an
+  earlier form of it passed with the old period, because Playwright's clock runs on by
+  itself.
+- **T085**: the sidebar's Tasks entry says "not known" while the list cannot be read. The
+  words are not marked up as the number is: the Agents section's browser tests, which this
+  feature does not edit, find the sidebar's numbers by that markup.
+- **T086**: built in the route, not in the stores: `POST .../runs/unattended` opens a
+  thread that has a state and no row before the run starts, as reading it would. No store
+  changed, so there is no Postgres test; the tests are in `tests/test_thread_index_api.py`.
+  A new task pays one reading of the index and one of its state for it.
+- **T087 to T091**: the five assertions, as their tasks say.
+- **T092, T093**: as their tasks say. The card's sentence is now "An approved action runs
+  once at most, and not at all when it is no longer set up on the service".
+- **T094**: the test found a control out of reach at 360 pixels: "Approve ... with these
+  arguments" was wider than the window. The card's decision buttons now wrap.
+- **T095, T096**: the contract's answers, and the sentences of the spec and this plan.
+- **T097**: the stand-in model's `call-tools` id, chat completions only, and an id of its
+  own for every reply of every model id. The quickstart can be walked without a
+  provider's key.
+
+**Found while building, and fixed here**: a run that fails with a model's error which
+names an agent's address sent that address in its `error` event, and the list repeated it
+as the failed task's reason. A console run's error is now cleaned of addresses in
+`runtime/unattended.py`, for the list and for the reader's `error` event.
+
+**Read by a reviewer that had not written it.** No finding was high. Checked in the code
+and fixed, each with a test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| A reading that failed after an accepted stop made the page say "too late" while the run was still stopping. | A reading that failed says nothing of the run. |
+| A proposed whole number of 22 digits or more is written with an exponent by a browser, so an edit of another argument could send a number nobody proposed. | Refused however the number is written. |
+| Each tick of a timer asked for a reading while the one before was under way, which drops the earlier answer: with a service slower than the period no reading would ever be shown. | A tick asks for nothing while its reading is under way. In the task's view this is kept in a ref: reading SWR's `isValidating` there re-renders the view on every reading, which its effects are not written for. |
+| The address fix was described as wider than it is. | The comment, the README, `AGENTS.md`, and the contract say what it does. |
+| A test held the earlier route to sending the address. | Removed. |
+| `_open_first` adds a second wait of five seconds when the index hangs; the spec said five in all. | The spec says five each time; a test of the lookup that never answers was added. |
+
+**Checked by hand** on a check instance, with the repository's stand-in model as
+`call-tools` and the stand-in agent, in a real Chromium: a proposal from `notify` approved;
+an edit with a 20-digit number refused beside the edit with its reason; Stop on the page
+that reads the stream of `steps 8`, "stopping" 36 ms after the press and Stopped 0.8 s
+later with two of eight steps taken; a hand-off from `handoff stub`; a failed task's reason
+on its row; and "not known" on the sidebar 8 seconds after the service was stopped.
+
+**Open after Phase 11**, none of them this feature's to close:
+
+- **A model's error that names an agent's address** is sent as it is by
+  `POST /threads/{id}/runs` and `/resume` in their `error` event, is in the debug stream
+  of every route, and is kept by the checkpointer with the failed step. Features 004 and
+  005 clean a model's error of the profile's key in `llm/guard.py`; the address needs the
+  same there, or in `api/streaming.py`. Neither file is this feature's.
+- **The Agents section's words** for an agent task and a task (FR-001a, narrowed).
+- **A profile's test may take 60 seconds** (`FREYJA_LLM_TEST_TIMEOUT_SECONDS`), and the
+  console's forwarding ends a request after 30: a slow test is cut by the console. Feature
+  004's.
+- **How a stopped run ended is not known** to a page that follows by reading once a later
+  run has started: the page says nothing then.
+- **No browser test** of a decision that gets no answer; unit tests cover it. Added in
+  Phase 12.
+- DNS rebinding, open at the end of Phase 10, is closed (`api/hosts.py`).
+
+## Phase 12 as built
+
+The second convergence: fourteen tasks (T098 to T111), one high, three medium, ten low.
+Each has its test, shown to fail without its fix.
+
+- **T098, high**: a reply's pieces that arrive as lists of blocks are joined while the run
+  streams. The default model (`anthropic:`) and an `openai:` model through the Responses API
+  send each piece as a list with one block, and an empty list last; the page showed the last
+  piece alone, then nothing, until the run had ended. Read from a real run of the stand-in
+  model through the Responses API, the pieces are: one empty list under the response's id,
+  then text blocks with `index` 0 under the run's id, one carrying the text's own `id`, and
+  an empty list. `web/lib/merge.ts` is a port of the library's own join (`merge_content`,
+  `merge_lists`, `merge_dicts`), so what streams is what the conversation holds after; the
+  unit tests' expectations were each computed with the library. Each piece also carries
+  the actions as that piece alone makes them, the later ones under no name: only a piece
+  whose every action is named replaces the actions shown. A reply of Freyja's that holds
+  nothing yet is not shown. A browser test in `web/e2e/stream.spec.ts` sends the Responses
+  API's pieces through the console's forwarding.
+- **T099**: `web/lib/json.ts` reads JSON with a whole number beyond 2^53 kept as it is
+  written, where the browser gives a number's own text to a reviver (`context.source`) and
+  writes text back as a number (`JSON.rawJSON`); current Chromium and Firefox, and the
+  Node the unit tests run on, do. `api()`, `stream()`, the stream's events, and
+  `parseArguments` read through it, so such an argument is shown digit for digit, in the
+  card and in the conversation, and an edit sends it as it was entered. A browser that
+  cannot keeps the refusal and the note of Phase 11. The browser test hands the page the
+  service's answer as text, since built as a value in the test the id would already be
+  another.
+- **T100**: tests that a hidden page and a hidden list read again when shown, by no timer.
+  The list's unit tests now set the reading library's focus throttle to zero, as the
+  view's did: it waits five seconds after a page was mounted before it reads on focus.
+- **T101**: every text of every event a console run sends its reader, keys included, is
+  cleaned of agents' addresses as it reads (`_scrubbed`), the debug stream included; the
+  proofs drive the debug stream of both console routes, with an error that writes the
+  address after a line break and after letters of another script. The earlier routes and the checkpointer are still not cleaned (below).
+- **T102**: when the lookup before a console run fails or is given up, the index is handed
+  no text, and the row takes its first message from the thread's state once the run is
+  settled.
+- **T103**: when the service counts tasks and lists none, the section says so, not that
+  there is no task.
+- **T104 to T106**: a decision the service stops listing is dropped from the card's state,
+  so it takes a press to choose it again; values the service refuses make the view read
+  the task again; two actions of one name are named by their place as well.
+- **T107**: unit and browser tests of a decision that gets no answer, applied and not.
+- **T108**: "This run has no Stop: the console did not start it, or the service could not
+  mark it as one that can be stopped."
+- **T109, T110**: a page of another origin reads nothing of `/api/threads` through the
+  forwarding, in both browsers; the sidebar says "not known" while a reading hangs; the
+  rows go when a later reading fails.
+- **T111**: the spec (three waits; FR-006 and a hidden console; FR-007's "blank";
+  FR-022a and a row of a later run; FR-014 and FR-015 and the numbers), the contract's
+  `runs`, which counts every time the lease was taken, and a dated note in `research.md`.
+
+**Read by a reviewer that had not written it.** Checked in the code and fixed, each with a
+test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| Medium: `_scrubbed` cleaned the event's JSON text, where a line break or a letter of another script before an address is an escape sequence; the address was then not found, in the reader's `error` event and in the reason the list keeps. The code it replaced cleaned the decoded message. | Each text is decoded and cleaned, keys included, and the data written again with the same encoder. |
+| Medium: while a run streamed, an action was shown half built, under no name: each piece carries the action as that piece alone makes it. | Only a piece whose every action is named replaces the actions shown. The test's pieces are now those the service's serializer makes of the library's own. |
+| Low: the view's own join differed from the library's in places (lists and numbers inside a block, a text place that is not the library's, blocks of one place with different ids, text followed by blocks). | Replaced by a port of the library's join (`web/lib/merge.ts`). |
+| Low: a bare whole number beyond 2^53 passed the check that edited arguments are a JSON object. | A set of named arguments is a plain object. |
+| Low: the filter for empty messages hid an action's result that holds no text. | It hides only a reply of Freyja's. A bare string among blocks is shown as text, and an empty one as nothing. |
+
+**Also changed while building**: two unit tests that fake `setInterval` waited for the
+run to be forgotten with Testing Library's wait, which looks again only by that faked
+timer or when the page changes. Once answers were read as text and then parsed (T099),
+one of them failed every time, the run forgotten with nothing on the page left to change.
+Both now wait in real time (`forgotten`).
+
+**Open after Phase 12**, none of them this feature's to close:
+
+- **A model's error that names an agent's address** is sent as it is by
+  `POST /threads/{id}/runs` and `/resume`, and kept by the checkpointer with the failed
+  step: `llm/guard.py` or `api/streaming.py`, features 004 and 005.
+- **The Agents section's words** for an agent task and a task (FR-001a, narrowed).
+- **A profile's test may take 60 seconds**, and the console's forwarding ends a request
+  after 30: feature 004's.
+
+## Phase 13 as built
+
+The third convergence: eight low tasks (T112 to T119), nothing critical, high, or medium.
+Each code task has its test, shown to fail without its fix.
+
+- **T112**: an action is shown from the piece that names it, and a reply that asks for two
+  shows both while it streams: a named action is added, or takes the place of the one of
+  its id, and one that names nothing is left out. Once the model's step is done, its
+  `update` event holds the reply whole, and each action shown takes its arguments from it,
+  matched by the action's id. The id and not the message's is matched: through the
+  Responses API, the reply the update holds keeps the provider's id while most pieces
+  streamed under the run's. The update's shape was read from a run of the stand-in model
+  through the service (`{"node": "model", "data": {"messages": [...]}}`). Before the step
+  is done, an action whose arguments arrive in pieces is still shown with `{}`: the
+  service sends no piece's part of the arguments, only what each piece alone makes of them.
+  A subagent's actions keep `{}` until the run has ended: the stream carries no update from
+  inside a subagent (`api/streaming.py`, feature 003).
+- **T113**: every reading of tasks takes `READING` (`web/lib/tasks.ts`), which sets the
+  reading library's focus throttle to zero, so a page that was hidden is read as soon as it
+  is shown, also within five seconds of being opened. Being shown fires two events; the
+  second finds the first's reading under way. The list's and the view's unit tests no
+  longer set the throttle themselves, so their tests of a page shown again prove it.
+- **T114**: while the page reads its own run's stream, the view's timer reads the row, and
+  only the row, every `FOLLOW_SECONDS`. A stop asked in another window is then said, and
+  Stop is no longer offered. How the run ended is still the stream's last event to say: a
+  row read while the page streams does not settle a stop the page asked for, since the row
+  can say the run is over before that event arrives.
+- **T115**: a decision refused because a run is in progress says that the proposal was most
+  likely decided in another window.
+- **T116**: the spec says a number is kept by its value: `5.0` is shown and sent as `5`.
+  Only a whole number beyond 2^53 is kept as it was written, since its value would change.
+- **T117 to T119**: the contract's example rows carry `runs`; its other reasons for `500`,
+  the `422` that comes before `403`, and the cleaning of a console run's events are said
+  (`openapi.yaml`, `sse-events.md`); and the Constitution Check's row for principle V says
+  that the index's statements are fixed strings with named parameters, with no `sql`
+  module and no `# nosemgrep` mark.
+
+**Read by a reviewer that had not written it.** No high or medium finding. Each low one was
+checked in the code and fixed, with a test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| Low: on the render the stream's last event arrives in, the effect that settles a stop from the row still acted on a row read during the stream; a row that disagreed with the stream, as one whose note of the stop was lost, made the page say "too late" of a run the stream said stopped. | A stop records whether the page read the run's stream when it was asked; only a stream that was cut leaves such a stop to the row. |
+| Low: one failed reading of the row while the page streams its own run showed "could not be loaded", now that the row is read every four seconds then. | Not said while the page reads its own run's stream; the row is read again a few seconds later. |
+| Low: between its own run's last event and the reading after it, the page said that a run is in progress, from the row read during the stream, and read the conversation once more, which replaced the reading made at the end. | Neither for the page's own run while it is shown as it streamed. |
+| Low: the join trusted actions' ids to be non-empty and unique across replies. | An empty id is no id, and a step's update fills only the replies streamed since the previous one. |
+| Low: README and `AGENTS.md` said an action's arguments appear once the reply is complete, which holds for Freyja's own replies only. | Both say so. |
+
+**Checked by hand** on a check instance, with the stand-in model as a saved profile whose
+one model call takes 20 seconds: window A started a run and read its stream, window B
+opened the task and pressed Stop. Window A said "stopping" 3.8 seconds after the press,
+after one reading of the row, and offered Stop no more. The stop came during the reply's
+only model call, so the run ended by itself, as the spec has it: both windows showed the
+task done, window B said that the stop came too late, and window A, which had not asked,
+said nothing of it.
+
+**Open after Phase 13**, none of them this feature's to close: the three of Phase 12 above.
+
+**Phase 14 as built.** T120 first, on its own: a new task's id is 16 bytes from
+`crypto.getRandomValues`, which a browser gives every page, in place of
+`crypto.randomUUID`, which it gives a secure origin only (https, `localhost`, `127.0.0.1`):
+a console reached over http by a name or another address threw at New task before its
+dialog opened. A unit test takes `randomUUID` away and asks for 200 ids. Then T121 to T127:
+
+| Task | As built |
+|------|----------|
+| T121 | When the row or the conversation read at the end of the page's own run still says a run is in progress, the view reads both once more `AGAIN_SECONDS` (1) later. The timer is kept in a ref, cleared only when the page goes, since the page forgets its run once the first reading is answered. |
+| T122 | `rowFailure` is not shown while the row the page holds may be from before its own run: from the run's start until the reading made at its end was answered (`rowFromBefore`). |
+| T123 | The follow-up box and the box that sends a failed first message again say `run_active` and `decision_pending` in the console's words (`inWords` in `follow-up.tsx`); Stop says `thread_not_found` and `internal` in its own; the list says "The list of tasks could not be read." and a task's page "The task could not be read." for the service's `internal` answer to a reading of the list or of the row. `send-box.tsx` is unchanged. |
+| T124 | The list compares the tasks it shows that need a decision with the service's count of them; when fewer are shown as such, it says how many, and that they could not be read just now or changed while the list was read, in place of saying that every one is listed. No change to the service or the contract. |
+| T125 | `_summary` passes a failed run's stored reason through `SCRUBBER` again. |
+| T126 | The contract's introduction says the `unknown_host` refusal comes before anything else, on every path but `/healthz`, for every client, also for a request whose `Host` names no host; each GET has a `403` for it, and each POST's `403` names both refusals. FR-024 and FR-027 name it as the one change for a client that is not a web page. |
+| T127 | FR-002 is narrowed to what data-model.md's "Opened" says, the second of the two ways the task gave: the time the row is opened is not when the run started either, and LangGraph writes a checkpoint as a run starts, so the last recorded step is the nearer of the two. No code changed. |
+
+An independent reviewer read the diff. It found nothing high, one medium that Phase 13 had
+left, and four low; each was checked in the code and fixed, with a test:
+
+| Finding | Fixed by |
+|---------|----------|
+| Medium: a stop asked while the page read its own stream, and the stream then cut, was never settled: once the page forgot its run, the guard that leaves an own run to its last event skipped every reading of the row. The page said "stopping" on, and never that the stop came too late. | A cut stream makes the stop the row's to settle (`own: false`), as for a run the page follows. |
+| Low: Stop, and the box that sends a failed first message again, still gave service sentences that name a thread. | Both say them in the console's words. |
+| Low: T124's words were untrue for a task whose run took the lease while the list was read, which is listed as Running. | The words name both causes. |
+| Low: T122 hid a failure the row read after a cut stream reported, while the conversation could not be read. | The row's failure is hidden only until the reading made at the run's end was answered. |
+| Low: the contract's `unknown_host` left out a request whose `Host` names no host, and FR-027 left out `/healthz`. | Both say so. |
+
+Each fix was taken away in turn and its tests failed every time: 17 mutation checks.

@@ -339,6 +339,8 @@ describe("AppSidebar, the Tasks entry", () => {
     tasksLink().parentElement?.querySelector(
       '[data-slot="sidebar-menu-badge"]',
     ) ?? null;
+  const NOT_KNOWN =
+    "How many tasks need a decision is not known: the list of tasks could not be read.";
   const tasksSaid = () => {
     const id = tasksLink().getAttribute("aria-describedby");
     return id === null
@@ -368,7 +370,7 @@ describe("AppSidebar, the Tasks entry", () => {
     await waitFor(() => expect(tasksSaid()).toBe("1 task needs a decision"));
   });
 
-  it("shows no number before the first answer, for none, and after a failed reading", async () => {
+  it("shows no number before the first answer and for none, and says that it is not known after a failed reading", async () => {
     let answer: (reply: Response) => void = () => {};
     vi.stubGlobal(
       "fetch",
@@ -389,16 +391,24 @@ describe("AppSidebar, the Tasks entry", () => {
     answer(new Response(JSON.stringify(NO_TASKS)));
     first.unmount();
 
-    for (const reply of [waiting(0), { fails: "Failed to fetch" } as Reply]) {
-      threadReplies = [reply];
-      threadAsks = 0;
-      stubFetch(list(HELLO));
-      const { unmount } = renderSidebar();
-      await waitFor(() => expect(threadAsks).toBe(1));
-      expect(tasksBadge()).toBeNull();
-      expect(tasksLink().getAttribute("aria-describedby")).toBeNull();
-      unmount();
-    }
+    threadReplies = [waiting(0)];
+    threadAsks = 0;
+    stubFetch(list(HELLO));
+    const none = renderSidebar();
+    await waitFor(() => expect(threadAsks).toBe(1));
+    expect(tasksBadge()).toBeNull();
+    expect(tasksLink().getAttribute("aria-describedby")).toBeNull();
+    none.unmount();
+
+    // A list that could not be read is not "no task needs a decision": the entry says, in
+    // words, that the number is not known (Edge Cases, "The list cannot be kept or read").
+    threadReplies = [{ fails: "Failed to fetch" } as Reply];
+    threadAsks = 0;
+    stubFetch(list(HELLO));
+    renderSidebar();
+    await waitFor(() => expect(tasksSaid()).toBe(NOT_KNOWN));
+    expect(tasksBadge()?.textContent).toContain("not known");
+    expect(tasksBadge()?.textContent).not.toMatch(/\d/);
   });
 
   it("drops the number once a later reading fails, and shows the next one", async () => {
@@ -409,7 +419,9 @@ describe("AppSidebar, the Tasks entry", () => {
       renderSidebar();
       await waitFor(() => expect(tasksSaid()).toBe("2 tasks need a decision"));
       vi.advanceTimersByTime(LIST_SECONDS * 1000);
-      await waitFor(() => expect(tasksBadge()).toBeNull());
+      // The earlier number is not shown as if it were current.
+      await waitFor(() => expect(tasksSaid()).toBe(NOT_KNOWN));
+      expect(tasksBadge()?.textContent).not.toMatch(/\d/);
       // The reading that failed did not end the following.
       vi.advanceTimersByTime(LIST_SECONDS * 1000);
       await waitFor(() => expect(tasksSaid()).toBe("1 task needs a decision"));
@@ -418,7 +430,19 @@ describe("AppSidebar, the Tasks entry", () => {
     }
   });
 
-  it("reads the list again by itself every fifteen seconds on another section", async () => {
+  // T113: the reading library waits five seconds after a page was opened before it reads
+  // on the page being shown; the console sets that wait aside.
+  it("reads the list again at once when the page is shown, also within five seconds of it being opened", async () => {
+    threadReplies = [waiting(0), waiting(2)];
+    stubFetch(list(HELLO));
+    renderSidebar();
+    await waitFor(() => expect(threadAsks).toBe(1));
+    document.dispatchEvent(new Event("visibilitychange"));
+    await waitFor(() => expect(tasksSaid()).toBe("2 tasks need a decision"));
+    expect(threadAsks).toBe(2);
+  });
+
+  it("reads the list again by itself, by its timer, on another section", async () => {
     threadReplies = [waiting(0), waiting(1)];
     stubFetch(list(HELLO));
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });

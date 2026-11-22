@@ -11,7 +11,7 @@ This feature changes nothing in the streams of `POST /threads/{thread_id}/runs` 
 `POST /threads/{thread_id}/resume`. It adds two routes that answer with the same stream,
 `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`
 ([openapi.yaml](openapi.yaml)). Their events are the existing ones, made by the same code.
-Six things differ, and all six are about these two routes only.
+Seven things differ, and all seven are about these two routes only.
 
 ## The run does not depend on the stream
 
@@ -71,3 +71,10 @@ With `?debug=true`, a run through these routes sends one more `debug` event of t
 R4): for a run with one tool call, 35 debug events where the existing route sends 32. The
 other events are the same. Debug events never change the run and are not part of what the
 console reads.
+
+## No agent's address
+
+Every text of every event, keys included and the debug events among them, is cleaned of
+every agent's address before it is sent, as `delegates/addresses.py` takes an address out of
+any text: a model's error that repeats one, for example. The existing routes' events are not
+cleaned this way.

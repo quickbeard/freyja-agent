@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
+import { mergeContent } from "@/lib/merge";
 import {
   begin,
   clear,
@@ -17,6 +18,7 @@ import {
   type DecisionSent,
   decide,
   type Message,
+  READING,
   readState,
   readThread,
   type StreamEvent,
@@ -25,23 +27,41 @@ import {
   THREADS_KEY,
   type ThreadState,
   type ThreadSummary,
+  type ToolCall,
   threadKey,
 } from "@/lib/tasks";
 import { AgentTasks, awaited } from "./agent-tasks";
-import { type Blocked, FollowUp } from "./follow-up";
-import { MessageView } from "./message";
+import { type Blocked, FollowUp, inWords } from "./follow-up";
+import { contentText, MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
 import { TaskStatus } from "./status";
 import { StopButton, type StopState } from "./stop-button";
 
 // How often a page that does not read a run's stream reads the task again while that run is
-// in progress (FR-013).
-export const FOLLOW_SECONDS = 5;
+// in progress. FR-013 gives five seconds as the most; a reading takes time of its own, so
+// the period is shorter than the bound.
+export const FOLLOW_SECONDS = 4;
 
 // How often a page reads a task again while one of its agent tasks is pending, or has ended
-// with its outcome not yet in the conversation (FR-013).
-export const AGENT_SECONDS = 15;
+// with its outcome not yet in the conversation. FR-013 gives fifteen seconds as the most.
+export const AGENT_SECONDS = 12;
+
+// How soon a task is read again when the reading made at the end of this page's own run
+// still says a run is in progress: the service sends the run's last event before it gives
+// the run's lease back, which takes it a moment more.
+export const AGAIN_SECONDS = 1;
+
+/** Whether a reading made at the end of a run still says a run is in progress. */
+function stillRunning(
+  row: PromiseSettledResult<ThreadSummary | undefined>,
+  state: PromiseSettledResult<ThreadState | undefined>,
+): boolean {
+  return (
+    (row.status === "fulfilled" && row.value?.status === "running") ||
+    (state.status === "fulfilled" && state.value?.run_active === true)
+  );
+}
 
 const NO_USABLE_MODEL = "no_usable_model";
 
@@ -78,6 +98,52 @@ const STEPS: Record<string, string> = {
 };
 
 /**
+ * The actions a reply shows once a piece of it arrived. Each piece carries the actions as
+ * that piece alone makes them: the first piece of an action names it, under its id, and the
+ * next ones hold parts of its arguments under no name. A named action is added, or takes
+ * the place of the one of its id; one that names nothing is left out, so that no half of
+ * an action is shown (FR-010). An empty id is no id.
+ */
+function withNamed(
+  shown: ToolCall[] | null | undefined,
+  piece: ToolCall[] | null | undefined,
+): ToolCall[] | null | undefined {
+  const named = (piece ?? []).filter((call) => call.name !== "");
+  if (named.length === 0) {
+    return shown;
+  }
+  const calls = [...(shown ?? [])];
+  for (const call of named) {
+    const at = calls.findIndex(
+      (earlier) => Boolean(call.id) && earlier.id === call.id,
+    );
+    if (at === -1) {
+      calls.push(call);
+    } else {
+      calls[at] = call;
+    }
+  }
+  return calls;
+}
+
+/** The actions of the replies a model step's update holds: each whole, with its arguments. */
+function wholeCalls(data: unknown): Map<string, ToolCall> {
+  const whole = new Map<string, ToolCall>();
+  const replies = (data as { messages?: unknown } | null)?.messages;
+  if (!Array.isArray(replies)) {
+    return whole;
+  }
+  for (const reply of replies as Partial<Message>[]) {
+    for (const call of reply?.tool_calls ?? []) {
+      if (call.id && call.name !== "") {
+        whole.set(call.id, call);
+      }
+    }
+  }
+  return whole;
+}
+
+/**
  * What the stream has brought so far: the person's message, then each message as it grows,
  * by its id. While a run streams, a subagent's text cannot be told from Freyja's own
  * (feature 001), so this is work in progress; the conversation read afterwards is what counts.
@@ -95,13 +161,38 @@ export function streamed(run: LiveRun): {
       name: null,
     });
   }
+  // The messages above are held, not streamed: they are shown whatever they hold.
+  const held = messages.length;
+  // Where the messages streamed since the model's last step was done begin: a step's
+  // update is about the reply of that step, and a provider may give the actions of two
+  // replies the same ids.
+  let since = held;
   const at = new Map<string, number>();
   const steps: string[] = [];
   run.events.forEach((event: StreamEvent, index) => {
     if (event.event === "update") {
-      const node = (event.data as { node?: string } | null)?.node ?? "";
+      const update = event.data as { node?: string; data?: unknown } | null;
+      const node = update?.node ?? "";
       if (node in STEPS) {
         steps.push(STEPS[node]);
+      }
+      // Once the model's step is done, its update holds the reply whole: each action it
+      // asks for with all of its arguments, which the pieces gave in parts or not at all.
+      // An action shown is matched by its id, which every piece of it and the update share.
+      if (node === "model") {
+        const whole = wholeCalls(update?.data);
+        for (let index = since; index < messages.length; index += 1) {
+          const calls = messages[index].tool_calls;
+          if (calls?.some((call) => call.id && whole.has(call.id))) {
+            messages[index] = {
+              ...messages[index],
+              tool_calls: calls.map(
+                (call) => (call.id && whole.get(call.id)) || call,
+              ),
+            };
+          }
+        }
+        since = messages.length;
       }
       return;
     }
@@ -120,17 +211,23 @@ export function streamed(run: LiveRun): {
       return;
     }
     const earlier = messages[found];
-    const grown =
-      typeof earlier.content === "string" && typeof message.content === "string"
-        ? earlier.content + message.content
-        : message.content;
-    const calls =
-      message.tool_calls && message.tool_calls.length > 0
-        ? message.tool_calls
-        : earlier.tool_calls;
-    messages[found] = { ...earlier, content: grown, tool_calls: calls };
+    messages[found] = {
+      ...earlier,
+      content: mergeContent(earlier.content, message.content),
+      tool_calls: withNamed(earlier.tool_calls, message.tool_calls),
+    };
   });
-  return { messages, steps };
+  // A reply of Freyja's that holds nothing yet is not shown: some models open a reply with
+  // an empty piece, and one under an id of its own that nothing follows. Every other
+  // message is, an action's result that holds no text among them.
+  const shown = messages.filter(
+    (message, index) =>
+      index < held ||
+      message.type !== "ai" ||
+      contentText(message.content) !== "" ||
+      (message.tool_calls ?? []).length > 0,
+  );
+  return { messages: shown, steps };
 }
 
 function Failure({ error }: { error: RunError }) {
@@ -181,7 +278,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     threadKey(threadId),
     () => readThread(threadId),
     {
-      shouldRetryOnError: false,
+      ...READING,
       onSuccess: () => {
         rowReadsNow.current += 1;
         setRowReads(rowReadsNow.current);
@@ -195,7 +292,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     stateKey(threadId),
     () => readState(threadId),
     {
-      shouldRetryOnError: false,
+      ...READING,
       onSuccess: () => {
         stateReadsNow.current += 1;
         setStateReads(stateReadsNow.current);
@@ -229,9 +326,15 @@ export function TaskView({ threadId }: { threadId: string }) {
   // until a reading made after it says the run is no longer in progress (FR-010): the row
   // the page held before, as for a follow-up, says nothing of this run.
   const [cut, setCut] = useState<number | null>(null);
-  // Set when the service accepted a stop this page asked for, to the number of readings of
-  // the row answered until then: how the run ended is told by a reading made after it.
-  const [stopAsked, setStopAsked] = useState<number | null>(null);
+  // Set when the service accepted a stop this page asked for: `at` is the number of
+  // readings of the row answered until then, since how the run ended is told by a reading
+  // made after it, and `run` which of the task's runs the service said the stop was for.
+  // `own` says whether the page read the run's stream when the stop was asked.
+  const [stopAsked, setStopAsked] = useState<{
+    at: number;
+    run: number;
+    own: boolean;
+  } | null>(null);
   // Set when a run this page asked to stop ended another way before the stop took effect:
   // it is said until the task's next run (FR-022a). `at` is the number of readings of the
   // row answered until then, and `rested` whether a reading since has said that no run is
@@ -244,21 +347,43 @@ export function TaskView({ threadId }: { threadId: string }) {
   // again (FR-008's rule for a new task, kept for a follow-up).
   const [draft, setDraft] = useState({ box: 0, text: "" });
 
-  // When a run this page shows ends, in whichever way, the task is read again once.
+  // When a run this page shows ends, in whichever way, the task is read again once, and once
+  // more `AGAIN_SECONDS` later when that reading still says a run is in progress (FR-010,
+  // FR-019, FR-020). Until then the page would show the run in progress, offer Stop, hide a
+  // proposal the run paused on, and keep the follow-up box shut. The second reading's timer
+  // outlives the run, which the page forgets once the first is answered.
+  const again = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(again.current), []);
   useEffect(() => {
     if (ended === null) {
       return;
     }
     if (ended.kind === "connection_ended") {
       setCut(rowReadsNow.current);
+      // No last event will say how the run ended: a stop asked while the page read the
+      // stream is settled by the row, as for a run the page follows, also once the page has
+      // forgotten the run.
+      setStopAsked((asked) =>
+        asked === null ? null : { ...asked, own: false },
+      );
     }
     let current = true;
     const states = stateReadsNow.current;
-    void Promise.allSettled([readRowAgain(), readStateAgain()]).then(() => {
-      if (current) {
+    void Promise.allSettled([readRowAgain(), readStateAgain()]).then(
+      ([rowAnswer, stateAnswer]) => {
+        if (!current) {
+          return;
+        }
         setReadFor({ end: ended, states });
-      }
-    });
+        if (stillRunning(rowAnswer, stateAnswer)) {
+          clearTimeout(again.current);
+          again.current = setTimeout(() => {
+            void readRowAgain().catch(() => undefined);
+            void readStateAgain().catch(() => undefined);
+          }, AGAIN_SECONDS * 1000);
+        }
+      },
+    );
     // The list and the sidebar's number follow at once, not at their next reading.
     void readListAgain(THREADS_KEY);
     return () => {
@@ -269,10 +394,14 @@ export function TaskView({ threadId }: { threadId: string }) {
   const failed = runError(run);
   const noConversation = missing(state.error);
   const rowMissing = missing(row.error);
-  // A read that failed for another reason than that there is no such task.
+  // A read that failed for another reason than that there is no such task. While the page
+  // reads its own run's stream, a reading of the row that failed is not said: the stream
+  // says how the run goes, and the row is read again a few seconds later.
   const readError =
     (state.error !== undefined && !noConversation ? state.error : undefined) ??
-    (row.error !== undefined && !rowMissing ? row.error : undefined);
+    (row.error !== undefined && !rowMissing && !streaming
+      ? row.error
+      : undefined);
   const rowRunning = row.error === undefined && row.data?.status === "running";
   // A new task whose first run failed before anything was recorded keeps its run, whose
   // message is offered again (FR-008).
@@ -381,7 +510,15 @@ export function TaskView({ threadId }: { threadId: string }) {
     !streaming &&
     (row.data?.status === "waiting_for_agent" ||
       (state.data?.agent_tasks ?? []).some(awaited));
-  const period = following ? FOLLOW_SECONDS : waiting ? AGENT_SECONDS : null;
+  // While the page reads its own run's stream, the row is read on the same timer, and only
+  // the row: a stop asked in another window is then said, and Stop no longer offered
+  // (FR-022). The stream says the rest.
+  const period =
+    streaming || following ? FOLLOW_SECONDS : waiting ? AGENT_SECONDS : null;
+  // Whether a reading the timer below asked for is still under way. Kept here and not
+  // taken from SWR's `isValidating`: a component that reads that is rendered again each
+  // time a reading begins or ends, which this view's effects are not written for.
+  const reading = useRef({ row: false, state: false });
   useEffect(() => {
     if (period === null) {
       return;
@@ -391,24 +528,46 @@ export function TaskView({ threadId }: { threadId: string }) {
       if (document.visibilityState === "hidden") {
         return;
       }
-      void readRowAgain();
-      void readStateAgain();
+      // A reading asked for while one is under way takes its place, and the earlier one's
+      // answer is dropped: with a service slower than the period, none would ever be
+      // shown. A reading that gets no answer is given up by itself (`ANSWER_SECONDS`).
+      const under = reading.current;
+      if (!under.row) {
+        under.row = true;
+        void readRowAgain()
+          .catch(() => undefined)
+          .finally(() => {
+            under.row = false;
+          });
+      }
+      if (!streaming && !under.state) {
+        under.state = true;
+        void readStateAgain()
+          .catch(() => undefined)
+          .finally(() => {
+            under.state = false;
+          });
+      }
     }, period * 1000);
     return () => clearInterval(timer);
-  }, [period, readRowAgain, readStateAgain]);
+  }, [period, streaming, readRowAgain, readStateAgain]);
   // A run this page followed has ended: the conversation is read once more. The reading that
   // showed the end was asked for together with the conversation's, and the service may have
   // answered that one before the run recorded its last step.
   const followed = useRef(false);
   const rowRead = row.data !== undefined && row.error === undefined;
+  // The page's own run, shown as it streamed until the task is read after it, is not one
+  // the page follows: the end of that run is read once already.
   useEffect(() => {
     if (inProgress) {
-      followed.current = true;
+      if (!showLive) {
+        followed.current = true;
+      }
     } else if (followed.current && rowRead) {
       followed.current = false;
       void readStateAgain();
     }
-  }, [inProgress, rowRead, readStateAgain]);
+  }, [inProgress, showLive, rowRead, readStateAgain]);
   useEffect(() => {
     if (cut !== null && rowReads > cut && rowRead && !inProgress) {
       setCut(null);
@@ -435,19 +594,33 @@ export function TaskView({ threadId }: { threadId: string }) {
     }
   }, [stopAsked, ended]);
   // A page that follows the run by reading is told by a reading of the row made after the
-  // stop. A reading that says a run is in progress and not stopping is of another run. A
-  // run that ended and was followed by another between two readings cannot be told from
-  // one that ended another way: the row names no run.
+  // stop. The row names its run. One that is of a later run says nothing of how the run
+  // this page stopped ended, as stopped or another way: the page then claims neither. One
+  // of the same run that says the run is in progress goes on waiting, also when it does
+  // not say "stopping": it was made before the stop was marked.
   const rowStatus = row.data?.status;
   const rowStopping = rowRunning && row.data?.stopping === true;
+  const rowRuns = row.data?.runs;
+  const rowUnread = row.error !== undefined;
   useEffect(() => {
-    if (stopAsked === null || rowReads <= stopAsked) {
+    // A reading that failed says nothing of the run: the row held from before is not the
+    // service's word on how it ended. Nor does any reading of a run whose stream the page
+    // read when the stop was asked: the stream's last event says, also on the render it
+    // arrives in. Only a stream that was cut leaves it to the row.
+    if (
+      stopAsked === null ||
+      (stopAsked.own && ended?.kind !== "connection_ended") ||
+      rowReads <= stopAsked.at ||
+      rowRuns === undefined ||
+      rowUnread
+    ) {
+      return;
+    }
+    if (rowRuns !== stopAsked.run) {
+      setStopAsked(null);
       return;
     }
     if (rowRunning) {
-      if (!rowStopping) {
-        setStopAsked(null);
-      }
       return;
     }
     // The row says the run has ended, and how: its status is the service's word.
@@ -455,7 +628,7 @@ export function TaskView({ threadId }: { threadId: string }) {
     if (rowStatus !== "stopped") {
       setLate({ at: rowReadsNow.current, rested: true });
     }
-  }, [stopAsked, rowReads, rowRunning, rowStopping, rowStatus]);
+  }, [ended, stopAsked, rowReads, rowRuns, rowRunning, rowStatus, rowUnread]);
   // That a stop came too late is about the run that ended: it goes with the next run, one
   // of this page or one the row shows once it has said that the earlier run was over.
   useEffect(() => {
@@ -502,7 +675,12 @@ export function TaskView({ threadId }: { threadId: string }) {
   }
 
   async function sendAgain(text: string) {
-    const answer = await startRun(threadId, text);
+    let answer: ReadableStream<Uint8Array>;
+    try {
+      answer = await startRun(threadId, text);
+    } catch (refused) {
+      throw inWords(refused);
+    }
     setStopAsked(null);
     clear(threadId);
     begin(threadId, text, answer);
@@ -547,7 +725,10 @@ export function TaskView({ threadId }: { threadId: string }) {
     >
       <p className="text-sm">
         {readError instanceof ApiError
-          ? readError.message
+          ? readError === row.error && readError.code === "internal"
+            ? // The service's sentence speaks of the list of threads (FR-001a).
+              "The task could not be read."
+            : readError.message
           : "The task could not be loaded."}
         {following && " This page reads the task again until it can."}
       </p>
@@ -584,8 +765,14 @@ export function TaskView({ threadId }: { threadId: string }) {
       ? row.data?.status
       : undefined;
   const live = showLive && run !== undefined ? streamed(run) : null;
+  // Not while the row the page holds may be from before its own run, and say how an earlier
+  // one failed: from the run's start until the reading made at its end was answered.
+  const rowFromBefore = streaming || (ended !== null && readFor?.end !== ended);
   const rowFailure =
-    failed === null && row.error === undefined && row.data?.status === "failed"
+    failed === null &&
+    !rowFromBefore &&
+    row.error === undefined &&
+    row.data?.status === "failed"
       ? row.data.error
       : null;
   // A proposal is decided only on a page that is not showing a run in progress.
@@ -623,10 +810,10 @@ export function TaskView({ threadId }: { threadId: string }) {
       ? started
         ? "The run has started. Freyja's reply appears as it is written."
         : "Starting the run…"
-      : inProgress
+      : inProgress && !showLive
         ? "A run is in progress. This page reads the task again until it ends."
         : waiting
-          ? "This page reads the task again every fifteen seconds while an agent task is pending or its outcome is not in the conversation yet."
+          ? `This page reads the task again every ${AGENT_SECONDS} seconds while an agent task is pending or its outcome is not in the conversation yet.`
           : null;
   const words = [
     late !== null
@@ -681,8 +868,12 @@ export function TaskView({ threadId }: { threadId: string }) {
           threadId={threadId}
           about={row.data?.first_message ?? run?.message ?? null}
           run={stopState}
-          onAsked={() => {
-            setStopAsked(rowReadsNow.current);
+          onAsked={(asked) => {
+            setStopAsked({
+              at: rowReadsNow.current,
+              run: asked,
+              own: streaming,
+            });
             setNotice(null);
             // The button goes; the focus goes to where the page says the run is stopping.
             statusRef.current?.focus();
@@ -738,6 +929,10 @@ export function TaskView({ threadId }: { threadId: string }) {
           pending={pending}
           send={(decisions) => decideNow(pending.interrupt_id, decisions)}
           onStale={stale}
+          onRefused={() => {
+            void readRowAgain();
+            void readStateAgain();
+          }}
         />
       )}
       <AgentTasks tasks={agentTasks} />

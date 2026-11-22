@@ -18,17 +18,34 @@ It behaves by the model id it is asked for:
 - ``reject-key``: answers 401 to every request;
 - ``never-answer``: does not answer;
 - ``slow``: answers after 20 seconds;
+- ``call-tools``: asks for tools, by a keyword at the start of the last message of a person,
+  as ``tests/a2a_stub.py`` acts on one (feature 007, T097):
+
+  - ``notify <text>``: one call of ``send_notification`` to ``#ops`` with the text;
+  - ``handoff <agent> <text>``: one call of ``handoff_to_<agent>`` with the text;
+  - ``steps <n>``: ``n`` calls of ``ls``, one a reply, each after ``step_seconds``, so that
+    a run lasts long enough to be stopped by hand;
+  - once the call it asked for has its result, it answers ``Done: `` and the result; any
+    other message is answered ``ready``, and a tool it was not given is said in text.
+
+  It answers chat completions only: a profile that names it has ``responses_api`` false,
+  and an environment that names it sets ``FREYJA_OPENAI_RESPONSES_API=false``;
 - any other id: answers everything.
 
 A request that asks for a stream is answered as one, in the API's own events, because that is
 how a run asks: a profile that points here can be run on, not only tested.
+
+Every reply has an id of its own. A thread keeps one message per id, so two replies under
+one id would leave only the second in the conversation.
 """
 
 import argparse
 import asyncio
+import itertools
 import json
 import logging
-from collections.abc import Iterator
+import re
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,6 +62,16 @@ logger = logging.getLogger("uvicorn.error")
 
 REFUSAL = "Input should be a valid string: this endpoint takes no earlier turns as input"
 SLOW_SECONDS = 20.0
+# The model id that asks for tools, and what it answers when it is asked through the
+# Responses API, whose events for a tool call it does not write.
+TOOL_CALLER = "call-tools"
+CHAT_ONLY = (
+    f"The model {TOOL_CALLER} answers chat completions only: turn the Responses API off for "
+    "it (responses_api false in a profile, FREYJA_OPENAI_RESPONSES_API=false in the "
+    "environment)."
+)
+# How long ``call-tools`` waits before each step of ``steps <n>`` when served by hand.
+STEP_SECONDS = 1.0
 
 
 @dataclass
@@ -88,9 +115,9 @@ def error(status: int, message: str, code: str) -> JSONResponse:
     return JSONResponse(status_code=status, content=body)
 
 
-def _chat_answer(model: str) -> dict[str, Any]:
+def _chat_answer(model: str, number: int) -> dict[str, Any]:
     return {
-        "id": "chatcmpl-stub",
+        "id": f"chatcmpl-stub-{number}",
         "object": "chat.completion",
         "created": 0,
         "model": model,
@@ -105,9 +132,9 @@ def _chat_answer(model: str) -> dict[str, Any]:
     }
 
 
-def _responses_answer(model: str) -> dict[str, Any]:
+def _responses_answer(model: str, number: int) -> dict[str, Any]:
     return {
-        "id": "resp_stub",
+        "id": f"resp_stub_{number}",
         "object": "response",
         "created_at": 0,
         "status": "completed",
@@ -115,7 +142,7 @@ def _responses_answer(model: str) -> dict[str, Any]:
         "output": [
             {
                 "type": "message",
-                "id": "msg_stub",
+                "id": f"msg_stub_{number}",
                 "status": "completed",
                 "role": "assistant",
                 "content": [{"type": "output_text", "text": "ready", "annotations": []}],
@@ -134,9 +161,14 @@ def _responses_answer(model: str) -> dict[str, Any]:
     }
 
 
-def _chat_stream(model: str) -> Iterator[str]:
+def _chat_stream(model: str, number: int) -> Iterator[str]:
     """Chat completions, streamed: one chunk with the text, one that ends it, the usage."""
-    chunk = {"id": "chatcmpl-stub", "object": "chat.completion.chunk", "created": 0, "model": model}
+    chunk = {
+        "id": f"chatcmpl-stub-{number}",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+    }
     delta = {"role": "assistant", "content": "ready"}
     usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
     for part in (
@@ -148,9 +180,9 @@ def _chat_stream(model: str) -> Iterator[str]:
     yield "data: [DONE]\n\n"
 
 
-def _responses_stream(model: str) -> Iterator[str]:
+def _responses_stream(model: str, number: int) -> Iterator[str]:
     """The Responses API, streamed: the events of one message with one piece of text."""
-    done = _responses_answer(model)
+    done = _responses_answer(model, number)
     started = {**done, "status": "in_progress", "output": []}
     item = done["output"][0]
     text = {"type": "output_text", "text": "ready", "annotations": []}
@@ -175,12 +207,107 @@ def _responses_stream(model: str) -> Iterator[str]:
         yield f"event: {event['type']}\ndata: {body}\n\n"
 
 
+def _text(content: Any) -> str:
+    """A turn's text, whether it was sent as a string or in parts."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(part.get("text", "") for part in content if isinstance(part, dict))
+    return ""
+
+
+@dataclass
+class Plan:
+    """What ``call-tools`` answers one request with: text, or one call of a tool."""
+
+    text: str = ""
+    call: tuple[str, dict[str, Any]] | None = None
+    # Whether the reply is a step of ``steps <n>``, which waits before it is sent.
+    step: bool = False
+
+
+def plan(turns: list[dict[str, Any]], tools: list[str]) -> Plan:
+    """What ``call-tools`` answers a conversation with, given the tools it was handed."""
+    people = [at for at, turn in enumerate(turns) if turn.get("role") == "user"]
+    if not people:
+        return Plan(text="ready")
+    asked = _text(turns[people[-1]].get("content")).strip()
+    results = [turn for turn in turns[people[-1] + 1 :] if turn.get("role") == "tool"]
+    keyword, _, rest = asked.partition(" ")
+    rest = rest.strip()
+
+    wanted: tuple[str, dict[str, Any]] | None = None
+    if keyword == "steps" and rest.isascii() and rest.isdigit():
+        if len(results) >= int(rest):
+            return Plan(text=f"Took {len(results)} steps.", step=True)
+        wanted = ("ls", {"path": "/"})
+    elif keyword == "notify":
+        wanted = ("send_notification", {"channel": "#ops", "message": rest or "hello"})
+    elif keyword == "handoff" and re.fullmatch(r"[a-z][a-z0-9_-]*( .*)?", rest, re.S):
+        agent, _, message = rest.partition(" ")
+        wanted = (f"handoff_to_{agent}", {"message": message.strip() or "hello"})
+    if wanted is None:
+        return Plan(text="ready")
+    if wanted[0] not in tools:
+        return Plan(text=f"The tool {wanted[0]} is not among the tools I was given.")
+    if results and keyword != "steps":
+        return Plan(text=f"Done: {_text(results[-1].get('content')).strip()[:600]}")
+    return Plan(call=wanted, step=keyword == "steps")
+
+
+def _tool_message(planned: Plan, number: int) -> tuple[dict[str, Any], str]:
+    """The assistant's message for a plan, and why the reply ends, as chat completions say."""
+    if planned.call is None:
+        return {"role": "assistant", "content": planned.text}, "stop"
+    name, arguments = planned.call
+    call = {
+        "id": f"call_stub_{number}",
+        "type": "function",
+        "function": {"name": name, "arguments": json.dumps(arguments)},
+    }
+    return {"role": "assistant", "content": None, "tool_calls": [call]}, "tool_calls"
+
+
+def _tool_answer(model: str, number: int, planned: Plan) -> dict[str, Any]:
+    message, finish = _tool_message(planned, number)
+    return {
+        **_chat_answer(model, number),
+        "choices": [{"index": 0, "message": message, "finish_reason": finish}],
+    }
+
+
+async def _tool_stream(model: str, number: int, planned: Plan, wait: float) -> AsyncIterator[str]:
+    """Chat completions, streamed, for ``call-tools``: the text or the call, then the usage."""
+    chunk = {
+        "id": f"chatcmpl-stub-{number}",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+    }
+    message, finish = _tool_message(planned, number)
+    if "tool_calls" in message:
+        message = {**message, "tool_calls": [{"index": 0, **message["tool_calls"][0]}]}
+    usage = {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    if wait:
+        await asyncio.sleep(wait)
+    for part in (
+        {"choices": [{"index": 0, "delta": message, "finish_reason": None}]},
+        {"choices": [{"index": 0, "delta": {}, "finish_reason": finish}]},
+        {"choices": [], "usage": usage},
+    ):
+        yield f"data: {json.dumps({**chunk, **part})}\n\n"
+    yield "data: [DONE]\n\n"
+
+
 @dataclass
 class LlmStub:
     """The stand-in and what it received."""
 
     app: FastAPI = field(default_factory=FastAPI)
     requests: list[StubRequest] = field(default_factory=list)
+    # How long ``call-tools`` waits before each step of ``steps <n>``; the suite waits none.
+    step_seconds: float = 0.0
+    _numbers: Iterator[int] = field(default_factory=lambda: itertools.count(1), repr=False)
 
     def __post_init__(self) -> None:
         # Also under the path the LangSmith gateway gives OpenAI, so that an environment
@@ -213,10 +340,24 @@ class LlmStub:
             await asyncio.sleep(SLOW_SECONDS)
         if model == "refuse-conversation" and received.earlier_turns:
             return error(422, REFUSAL, "invalid_type")
+        number = next(self._numbers)
+        if model == TOOL_CALLER:
+            if api != "chat":
+                return error(400, CHAT_ONLY, "unsupported")
+            planned = plan(received.turns, received.tool_names)
+            wait = self.step_seconds if planned.step else 0.0
+            if body.get("stream"):
+                return StreamingResponse(
+                    _tool_stream(model, number, planned, wait), media_type="text/event-stream"
+                )
+            await asyncio.sleep(wait)
+            return JSONResponse(content=_tool_answer(model, number, planned))
         if body.get("stream"):
-            events = _chat_stream(model) if api == "chat" else _responses_stream(model)
+            events = (
+                _chat_stream(model, number) if api == "chat" else _responses_stream(model, number)
+            )
             return StreamingResponse(events, media_type="text/event-stream")
-        answer = _chat_answer(model) if api == "chat" else _responses_answer(model)
+        answer = _chat_answer(model, number) if api == "chat" else _responses_answer(model, number)
         return JSONResponse(content=answer)
 
     def factory(self, spec: ModelSpec) -> BaseChatModel:
@@ -235,7 +376,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Serve the stand-in model endpoint on loopback.")
     parser.add_argument("--http", type=int, required=True, metavar="PORT")
     args = parser.parse_args()
-    uvicorn.run(LlmStub().app, host="127.0.0.1", port=args.http)
+    uvicorn.run(LlmStub(step_seconds=STEP_SECONDS).app, host="127.0.0.1", port=args.http)
 
 
 if __name__ == "__main__":

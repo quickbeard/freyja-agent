@@ -818,93 +818,93 @@ acceptance scenario, edge case, and the contract against the code. No finding is
 or high: T078 to T081 are medium, the rest low. The standing rules above hold for each
 task: its test first, shown to fail.
 
-- [ ] T078 Show the service's reason on a failed task's row in
+- [X] T078 Show the service's reason on a failed task's row in
       `web/components/tasks/task-list.tsx`: the row's `error.message`, as plain text, with
       a unit test in `web/__tests__/components/tasks/task-list.test.tsx` and an assertion in
       `web/e2e/tasks.spec.ts`. Today only the task's page gives it, per FR-003 (missing)
-- [ ] T079 Add two browser tests to `web/e2e/stream.spec.ts` that press Stop on the page
+- [X] T079 Add two browser tests to `web/e2e/stream.spec.ts` that press Stop on the page
       that started the run and is reading its stream: one where the stand-in then ends the
       run as stopped (the page says "stopping", then shows Stopped), and one where the run
       ends another way after the press (the page says the stop came too late). Every Stop
       test in `web/e2e/tasks-run.spec.ts` follows a run by reading, per FR-028, FR-022,
       US5/AC4 (partial)
-- [ ] T080 Keep the numbers of an edit as the person entered them, in `web/lib/tasks.ts`
+- [X] T080 Keep the numbers of an edit as the person entered them, in `web/lib/tasks.ts`
       (`parseArguments`) and `web/components/tasks/proposal-card.tsx`: text is read with
       `JSON.parse`, which rounds an integer beyond 2^53, such as a 64-bit id, so an edit of
       another argument sends a value nobody proposed or entered. Refuse such text beside the
       edit, say on the card when a proposed argument holds such a number, and test both with
       a 19-digit integer, per FR-015, FR-014 (partial)
-- [ ] T081 Ask the owner before anything is changed: the Agents section calls an agent task
+- [X] T081 Ask the owner before anything is changed: the Agents section calls an agent task
       a "pending task" and a task a "thread" (`web/components/agents/agent-card.tsx`,
       `agent-list.tsx`, `agent-form.tsx`, `remove-dialog.tsx`, `web/lib/agents.ts`), where
       the console is to say "agent task" and "task" in every place it names either. Those
       files are feature 005's. Either they are reworded there, or spec.md narrows the rule
       to the Tasks section, per FR-001a (contradicts)
-- [ ] T082 Have a row name its run: add the number of runs the thread has had to
+- [X] T082 Have a row name its run: add the number of runs the thread has had to
       `ThreadSummary` and to the answer of `POST /threads/{thread_id}/stop`
       (`src/freyja_agent/api/thread_index_schemas.py`, `api/thread_index.py`,
       `contracts/openapi.yaml`, `web/lib/tasks.ts`), and have
       `web/components/tasks/task-view.tsx` say that a stop came too late only when a reading
       of the same run shows it ended another way. Today a page that follows a run by
       reading cannot tell that from a stopped run followed by another, per FR-022a (partial)
-- [ ] T083 Bound how long the console waits for an answer: a time limit in `api()` and, until
+- [X] T083 Bound how long the console waits for an answer: a time limit in `api()` and, until
       the answer begins, in `stream()` (`web/lib/api.ts`, a shared file), turned into the
       error a request with no answer already gets. First a test of what a page shows when the
       service accepts a request and does not answer: the list and the sidebar's number not
       shown as current, and a decision's outcome said to be not known, per FR-006, FR-018
       (partial)
-- [ ] T084 Shorten the three periods so that each bound holds with the request's round
+- [X] T084 Shorten the three periods so that each bound holds with the request's round
       trip: `LIST_SECONDS` in `web/lib/tasks.ts` and `FOLLOW_SECONDS` and `AGENT_SECONDS` in
       `web/components/tasks/task-view.tsx` equal the fifteen, five, and fifteen seconds the
       spec gives as the most. Add a browser test with `page.clock` in which the sidebar's
       number appears on `/llm` by the timer alone, per SC-004, FR-006, FR-013, US4/AC4
       (partial)
-- [ ] T085 Say on the sidebar's Tasks entry, in words, that the number is not known while
+- [X] T085 Say on the sidebar's Tasks entry, in words, that the number is not known while
       the list cannot be read (`web/components/app-sidebar.tsx` and its test, shared
       files): it shows nothing then, as it does when no task needs a decision, per Edge
       Cases "The list cannot be kept or read", FR-006 (partial)
-- [ ] T086 Take a row's first message only from a thread's first message: in
+- [X] T086 Take a row's first message only from a thread's first message: in
       `src/freyja_agent/runtime/thread_index.py` (`mark_unattended`, both stores), a thread
       that has no row yet and is continued through `/runs/unattended` by another client is
       listed under the follow-up's text from then on. Tests in `tests/test_thread_index.py`
       and `tests/integration/`, per FR-002, FR-004 (partial)
-- [ ] T087 [P] In `tests/test_unattended_runs.py`, leave the stream of a
+- [X] T087 [P] In `tests/test_unattended_runs.py`, leave the stream of a
       `resume/unattended` as the test of a run does, and compare the whole conversation of a
       run whose reader left with one whose reader stayed, not its last message alone, per
       SC-011, US5/AC1, FR-028 (partial)
-- [ ] T088 [P] Add a task that fails to both address proofs of
+- [X] T088 [P] Add a task that fails to both address proofs of
       `tests/test_thread_index_nowhere.py`, which go through tasks that finish and pause
       only, per SC-008 (partial)
-- [ ] T089 [P] In `tests/test_unattended_stop.py`, assert that after a stop applied before
+- [X] T089 [P] In `tests/test_unattended_stop.py`, assert that after a stop applied before
       an approved action started, the conversation of the continued task shows the action
       as not carried out, per Edge Cases "Stop is applied before an action that was just
       approved has started" (partial)
-- [ ] T090 [P] Test that a second message is refused with `run_active` while a run nobody
+- [X] T090 [P] Test that a second message is refused with `run_active` while a run nobody
       reads is in progress (`tests/test_unattended_runs.py`), and that reading the list
       contacts no tool server (`tests/test_thread_index_api.py`, which asserts the model and
       the agent only), per FR-021, FR-023 (partial)
-- [ ] T091 [P] Test that after an edit the conversation shows what was proposed and that a
+- [X] T091 [P] Test that after an edit the conversation shows what was proposed and that a
       person changed it: in the service's tests of a console decision, and in a test of the
       task's view. It holds today only by the approval library's default notice, which no
       test names, per US2/AC3 (partial)
-- [ ] T092 [P] In `web/components/tasks/proposal-card.tsx`, close an open edit or reject
+- [X] T092 [P] In `web/components/tasks/proposal-card.tsx`, close an open edit or reject
       form, and drop a chosen decision, when a later reading of the same proposal no longer
       lists that decision for the action, with a unit test, per FR-014 (partial)
-- [ ] T093 [P] Reword the card's sentence that an approved action runs once so that it
+- [X] T093 [P] Reword the card's sentence that an approved action runs once so that it
       claims nothing for an action the service names neither a tool server nor an agent
       for, and add a unit test of such a proposal
       (`web/components/tasks/proposal-card.tsx`), per Edge Cases "A proposal's action is no
       longer configured, or its agent was removed" (partial)
-- [ ] T094 [P] Add a browser test of the Tasks section in a narrow window to
+- [X] T094 [P] Add a browser test of the Tasks section in a narrow window to
       `web/e2e/tasks.spec.ts`: the list, New task, and a task's page with a proposal, every
       control reachable, per Edge Cases "The Tasks section is opened in a narrow window"
       (partial)
-- [ ] T095 [P] Add to `specs/007-web-tasks/contracts/openapi.yaml` the answers the routes
+- [X] T095 [P] Add to `specs/007-web-tasks/contracts/openapi.yaml` the answers the routes
       give and it lacks: `500` on `GET /threads/{thread_id}`, on
       `POST /threads/{thread_id}/stop`, and on the two `unattended` routes, and
       `already_decided` among the `409` codes of `resume/unattended`, per plan: contracts
       (contradicts)
-- [ ] T096 [P] Correct the sentences of spec.md and plan.md that the code no longer bears
+- [X] T096 [P] Correct the sentences of spec.md and plan.md that the code no longer bears
       out: that the end-to-end tests do not repeat the proof of a stream arriving as it is
       produced, and that `web/playwright.config.ts` is not changed (`web/e2e/stream.spec.ts`
       and its two projects exist); the seven fixed numbers of the Constitution Check's row
@@ -912,8 +912,184 @@ task: its test first, shown to fail.
       the list (a write may hold it for `INDEX_WRITE_SECONDS`); and FR-013, which has no
       word of a page that is hidden and reads nothing until it is shown, per plan:
       Constitution Check, FR-013, FR-023 (contradicts)
-- [ ] T097 Give the stand-in model endpoint a model id that asks for tools
+- [X] T097 Give the stand-in model endpoint a model id that asks for tools
       (`tests/llm_stub.py`): by a keyword at the start of the last message it calls
       `send_notification`, hands work to an agent, or takes several steps, and every reply
       gets an id of its own. Name it in `specs/007-web-tasks/quickstart.md`, which cannot be
       walked today with what the repository holds, per T073, plan: quickstart (partial)
+
+---
+
+## Phase 12: Convergence
+
+Appended by `/speckit-converge` on 2026-11-21, after Phase 11: a second reading of every
+requirement, acceptance scenario, edge case, the contract, and the tasks of Phase 11
+against the code. T098 is high, T099 to T101 are medium, the rest low. The standing rules
+above hold for each task: its test first, shown to fail.
+
+- [X] T098 Join the pieces of a reply that arrive as lists of blocks, in `streamed()` of
+      `web/components/tasks/task-view.tsx`: it adds a piece to the text only when both are
+      plain strings, and otherwise shows the last piece alone. The default model and an
+      `openai:` model through the Responses API send each piece as a list with one block,
+      and an empty list last, so the page shows a fragment and then nothing until the run
+      has ended. Join blocks by their `index`, show no message that has nothing in it yet,
+      and test with the pieces the service really sends for both shapes, in the unit tests
+      and in one browser test, per FR-010, US1/AC3 (partial)
+- [X] T099 Read and send a whole number beyond 2^53 exactly, where the browser can
+      (`web/lib/api.ts`, `web/lib/tasks.ts`, `web/components/tasks/proposal-card.tsx`,
+      `message.tsx`): the card shows such an argument rounded and refuses every edit of a
+      proposal that holds one, so a person approves an id they cannot read and cannot edit
+      it. Keep the digits of the service's answer and of the entered text as they are
+      written, on the card, in the conversation, and in what is sent; keep the refusal and
+      the note for a browser that cannot, and say in spec.md which case holds when, per
+      FR-014, FR-015, FR-009 (partial)
+- [X] T100 Test that a task's page that was hidden reads the task again when it is shown,
+      without waiting for its timer (`web/__tests__/components/tasks/task-view.test.tsx`),
+      and the same for the list: it rests on the reading library's default and nothing
+      holds the page to it, per FR-013 (partial)
+- [X] T101 Drive the debug stream of both console-run routes in the two proofs of
+      `tests/test_thread_index_nowhere.py`, as the proofs of the existing routes do, and
+      take an agent's address out of every event a console run sends its reader
+      (`src/freyja_agent/runtime/unattended.py`), not out of its `error` event alone: a
+      debug stream carries a failed step's error as the model raised it, per FR-025
+      (partial)
+- [X] T102 Keep a thread's own first message when the lookup before a console run fails or
+      is given up (`src/freyja_agent/api/thread_index.py`): the run's text is then kept as
+      the first message of a thread that had one. Hand the index no text in that case, so
+      that the row takes it from the thread's state, with a test of a thread that has a
+      state and no row, per FR-002, T086 (partial)
+- [X] T103 Show "There is no task yet." only when the service counts no task
+      (`web/components/tasks/task-list.tsx`): when every listed row was left out as
+      unreadable the list is empty and `total` is not, and the section then says something
+      untrue, per FR-023, FR-002 (partial)
+- [X] T104 Clear a chosen decision the service no longer lists from the card's state, in
+      `web/components/tasks/proposal-card.tsx`, where it is only hidden: when a later
+      reading lists the decision again, the choice and its open form come back without a
+      press. Test the decision listed again, per FR-014, FR-017, T092 (partial)
+- [X] T105 Read the task again when the service refuses a decision's values
+      (`web/components/tasks/proposal-card.tsx`, `task-view.tsx`): a refusal that says a
+      decision is no longer allowed is shown beside the action, and the control for it
+      stays until some other reading, per FR-014, Edge Cases "A proposal's action is no
+      longer configured, or its agent was removed" (partial)
+- [X] T106 Name each decision's control by its action's place as well when a proposal has
+      two actions of the same name (`web/components/tasks/proposal-card.tsx`): their
+      controls carry the same name, which does not say on which action, per FR-012a
+      (partial)
+- [X] T107 Test, in the task's view and in a browser, a decision that gets no answer: the
+      page says that the outcome is not known, reads the task again, and shows the card
+      only when the proposal is still pending. Today it is tested at the card alone, per
+      FR-018, Edge Cases "The answer to a decision never arrives" (partial)
+- [X] T108 Say that a run has no Stop in words that hold for a run the console started and
+      could not mark as one that can be stopped
+      (`web/components/tasks/stop-button.tsx`), which is told "the console did not start
+      it", per FR-022a (partial)
+- [X] T109 [P] Add to `web/e2e/stream.spec.ts` a page of another origin that reads
+      `/api/threads` through the console's forwarding and is given nothing by its browser;
+      only a request that changes something is shown there today, per US6/AC2, FR-028
+      (partial)
+- [X] T110 [P] Assert in `web/e2e/stream.spec.ts` what the sidebar says while a reading of
+      the list gets no answer, and in `web/__tests__/components/tasks/task-list.test.tsx`
+      that the rows are gone after a later reading failed, per T083, FR-006 (partial)
+- [X] T111 [P] Correct what the documents say and the code does not: the spec's
+      Convergence note that a console run waits for the list twice before its first event
+      (it is three times); FR-006, which has no word of a console that is hidden; FR-007,
+      where the box sends no message that is only spaces and the service would take one;
+      FR-022a, which does not say that a page following a run by reading says nothing once
+      the row is of a later run; the contract's `runs`, which counts every time the
+      thread's lease was taken, a refused request included; and `research.md`, which still
+      says the stream's arrival cannot be shown by an automated test, per FR-006, FR-007,
+      FR-022a, T096, plan: contracts (contradicts)
+
+---
+
+## Phase 13: Convergence
+
+Appended by `/speckit-converge` on 2026-11-22, after Phase 12: a third reading of every
+requirement, acceptance scenario, edge case, the contract, and the tasks of Phases 11 and
+12 against the code. Every finding is low: nothing critical, high, or medium remains. The
+standing rules above hold for each task: its test first, shown to fail.
+
+- [X] T112 Show an action's arguments as they arrive while a run streams
+      (`web/components/tasks/task-view.tsx`, `streamed`): each piece carries the action as
+      that piece alone makes it, so an action is shown with `{}` until the run has ended,
+      and of two actions in one reply only the last named one. Join the pieces of the
+      actions by their place, as the library joins `tool_call_chunks`, or take the reply's
+      actions from the model step's `update` event, and test with the pieces the service
+      sends, per FR-010, T098 (partial)
+- [X] T113 Read the task and the list again as soon as a hidden page is shown, also within
+      five seconds of the page being opened (`web/components/tasks/task-view.tsx`,
+      `task-list.tsx`, `web/components/app-sidebar.tsx`): the reading library waits five
+      seconds after a page was mounted before it reads on being shown, and the tests set
+      that to zero, so they do not hold the console as it runs, per FR-006, FR-013, T100
+      (partial)
+- [X] T114 Read the task's row while the page reads its own run's stream, so that a stop
+      asked in another window is said ("stopping") and Stop is no longer offered
+      (`web/components/tasks/task-view.tsx`): today the page learns of it only from the
+      run's last event, per FR-022 (partial)
+- [X] T115 Say, when a decision is refused because a run is in progress, that the proposal
+      was most likely decided in another window (`web/components/tasks/proposal-card.tsx`),
+      with a unit test, per Edge Cases "Two people decide the same proposal" (partial)
+- [X] T116 Keep the spelling of a number the service sent or a person entered, where it is
+      not the browser's own, such as `5.0` (`web/lib/json.ts`), or say in spec.md that only
+      a number's value is kept: `5.0` is shown and sent back as `5`, the same number, per
+      FR-014, FR-015, T099 (partial)
+- [X] T117 [P] Add `runs` to each row of the contract's example list
+      (`specs/007-web-tasks/contracts/openapi.yaml`), where the field is required, per
+      plan: contracts (contradicts)
+- [X] T118 [P] Correct four sentences of the contract the code does not bear out: the other
+      reasons for `500` on `resume/unattended` and on `GET /threads/{thread_id}`; that a
+      body that is not JSON is refused with `422` before `403`; and that a console run's
+      events are cleaned of agents' addresses, which the earlier routes' are not, per plan:
+      contracts (partial)
+- [X] T119 [P] Correct the Constitution Check's row for principle V in
+      `specs/007-web-tasks/plan.md`: the index's statements are fixed strings with
+      parameters, composed with no `sql` module and carrying no `# nosemgrep` mark, per
+      plan: Constitution Check (contradicts)
+
+## Phase 14: Convergence
+
+Appended by `/speckit-converge` on 2026-11-22, after Phase 13: a fourth reading of every
+requirement, acceptance scenario, edge case, success criterion, the contracts, and the
+tasks of Phases 11 to 13 against the code, by three readers, one per slice. One finding is
+high, on a deployment the default one does not show; the other seven are low. The standing
+rules above hold for each task: its test first, shown to fail.
+
+- [X] T120 Build a new task's id from `crypto.getRandomValues`, which every origin has, in
+      place of `crypto.randomUUID`, which a browser gives only to a secure origin (https,
+      `localhost`, `127.0.0.1`): over plain http under a name or an address other than
+      loopback, as the README's section on the containers describes, New task throws
+      before its dialog opens (`web/lib/tasks.ts`, `newThreadId`), with a unit test where
+      `randomUUID` is missing, per FR-007, US1/AC1 (partial)
+- [X] T121 Read the task again shortly after the reading made at the end of the page's own
+      run when that reading still says a run is in progress: the service sends the run's
+      last event before it gives the lease back (`runtime/unattended.py`, `_drive`), so
+      until the next reading, four seconds later, the page can show Running, offer Stop,
+      hide a proposal the run paused on, and block the follow-up box
+      (`web/components/tasks/task-view.tsx`), with a test where that reading says running,
+      per FR-010, FR-019, FR-020 (partial)
+- [X] T122 Show no earlier run's failure while the page streams its own run
+      (`web/components/tasks/task-view.tsx`, `rowFailure`): the row held from before says
+      `failed` until the next reading of the row, up to four seconds into a follow-up's
+      run, per FR-011, FR-003 (partial)
+- [X] T123 Say in the console's own words, as the proposal card does, the service's
+      sentences that name a thread: `run_active` and `decision_pending` on the follow-up
+      box (`follow-up.tsx`, `send-box.tsx`), and "The list of threads could not be read."
+      on the list and on a task's page (`task-list.tsx`, `task-view.tsx`), per FR-001a
+      (partial)
+- [X] T124 Do not say that every task that needs a decision is listed when the service left
+      rows out because they could not be read (`web/components/tasks/task-list.tsx`):
+      `more` is true then too (`api/thread_index.py`, `more = total > len(threads)`), per
+      FR-005, FR-023 (partial)
+- [X] T125 Clean a failed run's stored reason again when a row is answered
+      (`api/thread_index.py`, `_summary`, through `SCRUBBER`), so that an address that
+      became an agent's after the run failed is not returned, as card details are cleaned
+      again where they are used, with a test that saves the agent after the run failed,
+      per FR-025, SC-008 (partial)
+- [X] T126 Add the service's `403` `unknown_host` refusal of a request made for a name it
+      does not answer for to the contract (`contracts/openapi.yaml`, its introduction and
+      every path), and say in FR-024 and FR-027 that such a request is the one exception
+      to a client that is not a web page being served as before, per contract, FR-024,
+      FR-027 (contradicts)
+- [X] T127 Give a row opened while the thread's lease is held the time it was opened as
+      `changed_at`, not its last checkpoint's (`runtime/thread_index.py`, `open_thread`),
+      or narrow FR-002 to what data-model.md's "Opened" rule says, per FR-002 (partial)

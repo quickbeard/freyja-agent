@@ -55,7 +55,14 @@ const FOUR = [
 
 function renderList(withSidebar = false) {
   return render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        // The reading library's own wait before it reads a page shown again, five seconds
+        // after the page was opened, is left as it is: the console sets it aside itself.
+      }}
+    >
       {withSidebar && (
         <TooltipProvider>
           <SidebarProvider>
@@ -107,6 +114,159 @@ describe("the list of tasks", () => {
     expect(rows()[2]).toContain("<b>Markup</b> stays text.");
   });
 
+  it("gives the service's reason on a failed task's row, as text, and on no other row", async () => {
+    const reason =
+      "No usable model is active. <i>Activate</i> a usable LLM profile, then send the message again.";
+    serve(() =>
+      list([
+        summary({
+          thread_id: "failed",
+          first_message: "Summarize the week.",
+          status: "failed",
+          error: { code: "no_usable_model", message: reason },
+        }),
+        // The service gives a reason with `failed` only; one that came with another
+        // status would not be the reason of what the row says.
+        summary({
+          thread_id: "done",
+          first_message: "Say hello.",
+          status: "done",
+          error: { code: "internal", message: "An earlier reason." },
+        }),
+        summary({
+          thread_id: "bare",
+          first_message: "List the files.",
+          status: "failed",
+          error: null,
+        }),
+      ]),
+    );
+    const { container } = renderList();
+    await waitFor(() => expect(rows()).toHaveLength(3));
+
+    expect(rows()[0]).toContain("Failed");
+    expect(rows()[0]).toContain(reason);
+    expect(container.querySelector("li i")).toBeNull();
+    expect(rows()[1]).not.toContain("An earlier reason.");
+    // A failed row the service gave no reason for says that it failed, and no more.
+    expect(rows()[2]).toContain("Failed");
+    // The reason is part of the row, so of what the row's link is called.
+    expect(
+      screen.getByRole("link", { name: /Summarize the week\./ }).textContent,
+    ).toContain(reason);
+  });
+
+  it("shows a reading that took longer than the timer's period, and asks for no other meanwhile", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      // The service is slow: the first reading is answered only after two periods.
+      let answer: (reply: Answer) => void = () => {};
+      let asked = 0;
+      serve(() => {
+        asked += 1;
+        return new Promise<Answer>((resolve) => {
+          answer = resolve;
+        });
+      });
+      renderList();
+      await waitFor(() => expect(asked).toBe(1));
+
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      // A reading asked for while one is under way would take its place, and with a
+      // service this slow none would ever be shown.
+      expect(asked).toBe(1);
+      answer(list(FOUR));
+      await waitFor(() => expect(rows()).toHaveLength(4));
+
+      // Once it is answered, the next period reads again.
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(asked).toBe(2));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows no row once a later reading failed, and shows them again once one is answered", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let down = false;
+      serve(() => (down ? { fails: "refused" } : list(FOUR)));
+      renderList();
+      await waitFor(() => expect(rows()).toHaveLength(4));
+
+      // The rows the page holds are not shown as if they were current (FR-006).
+      down = true;
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      expect((await screen.findByRole("alert")).textContent).toMatch(
+        /cannot be reached/,
+      );
+      expect(rows()).toHaveLength(0);
+      expect(screen.queryByRole("list", { name: "Tasks" })).toBeNull();
+
+      down = false;
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // T113: within five seconds of the page being opened, as here, too.
+  it("is read again at once when the page is shown again, by no timer", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      let asked = 0;
+      let tasks = FOUR.slice(0, 1);
+      serve(() => {
+        asked += 1;
+        return list(tasks);
+      });
+      renderList();
+      await waitFor(() => expect(rows()).toHaveLength(1));
+
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      tasks = FOUR;
+      vi.advanceTimersByTime(3 * LIST_SECONDS * 1000);
+      expect(asked).toBe(1);
+
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      expect(asked).toBe(2);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // FR-023, T103: every listed row can be left out as unreadable. The list is then empty
+  // and the service still counts tasks: "no task yet" would be untrue.
+  it("does not say that there is no task when the service counts tasks and lists none", async () => {
+    serve(() => list([], { total: 3, more: true }));
+    renderList();
+    expect(
+      (await screen.findByText(/The service counts 3 tasks/)).textContent,
+    ).toBe(
+      "The service counts 3 tasks, and none of them can be shown just now. They are read again by themselves.",
+    );
+    expect(screen.queryByText(/There is no task yet/)).toBeNull();
+    expect(
+      screen.queryByText(/More tasks exist than are listed here/),
+    ).toBeNull();
+  });
+
+  it("says one task in the singular when it cannot be shown", async () => {
+    serve(() => list([], { total: 1, more: true }));
+    renderList();
+    expect((await screen.findByText(/cannot be shown/)).textContent).toBe(
+      "The service counts 1 task, and it cannot be shown just now. It is read again by itself.",
+    );
+  });
+
   it("says so when there is no task", async () => {
     serve(() => list([]));
     renderList();
@@ -124,6 +284,50 @@ describe("the list of tasks", () => {
     );
   });
 
+  // T124: the service leaves a row out that it cannot read, and `more` is then true too.
+  // When the left-out rows include tasks that need a decision, they are not all listed.
+  it("does not say that every task that needs a decision is listed when some were left out", async () => {
+    serve(() =>
+      list(FOUR.slice(0, 2), { needs_decision: 3, total: 6, more: true }),
+    );
+    renderList();
+    expect(
+      (await screen.findByText(/More tasks exist than are listed here/))
+        .textContent,
+    ).toBe(
+      "More tasks exist than are listed here: 6 in all. 2 tasks that need a decision are not listed as such: they could not be read just now, or they changed while the list was read. They are read again by themselves.",
+    );
+  });
+
+  it("says one task that needs a decision in the singular when it was left out", async () => {
+    serve(() => list([FOUR[1]], { needs_decision: 1, total: 2, more: true }));
+    renderList();
+    expect(
+      (await screen.findByText(/More tasks exist than are listed here/))
+        .textContent,
+    ).toBe(
+      "More tasks exist than are listed here: 2 in all. 1 task that needs a decision is not listed as one: it could not be read just now, or it changed while the list was read. It is read again by itself.",
+    );
+  });
+
+  // T123: the service's sentence names the list of threads; the console says task.
+  it("says in its own words that the list could not be read", async () => {
+    serve(() => ({
+      status: 500,
+      json: {
+        detail: {
+          code: "internal",
+          message: "The list of threads could not be read.",
+        },
+      },
+    }));
+    renderList();
+    expect((await screen.findByRole("alert")).textContent).toMatch(
+      /^The list of tasks could not be read\./,
+    );
+    expect(screen.queryByText(/thread/)).toBeNull();
+  });
+
   it("says the service cannot be reached, shows no row, and reads again on request", async () => {
     let down = true;
     serve(() => (down ? { fails: "refused" } : list(FOUR)));
@@ -138,7 +342,7 @@ describe("the list of tasks", () => {
     await waitFor(() => expect(rows()).toHaveLength(4));
   });
 
-  it("is read again every fifteen seconds, also after a reading failed", async () => {
+  it("is read again by its timer, also after a reading failed", async () => {
     let reads = 0;
     serve(() => {
       reads += 1;

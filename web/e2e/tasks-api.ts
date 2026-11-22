@@ -61,6 +61,7 @@ export function summary(
     created_at: "2026-11-20T08:00:00Z",
     changed_at: "2026-11-20T08:00:04Z",
     stoppable: false,
+    runs: 1,
     stopping: false,
     ...values,
   };
@@ -274,7 +275,7 @@ export class TaskService {
       });
       await route.fulfill({
         status: 202,
-        json: { thread_id: threadId, stopping: true },
+        json: { thread_id: threadId, stopping: true, run: running.row.runs },
       });
       return;
     }

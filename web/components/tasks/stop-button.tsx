@@ -20,6 +20,11 @@ const REFUSED: Record<string, string> = {
     "No run is in progress on this task any more, so nothing was stopped. The task is shown as it is now.",
   not_stoppable:
     "The service did not stop this run: the console did not start it, or it has only just started. The task is shown as it is now.",
+  // The service's sentences for these two name a thread (FR-001a).
+  thread_not_found:
+    "The service knows no run of this task, so nothing was stopped. The task is shown as it is now.",
+  internal:
+    "The service could not read or mark the task, so whether the stop was asked for is not known. The task is read again.",
 };
 
 const UNKNOWN =
@@ -60,8 +65,8 @@ export function StopButton({
   /** How the task's first message begins, for the control's name; null when not known. */
   about: string | null;
   run: StopState;
-  /** Called once the service has accepted the stop. */
-  onAsked: () => void;
+  /** Called once the service has accepted the stop, with which run it was asked for. */
+  onAsked: (run: number) => void;
   /** Told why nothing was stopped, or that it is not known; the task is read again. */
   onStale: (said: string) => void;
 }) {
@@ -77,8 +82,8 @@ export function StopButton({
     busy.current = true;
     setAsking(true);
     try {
-      await stopRun(threadId);
-      onAsked();
+      const { run: asked } = await stopRun(threadId);
+      onAsked(asked);
     } catch (failure) {
       if (failure instanceof ApiError && failure.code in REFUSED) {
         onStale(REFUSED[failure.code]);
@@ -103,9 +108,10 @@ export function StopButton({
   if (run === "not_stoppable") {
     return (
       <p className="text-sm text-muted-foreground">
-        This run has no Stop: the console did not start it. A run another client
-        started ends when that client stops reading, and a run the service
-        started ends by itself.
+        This run has no Stop: the console did not start it, or the service could
+        not mark it as one that can be stopped. A run another client started
+        ends when that client stops reading, and a run the service started ends
+        by itself.
       </p>
     );
   }

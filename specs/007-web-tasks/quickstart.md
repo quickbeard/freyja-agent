@@ -14,8 +14,22 @@ not hand work to: an action that is approved here really runs.
 
 - Everything the [001 quickstart](../001-thread-runs-api/quickstart.md) needs: Docker with
   Compose v2, `uv`, and a model provider key in `.env` for the environment's model. A model
-  that calls tools is needed for sections 2, 4, and 5; the stand-in model endpoint
-  (`tests/llm_stub.py`) answers in text only.
+  that calls tools is needed for sections 2, 4, and 5.
+- Or no provider key at all: the stand-in model endpoint (`tests/llm_stub.py`), under its
+  model id `call-tools`, asks for tools by a keyword at the start of a message. Serve it
+  with `uv run --env-file .env python -m tests.llm_stub --http 9997`, and either save and
+  activate a profile in the LLM section (provider `openai`, model `call-tools`, base URL
+  `http://127.0.0.1:9997/v1`, any key, the Responses API off), or start the service with
+  `FREYJA_MODEL=openai:call-tools`, `OPENAI_BASE_URL=http://127.0.0.1:9997/v1`, any
+  `OPENAI_API_KEY`, and `FREYJA_OPENAI_RESPONSES_API=false`. Then send these in place of
+  the sentences below, which are written for a model that reads them:
+  - `notify The nightly report is ready.` where a notification to `#ops` is asked for;
+  - `handoff stub slow 40` and `handoff stub slow 20` where work is handed to the agent
+    `stub`;
+  - `steps 8` where a task of many steps is asked for: eight steps, a second apart.
+
+  Such a model answers `ready` to anything else, so the replies of sections 1 and 4 say
+  nothing of what was asked: what those sections show of the console holds all the same.
 - Node 20.9 or newer and `pnpm`, for the web app.
 - `curl` and `jq`.
 - `.env` with no `FREYJA_A2A_AGENTS` and no `FREYJA_MCP_SERVERS` to begin with, and with
@@ -140,12 +154,12 @@ is sent to the agent `stub`.
 - The run waits for the agent for thirty seconds, the limit of one hand-off
   (`FREYJA_A2A_CALL_TIMEOUT_SECONDS`), and then ends. From then on the task's page lists one
   agent task for `stub`, pending, with the message it was started with, and says that it
-  reads the task again every fifteen seconds. The task's status, on its page and in the
+  reads the task again every 12 seconds. The task's status, on its page and in the
   list, is "Waiting for an agent".
 - About a minute after the approval, without a reload, the conversation shows the outcome
   and the agent task as completed: the agent takes forty seconds, the service looks every
   ten (`FREYJA_A2A_POLL_INTERVAL_SECONDS`) and records the outcome in a run of its own, and
-  the page reads every fifteen.
+  the page reads every twelve.
 
 ## 5. Leave, come back, stop (User Story 5)
 

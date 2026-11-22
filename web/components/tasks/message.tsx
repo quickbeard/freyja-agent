@@ -9,7 +9,12 @@ export function contentText(content: Message["content"]): string {
     return content;
   }
   return content
+    .filter((block) => block !== "")
     .map((block) => {
+      // A bare string among blocks is text, as the service's library takes it.
+      if (typeof block === "string") {
+        return block;
+      }
       if (
         typeof block === "object" &&
         block !== null &&

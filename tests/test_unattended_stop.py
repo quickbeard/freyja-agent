@@ -41,9 +41,9 @@ def stop(client: TestClient, thread: str, **headers: str) -> Any:
     return client.post(f"/threads/{thread}/stop", headers=headers)
 
 
-def accepted(response: Any, thread: str) -> None:
+def accepted(response: Any, thread: str, run: int = 1) -> None:
     assert response.status_code == 202, response.text
-    assert response.json() == {"thread_id": thread, "stopping": True}
+    assert response.json() == {"thread_id": thread, "stopping": True, "run": run}
 
 
 def refused(response: Any, status: int, code: str) -> None:
@@ -56,6 +56,44 @@ class FailsAfterHold(LabelledChatModel):
 
     def next_message(self) -> AIMessage:
         raise RuntimeError("provider unavailable")
+
+
+def test_a_row_names_its_run_and_a_stop_names_the_run_it_was_asked_for(
+    make_mcp_app: Callable[..., McpApp],
+) -> None:
+    """FR-022a: a page that follows a run by reading learns how the run it stopped ended
+    from the row. The row is of the thread's last run, so it says which run that is."""
+    model = LabelledChatModel(script=[], final_text="Done.")
+    made = make_mcp_app(model, {})
+    with TestClient(made.app) as client:
+        stream(client, RUN.format("t-1"), {"message": "Say hello."})
+        idle(client, "t-1")
+        first = row(client, "t-1")
+
+        model.script = [ls("l1"), ls("l2")]
+        model.hold()
+        reader = Reader(client, RUN.format("t-1"), {"message": "List."})
+        reader.start()
+        with model.held():
+            during = row(client, "t-1")
+            listed = client.get("/threads").json()["threads"][0]
+            # The stop is for the run in progress, the thread's second.
+            accepted(stop(client, "t-1"), "t-1", run=2)
+        reader.finish()
+        idle(client, "t-1")
+        stopped = row(client, "t-1")
+
+        stream(client, RUN.format("t-1"), {"message": "Go on."})
+        idle(client, "t-1")
+        later = row(client, "t-1")
+
+    assert (first["runs"], first["status"]) == (1, "done")
+    assert (during["runs"], during["status"]) == (2, "running")
+    assert listed["runs"] == 2
+    # The same number once the run has ended: the row is still of the run that was stopped.
+    assert (stopped["runs"], stopped["status"]) == (2, "stopped")
+    # And another once a further run has started: this row says nothing of the second run.
+    assert later["runs"] == 3
 
 
 def test_a_stop_during_a_model_call_keeps_the_reply_and_runs_none_of_its_tools(
@@ -132,7 +170,7 @@ def test_a_stop_during_an_approved_action_lets_it_run_once_and_records_it(
         reader = Reader(client, RESUME.format("t-1"), body)
         reader.start()
         gate.wait()
-        accepted(stop(client, "t-1"), "t-1")
+        accepted(stop(client, "t-1"), "t-1", run=2)
         gate.open()
         events = reader.finish()
         idle(client, "t-1")
@@ -171,12 +209,24 @@ def test_a_stop_applied_before_an_approved_action_started_leaves_it_unstarted(
         idle(client, "t-1")
         state = client.get("/threads/t-1/state").json()
         again = stream(client, RUN.format("t-1"), {"message": "Go on."})
+        idle(client, "t-1")
+        continued = client.get("/threads/t-1/state").json()
 
     assert events[-1] == ("end", {"status": "stopped"})
     # The decision is spent, nothing is pending, and the action never ran.
     assert state["pending"] is None
     assert [r for r in caplog.records if r.name == ACTIONS] == []
     assert again[-1] == ("end", {"status": "completed"})
+    # Once the task is continued, the conversation shows the action as not carried out: its
+    # call has a result that says so, which the model was given, and it ran at no time.
+    assert kinds(continued) == ["human", "ai", "tool", "human", "ai"]
+    call = continued["messages"][1]["tool_calls"][0]
+    unstarted = continued["messages"][2]
+    assert call["name"] == "send_notification"
+    assert "did not complete - no result was recorded" in unstarted["content"]
+    assert "sent to #ops" not in unstarted["content"].lower()
+    assert continued["pending"] is None
+    assert [r for r in caplog.records if r.name == ACTIONS] == []
 
 
 @pytest.mark.parametrize(

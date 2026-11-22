@@ -16,6 +16,7 @@ so every refusal and every check of a decision is the existing code, and take th
 events out of the response it returns. ``api/threads.py`` is not changed for them.
 """
 
+import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -31,8 +32,10 @@ from freyja_agent.api.thread_index_schemas import (
     ThreadSummary,
 )
 from freyja_agent.api.threads import DebugQuery, ThreadIdPath
+from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.thread_index import (
+    INDEX_WRITE_SECONDS,
     LIST_LIMIT,
     ThreadRecord,
     open_thread,
@@ -73,8 +76,14 @@ def _summary(record: ThreadRecord, lease_active: bool) -> ThreadSummary:
         thread_id=record.thread_id,
         first_message=record.first_message,
         status=status,
+        # The reason was cleaned when the run failed, of the addresses agents had then. One
+        # that became an agent's since is taken out here, as a card's details are cleaned
+        # again where they are used (spec FR-025).
         error=(
-            RunError(code=record.error_code or "internal", message=record.error_message or "")
+            RunError(
+                code=record.error_code or "internal",
+                message=SCRUBBER.scrub(record.error_message or ""),
+            )
             if status == "failed"
             else None
         ),
@@ -82,6 +91,7 @@ def _summary(record: ThreadRecord, lease_active: bool) -> ThreadSummary:
         changed_at=record.changed_at,
         stoppable=stoppable(record, lease_active),
         stopping=stopping(record, lease_active),
+        runs=record.runs,
     )
 
 
@@ -228,6 +238,47 @@ def _console_runs(request: Request) -> UnattendedRuns:
     return runs
 
 
+async def _open_first(runtime: Runtime, thread_id: str) -> bool:
+    """Give a thread that has a state and no row its row before a console run starts on it.
+
+    True once the row is known to be in order: there was one, or one was made, or the
+    thread is new. False when the lookup failed or was given up: the run's text may then be
+    a follow-up on a thread that has begun, and is not to be kept as its first message.
+
+    A console run tells the index the text it was started with, which a row that has no
+    first message takes for how the thread began. For a thread from before the index, or
+    one whose row could not be written, that text is a follow-up: so such a thread is opened
+    first, as reading it would, and its row has the first message its state holds (FR-002,
+    FR-004). A thread that is new has no state, and gets no row here.
+
+    Keeping the list never fails or holds up a run for long (FR-023): whatever goes wrong
+    here is logged, and the run starts.
+    """
+    try:
+        async with asyncio.timeout(INDEX_WRITE_SECONDS):
+            if await runtime.threads.get(thread_id) is not None:
+                return True
+            context = await runtime.begin_read()
+            try:
+                await open_thread(
+                    runtime.threads,
+                    context,
+                    runtime.agent_tasks,
+                    thread_id,
+                    lease_active=await runtime.locks.is_active(thread_id),
+                )
+            finally:
+                await context.release()
+    except Exception:
+        logger.warning(
+            "Thread %s: its row could not be looked up before its run; the run starts",
+            thread_id,
+            exc_info=True,
+        )
+        return False
+    return True
+
+
 async def _go_on(
     runs: UnattendedRuns,
     thread_id: str,
@@ -255,8 +306,11 @@ async def start_unattended(
     """Start a run that goes on when its reader leaves; the same refusals and events as
     ``POST /threads/{thread_id}/runs``, from the same code."""
     runs = _console_runs(request)
+    known = await _open_first(_runtime(request), thread_id)
     response = await threads.start_run(thread_id, body, request, debug)
-    return await _go_on(runs, thread_id, response, body.message)
+    # Without the lookup, the row takes its first message from the thread's state once the
+    # run is settled, which is the run's text when the thread is new (FR-002).
+    return await _go_on(runs, thread_id, response, body.message if known else None)
 
 
 @router.post("/{thread_id}/resume/unattended")
@@ -306,4 +360,4 @@ async def stop_run(thread_id: ThreadIdPath, request: Request) -> StopAnswer:
     if marked is None:
         raise _error(409, "no_run", "No run is in progress on this thread.")
     logger.info("Thread %s: a stop was asked for the run in progress", thread_id)
-    return StopAnswer(thread_id=thread_id)
+    return StopAnswer(thread_id=thread_id, run=marked.runs)

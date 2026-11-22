@@ -117,6 +117,7 @@ export function summary(values: Partial<ThreadSummary> = {}): ThreadSummary {
     created_at: "2026-11-20T08:00:00Z",
     changed_at: "2026-11-20T08:00:04Z",
     stoppable: false,
+    runs: 1,
     stopping: false,
     ...values,
   };
@@ -175,4 +176,17 @@ export function refusal(status: number, code: string, message: string) {
 /** An answer that comes after `ms`, as over a network. */
 export function later<T>(ms: number, answer: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(answer), ms));
+}
+
+/**
+ * As a browser that reads JSON without giving a number's own text (T099). Returns what
+ * puts the browser back as it was, to be called when the test is over.
+ */
+export function withoutDigits(): () => void {
+  const json = JSON as typeof JSON & { rawJSON?: unknown };
+  const rawJSON = json.rawJSON;
+  json.rawJSON = undefined;
+  return () => {
+    json.rawJSON = rawJSON;
+  };
 }
