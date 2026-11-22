@@ -1,6 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { body } from "@/__tests__/tasks-testing";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { body, withoutDigits } from "@/__tests__/tasks-testing";
 import { stubFetch } from "@/__tests__/testing";
+import { readJson } from "@/lib/json";
 import {
   decide,
   events,
@@ -204,13 +205,64 @@ describe("parseArguments", () => {
     ["a string", '"#ops"'],
     ["null", "null"],
     ["nothing", ""],
+    ["a bare whole number beyond what a browser holds", "12345678901234567890"],
+    ["a bare number that cannot be held at all", "1e999"],
   ])("gives a reason for %s", (_what, text) => {
     const parsed = parseArguments(text);
     expect("error" in parsed && parsed.error).toMatch(/JSON/);
   });
 
   // FR-015: an edit is sent as the person entered it. A browser reads a whole number
-  // beyond 2^53 as the nearest one it can hold, so such text would arrive changed.
+  // beyond 2^53 as the nearest one it can hold; one that keeps a number's own text sends
+  // it as it was entered (T099).
+  it.each([
+    ["a 64-bit id", '{"id":1234567890123456789}'],
+    ["the first number a browser changes", '{"n":9007199254740993}'],
+    ["a negative one", '{"n":-9007199254740993}'],
+    ["one inside a list", '{"ids":[1,2,12345678901234567890]}'],
+    ["one inside an object", '{"a":{"b":99999999999999999999}}'],
+    ["a number too large to hold at all", '{"n":1e999}'],
+    [
+      "a whole number written with an exponent",
+      '{"id":1.2345678901234568e+21}',
+    ],
+    ["a power of ten beyond what a browser holds", '{"n":1e30}'],
+  ])("takes %s, and what is sent holds it as it was entered", (_what, text) => {
+    const parsed = parseArguments(text);
+    expect("args" in parsed).toBe(true);
+    // As `decide` sends it: written out again, digit for digit.
+    expect("args" in parsed && JSON.stringify(parsed.args)).toBe(text);
+  });
+
+  it.each([
+    ["the largest whole number a browser holds", '{"n": 9007199254740991}'],
+    ["the smallest", '{"n": -9007199254740991}'],
+    ["a long number inside text", '{"id": "1234567890123456789"}'],
+    [
+      "a quote and a long number inside text",
+      '{"id": "say \\"1234567890123456789\\""}',
+    ],
+    ["a long number as a name", '{"1234567890123456789": 1}'],
+    ["a fraction", '{"n": 0.1}'],
+    ["a number with an exponent", '{"n": 1.5e3}'],
+    ["a small fraction with an exponent", '{"n": 2.5e-30}'],
+    ["zero and small numbers", '{"a": 0, "b": -1, "c": [10, 20]}'],
+  ])("takes %s", (_what, text) => {
+    const parsed = parseArguments(text);
+    expect("args" in parsed).toBe(true);
+    expect("args" in parsed && parsed.args).toEqual(JSON.parse(text));
+  });
+});
+
+// A browser that reads JSON without giving a number's own text cannot send such a number
+// as it was entered, so the page does not send it and says why.
+describe("parseArguments where a number's digits are not kept", () => {
+  let restore = () => {};
+  beforeEach(() => {
+    restore = withoutDigits();
+  });
+  afterEach(() => restore());
+
   it.each([
     ["a 64-bit id", '{"id": 1234567890123456789}', "1234567890123456789"],
     [
@@ -247,26 +299,22 @@ describe("parseArguments", () => {
 
   it.each([
     ["the largest whole number a browser holds", '{"n": 9007199254740991}'],
-    ["the smallest", '{"n": -9007199254740991}'],
     ["a long number inside text", '{"id": "1234567890123456789"}'],
-    [
-      "a quote and a long number inside text",
-      '{"id": "say \\"1234567890123456789\\""}',
-    ],
     ["a long number as a name", '{"1234567890123456789": 1}'],
     ["a fraction", '{"n": 0.1}'],
     ["a number with an exponent", '{"n": 1.5e3}'],
-    ["a small fraction with an exponent", '{"n": 2.5e-30}'],
-    ["a fraction beyond the whole numbers a browser holds", '{"n": 0.1e1}'],
-    ["zero and small numbers", '{"a": 0, "b": -1, "c": [10, 20]}'],
   ])("takes %s", (_what, text) => {
     const parsed = parseArguments(text);
-    expect("args" in parsed).toBe(true);
     expect("args" in parsed && parsed.args).toEqual(JSON.parse(text));
   });
 });
 
 describe("inexact", () => {
+  it("is false for a number whose digits were kept", () => {
+    expect(inexact(readJson('{"id": 1234567890123456789}'))).toBe(false);
+    expect(inexact(readJson('{"a": [{"b": 1e30}]}'))).toBe(false);
+  });
+
   it("says whether arguments the service sent hold a whole number a browser cannot hold exactly", () => {
     expect(inexact(JSON.parse('{"id": 1234567890123456789}'))).toBe(true);
     expect(inexact({ a: [{ b: 2 ** 53 + 2 }] })).toBe(true);
@@ -328,5 +376,53 @@ describe("LIST_SECONDS", () => {
     // would follow a change later than that.
     expect(LIST_SECONDS).toBeLessThan(15);
     expect(LIST_SECONDS).toBeGreaterThan(0);
+  });
+});
+
+describe("a number as it was written, through the service's answers", () => {
+  it("keeps a proposal's 64-bit id through a run's stream", async () => {
+    const text =
+      'event: interrupt\ndata: {"interrupt_id": "i1", "action_requests": [{"name": "close_record", "args": {"id": 1234567890123456789}}]}\n\n';
+    const [event] = await all(body(text));
+    const { action_requests } = event.data as {
+      action_requests: { args: unknown }[];
+    };
+    expect(JSON.stringify(action_requests[0].args)).toBe(
+      '{"id":1234567890123456789}',
+    );
+  });
+
+  it("keeps it through a reading of the task's state", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            '{"thread_id": "t-1", "messages": [], "pending": {"interrupt_id": "i1", "action_requests": [{"name": "close_record", "args": {"id": 1234567890123456789}}]}}',
+            { status: 200, headers: { "content-type": "application/json" } },
+          ),
+      ),
+    );
+    const state = (await readState("t-1")) as unknown as {
+      pending: { action_requests: { args: unknown }[] };
+    };
+    expect(JSON.stringify(state.pending.action_requests[0].args)).toBe(
+      '{"id":1234567890123456789}',
+    );
+    vi.unstubAllGlobals();
+  });
+
+  it("sends an edit's 64-bit id as it was entered", async () => {
+    const fetchStub = stubFetch({ status: 200, text: "" });
+    const parsed = parseArguments('{"id": 1234567890123456789, "note": "x"}');
+    if (!("args" in parsed)) {
+      throw new Error("the arguments were refused");
+    }
+    await decide("t-1", "i1", [{ type: "edit", args: parsed.args }]).catch(
+      () => undefined,
+    );
+    expect(fetchStub.mock.calls[0][1]?.body).toBe(
+      '{"interrupt_id":"i1","decisions":[{"type":"edit","args":{"id":1234567890123456789,"note":"x"}}]}',
+    );
   });
 });

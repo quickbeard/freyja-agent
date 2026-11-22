@@ -1,6 +1,8 @@
 // The one way the web app talks to the Freyja service: the browser calls `/api/...` on the web
 // app's own origin, and next.config.ts forwards it. Nothing here knows the service's address.
 
+import { readJson } from "./json";
+
 export type FieldError = { field: string; message: string };
 
 /** A request the service refused, or one that never got an answer from it. */
@@ -142,7 +144,8 @@ export async function api<T>(path: string, options: Options = {}): Promise<T> {
 /** An answer's body as JSON, or undefined when it is none; a body given up is raised. */
 async function read(response: Response): Promise<unknown> {
   try {
-    return await response.json();
+    // Read with its numbers as they are written, where the browser can (lib/json.ts).
+    return readJson(await response.text());
   } catch (unread) {
     if (unread instanceof DOMException && unread.name === "AbortError") {
       throw unread;

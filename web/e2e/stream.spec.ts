@@ -1,5 +1,5 @@
 import { createServer, type Server, type ServerResponse } from "node:http";
-import { expect, type Page, test } from "@playwright/test";
+import { type BrowserContext, expect, type Page, test } from "@playwright/test";
 import { STAND_IN_PORT } from "../playwright.config";
 import {
   ai,
@@ -25,8 +25,13 @@ let server: Server;
 // The run's stream, held open until the test has seen what it sent so far.
 let holding: ServerResponse | null = null;
 const finished = new Set<string>();
+// What the stand-in writes of the next run's reply before it holds the stream; the first
+// test's words when it is null.
+let pieces: string[] | null = null;
 // While true, the stand-in accepts a reading of the list and never answers it.
 let silent = false;
+// While true, the stand-in answers a reading of the list with one task.
+let listing = false;
 // A task whose run ended another way than the first test's: how it rests, which the
 // stand-in answers a reading of it with.
 const rest = new Map<
@@ -47,6 +52,9 @@ const stops: {
 }[] = [];
 const one = (value: string | string[] | undefined) =>
   Array.isArray(value) ? value[0] : value;
+// The origin each reading of the list reached the stand-in with, and what the list holds.
+const listed: (string | undefined)[] = [];
+const LISTED = "A task only the console's own pages may read.";
 // The `Host` each such request reached the stand-in with, by the thread it named.
 const hosts = new Map<string, string | undefined>();
 
@@ -63,7 +71,10 @@ test.beforeAll(async () => {
         "cache-control": "no-store, no-transform",
       });
       response.write(start(run[1]));
-      response.write(piece(REPLY));
+      for (const part of pieces ?? [piece(REPLY)]) {
+        response.write(part);
+      }
+      pieces = null;
       holding = response;
       return;
     }
@@ -85,6 +96,19 @@ test.beforeAll(async () => {
     }
     if (request.method === "GET" && path === "/threads" && silent) {
       // Accepted, and left without an answer.
+      return;
+    }
+    if (request.method === "GET" && path === "/threads" && listing) {
+      listed.push(one(request.headers.origin));
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(
+        JSON.stringify({
+          threads: [summary("listed-1", { first_message: LISTED })],
+          needs_decision: 0,
+          total: 1,
+          more: false,
+        }),
+      );
       return;
     }
     const thread = path.match(/^\/threads\/([^/]+)(\/state)?$/);
@@ -177,15 +201,65 @@ const words = (page: Page, text: string) =>
   page.getByText(text, { exact: true });
 
 /** Start a task from the section and wait for its reply to arrive; the task's id. */
-async function startTask(page: Page, text: string): Promise<string> {
+async function startTask(
+  page: Page,
+  text: string,
+  reply = REPLY,
+): Promise<string> {
   await page.goto("/tasks");
   await page.getByRole("button", { name: "New task" }).click();
   await page.getByLabel("What should Freyja do?").fill(text);
   await page.getByRole("button", { name: "Send" }).click();
   await expect(page).toHaveURL(/\/tasks\/[0-9a-f]{32}$/);
-  await expect(conversation(page)).toContainText(REPLY, { timeout: 10_000 });
+  await expect(conversation(page)).toContainText(reply, { timeout: 10_000 });
   return new URL(page.url()).pathname.split("/").at(-1) ?? "";
 }
+
+// 007, FR-010, User Story 1 (T098): a reply's pieces are not always plain text. The
+// default model and an `openai:` model through the Responses API send each piece as a list
+// of blocks, the first under an id nothing follows, and an empty list last. The page
+// joins them as they arrive: these are the pieces the service sends for such a model.
+test("a reply sent in blocks grows on the page as it is written, before the run ends", async ({
+  page,
+}) => {
+  const block = (id: string, content: unknown[]) =>
+    sse("message", {
+      message: { id, type: "ai", content, name: "freyja", tool_calls: [] },
+      metadata: { langgraph_node: "model", langgraph_step: 3 },
+    });
+  const text = (words: string) => [{ type: "text", text: words, index: 0 }];
+  pieces = [
+    block("resp_1", []),
+    block("lc_run--1", []),
+    block("lc_run--1", text("One, ")),
+    block("lc_run--1", text("two, ")),
+    block("lc_run--1", text("three.")),
+  ];
+  const id = await startTask(page, "Count to three.", "One, two, three.");
+
+  // The stream is open: the whole reply so far, in one message of Freyja's.
+  await expect(page.getByRole("article", { name: "Freyja" })).toHaveCount(1);
+  await expect(words(page, "Running")).toBeVisible();
+
+  // The text's own id, then the empty piece that ends the reply, take nothing away.
+  expect(holding).not.toBeNull();
+  holding?.write(
+    block("lc_run--1", [{ type: "text", text: "", id: "msg_1", index: 0 }]),
+  );
+  holding?.write(block("lc_run--1", []));
+  await expect(conversation(page)).toContainText("One, two, three.");
+  await expect(page.getByRole("article", { name: "Freyja" })).toHaveCount(1);
+
+  rest.set(id, {
+    status: "done",
+    first: "Count to three.",
+    messages: [human("Count to three."), ai("One, two, three.")],
+  });
+  holding?.end(END);
+  holding = null;
+  await expect(words(page, "Done")).toBeVisible();
+  await expect(conversation(page)).toContainText("One, two, three.");
+});
 
 test("Stop on the page that reads the run's stream says stopping, and stopped once the run's last event does", async ({
   page,
@@ -364,7 +438,78 @@ test("the section says the service cannot be reached when a reading of the list 
     ).toBeVisible();
     await expect(section.getByRole("list", { name: "Tasks" })).toHaveCount(0);
     await expect(section.getByText(/There is no task yet/)).toHaveCount(0);
+    // The sidebar's number is one reading with the list: it is said to be not known, which
+    // is not what the entry shows when no task needs a decision.
+    await expect(
+      page.getByRole("navigation", { name: "Sections" }),
+    ).toContainText("not known");
   } finally {
     silent = false;
   }
 });
+
+// 007, FR-024, User Story 6 (T109): a page of another origin reads nothing of the list of
+// tasks. The service gives no other origin permission to read its answers, and the
+// console's forwarding adds none: the request arrives, and the browser keeps the answer
+// from the page that made it.
+test("a page of another origin is given nothing of the list of tasks, through the console's forwarding", async ({
+  page,
+  context,
+  browserName,
+  baseURL,
+}) => {
+  const consoleOrigin = new URL(baseURL ?? "").origin;
+
+  listing = true;
+  try {
+    await readNothingOfTheList(page, context, browserName, consoleOrigin);
+  } finally {
+    listing = false;
+  }
+});
+
+async function readNothingOfTheList(
+  page: Page,
+  context: BrowserContext,
+  browserName: string,
+  consoleOrigin: string,
+) {
+  // The console's own page reads the list.
+  await page.goto("/tasks");
+  await expect(page.getByRole("list", { name: "Tasks" })).toContainText(LISTED);
+
+  if (browserName === "chromium") {
+    await context.grantPermissions(["local-network-access"]);
+  }
+  const otherOrigin = `http://127.0.0.1:${new URL(consoleOrigin).port}`;
+  const elsewhere = `${otherOrigin}/a-page-of-another-origin`;
+  await page.route(elsewhere, (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>Elsewhere</title><h1>Elsewhere</h1>",
+    }),
+  );
+  await page.goto(elsewhere);
+  const before = listed.length;
+  const theirs = await page.evaluate(async (address) => {
+    const got: Record<string, string> = {};
+    try {
+      got.asked = `read: ${await (await fetch(address)).text()}`;
+    } catch (failure) {
+      got.asked = `kept from the page (${(failure as Error).name})`;
+    }
+    try {
+      const answer = await fetch(address, { mode: "no-cors" });
+      got.unasked = `${answer.type}, status ${answer.status}, ${(await answer.text()).length} characters`;
+    } catch (failure) {
+      got.unasked = `kept from the page (${(failure as Error).name})`;
+    }
+    return got;
+  }, `${consoleOrigin}/api/threads`);
+
+  // The request was made and answered: it is the browser that gives the page nothing.
+  await expect.poll(() => listed.length).toBeGreaterThan(before);
+  expect(listed.slice(before)).toContain(otherOrigin);
+  expect(theirs.asked).toBe("kept from the page (TypeError)");
+  expect(theirs.unasked).toBe("opaque, status 0, 0 characters");
+}

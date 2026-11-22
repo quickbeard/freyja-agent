@@ -16,7 +16,7 @@ const ACCEPTED = {
   json: { thread_id: "t-1", stopping: true, run: 1 },
 };
 const NOT_STOPPABLE =
-  "This run has no Stop: the console did not start it. A run another client started ends when that client stops reading, and a run the service started ends by itself.";
+  "This run has no Stop: the console did not start it, or the service could not mark it as one that can be stopped. A run another client started ends when that client stops reading, and a run the service started ends by itself.";
 
 function show(
   run: "stoppable" | "not_stoppable",

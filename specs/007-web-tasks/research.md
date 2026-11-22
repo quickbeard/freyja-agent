@@ -439,7 +439,7 @@ sidebar's number.
 service's answers handed to the page by a helper file of this feature,
 `web/e2e/tasks-api.ts`. `web/e2e/api.ts` is not changed.
 
-**What the end-to-end tests cannot show**: that a stream arrives as it is produced. They hand
+**What the end-to-end tests cannot show** (as planned; since Phase 4 they do, see the note at the end of this file): that a stream arrives as it is produced. They hand
 a page its answers in the browser, whole, and the app under test forwards to an address
 nothing listens on, which a test cannot serve from. Showing it automatically needs a second
 address in `web/playwright.config.ts` and a stand-in behind it for every test. That file is
@@ -548,3 +548,11 @@ decision does not rest on it.
 - A list that nobody read for a long time is slow at its first reading (R6).
 - The README's sentence about a clean stop is wrong for every run started the existing way
   (R17). Phase 3 corrects the sentence; it does not change what those runs do.
+
+## Note, 2026-11-22
+
+R15 and R16 say that the end-to-end tests cannot show a stream arriving as it is produced,
+and that `web/playwright.config.ts` is not changed. Both held when they were written. In
+Phase 4, with the owner's word, `web/playwright.config.ts` gained the two projects of
+`web/e2e/stream.spec.ts`, which lets a page's requests through the console's forwarding to a
+stand-in for the service and shows the stream arriving in both browsers.

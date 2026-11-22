@@ -103,9 +103,10 @@ export function StopButton({
   if (run === "not_stoppable") {
     return (
       <p className="text-sm text-muted-foreground">
-        This run has no Stop: the console did not start it. A run another client
-        started ends when that client stops reading, and a run the service
-        started ends by itself.
+        This run has no Stop: the console did not start it, or the service could
+        not mark it as one that can be stopped. A run another client started
+        ends when that client stops reading, and a run the service started ends
+        by itself.
       </p>
     );
   }

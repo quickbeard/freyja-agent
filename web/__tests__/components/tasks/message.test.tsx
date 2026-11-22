@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { ai, human } from "@/__tests__/tasks-testing";
 import { contentText, MessageView } from "@/components/tasks/message";
+import { readJson } from "@/lib/json";
 import type { Message } from "@/lib/tasks";
 
 const MARKUP =
@@ -124,5 +125,30 @@ describe("an action a person edited before it ran", () => {
     );
     expect(ran.textContent).toContain('"channel": "#ops-staging"');
     expect(ran.textContent).toContain("Notification to #ops-staging recorded.");
+  });
+});
+
+describe("an action whose argument is a number beyond what a browser holds", () => {
+  it("is shown in the conversation with the number as the service sent it", () => {
+    const reply = readJson(
+      '{"id": "ai-9", "type": "ai", "content": "", "name": null, "tool_calls": [{"id": "c1", "name": "close_record", "args": {"id": 1234567890123456789}}]}',
+    ) as Message;
+    render(<MessageView message={reply} />);
+    expect(
+      screen.getByRole("article", { name: "Freyja" }).textContent,
+    ).toContain('"id": 1234567890123456789');
+  });
+});
+
+describe("content that mixes text and blocks", () => {
+  it("shows a bare string in a list of blocks as text, and an empty one as nothing", () => {
+    expect(
+      contentText([
+        "",
+        "One, ",
+        { type: "text", text: "two." },
+        { type: "image" },
+      ]),
+    ).toBe('One, \ntwo.\n{"type":"image"}');
   });
 });

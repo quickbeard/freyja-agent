@@ -104,6 +104,17 @@ export function TaskList() {
       </output>
     );
   }
+  if (data.threads.length === 0 && data.total > 0) {
+    // The service leaves a row out that it cannot read (FR-023). With every listed row left
+    // out the list is empty and tasks exist all the same: "no task yet" would be untrue.
+    return (
+      <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
+        {data.total === 1
+          ? "The service counts 1 task, and it cannot be shown just now. It is read again by itself."
+          : `The service counts ${data.total} tasks, and none of them can be shown just now. They are read again by themselves.`}
+      </p>
+    );
+  }
   if (data.threads.length === 0) {
     return (
       <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">

@@ -324,8 +324,12 @@ components:
         runs:
           type: integer
           description: >
-            How many runs have started on the thread. The status is of the last of them, so
-            a client that asked to stop run `n` knows whether a row still speaks of that run.
+            How many times the thread's run lease was taken: every run, and every request
+            refused after taking it, such as a decision for a proposal that is no longer
+            pending. The status is of the last run, so a client that asked to stop run `n`
+            knows whether a row still speaks of that run; a number that moved on may also
+            mean only a refused request, and the client then says nothing of how the run
+            ended.
     ThreadList:
       type: object
       required: [threads, needs_decision, total, more]

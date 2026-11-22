@@ -231,8 +231,12 @@ def _console_runs(request: Request) -> UnattendedRuns:
     return runs
 
 
-async def _open_first(runtime: Runtime, thread_id: str) -> None:
+async def _open_first(runtime: Runtime, thread_id: str) -> bool:
     """Give a thread that has a state and no row its row before a console run starts on it.
+
+    True once the row is known to be in order: there was one, or one was made, or the
+    thread is new. False when the lookup failed or was given up: the run's text may then be
+    a follow-up on a thread that has begun, and is not to be kept as its first message.
 
     A console run tells the index the text it was started with, which a row that has no
     first message takes for how the thread began. For a thread from before the index, or
@@ -246,7 +250,7 @@ async def _open_first(runtime: Runtime, thread_id: str) -> None:
     try:
         async with asyncio.timeout(INDEX_WRITE_SECONDS):
             if await runtime.threads.get(thread_id) is not None:
-                return
+                return True
             context = await runtime.begin_read()
             try:
                 await open_thread(
@@ -264,6 +268,8 @@ async def _open_first(runtime: Runtime, thread_id: str) -> None:
             thread_id,
             exc_info=True,
         )
+        return False
+    return True
 
 
 async def _go_on(
@@ -293,9 +299,11 @@ async def start_unattended(
     """Start a run that goes on when its reader leaves; the same refusals and events as
     ``POST /threads/{thread_id}/runs``, from the same code."""
     runs = _console_runs(request)
-    await _open_first(_runtime(request), thread_id)
+    known = await _open_first(_runtime(request), thread_id)
     response = await threads.start_run(thread_id, body, request, debug)
-    return await _go_on(runs, thread_id, response, body.message)
+    # Without the lookup, the row takes its first message from the thread's state once the
+    # run is settled, which is the run's text when the thread is new (FR-002).
+    return await _go_on(runs, thread_id, response, body.message if known else None)
 
 
 @router.post("/{thread_id}/resume/unattended")

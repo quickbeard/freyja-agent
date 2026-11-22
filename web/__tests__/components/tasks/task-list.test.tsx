@@ -55,7 +55,15 @@ const FOUR = [
 
 function renderList(withSidebar = false) {
   return render(
-    <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+    <SWRConfig
+      value={{
+        provider: () => new Map(),
+        dedupingInterval: 0,
+        // A page shown again reads at once in a test too: the reading library waits five
+        // seconds after a page was mounted before it reads on that account.
+        focusThrottleInterval: 0,
+      }}
+    >
       {withSidebar && (
         <TooltipProvider>
           <SidebarProvider>
@@ -178,6 +186,85 @@ describe("the list of tasks", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows no row once a later reading failed, and shows them again once one is answered", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let down = false;
+      serve(() => (down ? { fails: "refused" } : list(FOUR)));
+      renderList();
+      await waitFor(() => expect(rows()).toHaveLength(4));
+
+      // The rows the page holds are not shown as if they were current (FR-006).
+      down = true;
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      expect((await screen.findByRole("alert")).textContent).toMatch(
+        /cannot be reached/,
+      );
+      expect(rows()).toHaveLength(0);
+      expect(screen.queryByRole("list", { name: "Tasks" })).toBeNull();
+
+      down = false;
+      vi.advanceTimersByTime(LIST_SECONDS * 1000);
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      expect(screen.queryByRole("alert")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("is read again at once when the page is shown again, by no timer", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      let asked = 0;
+      let tasks = FOUR.slice(0, 1);
+      serve(() => {
+        asked += 1;
+        return list(tasks);
+      });
+      renderList();
+      await waitFor(() => expect(rows()).toHaveLength(1));
+
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      tasks = FOUR;
+      vi.advanceTimersByTime(3 * LIST_SECONDS * 1000);
+      expect(asked).toBe(1);
+
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(rows()).toHaveLength(4));
+      expect(asked).toBe(2);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // FR-023, T103: every listed row can be left out as unreadable. The list is then empty
+  // and the service still counts tasks: "no task yet" would be untrue.
+  it("does not say that there is no task when the service counts tasks and lists none", async () => {
+    serve(() => list([], { total: 3, more: true }));
+    renderList();
+    expect(
+      (await screen.findByText(/The service counts 3 tasks/)).textContent,
+    ).toBe(
+      "The service counts 3 tasks, and none of them can be shown just now. They are read again by themselves.",
+    );
+    expect(screen.queryByText(/There is no task yet/)).toBeNull();
+    expect(
+      screen.queryByText(/More tasks exist than are listed here/),
+    ).toBeNull();
+  });
+
+  it("says one task in the singular when it cannot be shown", async () => {
+    serve(() => list([], { total: 1, more: true }));
+    renderList();
+    expect((await screen.findByText(/cannot be shown/)).textContent).toBe(
+      "The service counts 1 task, and it cannot be shown just now. It is read again by itself.",
+    );
   });
 
   it("says so when there is no task", async () => {

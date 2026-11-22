@@ -306,7 +306,7 @@ describe("a request that gets no answer", () => {
           ({
             ok: true,
             status: 200,
-            json: () =>
+            text: () =>
               new Promise((_resolve, reject) => {
                 init?.signal?.addEventListener("abort", () =>
                   reject(new DOMException("Given up.", "AbortError")),

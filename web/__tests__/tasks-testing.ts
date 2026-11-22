@@ -177,3 +177,16 @@ export function refusal(status: number, code: string, message: string) {
 export function later<T>(ms: number, answer: T): Promise<T> {
   return new Promise((resolve) => setTimeout(() => resolve(answer), ms));
 }
+
+/**
+ * As a browser that reads JSON without giving a number's own text (T099). Returns what
+ * puts the browser back as it was, to be called when the test is over.
+ */
+export function withoutDigits(): () => void {
+  const json = JSON as typeof JSON & { rawJSON?: unknown };
+  const rawJSON = json.rawJSON;
+  json.rawJSON = undefined;
+  return () => {
+    json.rawJSON = rawJSON;
+  };
+}

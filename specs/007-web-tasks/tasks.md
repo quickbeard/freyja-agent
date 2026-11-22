@@ -927,7 +927,7 @@ requirement, acceptance scenario, edge case, the contract, and the tasks of Phas
 against the code. T098 is high, T099 to T101 are medium, the rest low. The standing rules
 above hold for each task: its test first, shown to fail.
 
-- [ ] T098 Join the pieces of a reply that arrive as lists of blocks, in `streamed()` of
+- [X] T098 Join the pieces of a reply that arrive as lists of blocks, in `streamed()` of
       `web/components/tasks/task-view.tsx`: it adds a piece to the text only when both are
       plain strings, and otherwise shows the last piece alone. The default model and an
       `openai:` model through the Responses API send each piece as a list with one block,
@@ -935,7 +935,7 @@ above hold for each task: its test first, shown to fail.
       has ended. Join blocks by their `index`, show no message that has nothing in it yet,
       and test with the pieces the service really sends for both shapes, in the unit tests
       and in one browser test, per FR-010, US1/AC3 (partial)
-- [ ] T099 Read and send a whole number beyond 2^53 exactly, where the browser can
+- [X] T099 Read and send a whole number beyond 2^53 exactly, where the browser can
       (`web/lib/api.ts`, `web/lib/tasks.ts`, `web/components/tasks/proposal-card.tsx`,
       `message.tsx`): the card shows such an argument rounded and refuses every edit of a
       proposal that holds one, so a person approves an id they cannot read and cannot edit
@@ -943,54 +943,54 @@ above hold for each task: its test first, shown to fail.
       written, on the card, in the conversation, and in what is sent; keep the refusal and
       the note for a browser that cannot, and say in spec.md which case holds when, per
       FR-014, FR-015, FR-009 (partial)
-- [ ] T100 Test that a task's page that was hidden reads the task again when it is shown,
+- [X] T100 Test that a task's page that was hidden reads the task again when it is shown,
       without waiting for its timer (`web/__tests__/components/tasks/task-view.test.tsx`),
       and the same for the list: it rests on the reading library's default and nothing
       holds the page to it, per FR-013 (partial)
-- [ ] T101 Drive the debug stream of both console-run routes in the two proofs of
+- [X] T101 Drive the debug stream of both console-run routes in the two proofs of
       `tests/test_thread_index_nowhere.py`, as the proofs of the existing routes do, and
       take an agent's address out of every event a console run sends its reader
       (`src/freyja_agent/runtime/unattended.py`), not out of its `error` event alone: a
       debug stream carries a failed step's error as the model raised it, per FR-025
       (partial)
-- [ ] T102 Keep a thread's own first message when the lookup before a console run fails or
+- [X] T102 Keep a thread's own first message when the lookup before a console run fails or
       is given up (`src/freyja_agent/api/thread_index.py`): the run's text is then kept as
       the first message of a thread that had one. Hand the index no text in that case, so
       that the row takes it from the thread's state, with a test of a thread that has a
       state and no row, per FR-002, T086 (partial)
-- [ ] T103 Show "There is no task yet." only when the service counts no task
+- [X] T103 Show "There is no task yet." only when the service counts no task
       (`web/components/tasks/task-list.tsx`): when every listed row was left out as
       unreadable the list is empty and `total` is not, and the section then says something
       untrue, per FR-023, FR-002 (partial)
-- [ ] T104 Clear a chosen decision the service no longer lists from the card's state, in
+- [X] T104 Clear a chosen decision the service no longer lists from the card's state, in
       `web/components/tasks/proposal-card.tsx`, where it is only hidden: when a later
       reading lists the decision again, the choice and its open form come back without a
       press. Test the decision listed again, per FR-014, FR-017, T092 (partial)
-- [ ] T105 Read the task again when the service refuses a decision's values
+- [X] T105 Read the task again when the service refuses a decision's values
       (`web/components/tasks/proposal-card.tsx`, `task-view.tsx`): a refusal that says a
       decision is no longer allowed is shown beside the action, and the control for it
       stays until some other reading, per FR-014, Edge Cases "A proposal's action is no
       longer configured, or its agent was removed" (partial)
-- [ ] T106 Name each decision's control by its action's place as well when a proposal has
+- [X] T106 Name each decision's control by its action's place as well when a proposal has
       two actions of the same name (`web/components/tasks/proposal-card.tsx`): their
       controls carry the same name, which does not say on which action, per FR-012a
       (partial)
-- [ ] T107 Test, in the task's view and in a browser, a decision that gets no answer: the
+- [X] T107 Test, in the task's view and in a browser, a decision that gets no answer: the
       page says that the outcome is not known, reads the task again, and shows the card
       only when the proposal is still pending. Today it is tested at the card alone, per
       FR-018, Edge Cases "The answer to a decision never arrives" (partial)
-- [ ] T108 Say that a run has no Stop in words that hold for a run the console started and
+- [X] T108 Say that a run has no Stop in words that hold for a run the console started and
       could not mark as one that can be stopped
       (`web/components/tasks/stop-button.tsx`), which is told "the console did not start
       it", per FR-022a (partial)
-- [ ] T109 [P] Add to `web/e2e/stream.spec.ts` a page of another origin that reads
+- [X] T109 [P] Add to `web/e2e/stream.spec.ts` a page of another origin that reads
       `/api/threads` through the console's forwarding and is given nothing by its browser;
       only a request that changes something is shown there today, per US6/AC2, FR-028
       (partial)
-- [ ] T110 [P] Assert in `web/e2e/stream.spec.ts` what the sidebar says while a reading of
+- [X] T110 [P] Assert in `web/e2e/stream.spec.ts` what the sidebar says while a reading of
       the list gets no answer, and in `web/__tests__/components/tasks/task-list.test.tsx`
       that the rows are gone after a later reading failed, per T083, FR-006 (partial)
-- [ ] T111 [P] Correct what the documents say and the code does not: the spec's
+- [X] T111 [P] Correct what the documents say and the code does not: the spec's
       Convergence note that a console run waits for the list twice before its first event
       (it is three times); FR-006, which has no word of a console that is hidden; FR-007,
       where the box sends no message that is only spaces and the service would take one;

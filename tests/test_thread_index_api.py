@@ -348,6 +348,51 @@ def test_a_console_run_starts_all_the_same_when_the_thread_cannot_be_looked_up_f
     assert "Thread t-1: its row could not be looked up before its run" in caplog.text
 
 
+@pytest.mark.parametrize("how", ["fails", "hangs"])
+def test_a_thread_whose_lookup_failed_keeps_its_own_first_message(
+    make_mcp_app: Callable[..., McpApp],
+    sse_events: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    how: str,
+) -> None:
+    """FR-002, T102: when the thread cannot be opened before a console run, the run's text
+    is not taken for how a thread began that has begun already."""
+    made = make_mcp_app(ScriptedChatModel(final_text="Answered."), {})
+    monkeypatch.setattr(api, "INDEX_WRITE_SECONDS", 0.05)
+    with TestClient(made.app) as client:
+        run(client, "old", "From before the index.", sse_events)
+        index = index_of(made)
+        index._rows.clear()
+        real = index.get
+        tried: list[str] = []
+
+        async def fails_once(thread_id: str) -> Any:
+            if not tried:
+                tried.append(thread_id)
+                if how == "hangs":
+                    await asyncio.Event().wait()
+                raise RuntimeError("the index is away")
+            return await real(thread_id)
+
+        monkeypatch.setattr(index, "get", fails_once)
+        with client.stream(
+            "POST", "/threads/old/runs/unattended", json={"message": "And one thing more."}
+        ) as response:
+            events = sse_events(response.iter_lines())
+        one = row(client, "old")
+        state = client.get("/threads/old/state").json()
+
+    assert tried == ["old"]
+    assert events[-1] == ("end", {"status": "completed"})
+    assert one["first_message"] == "From before the index."
+    assert one["status"] == "done"
+    # The follow-up is in the conversation, where it belongs.
+    assert [m["content"] for m in state["messages"] if m["type"] == "human"] == [
+        "From before the index.",
+        "And one thing more.",
+    ]
+
+
 def test_a_console_run_starts_when_the_lookup_before_it_never_answers(
     make_mcp_app: Callable[..., McpApp],
     sse_events: Any,

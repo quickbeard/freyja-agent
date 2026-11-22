@@ -28,6 +28,11 @@ PORT = 9781
 URL = f"http://127.0.0.1:{PORT}"
 # What a model's endpoint might answer: an error that repeats an address it was sent.
 LEAKY = f"The provider could not take a request that names {URL}/ and gave up."
+# The same, with the address after a line break and after letters of another script: in
+# the event's JSON text these are an escape sequence written against the address.
+LEAKY_ESCAPED = (
+    f"The provider could not reach\nlocalhost:{PORT}/a2a, nor \u63a5\u7d9a127.0.0.1:{PORT}."
+)
 
 NOTIFY = AIMessage(
     content="",
@@ -163,10 +168,14 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
         saved = seen.call("POST", "/llm/profiles", json=profile()).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{saved}/activate").status_code == 200
 
-        paused = seen.stream("/threads/c-paused/runs/unattended", {"message": "Tell #ops."})
+        # Each stream is watched in full, its debug events included, as the proofs of the
+        # earlier routes watch theirs.
+        paused = seen.stream(
+            "/threads/c-paused/runs/unattended", {"message": "Tell #ops."}, debug="true"
+        )
         assert paused[-1][0] == "interrupt"
         body = {"interrupt_id": paused[-1][1]["interrupt_id"], "decisions": [{"type": "reject"}]}
-        decided = seen.stream("/threads/c-paused/resume/unattended", body)
+        decided = seen.stream("/threads/c-paused/resume/unattended", body, debug="true")
         assert decided[-1] == ("end", {"status": "completed"})
 
         # One that is stopped while the model works.
@@ -187,7 +196,9 @@ def test_a_key_is_in_nothing_a_console_run_returns_or_logs(
             "POST", "/llm/profiles", json=profile(name="Leaky", model="leaky-model")
         ).json()["id"]
         assert seen.call("POST", f"/llm/profiles/{leaky}/activate").status_code == 200
-        failed = seen.stream("/threads/c-failed/runs/unattended", {"message": "This one fails."})
+        failed = seen.stream(
+            "/threads/c-failed/runs/unattended", {"message": "This one fails."}, debug="true"
+        )
         assert failed[-1][0] == "error"
 
         statuses = index_routes(seen, "c-paused", "c-stopped", "c-failed")
@@ -217,32 +228,60 @@ def test_an_address_is_in_nothing_a_console_run_returns_or_logs(
 
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         seen = Seen(client, sse_events)
-        proposed = seen.stream("/threads/c-done/runs/unattended", {"message": "Ask the helper."})
+        # Each stream is watched in full, its debug events included, as the proofs of the
+        # earlier routes watch theirs.
+        proposed = seen.stream(
+            "/threads/c-done/runs/unattended", {"message": "Ask the helper."}, debug="true"
+        )
         assert proposed[-1][0] == "interrupt"
         body = {
             "interrupt_id": proposed[-1][1]["interrupt_id"],
             "decisions": [{"type": "approve"}],
         }
-        approved = seen.stream("/threads/c-done/resume/unattended", body)
+        approved = seen.stream("/threads/c-done/resume/unattended", body, debug="true")
         assert approved[-1] == ("end", {"status": "completed"})
-        waiting = seen.stream("/threads/c-paused/runs/unattended", {"message": "Again."})
+        waiting = seen.stream(
+            "/threads/c-paused/runs/unattended", {"message": "Again."}, debug="true"
+        )
         assert waiting[-1][0] == "interrupt"
         assert seen.call("POST", "/threads/c-paused/stop").status_code == 409
 
         # One that fails, with an error that names the agent's address: the list gives a
         # failed console run's reason, the one text of a run it holds.
-        failed = seen.stream("/threads/c-failed/runs/unattended", {"message": "This one fails."})
+        failed = seen.stream(
+            "/threads/c-failed/runs/unattended", {"message": "This one fails."}, debug="true"
+        )
         assert failed[-1][0] == "error"
+        # The debug stream carried the failed step, whose error named the address.
+        assert any(kind == "debug" for kind, _ in failed)
+
+        # One whose error writes the address after a line break and after other letters.
+        model.error = LEAKY_ESCAPED
+        model.fail_on_call = model.calls + 1
+        escaped = seen.stream(
+            "/threads/c-escaped/runs/unattended", {"message": "This one fails too."}, debug="true"
+        )
+        assert escaped[-1][0] == "error"
+        escaped_row = seen.call("GET", "/threads/c-escaped").json()
 
         statuses = index_routes(seen, "c-done", "c-paused", "c-failed")
         failed_row = seen.call("GET", "/threads/c-failed").json()
 
-    assert statuses == {"c-done": "done", "c-paused": "needs_decision", "c-failed": "failed"}
+    assert statuses == {
+        "c-done": "done",
+        "c-paused": "needs_decision",
+        "c-failed": "failed",
+        "c-escaped": "failed",
+    }
     # The reason is given, to the run's reader and in the list, and it is the one that named
     # the address, without the address: a console run's error is cleaned where it passes.
     assert failed[-1][1]["code"] == "model_error"
     assert "could not take a request that names" in failed[-1][1]["message"]
     assert failed_row["error"]["message"] == failed[-1][1]["message"]
+    # The rest of such a reason is kept as it was: only the address is taken out.
+    assert escaped[-1][1]["message"].startswith("The model request failed: The provider could")
+    assert "\n" in escaped[-1][1]["message"]
+    assert "\u63a5\u7d9a" in escaped_row["error"]["message"]
     assert len(made.stub_at(URL).record.messages) == 1
     no_address(seen.texts, PORT)
     no_address(logged(caplog), PORT)

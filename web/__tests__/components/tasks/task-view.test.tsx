@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import useSWR, { SWRConfig } from "swr";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -19,9 +25,11 @@ import {
   summary,
   update,
 } from "@/__tests__/tasks-testing";
+import { contentText } from "@/components/tasks/message";
 import {
   AGENT_SECONDS,
   FOLLOW_SECONDS,
+  streamed,
   TaskView,
 } from "@/components/tasks/task-view";
 import { begin, clear, get } from "@/lib/task-runs";
@@ -64,6 +72,24 @@ function service(answers: { row: () => Answer; state: () => Answer }) {
     }
     return path.endsWith("/state") ? answers.state() : answers.row();
   });
+}
+
+/**
+ * Wait, in real time, for the page to have forgotten its run. For a test that fakes
+ * `setInterval`: Testing Library's own wait looks again by that timer, and otherwise only
+ * when the page changes, which forgetting a run that has been read need not do.
+ */
+async function forgotten() {
+  for (
+    let waited = 0;
+    get("t-1") !== undefined && waited < 2000;
+    waited += 20
+  ) {
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+  expect(get("t-1")).toBeUndefined();
 }
 
 const conversation = () =>
@@ -277,7 +303,7 @@ describe("a task's page", () => {
           /The connection to the run ended before the run did/,
         ),
       ).toBeTruthy();
-      await waitFor(() => expect(get("t-1")).toBeUndefined());
+      await forgotten();
 
       // The run ended by itself after all: the page says nothing more of the cut.
       done = true;
@@ -507,6 +533,140 @@ describe("a task's page with a proposal", () => {
     expect(
       screen.queryByRole("button", { name: "Approve send_notification" }),
     ).toBeNull();
+  });
+});
+
+// FR-018, T107: no answer to a decision. It may or may not have been applied: the page
+// says that it is not known, never that it failed, reads the task again, and shows the
+// proposal only when it is still pending.
+describe("a task's page and a decision that gets no answer", () => {
+  const UNKNOWN =
+    "No answer came, so whether the decision was applied is not known. The task is read again, and the proposal is shown only if it is still pending.";
+
+  function decided(applied: boolean) {
+    const asked = { state: 0, posts: 0 };
+    serve((method, path) => {
+      if (method === "POST") {
+        asked.posts += 1;
+        return { fails: "the connection dropped" };
+      }
+      const after = asked.posts > 0 && applied;
+      if (path.endsWith("/state")) {
+        asked.state += 1;
+        return {
+          json: after
+            ? state([human("Tell #ops."), ASKED, ai("Sent.", "ai-2")])
+            : state([human("Tell #ops."), ASKED], {
+                pending: PROPOSAL("int-1"),
+              }),
+        };
+      }
+      return { json: summary({ status: after ? "done" : "needs_decision" }) };
+    });
+    return asked;
+  }
+
+  it("says that the outcome is not known, reads the task again, and shows the proposal that is still pending", async () => {
+    const asked = decided(false);
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+
+    expect((await screen.findByRole("alert")).textContent).toBe(UNKNOWN);
+    expect(screen.queryByText(/failed/i)).toBeNull();
+    await waitFor(() => expect(asked.state).toBeGreaterThanOrEqual(2));
+    // Still pending, so the card is there to decide again; nothing was sent twice.
+    expect(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    ).toBeTruthy();
+    expect(screen.getByText("Needs your decision")).toBeTruthy();
+    expect(asked.posts).toBe(1);
+  });
+
+  it("shows no proposal when the decision had been applied after all", async () => {
+    const asked = decided(true);
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Approve send_notification" }),
+    );
+
+    await waitFor(() => expect(conversation()).toContain("Sent."));
+    expect(
+      screen.queryByRole("button", { name: "Approve send_notification" }),
+    ).toBeNull();
+    expect(screen.getByText("Done")).toBeTruthy();
+    expect(asked.posts).toBe(1);
+  });
+
+  // FR-014, T105: values the service refuses; the task is read again and the card offers
+  // what the service lists now.
+  it("reads the task again when the service refuses a decision's values, and offers what it lists now", async () => {
+    let posts = 0;
+    serve((method, path) => {
+      if (method === "POST") {
+        posts += 1;
+        return {
+          status: 422,
+          json: {
+            detail: [
+              {
+                type: "value_error",
+                loc: ["body", "decisions", 0, "type"],
+                msg: "This action cannot be edited any more.",
+              },
+            ],
+          },
+        };
+      }
+      if (path.endsWith("/state")) {
+        const pending = PROPOSAL("int-1");
+        return {
+          json: state([human("Tell #ops."), ASKED], {
+            pending:
+              posts === 0
+                ? pending
+                : {
+                    ...pending,
+                    action_requests: [
+                      {
+                        ...pending.action_requests[0],
+                        allowed_decisions: ["approve", "reject"],
+                      },
+                    ],
+                  },
+          }),
+        };
+      }
+      return { json: summary({ status: "needs_decision" }) };
+    });
+    renderView();
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Edit the arguments of send_notification",
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Approve send_notification with these arguments",
+      }),
+    );
+
+    // The same proposal, read again: edit is no longer offered, and its form is closed.
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Edit the arguments of send_notification",
+        }),
+      ).toBeNull(),
+    );
+    expect(
+      screen.queryByLabelText("Arguments for send_notification, as JSON"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Approve send_notification" }),
+    ).toBeTruthy();
+    expect(posts).toBe(1);
   });
 });
 
@@ -1264,6 +1424,57 @@ describe("a task's page and its agent tasks", () => {
   });
 });
 
+// Phase 12 (T100), FR-013: a page that was hidden reads the task again when it is shown,
+// without waiting for its timer. The reading library does that by default; nothing else
+// held the page to it, and a setting that turned it off would have left a page that comes
+// back showing what it held when it was left.
+
+describe("a task's page that is shown again", () => {
+  it("reads the task again at once, by no timer", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      let status: "running" | "done" = "running";
+      const asked = { row: 0, state: 0 };
+      serve((_method, path) => {
+        const what = path.endsWith("/state") ? "state" : "row";
+        asked[what] += 1;
+        return what === "state"
+          ? {
+              json: state(
+                status === "done"
+                  ? [human("Count slowly."), ai("One, two, three.")]
+                  : [human("Count slowly.")],
+                { run_active: status === "running" },
+              ),
+            }
+          : { json: summary({ first_message: "Count slowly.", status }) };
+      });
+      renderView();
+      expect(await screen.findByText("Running")).toBeTruthy();
+      expect(asked).toEqual({ row: 1, state: 1 });
+
+      // The tab goes to the background; the run ends meanwhile.
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      status = "done";
+      vi.advanceTimersByTime(3 * FOLLOW_SECONDS * 1000);
+      expect(asked).toEqual({ row: 1, state: 1 });
+
+      // It is shown again: no timer is advanced from here on.
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await waitFor(() => expect(screen.getByText("Done")).toBeTruthy());
+      await waitFor(() => expect(conversation()).toContain("One, two, three."));
+      expect(asked.row).toBeGreaterThanOrEqual(2);
+      expect(asked.state).toBeGreaterThanOrEqual(2);
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+});
+
 // Phase 7, from the review: what the page holds from before a run says nothing of that run.
 
 describe("a task's page and the periods it reads at", () => {
@@ -1404,7 +1615,7 @@ describe("a task's page and a follow-up whose end it cannot read at once", () =>
       // The service is back: the page reads by itself, and shows what the service holds.
       down = false;
       vi.advanceTimersByTime(FOLLOW_SECONDS * 1000);
-      await waitFor(() => expect(get("t-1")).toBeUndefined());
+      await forgotten();
       expect(screen.queryByRole("alert")).toBeNull();
       expect(items()).toHaveLength(4);
       await waitFor(() => expect(sendMessage().disabled).toBe(false));
@@ -1553,7 +1764,7 @@ describe("a task's page and Stop", () => {
   const STOPPING = "The run is stopping. The step under way completes first.";
   const TOO_LATE =
     "The run ended before the stop took effect. The task is shown as it ended.";
-  const NO_STOP = /^This run has no Stop: the console did not start it\./;
+  const NO_STOP = /^This run has no Stop: the console did not start it, or/;
   const ACCEPTED = {
     status: 202,
     json: { thread_id: "t-1", stopping: true, run: 1 },
@@ -2495,5 +2706,277 @@ describe("a task's page that is left while its run streams", () => {
     answer.close();
     await waitFor(() => expect(get("t-1")?.ended?.kind).toBe("event"));
     expect(asked.filter(({ method }) => method !== "GET")).toEqual([]);
+  });
+});
+
+// Phase 12 (T098): a reply's pieces are not always plain text. The default model and an
+// `openai:` model through the Responses API send each piece as a list of blocks, and an
+// empty list last. The pieces below are the ones the service sends for each, as they were
+// read from a run (FR-010, US1/AC3).
+
+describe("a reply that streams in blocks", () => {
+  const blocks = (id: string, content: unknown[], tool_calls: unknown[] = []) =>
+    sse("message", {
+      message: { id, type: "ai", content, name: "freyja", tool_calls },
+      metadata: { langgraph_node: "model", langgraph_step: 3 },
+    });
+  const RUN = "lc_run--01a1fe7d-5ce0-70f8-8d62-d4d99b58e056";
+  // An `openai:` model through the Responses API: the first piece under the response's
+  // id, the others under the run's, the text's own id on a piece of its own.
+  const RESPONSES = [
+    blocks("resp_1", []),
+    blocks(RUN, []),
+    blocks(RUN, [{ type: "text", text: "One, ", index: 0 }]),
+    blocks(RUN, [{ type: "text", text: "two, ", index: 0 }]),
+    blocks(RUN, [{ type: "text", text: "three.", index: 0 }]),
+    blocks(RUN, [{ type: "text", text: "", id: "msg_1", index: 0 }]),
+    blocks(RUN, []),
+  ];
+  // An `anthropic:` model: text in one block, then the action it asks for in another,
+  // whose arguments arrive in pieces. With each piece, the action as that piece alone
+  // makes it: its name only with the first, and part of its arguments with the next. These
+  // are what the service's serializer makes of the library's own pieces.
+  const ANTHROPIC = [
+    blocks(RUN, []),
+    blocks(RUN, [{ text: "I will ", type: "text", index: 0 }]),
+    blocks(RUN, [{ text: "tell #ops.", type: "text", index: 0 }]),
+    blocks(
+      RUN,
+      [
+        {
+          id: "toolu_1",
+          input: {},
+          name: "send_notification",
+          type: "tool_use",
+          index: 1,
+        },
+      ],
+      [{ id: "toolu_1", name: "send_notification", args: {} }],
+    ),
+    blocks(
+      RUN,
+      [{ partial_json: '{"channel": "#o', type: "input_json_delta", index: 1 }],
+      [{ id: null, name: "", args: { channel: "#o" } }],
+    ),
+    blocks(RUN, [
+      {
+        partial_json: 'ps", "text": "hi"}',
+        type: "input_json_delta",
+        index: 1,
+      },
+    ]),
+    blocks(RUN, []),
+  ];
+
+  function joined(...pieces: string[]) {
+    const events = pieces.map((piece) => {
+      const [, kind, data] =
+        /^event: (\w+)\r\ndata: ([\s\S]*)\r\n\r\n$/.exec(piece) ?? [];
+      return { event: kind, data: JSON.parse(data) };
+    });
+    return streamed({
+      threadId: "t-1",
+      message: "Count to three.",
+      before: [],
+      events,
+      ended: null,
+    }).messages;
+  }
+
+  it("joins the pieces of the Responses API into one reply, and shows no message that holds nothing", () => {
+    const messages = joined(...RESPONSES);
+    expect(messages.map((message) => message.type)).toEqual(["human", "ai"]);
+    expect(contentText(messages[1].content)).toBe("One, two, three.");
+    // As the service holds the reply once the run has ended.
+    expect(messages[1].content).toEqual([
+      { type: "text", text: "One, two, three.", index: 0, id: "msg_1" },
+    ]);
+  });
+
+  it("shows what has arrived so far, piece by piece", () => {
+    expect(joined(...RESPONSES.slice(0, 2))).toHaveLength(1);
+    expect(contentText(joined(...RESPONSES.slice(0, 3))[1].content)).toBe(
+      "One, ",
+    );
+    expect(contentText(joined(...RESPONSES.slice(0, 4))[1].content)).toBe(
+      "One, two, ",
+    );
+    // The empty piece that ends the reply takes nothing away.
+    expect(contentText(joined(...RESPONSES)[1].content)).toBe(
+      contentText(joined(...RESPONSES.slice(0, 5))[1].content),
+    );
+  });
+
+  it("joins an Anthropic reply as the service holds it once the run has ended", () => {
+    const [, reply] = joined(...ANTHROPIC);
+    // As the library joins these pieces (`AIMessageChunk.__add__`), read from it.
+    expect(reply.content).toEqual([
+      { text: "I will tell #ops.", type: "text", index: 0 },
+      {
+        id: "toolu_1",
+        input: {},
+        name: "send_notification",
+        type: "tool_use",
+        index: 1,
+        partial_json: '{"channel": "#ops", "text": "hi"}',
+      },
+    ]);
+    expect(contentText(reply.content).startsWith("I will tell #ops.\n")).toBe(
+      true,
+    );
+  });
+
+  it("shows the action an Anthropic reply asks for by its name while it streams, never half of it", () => {
+    for (let end = 4; end <= ANTHROPIC.length; end += 1) {
+      const [, reply] = joined(...ANTHROPIC.slice(0, end));
+      // From the piece that names it on, the action is the named one, whole as far as the
+      // stream has said: no piece that names nothing takes its place.
+      expect(reply.tool_calls).toEqual([
+        { id: "toolu_1", name: "send_notification", args: {} },
+      ]);
+    }
+  });
+
+  it("joins plain text and blocks as the service's library does", () => {
+    // Read from `merge_content`: text then blocks puts the text first in the list; blocks
+    // then text adds the text after them, or to a text that ends the list.
+    const mixed = joined(
+      chunk("One, ", RUN),
+      blocks(RUN, [{ type: "text", text: "two.", index: 0 }]),
+    );
+    expect(mixed[1].content).toEqual([
+      "One, ",
+      { type: "text", text: "two.", index: 0 },
+    ]);
+    expect(contentText(mixed[1].content)).toBe("One, \ntwo.");
+    const other = joined(
+      blocks(RUN, [{ type: "text", text: "One, ", index: 0 }]),
+      chunk("two.", RUN),
+      chunk("", RUN),
+    );
+    expect(other[1].content).toEqual([
+      { type: "text", text: "One, ", index: 0 },
+      "two.",
+    ]);
+  });
+
+  it("joins lists and numbers inside a block, and a block's place given as text only when it is the library's", () => {
+    const [, reply] = joined(
+      blocks(RUN, [
+        {
+          type: "reasoning",
+          index: 0,
+          summary: [{ index: 0, type: "summary_text", text: "Looking " }],
+          tokens: 2,
+        },
+      ]),
+      blocks(RUN, [
+        {
+          type: "reasoning",
+          index: 0,
+          summary: [{ index: 0, type: "summary_text", text: "it up." }],
+          tokens: 3,
+        },
+      ]),
+      blocks(RUN, [{ type: "text", text: "A", index: "lc_txt_0" }]),
+      blocks(RUN, [{ type: "text", text: "B", index: "lc_txt_0" }]),
+      blocks(RUN, [{ type: "text", text: "C", index: "other" }]),
+      blocks(RUN, [{ type: "text", text: "D", index: "other" }]),
+    );
+    expect(reply.content).toEqual([
+      {
+        type: "reasoning",
+        index: 0,
+        summary: [{ index: 0, type: "summary_text", text: "Looking it up." }],
+        tokens: 5,
+      },
+      { type: "text", text: "AB", index: "lc_txt_0" },
+      { type: "text", text: "C", index: "other" },
+      { type: "text", text: "D", index: "other" },
+    ]);
+  });
+
+  it("keeps two blocks of one place apart when their ids differ", () => {
+    const [, reply] = joined(
+      blocks(RUN, [{ type: "text", text: "A", index: 0, id: "one" }]),
+      blocks(RUN, [{ type: "text", text: "B", index: 0, id: "two" }]),
+    );
+    expect(reply.content).toEqual([
+      { type: "text", text: "A", index: 0, id: "one" },
+      { type: "text", text: "B", index: 0, id: "two" },
+    ]);
+  });
+
+  it("shows a streamed action's result that holds no text", () => {
+    const messages = joined(
+      blocks(RUN, [], [{ id: "c1", name: "ls", args: { path: "/" } }]),
+      sse("message", {
+        message: {
+          id: "tool-1",
+          type: "tool",
+          content: "",
+          name: "ls",
+          tool_call_id: "c1",
+        },
+        metadata: { langgraph_node: "tools", langgraph_step: 4 },
+      }),
+    );
+    expect(messages.map((message) => message.type)).toEqual([
+      "human",
+      "ai",
+      "tool",
+    ]);
+  });
+
+  it("keeps a block's id once when it comes again, as the service holds it", () => {
+    const [, reply] = joined(
+      blocks(RUN, [{ type: "text", text: "One, ", id: "msg_1", index: 0 }]),
+      blocks(RUN, [{ type: "text", text: "two.", id: "msg_1", index: 0 }]),
+    );
+    expect(reply.content).toEqual([
+      { type: "text", text: "One, two.", id: "msg_1", index: 0 },
+    ]);
+  });
+
+  it("keeps blocks apart that have another place or none, and a piece that is no block", () => {
+    const [, reply] = joined(
+      blocks(RUN, [{ type: "text", text: "First.", index: 0 }]),
+      blocks(RUN, [{ type: "text", text: "Second.", index: 1 }]),
+      blocks(RUN, [{ type: "text", text: "No place." }]),
+      blocks(RUN, ["a bare piece"]),
+    );
+    expect(reply.content).toEqual([
+      { type: "text", text: "First.", index: 0 },
+      { type: "text", text: "Second.", index: 1 },
+      { type: "text", text: "No place." },
+      "a bare piece",
+    ]);
+  });
+
+  it("still joins plain text as before, and keeps a message that holds only an action", () => {
+    const messages = joined(
+      chunk("Half", "ai-1"),
+      chunk(" and half.", "ai-1"),
+      blocks("ai-2", [], [{ id: "c1", name: "ls", args: { path: "/" } }]),
+    );
+    expect(messages[1].content).toBe("Half and half.");
+    expect(messages[2].tool_calls).toHaveLength(1);
+  });
+
+  it.each([
+    ["the Responses API", RESPONSES, "One, two, three."],
+    ["Anthropic", ANTHROPIC, "I will tell #ops."],
+  ])("shows a reply of %s on the page as it is written, before the run has ended", async (_which, pieces, text) => {
+    serve(() => NOT_USED);
+    const answer = openBody();
+    begin("t-1", "Count to three.", answer.stream);
+    renderView();
+    answer.send(START, ...pieces.slice(0, -2));
+    await waitFor(() => expect(conversation()).toContain(text.slice(0, 8)));
+    answer.send(...pieces.slice(-2));
+    await waitFor(() => expect(conversation()).toContain(text));
+    // One reply of Freyja's, not one for each piece or each id.
+    expect(screen.getAllByRole("article", { name: "Freyja" })).toHaveLength(1);
+    expect(screen.getByText("Running")).toBeTruthy();
   });
 });

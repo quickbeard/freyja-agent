@@ -267,7 +267,8 @@ class UnattendedRuns:
 
     async def _drive(self, run: _Run, events: AsyncIterator[ServerSentEvent]) -> None:
         try:
-            async for event in events:
+            async for given in events:
+                event = _scrubbed(given)
                 kind = event.event
                 if kind == "start" and run.owner is None:
                     run.owner = f"{self.instance_id}:{_data(event).get('run_id')}"
@@ -318,18 +319,10 @@ class UnattendedRuns:
             await self._note(run, "stopped")
             return ServerSentEvent(data=json.dumps({"status": "stopped"}), event="end")
         if kind == "error":
+            # Cleaned of agents' addresses already (`_scrubbed`), so the reason kept for
+            # the list holds none either.
             data = _data(event)
-            # The reason may be text a model's endpoint wrote, and it is kept for the list,
-            # which every page of the console reads: an agent's address is taken out of it
-            # here, for the list and in the ``error`` event the run's reader gets (FR-025).
-            # Only that: a debug stream's events and what the checkpointer keeps of a
-            # failed step hold the error as the model raised it, on every route, until the
-            # model's errors are cleaned where its key is (``llm/guard.py``).
-            message = data.get("message")
-            cleaned = SCRUBBER.scrub(message) if isinstance(message, str) else message
-            await self._note(run, "failed", data.get("code"), cleaned)
-            if cleaned != message:
-                return ServerSentEvent(data=json.dumps({**data, "message": cleaned}), event="error")
+            await self._note(run, "failed", data.get("code"), data.get("message"))
         return event
 
     async def _note(
@@ -358,6 +351,47 @@ class UnattendedRuns:
         if tasks:
             logger.info("Waiting for %d run(s) without a reader to reach a step's end", len(tasks))
             await asyncio.gather(*tasks, return_exceptions=True)
+
+
+def _scrubbed(event: ServerSentEvent) -> ServerSentEvent:
+    """The event with every agent's address taken out of its data (FR-025).
+
+    What a console run sends its reader can hold text a model's endpoint wrote: a failed
+    step's error, in the ``error`` event and in the debug stream's events. An agent's
+    address in it is taken out here, before the event is told to the index or handed to the
+    reader. Each text of the data is cleaned as it reads, its keys included: in the JSON
+    text a line break or a letter of another script is an escape sequence written against
+    the address, which the scrubber would not take for one. Data that is no JSON is cleaned
+    as it stands. What the checkpointer keeps of a failed step is not cleaned here, and
+    neither are the earlier routes' streams: that is the model's guard's (``llm/guard.py``),
+    as it is for a profile's key.
+    """
+    data = event.data
+    if not isinstance(data, str):
+        return event
+    try:
+        value = json.loads(data)
+    except ValueError:
+        cleaned = SCRUBBER.scrub(data)
+    else:
+        scrubbed = _scrub_texts(value)
+        cleaned = data if scrubbed == value else json.dumps(scrubbed)
+    if cleaned == data:
+        return event
+    return ServerSentEvent(
+        data=cleaned, event=event.event, id=event.id, retry=event.retry, comment=event.comment
+    )
+
+
+def _scrub_texts(value: Any) -> Any:
+    """``value`` with every text in it, keys included, cleaned of agents' addresses."""
+    if isinstance(value, str):
+        return SCRUBBER.scrub(value)
+    if isinstance(value, list):
+        return [_scrub_texts(item) for item in value]
+    if isinstance(value, dict):
+        return {SCRUBBER.scrub(key): _scrub_texts(item) for key, item in value.items()}
+    return value
 
 
 def _data(event: ServerSentEvent) -> dict[str, Any]:

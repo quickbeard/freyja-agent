@@ -3,6 +3,7 @@
 // words in what it calls. What a delegate agent works on is an "agent task", never a task.
 
 import { api, stream } from "./api";
+import { changes, keepsDigits, readJson } from "./json";
 
 /** One status per task, worked out by the service (FR-003). */
 export type ThreadStatus =
@@ -207,20 +208,29 @@ export function parseArguments(
 ): { args: Record<string, unknown> } | { error: string } {
   let value: unknown;
   try {
-    value = JSON.parse(text);
+    value = readJson(text);
   } catch {
     return {
       error:
         'This is not valid JSON. Enter the arguments as a JSON object, such as {"name": "value"}.',
     };
   }
-  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+  // A plain object: a number kept as it was written is an object of another kind
+  // (lib/json.ts), and no set of named arguments.
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    Array.isArray(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype
+  ) {
     return {
       error:
         'The arguments must be a JSON object, with a name for each argument, such as {"name": "value"}.',
     };
   }
-  const changed = changedNumber(text);
+  // A browser that keeps a number's own text sends it as it was entered. One that does
+  // not would send another number, so the text is not sent (FR-015).
+  const changed = keepsDigits() ? null : changedNumber(text);
   if (changed !== null) {
     return {
       error: `This page cannot be sure to send the number ${changed} exactly: a browser holds whole numbers only up to ${Number.MAX_SAFE_INTEGER}, and may send another one. Put it in quotes if the action takes it as text, or send this decision through the service's API.`,
@@ -248,10 +258,7 @@ function changedNumber(text: string): string | null {
     // Also when it is written with an exponent, which is how a browser writes a whole
     // number of 22 digits or more: the edit box starts from one that was proposed, and
     // its last digits are gone by then.
-    if (
-      !Number.isFinite(read) ||
-      (Number.isInteger(read) && !Number.isSafeInteger(read))
-    ) {
+    if (changes(read)) {
       return written;
     }
   }
@@ -265,7 +272,7 @@ function changedNumber(text: string): string | null {
  */
 export function inexact(value: unknown): boolean {
   if (typeof value === "number") {
-    return Number.isInteger(value) && !Number.isSafeInteger(value);
+    return Number.isInteger(value) && changes(value);
   }
   if (typeof value === "object" && value !== null) {
     return Object.values(value).some(inexact);
@@ -299,7 +306,7 @@ function decode(data: string[]): unknown {
     return null;
   }
   try {
-    return JSON.parse(text);
+    return readJson(text);
   } catch {
     return text;
   }

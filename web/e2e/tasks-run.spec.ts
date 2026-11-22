@@ -447,7 +447,9 @@ test("a run the console did not start has no Stop, and the page says why", async
 
   await expect(page.getByText(IN_PROGRESS)).toBeVisible();
   await expect(
-    page.getByText("This run has no Stop: the console did not start it."),
+    page.getByText(
+      "This run has no Stop: the console did not start it, or the service could not mark it as one that can be stopped.",
+    ),
   ).toBeVisible();
   await expect(stopButton(page)).toHaveCount(0);
   expect(service.stops).toEqual([]);

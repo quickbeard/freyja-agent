@@ -125,12 +125,15 @@ export function ProposalCard({
   pending,
   send,
   onStale,
+  onRefused,
 }: {
   pending: PendingDecision;
   /** Sends the decisions; a refusal is raised as an `ApiError`. */
   send: (decisions: DecisionSent[]) => Promise<void>;
   /** Told why the page no longer shows the task as it is; the task is read again. */
   onStale: (said: string) => void;
+  /** Called when the service refused a decision's values; the task is read again. */
+  onRefused?: () => void;
 }) {
   const actions = pending.action_requests;
   const [choices, setChoices] = useState<Choice[]>(() =>
@@ -172,8 +175,11 @@ export function ProposalCard({
       await send(decisions as DecisionSent[]);
     } catch (failure) {
       if (failure instanceof ApiError && failure.code === "invalid") {
-        // Each edit stays, with the service's reason beside it (FR-015).
+        // Each edit stays, with the service's reason beside it (FR-015). The reason can be
+        // that a decision is no longer allowed for the action: the task is read again, so
+        // that the card offers what the service lists now (FR-014).
         setRefused(reasons(failure));
+        onRefused?.();
       } else if (failure instanceof ApiError && failure.code in STALE) {
         onStale(STALE[failure.code]);
       } else if (
@@ -207,7 +213,19 @@ export function ProposalCard({
       ? { ...choice, decision: null }
       : choice,
   );
+  // It is dropped for good, not hidden: were the decision listed again later, it would
+  // otherwise be chosen again, and its form open, by no press of anyone's (FR-017).
+  if (kept.some((choice, index) => choice !== choices[index])) {
+    setChoices(kept);
+  }
   const ready = kept.map(sent);
+  // A control's name says on which action (FR-012a): where two actions of a proposal have
+  // one name, each is called by its place as well.
+  const called = actions.map((action, index) =>
+    actions.filter(({ name }) => name === action.name).length > 1
+      ? `${action.name} (action ${index + 1} of ${actions.length})`
+      : action.name,
+  );
   const complete = ready.every(
     (decision) => decision !== null && !("error" in decision),
   );
@@ -233,6 +251,7 @@ export function ProposalCard({
           <li key={`${action.name}-${index}`}>
             <ActionDecision
               action={action}
+              called={called[index]}
               choice={kept[index]}
               single={single}
               sending={sending}
@@ -270,6 +289,7 @@ export function ProposalCard({
 
 function ActionDecision({
   action,
+  called,
   choice,
   single,
   sending,
@@ -278,6 +298,8 @@ function ActionDecision({
   onSend,
 }: {
   action: ActionRequest;
+  /** What the action's controls call it: its name, and its place where the name repeats. */
+  called: string;
   choice: Choice;
   single: boolean;
   sending: boolean;
@@ -297,7 +319,7 @@ function ActionDecision({
   const length = characters(choice.reason);
   const tooLong = length > REJECT_REASON_LIMIT;
   const goesTo = where(action);
-  const name = action.name;
+  const name = called;
   const editing = choice.decision === "edit";
   const rejecting = choice.decision === "reject";
   // With one action, Edit and Reject open what they need, and the button that sends is
@@ -311,7 +333,7 @@ function ActionDecision({
       className="flex flex-col gap-3 rounded-md border p-3"
     >
       <div className="flex flex-col gap-1">
-        <h3 className="font-mono text-sm font-semibold">{name}</h3>
+        <h3 className="font-mono text-sm font-semibold">{action.name}</h3>
         {goesTo !== null && (
           <p className="text-xs text-muted-foreground">{goesTo}</p>
         )}

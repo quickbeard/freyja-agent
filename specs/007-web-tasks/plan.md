@@ -1107,5 +1107,84 @@ on its row; and "not known" on the sidebar 8 seconds after the service was stopp
   004's.
 - **How a stopped run ended is not known** to a page that follows by reading once a later
   run has started: the page says nothing then.
-- **No browser test** of a decision that gets no answer; unit tests cover it.
+- **No browser test** of a decision that gets no answer; unit tests cover it. Added in
+  Phase 12.
 - DNS rebinding, open at the end of Phase 10, is closed (`api/hosts.py`).
+
+## Phase 12 as built
+
+The second convergence: fourteen tasks (T098 to T111), one high, three medium, ten low.
+Each has its test, shown to fail without its fix.
+
+- **T098, high**: a reply's pieces that arrive as lists of blocks are joined while the run
+  streams. The default model (`anthropic:`) and an `openai:` model through the Responses API
+  send each piece as a list with one block, and an empty list last; the page showed the last
+  piece alone, then nothing, until the run had ended. Read from a real run of the stand-in
+  model through the Responses API, the pieces are: one empty list under the response's id,
+  then text blocks with `index` 0 under the run's id, one carrying the text's own `id`, and
+  an empty list. `web/lib/merge.ts` is a port of the library's own join (`merge_content`,
+  `merge_lists`, `merge_dicts`), so what streams is what the conversation holds after; the
+  unit tests' expectations were each computed with the library. Each piece also carries
+  the actions as that piece alone makes them, the later ones under no name: only a piece
+  whose every action is named replaces the actions shown. A reply of Freyja's that holds
+  nothing yet is not shown. A browser test in `web/e2e/stream.spec.ts` sends the Responses
+  API's pieces through the console's forwarding.
+- **T099**: `web/lib/json.ts` reads JSON with a whole number beyond 2^53 kept as it is
+  written, where the browser gives a number's own text to a reviver (`context.source`) and
+  writes text back as a number (`JSON.rawJSON`); current Chromium and Firefox, and the
+  Node the unit tests run on, do. `api()`, `stream()`, the stream's events, and
+  `parseArguments` read through it, so such an argument is shown digit for digit, in the
+  card and in the conversation, and an edit sends it as it was entered. A browser that
+  cannot keeps the refusal and the note of Phase 11. The browser test hands the page the
+  service's answer as text, since built as a value in the test the id would already be
+  another.
+- **T100**: tests that a hidden page and a hidden list read again when shown, by no timer.
+  The list's unit tests now set the reading library's focus throttle to zero, as the
+  view's did: it waits five seconds after a page was mounted before it reads on focus.
+- **T101**: every text of every event a console run sends its reader, keys included, is
+  cleaned of agents' addresses as it reads (`_scrubbed`), the debug stream included; the
+  proofs drive the debug stream of both console routes, with an error that writes the
+  address after a line break and after letters of another script. The earlier routes and the checkpointer are still not cleaned (below).
+- **T102**: when the lookup before a console run fails or is given up, the index is handed
+  no text, and the row takes its first message from the thread's state once the run is
+  settled.
+- **T103**: when the service counts tasks and lists none, the section says so, not that
+  there is no task.
+- **T104 to T106**: a decision the service stops listing is dropped from the card's state,
+  so it takes a press to choose it again; values the service refuses make the view read
+  the task again; two actions of one name are named by their place as well.
+- **T107**: unit and browser tests of a decision that gets no answer, applied and not.
+- **T108**: "This run has no Stop: the console did not start it, or the service could not
+  mark it as one that can be stopped."
+- **T109, T110**: a page of another origin reads nothing of `/api/threads` through the
+  forwarding, in both browsers; the sidebar says "not known" while a reading hangs; the
+  rows go when a later reading fails.
+- **T111**: the spec (three waits; FR-006 and a hidden console; FR-007's "blank";
+  FR-022a and a row of a later run; FR-014 and FR-015 and the numbers), the contract's
+  `runs`, which counts every time the lease was taken, and a dated note in `research.md`.
+
+**Read by a reviewer that had not written it.** Checked in the code and fixed, each with a
+test that fails without the fix:
+
+| Finding | What was done |
+|---|---|
+| Medium: `_scrubbed` cleaned the event's JSON text, where a line break or a letter of another script before an address is an escape sequence; the address was then not found, in the reader's `error` event and in the reason the list keeps. The code it replaced cleaned the decoded message. | Each text is decoded and cleaned, keys included, and the data written again with the same encoder. |
+| Medium: while a run streamed, an action was shown half built, under no name: each piece carries the action as that piece alone makes it. | Only a piece whose every action is named replaces the actions shown. The test's pieces are now those the service's serializer makes of the library's own. |
+| Low: the view's own join differed from the library's in places (lists and numbers inside a block, a text place that is not the library's, blocks of one place with different ids, text followed by blocks). | Replaced by a port of the library's join (`web/lib/merge.ts`). |
+| Low: a bare whole number beyond 2^53 passed the check that edited arguments are a JSON object. | A set of named arguments is a plain object. |
+| Low: the filter for empty messages hid an action's result that holds no text. | It hides only a reply of Freyja's. A bare string among blocks is shown as text, and an empty one as nothing. |
+
+**Also changed while building**: two unit tests that fake `setInterval` waited for the
+run to be forgotten with Testing Library's wait, which looks again only by that faked
+timer or when the page changes. Once answers were read as text and then parsed (T099),
+one of them failed every time, the run forgotten with nothing on the page left to change.
+Both now wait in real time (`forgotten`).
+
+**Open after Phase 12**, none of them this feature's to close:
+
+- **A model's error that names an agent's address** is sent as it is by
+  `POST /threads/{id}/runs` and `/resume`, and kept by the checkpointer with the failed
+  step: `llm/guard.py` or `api/streaming.py`, features 004 and 005.
+- **The Agents section's words** for an agent task and a task (FR-001a, narrowed).
+- **A profile's test may take 60 seconds**, and the console's forwarding ends a request
+  after 30: feature 004's.

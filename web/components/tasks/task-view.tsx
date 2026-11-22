@@ -6,6 +6,7 @@ import useSWR, { useSWRConfig } from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { ApiError } from "@/lib/api";
+import { mergeContent } from "@/lib/merge";
 import {
   begin,
   clear,
@@ -29,7 +30,7 @@ import {
 } from "@/lib/tasks";
 import { AgentTasks, awaited } from "./agent-tasks";
 import { type Blocked, FollowUp } from "./follow-up";
-import { MessageView } from "./message";
+import { contentText, MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
 import { TaskStatus } from "./status";
@@ -96,6 +97,8 @@ export function streamed(run: LiveRun): {
       name: null,
     });
   }
+  // The messages above are held, not streamed: they are shown whatever they hold.
+  const held = messages.length;
   const at = new Map<string, number>();
   const steps: string[] = [];
   run.events.forEach((event: StreamEvent, index) => {
@@ -121,17 +124,31 @@ export function streamed(run: LiveRun): {
       return;
     }
     const earlier = messages[found];
-    const grown =
-      typeof earlier.content === "string" && typeof message.content === "string"
-        ? earlier.content + message.content
-        : message.content;
-    const calls =
-      message.tool_calls && message.tool_calls.length > 0
-        ? message.tool_calls
-        : earlier.tool_calls;
-    messages[found] = { ...earlier, content: grown, tool_calls: calls };
+    // Each piece carries the actions as that piece alone makes them: the first names an
+    // action, and the next ones hold parts of its arguments under no name. Only a piece
+    // whose every action is named takes the place of the actions shown, so that no half of
+    // one is shown while the run streams (FR-010).
+    const named =
+      message.tool_calls &&
+      message.tool_calls.length > 0 &&
+      message.tool_calls.every((call) => call.name !== "");
+    messages[found] = {
+      ...earlier,
+      content: mergeContent(earlier.content, message.content),
+      tool_calls: named ? message.tool_calls : earlier.tool_calls,
+    };
   });
-  return { messages, steps };
+  // A reply of Freyja's that holds nothing yet is not shown: some models open a reply with
+  // an empty piece, and one under an id of its own that nothing follows. Every other
+  // message is, an action's result that holds no text among them.
+  const shown = messages.filter(
+    (message, index) =>
+      index < held ||
+      message.type !== "ai" ||
+      contentText(message.content) !== "" ||
+      (message.tool_calls ?? []).length > 0,
+  );
+  return { messages: shown, steps };
 }
 
 function Failure({ error }: { error: RunError }) {
@@ -776,6 +793,10 @@ export function TaskView({ threadId }: { threadId: string }) {
           pending={pending}
           send={(decisions) => decideNow(pending.interrupt_id, decisions)}
           onStale={stale}
+          onRefused={() => {
+            void readRowAgain();
+            void readStateAgain();
+          }}
         />
       )}
       <AgentTasks tasks={agentTasks} />
