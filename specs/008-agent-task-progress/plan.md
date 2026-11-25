@@ -464,7 +464,10 @@ as a changed state. What differs from the tasks, and why:
   starts a line of the result that is not indented, and the task id also reaches the line
   the model is told on every call. The progress text is set apart; those two are not. The
   docstring of `task_line` says so. Closing it changes feature 003's lines, and is the
-  owner's to decide.
+  owner's to decide. *Closed after the feature, at the owner's word, by the fix of the
+  check's task line:* a reply whose task or conversation id holds a control character or a
+  line break is malformed, and the message's start, and the id of a task recorded before,
+  are written on one line, each line break shown as `⏎` (`tests/test_agent_task_lines.py`).
 
 ### Request 4: Phase 7, the walk with a real model and the gates (2026-11-25)
 
@@ -537,7 +540,8 @@ above, with its reason):
 - No existing test was changed beyond `tests/test_state.py` (request 1); FR-022's allowance
   for the check's result and a non-streaming hand-off's updates went unused.
 - Left open for the owner: the check's entry line holds the agent's task id and the task's
-  message as they are (feature 003), so a line break in either is not set apart.
+  message as they are (feature 003), so a line break in either is not set apart. Closed
+  since, by the fix of the check's task line (request 3's notes say how).
 
 **Coverage against the starting point (T042)**: the service's statements 91.48% (91.39% at
 the start, `fail_under = 88`); the web app's statements 97.44%, branches 94.38%, functions

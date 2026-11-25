@@ -118,7 +118,11 @@ startup and exits with an error naming the connection when it is unreachable.
   `connect` reads the agent's card and builds the client, so nothing is sent over a link that
   holds no usable card. It pins every request to the configured address, sends messages and
   reads and cancels tasks under the call time limit, records each agent's status, and removes
-  every known address from everything it emits (`describe`). `progress_text` says what of a
+  every known address from everything it emits (`describe`). A reply that names a task
+  with an empty id or conversation id, or gives an id that is too long or holds a control
+  character or a line break, is malformed (`malformed`), and nothing of it is kept, since
+  an id is written into what the model reads line by line.
+  `progress_text` says what of a
   status is a task's progress (feature 008): the text of a working status's message, cleaned
   and cut to `PROGRESS_LIMIT` characters, used by the hand-off and the worker alike.
   `agent_cards.py` reads an agent's card under one time limit and one size limit and says

@@ -567,7 +567,11 @@ def _handoff_coroutine(send: _Send) -> Any:
             step,
             tool_call_id,
             result=result,
-            task_id=outcome.task.id if outcome.task is not None else None,
+            # Nothing from a malformed reply is kept, its unusable id included: a text column
+            # does not take every character an agent can put in one (FR-009).
+            task_id=(
+                outcome.task.id if outcome.task is not None and outcome.malformed is None else None
+            ),
         )
         # The send is finished and recorded: the call's row has done its work.
         await store.delete_call(thread_id, call_namespace(step), tool_call_id)
