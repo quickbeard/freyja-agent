@@ -90,6 +90,8 @@ AGENT_TASK_FIELDS = {
     "last_checked_at",
     "ended_at",
     "outcome_delivered",
+    # Feature 008: what the agent last reported, or null (FR-009).
+    "progress",
 }
 
 
@@ -128,8 +130,18 @@ def test_agent_tasks_are_listed_oldest_first_with_every_field(
         # Recorded newest first; listed oldest first. Another thread's task is not listed.
         ended = start + timedelta(minutes=30)
         await runtime.agent_tasks.record_task(
-            task("t-2", 20, state="completed", ended_at=ended, outcome="done", outcome_ready=True)
+            task(
+                "t-2",
+                20,
+                state="completed",
+                ended_at=ended,
+                outcome="done",
+                outcome_ready=True,
+                progress="Step 3 of 3\nCharts next",
+                progress_at=start + timedelta(minutes=25),
+            )
         )
+        # Recorded without progress, as a task recorded before feature 008 is (FR-021).
         await runtime.agent_tasks.record_task(task("t-1", 10, state="input_required"))
         await runtime.agent_tasks.record_task(replace(task("t-0", 0), thread_id="elsewhere"))
 
@@ -149,6 +161,7 @@ def test_agent_tasks_are_listed_oldest_first_with_every_field(
             "last_checked_at": "2026-11-10T09:10:00Z",
             "ended_at": None,
             "outcome_delivered": True,
+            "progress": None,
         },
         {
             "agent": "stub",
@@ -160,6 +173,9 @@ def test_agent_tasks_are_listed_oldest_first_with_every_field(
             "ended_at": "2026-11-10T09:30:00Z",
             # Ready and not yet recorded in the thread by a run.
             "outcome_delivered": False,
+            # Kept with the task whatever its status: the last progress learned while it
+            # was working (FR-007, FR-009).
+            "progress": {"text": "Step 3 of 3\nCharts next", "learned_at": "2026-11-10T09:25:00Z"},
         },
     ]
 

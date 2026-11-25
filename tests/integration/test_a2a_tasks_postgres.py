@@ -26,6 +26,7 @@ from tests.test_agent_task_store import (
     test_a_proposed_call_is_kept_as_it_was_proposed,
     test_a_reply_replaces_the_calls_of_its_thread_and_namespace_and_no_other,
     test_a_send_is_recorded_once_and_finished,
+    test_a_task_has_no_progress_until_it_is_given_some,
     test_a_task_keeps_the_ref_of_the_agent_it_was_started_with,
     test_a_task_that_does_not_exist_is_left_alone,
     test_an_outcome_is_marked_delivered_once,
@@ -33,10 +34,13 @@ from tests.test_agent_task_store import (
     test_an_unknown_column_is_refused,
     test_an_update_can_require_the_state_it_expects,
     test_follow_ups_are_set_and_cleared_per_thread,
+    test_nothing_that_ends_or_gives_up_a_task_clears_its_progress,
     test_one_tool_call_id_in_two_namespaces_of_a_thread_is_two_calls,
     test_one_tool_call_id_twice_in_one_reply_keeps_the_later_call,
     test_pending_tasks_are_counted_by_agent_and_ref,
     test_pending_tasks_are_given_up_by_ref,
+    test_progress_is_kept_with_the_task_and_read_back_everywhere,
+    test_progress_is_set_only_by_an_update_that_names_it,
     test_ready_outcomes_wait_for_delivery_once,
     test_tasks_are_listed_oldest_first_and_never_dropped,
     test_the_ref_of_a_task_cannot_be_changed,
@@ -54,6 +58,7 @@ __all__ = [
     "test_a_proposed_call_is_kept_as_it_was_proposed",
     "test_a_reply_replaces_the_calls_of_its_thread_and_namespace_and_no_other",
     "test_a_send_is_recorded_once_and_finished",
+    "test_a_task_has_no_progress_until_it_is_given_some",
     "test_a_task_keeps_the_ref_of_the_agent_it_was_started_with",
     "test_a_task_that_does_not_exist_is_left_alone",
     "test_an_outcome_is_marked_delivered_once",
@@ -61,10 +66,13 @@ __all__ = [
     "test_an_unknown_column_is_refused",
     "test_an_update_can_require_the_state_it_expects",
     "test_follow_ups_are_set_and_cleared_per_thread",
+    "test_nothing_that_ends_or_gives_up_a_task_clears_its_progress",
     "test_one_tool_call_id_in_two_namespaces_of_a_thread_is_two_calls",
     "test_one_tool_call_id_twice_in_one_reply_keeps_the_later_call",
     "test_pending_tasks_are_counted_by_agent_and_ref",
     "test_pending_tasks_are_given_up_by_ref",
+    "test_progress_is_kept_with_the_task_and_read_back_everywhere",
+    "test_progress_is_set_only_by_an_update_that_names_it",
     "test_ready_outcomes_wait_for_delivery_once",
     "test_tasks_are_listed_oldest_first_and_never_dropped",
     "test_the_ref_of_a_task_cannot_be_changed",
@@ -200,3 +208,105 @@ async def test_a_replacement_that_fails_leaves_the_earlier_calls_in_place(
     with pytest.raises(psycopg.Error):
         await store.replace_calls("th-1", "", [a_call("call-2"), a_call("bad", agent="a\x00b")])
     assert [call.tool_call_id for call in await store.list_calls("th-1")] == ["call-1"]
+
+
+# Feature 008, T004: the two columns of kept progress, on a table that exists in deployments
+# (008 research R2).
+
+# ``freyja_agent_tasks`` as feature 005 left it: with ``agent_ref``, without the progress.
+BEFORE_008 = """
+    CREATE TABLE freyja_agent_tasks (
+        agent             text NOT NULL,
+        task_id           text NOT NULL,
+        thread_id         text NOT NULL,
+        context_id        text NOT NULL,
+        message           text NOT NULL,
+        state             text NOT NULL,
+        started_at        timestamptz NOT NULL,
+        last_checked_at   timestamptz NOT NULL,
+        ended_at          timestamptz,
+        outcome           text,
+        outcome_ready     boolean NOT NULL DEFAULT false,
+        delivered_at      timestamptz,
+        watcher           text,
+        watch_until       timestamptz,
+        followup_attempts integer NOT NULL DEFAULT 0,
+        followup_next_at  timestamptz,
+        followup_error    text,
+        agent_ref         text,
+        PRIMARY KEY (agent, task_id)
+    )
+"""
+AN_EARLIER_WORKING_ROW = (
+    "INSERT INTO freyja_agent_tasks (agent, task_id, thread_id, context_id, message, state,"
+    " started_at, last_checked_at, agent_ref) VALUES ('stub', 'old', 'th-1', 'ctx-1', 'm',"
+    " 'working', now(), now(), '0af3:1')"
+)
+PROGRESS_COLUMNS = (
+    "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
+    " WHERE table_name = 'freyja_agent_tasks' AND column_name IN ('progress', 'progress_at')"
+    " ORDER BY column_name"
+)
+
+
+@pytest.fixture
+async def before_008(settings: Settings) -> AsyncIterator[psycopg.AsyncConnection]:
+    """A database as a deployment of feature 005, 006, or 007 left it, and a connection."""
+    async with await psycopg.AsyncConnection.connect(
+        settings.database_uri, autocommit=True
+    ) as conn:
+        await conn.execute(BEFORE_008)
+        await conn.execute(AN_EARLIER_WORKING_ROW)
+        yield conn
+
+
+async def test_the_progress_columns_are_added_and_an_earlier_row_has_no_progress(
+    settings: Settings, before_008: psycopg.AsyncConnection
+) -> None:
+    """FR-021: a task recorded before this feature reads as one with no kept progress."""
+    cursor = await before_008.execute(PROGRESS_COLUMNS)
+    assert await cursor.fetchall() == []
+    persistence = await open_persistence(settings)
+    try:
+        store = PostgresAgentTaskStore(persistence.pool)
+        await store.setup()
+        cursor = await before_008.execute(PROGRESS_COLUMNS)
+        assert await cursor.fetchall() == [
+            ("progress", "text", "YES"),
+            ("progress_at", "timestamp with time zone", "YES"),
+        ]
+        old = await store.get_task("stub", "old")
+        assert old is not None and (old.progress, old.progress_at) == (None, None)
+        assert (old.state, old.agent_ref) == ("working", "0af3:1")
+        # A second start changes nothing, and the store works on the table from here on.
+        await store.setup()
+        cursor = await before_008.execute(PROGRESS_COLUMNS)
+        assert len(await cursor.fetchall()) == 2
+        learned = await store.now()
+        assert await store.update_task(
+            "stub", "old", when_state=("working",), progress="Half done", progress_at=learned
+        )
+        assert await store.give_up_pending(["0af3:1"], "Stopped waiting for {task_id}.") == 1
+        given_up = await store.get_task("stub", "old")
+    finally:
+        await persistence.close()
+    assert given_up is not None and given_up.state == "given_up"
+    assert (given_up.progress, given_up.progress_at) == ("Half done", learned)
+
+
+async def test_progress_round_trips_through_every_reading_of_a_task(
+    store: AgentTaskStore,
+) -> None:
+    learned = await store.now()
+    # Several lines, characters outside ASCII, and 2,000 characters in all.
+    text = "Step 2 of 3\nline two \u00e9\U0001f600" + "x" * 1977
+    await store.record_task(await a_task(store, "recorded", progress=text, progress_at=learned))
+    await store.record_task(await a_task(store, "updated"))
+    assert await store.update_task("stub", "updated", progress=text, progress_at=learned)
+    claimed = {task.task_id: task for task in await store.claim_due("instance-a", 30)}
+    listed = {task.task_id: task for task in await store.list_tasks("th-1")}
+    for task_id in ("recorded", "updated"):
+        found = await store.get_task("stub", task_id)
+        for task in (found, listed[task_id], claimed[task_id]):
+            assert task is not None
+            assert (task.progress, task.progress_at) == (text, learned)

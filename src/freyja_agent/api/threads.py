@@ -20,6 +20,7 @@ from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
     THREAD_ID_PATTERN,
     AgentTask,
+    AgentTaskProgress,
     ResumeRequest,
     RunRequest,
     ThreadState,
@@ -299,6 +300,11 @@ async def _read_state(runtime: Runtime, context: RunContext, thread_id: str) -> 
                 last_checked_at=task.last_checked_at,
                 ended_at=task.ended_at,
                 outcome_delivered=task.outcome_delivered,
+                progress=(
+                    AgentTaskProgress(text=task.progress, learned_at=task.progress_at)
+                    if task.progress is not None and task.progress_at is not None
+                    else None
+                ),
             )
             for task in await runtime.agent_tasks.list_tasks(thread_id)
         ],
