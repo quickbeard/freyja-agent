@@ -287,3 +287,25 @@ its column fails every reading of a task on Postgres.
 ## Complexity Tracking
 
 No violation of the constitution to justify.
+
+## Implementation Notes
+
+### Phase 1: the starting point (2026-11-25)
+
+Measured on the branch as created from `main` at `32dc9ae`, before any change of this
+feature. T042 compares the finished branch with these numbers.
+
+| Suite | Command | Result | Floor |
+|---|---|---|---|
+| Service | `uv run pytest --cov` | 1,897 passed, 127 skipped; 91.39% of statements (5,970, of which 514 not run) | `fail_under = 88` in `pyproject.toml` |
+| Web app | `pnpm test:coverage` in `web/` | 752 tests in 33 files passed; statements 97.42%, branches 94.34%, functions 97.15%, lines 97.93% | 90 for each in `web/vitest.config.mts` |
+| Postgres, opt-in | `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5434/freyja_test uv run pytest tests/integration` | 127 passed | none: CI does not run them, and the service's number above leaves them out |
+
+- The 127 tests the service suite skipped are exactly the opt-in Postgres tests:
+  `tests/integration` collects 127, all 127 are skipped without `FREYJA_TEST_DATABASE_URI`,
+  and the same 127 passed against `freyja_test`.
+- `tests/test_thread_index_api.py::test_a_run_that_died_in_the_middle_is_stopped_once_its_lease_expired`,
+  which failed once under load during the plan's commit, passed in the full run. It was not
+  run alone, since it did not fail.
+- The database `freyja_test` already existed in the compose Postgres on port 5434; nothing
+  was created.
