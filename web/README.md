@@ -4,6 +4,8 @@ The console of [Freyja](../README.md): a [Next.js](https://nextjs.org) app throu
 
 Like the API, the console has no authentication, and it has no users: whoever can reach it can change the service's configuration, sees every task, and can decide every proposal. Nothing records who decided.
 
+What each section of the console shows and does is described in [docs/web-console.md](../docs/web-console.md).
+
 ## Setup
 
 The console needs Node and [pnpm](https://pnpm.io). `package.json` names the pnpm version (`packageManager`); the container image is built with Node 26, and CI runs on the current LTS.
