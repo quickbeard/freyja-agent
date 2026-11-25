@@ -83,7 +83,8 @@ of the code it covers. End-to-end tests are `*.spec.ts` files under `web/e2e/`.
 
 Each pull request goes to GitHub with a matching merge request on GitLab, is built on a
 branch recreated from the latest `main`, and leaves both suites passing, the README true, and
-the feature off by default. They follow the plan's phases:
+the feature off by default. Request N is the plan's phase N; the task phases below are
+numbered one higher, since Phase 1 is the setup. They follow the plan's phases:
 
 | Request | Plan phase | Task phases | Tasks | What it delivers |
 |---|---|---|---|---|
@@ -364,35 +365,37 @@ exists to prevent.
       worker leaves the thread alone (an instance that is off never runs a thread another
       instance gave a caller)
 - [ ] T013 Add part 2 to `tests/test_a2a_server_tasks.py`, where a thread stands and ending a
-      task (FR-016, SC-014, R7, R9), on an app with the feature on, with tasks accepted
-      through `ReceivedTasks.accept` and looks made by the release function or called
-      directly. One test per row of R7's table, in its order: a task whose run has not taken
-      the lease is working whatever the thread says, also when an earlier reply is the
-      thread's last message; a held lease is working; an interrupt is working and waiting for
-      a person, with the actions' names; an agent task awaited (working, an outcome ready and
-      not in the thread, a run to report it to be tried again) is working and waiting for the
-      agent, and one waiting for input whose question was reported is not awaited; this
-      task's note `failed` is failed with the code mapped from the note's (`no_usable_model`,
-      `model_error`, `step_limit`, and `internal` for any other); this task's note `stopped`
-      is canceled with `stopped`; a thread still at `base_checkpoint` with no note of the
-      task's is failed with `interrupted`; a thread with a next step is failed with
-      `interrupted`; otherwise completed, with Freyja's last reply as the result. The three
-      fences: a look between acceptance and the lease writes nothing; a look during which a
-      run takes the lease, or the checkpoint moves, writes nothing and the task is looked at
-      again; an earlier run's note, older than the task's start or than the thread's last
-      checkpoint, is not read; two looks at once write one end. A row `working` with
-      `started_at` null for more than a minute on the suite's clock is failed with
-      `interrupted`. A run of the worker's on a caller's thread that is cut off, fails, or is
-      given up leaves no task working (SC-014). A task a look ends, completed, failed, or
-      canceled as `stopped`, is released in the same write, since a look ends a task only
-      when nothing of its thread is in progress, pending, or awaited; a console Stop of a
-      caller's run therefore frees its place in the limits at once. Accepting a message
-      first looks at the caller's tasks that still count, so a task whose end was not yet
-      written (its release function lost) does not count once its thread is at rest
-      (data-model.md, "Accepting a message", step 3). The release function runs after the
-      lease is given back, for a console
-      run, a run of the routes, and a run of the worker; a look that blocks does not delay
-      the release; one that raises is logged and the lease is released all the same
+      task (FR-016, SC-014, R7, R9), on an app with the feature on, with tasks accepted through
+      `ReceivedTasks.accept` and looks made by the release function or called directly. One
+      test per row of R7's table, in its order: a task whose run has not taken the lease is
+      working whatever the thread says, also when an earlier reply is the thread's last
+      message; a held lease is working; an interrupt is working and waiting for a person, with
+      the actions' names; an agent task awaited (working, an outcome ready and not in the
+      thread, a run to report it to be tried again) is working and waiting for the agent, and
+      one waiting for input whose question was reported is not awaited; this task's note
+      `failed` is failed with the code mapped from the note's (`no_usable_model`,
+      `model_error`, `step_limit`, and `internal` for any other); this task's note `stopped` is
+      canceled with `stopped`; a thread still at `base_checkpoint` with no note of the task's
+      is failed with `interrupted`; a thread with a next step is failed with `interrupted`;
+      otherwise completed, with Freyja's last reply as the result. The three fences: a look
+      between acceptance and the lease writes nothing; a look during which a run takes the
+      lease, or the checkpoint moves, writes nothing and the task is looked at again; an
+      earlier run's note, older than the task's start or than the thread's last checkpoint, is
+      not read; two looks at once write one end. A row `working` with `started_at` null for
+      more than a minute on the suite's clock is failed with `interrupted`. A run of the
+      worker's on a caller's thread that is cut off, fails, or is given up leaves no task
+      working (SC-014). A continuation that fails while its proposal is still pending, as when
+      no usable model is active at the resume, leaves the task working and waiting for a person
+      (Edge Cases). A task a look ends, completed, failed, or canceled as `stopped`, is
+      released in the same write, since a look ends a task only when nothing of its thread is
+      in progress, pending, or awaited; a console Stop of a caller's run therefore frees its
+      place in the limits at once. Accepting a message first looks at the tasks that still
+      count, the caller's and the others' ("for the caller and in all", data-model.md), so a
+      task whose end was not yet written (its release function lost) does not count once its
+      thread is at rest (data-model.md, "Accepting a message", step 3). The release function
+      runs after the lease is given back, for a console run, a run of the routes, and a run of
+      the worker; a look that blocks does not delay the release; one that raises is logged and
+      the lease is released all the same
 - [ ] T014 [P] In `tests/test_unattended_runs.py`: `UnattendedRuns.join(thread_id)` gives one
       more reader of a run in progress on this instance, from the events that follow, ending
       with the run's last event; it gives `None` when no run of the thread is in progress
@@ -492,7 +495,8 @@ exists to prevent.
       context_id, text, hops)`, which accepts the message through the store and starts the
       run through `api/runs.py` as a console run, removes the task's row when the run is
       refused, and writes `started_at` and `base_checkpoint` once the run holds the lease,
-      and which first looks at the caller's tasks that still count (data-model.md step 3);
+      and which first looks at the tasks that still count, the caller's and the others'
+      (data-model.md step 3);
       the look of R7, with its table, its three fences, and the minute rule; the end,
       written once from a consistent look and released in the same write; and
       the function the lease's release calls while the feature is on, which looks at the
@@ -821,10 +825,10 @@ console no longer counts it.
 ### Tests for User Story 4
 
 - [ ] T063 [US4] Add part 4 to `tests/test_a2a_server_tasks.py`, following (FR-017):
-      `SubscribeToTask` gives the task as it stands and every change to its end; on a task
-      that ended, -32004; a fifth stream of one task is refused with `stream_limit` and its
-      sentence, and a fourth is not; a follower through a second instance on the same stores
-      receives each change of state, of the status, and the result, and no pieces; a
+      `SubscribeToTask` gives the task as it stands and every change to its end; on a task that
+      ended, -32004; a fifth stream of one task on one instance is refused with `stream_limit`
+      and its sentence, and a fourth is not; a follower through a second instance on the same
+      stores receives each change of state, of the status, and the result, and no pieces; a
       follower that falls `READER_BACKLOG` events behind is disconnected and the run goes on
 - [ ] T064 [US4] Add part 5 to `tests/test_a2a_server_tasks.py`, restarts (FR-012, SC-010): a
       second application on the same stores, and a runtime opened again on them, read a
@@ -856,7 +860,10 @@ console no longer counts it.
       continuation is marked, and one after, stop it at its first boundary; a cancel and a
       decision at once, in both orders, have exactly one effect; a rejection by rule that fails
       (no usable model, no context) is tried again no sooner than 30 seconds later and at most
-      five times, after which nobody can approve and a person can reject
+      five times, after which nobody can approve and a person can reject; a decision sent
+      through `/threads/{id}/resume`, the route whose run ends when its client stops reading,
+      is applied as today, a cancel that follows cannot stop that run, and the task is
+      canceled all the same, with what the run does left in the thread (Edge Cases)
 - [ ] T067 [US4] Add part 8 to `tests/test_a2a_server_tasks.py`, releases and the sweep (R9):
       a canceled task is released once its thread has no run in progress and no agent task
       awaited, and a pending proposal does not keep it counting; the sweep, run on the
@@ -938,7 +945,9 @@ removing a caller cancels its task.
       else; a name of "lowercase letters, digits, hyphens, and underscores, starting with a
       letter, at most 32 characters; not `local`"; a token of "16 to 4,096 characters, each
       a visible ASCII character (no space, no control character)"; two callers with one
-      token; more than 20; `FREYJA_A2A_SERVER_HOST` without `_PORT` and the other way round;
+      token; more than 20; a caller named as a configured delegate agent is accepted and
+      neither name gives anything of the other (Edge Cases); `FREYJA_A2A_SERVER_HOST` without
+      `_PORT` and the other way round;
       the outside listener set while the feature is off, while no caller is named, and
       while `FREYJA_A2A_SERVER_URL` is unset; a URL that is not `http` or `https` with a
       host and at most a port; a port outside 1 to 65535, or the service's own on the same

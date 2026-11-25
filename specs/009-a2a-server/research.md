@@ -131,7 +131,9 @@ thread is made or a model is asked.
 
 **Refused credentials are logged sparingly.** Anyone who reaches the outside listener can
 send requests without a token. One warning is written for the first refusal, and after that
-at most one in ten seconds for each address, saying how many were refused since (FR-028).
+at most one in ten seconds for each of the two addresses, the service's own and the outside
+listener, saying how many were refused since (FR-028). Counted per client address, the
+warnings and the record of them would grow with the number of clients.
 
 The refusal of other origins runs first on both addresses, by the rule the thread routes
 use (`refuse_other_origins`). `AllowedHosts` covers the own address as it covers every route
@@ -502,7 +504,7 @@ has ended, when its client goes, or when the service stops.
 - **Through another instance**, or for a run of the worker's, there are no events: the loop
   sends each change of state and of the status message, and the result (FR-017).
 
-A task has at most four followers at once; a fifth is refused as "not now" (R12). The spec
+A task has at most four followers at once on one instance; a fifth there is refused as "not now" (R12). The spec
 does not ask for the number; it bounds what a caller can hold open.
 
 ## R14. A send that does not ask for a stream

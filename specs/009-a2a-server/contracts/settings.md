@@ -6,7 +6,7 @@ reads it.
 
 | Variable | Default | Rule |
 |---|---|---|
-| `FREYJA_A2A_SERVER` | `false` | Whether Freyja receives work over A2A. Off: every other variable here may be set and is not used, apart from the two errors below. |
+| `FREYJA_A2A_SERVER` | `false` | Whether Freyja receives work over A2A. Off: every other variable here may be set and is not used, apart from two errors of the outside listener below: `FREYJA_A2A_SERVER_HOST` without `_PORT` or the other way round, and the outside listener set while the feature is off. |
 | `FREYJA_A2A_SERVER_CALLERS` | `{}` | A JSON object: a caller's name, then an object with `token` and nothing else. At most 20. |
 | `FREYJA_A2A_SERVER_HOST` | unset | The address the outside listener binds. No default: a deployment that opens it says where. |
 | `FREYJA_A2A_SERVER_PORT` | unset | Its port, 1 to 65535, and not the service's own on the same address. |
