@@ -173,6 +173,63 @@ for (const width of [1280, 390]) {
   });
 }
 
+// Phase 8 (T048): what the service really sends, read in both browsers.
+
+test("a time written with microseconds, as the service writes it, gives its age and its exact time", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  hold(service, working("Step 1 of 6", "2026-11-25T08:00:00.259558Z"));
+  await open(page, service, 90);
+
+  await expect(lastReported(page)).toHaveText(
+    "Last reported by the agent 1 minute ago:",
+  );
+  const time = agentTasks(page).first().locator("time");
+  await expect(time).toHaveAttribute("datetime", "2026-11-25T08:00:00.259558Z");
+  // The exact time is in the browser's time zone: 08:00 UTC is still November 24 far west.
+  await expect(time).toHaveAttribute(
+    "title",
+    /^Nov 2[45], 2026, \d{1,2}:\d{2}/,
+  );
+});
+
+test("a text holding a right-to-left override is shown as written, in a box the browser isolates", async ({
+  page,
+}) => {
+  const override = String.fromCodePoint(0x202e);
+  const text = `${override}Step 2 of 6, then the charts`;
+  const service = new TaskService();
+  hold(service, working(text));
+  await open(page, service);
+
+  await expect(box(page)).toHaveText(text);
+  // The box isolates its text: an override in it reaches nothing outside it.
+  expect(
+    await box(page).evaluate(
+      (element) => getComputedStyle(element).unicodeBidi,
+    ),
+  ).toBe("isolate");
+  await expect(lastReported(page)).toHaveText(
+    "Last reported by the agent just now:",
+  );
+  // The agent task's lines hold what they held before, the box last. (This is their text,
+  // not their order on screen: each is a block of its own, which an override in another
+  // cannot reach, and the box's own isolation is what the check above shows.)
+  const lines = await agentTasks(page)
+    .first()
+    .evaluate((element) =>
+      Array.from(element.children, (child) => child.textContent),
+    );
+  expect(lines).toEqual([
+    "stubPendingThe agent is working",
+    "Started with:",
+    "slow 40",
+    "Last reported by the agent just now:",
+    text,
+  ]);
+});
+
 test("an agent task that completed shows no progress", async ({ page }) => {
   const service = new TaskService();
   hold(
