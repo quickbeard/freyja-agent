@@ -20,6 +20,7 @@ removes every agent address the process knows (005 FR-028).
 import asyncio
 import contextlib
 import logging
+import unicodedata
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -650,10 +651,21 @@ async def send_message(
 
 # A task or conversation id longer than this makes a reply malformed (FR-009).
 ID_LIMIT = 256
+# What an id must not hold: a control character, which every line break but two is, or a
+# separator of lines or paragraphs. The agent chooses its task's id, and the id is written
+# into what the model reads line by line, its system message included: a line break in one
+# would start a line of the agent's choosing, which could pass for another task or for the
+# service's own words.
+_UNSAFE_CATEGORIES = frozenset({"Cc", "Zl", "Zp"})
+
+
+def _unsafe(value: str) -> bool:
+    return any(unicodedata.category(character) in _UNSAFE_CATEGORIES for character in value)
 
 
 def malformed(outcome: SendOutcome) -> str | None:
-    """What makes a reply unusable, or None: an empty or overlong task or conversation id."""
+    """What makes a reply unusable, or None: a task or conversation id that is empty, longer
+    than ``ID_LIMIT`` characters, or holds a control character or a line break."""
     checks: list[tuple[str, str]] = []
     if outcome.reply is not None:
         # A direct message may leave its conversation out; it then starts none.
@@ -666,6 +678,8 @@ def malformed(outcome: SendOutcome) -> str | None:
             return f"its {name} is empty"
         if len(value) > ID_LIMIT:
             return f"its {name} is longer than {ID_LIMIT} characters"
+        if _unsafe(value):
+            return f"its {name} holds a control character or a line break"
     return None
 
 
