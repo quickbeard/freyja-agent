@@ -32,6 +32,10 @@ Always go through uv. Never call python, pip, or pytest directly.
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
   `http://127.0.0.1:9998` for a manual run; add it to `FREYJA_A2A_AGENTS` under any name.
+- `uv run python -m tests.a2a_caller --url http://localhost:8000 <card|send|stream|get> ...`
+  is the stand-in caller of feature 009, the protocol's own client, calling Freyja as another
+  agent would at the service's own address (`FREYJA_A2A_SERVER=true`); it prints each task or
+  event, and a refusal, as one JSON object.
 - `uv run --env-file .env python -m tests.llm_stub --http 9997` serves the stand-in model
   endpoint for a manual run; use `http://127.0.0.1:9997/v1` as an LLM profile's base URL. It
   behaves by model id: `refuse-conversation`, `reject-key`, `repeat-key`, `never-answer`,
@@ -254,6 +258,19 @@ startup and exits with an error naming the connection when it is unreachable.
   feature's service, `ReceivedTasks`: accepting a caller's message as a console run, where a
   caller's thread stands (`standing`, research R7's table and its three fences), writing a
   task's end once (`look`), and the function every release calls while the feature is on;
+  a task as its caller is told it (`view`: the fixed status sentences and reasons, every text
+  read from the thread cleaned of agents' addresses and models' keys), the follower that
+  turns a console run's events into what a caller is sent, names only and the text of
+  Freyja's own reply (`follow`), and the wait of a send without a stream (`settle`);
+  `a2a_server.py` the routes of feature 009, added by the lifespan while the feature is on:
+  the card (`GET /.well-known/agent-card.json`) and `POST /a2a`, the SDK's JSON-RPC
+  dispatcher behind the checks of other origins, a credential, and the size, with
+  `FreyjaRequestHandler`, which checks a message's form, calls `ReceivedTasks`, turns its
+  tasks into the protocol's types, and refuses what the contract does not offer; it is the
+  one module that imports the SDK's server modules; `streaming.py` marks each `message`
+  event of a run on the strict build with `metadata.reply`, whether it is text of Freyja's
+  own reply (`is_reply`); the two message routes refuse a caller's thread with 409
+  `caller_thread` (`runs.refuse_caller_thread`), and a thread's row has `caller`;
   `threads.py` the three thread routes (runs, state, resume),
   each of which takes a context, the two that run under the thread's lease, and validates
   a decision on the orchestrator that then carries it out;
@@ -360,7 +377,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `awaited` says whether a task still waits for one, and which shows under a working agent
   task what its agent last reported and how long ago, worded by `web/lib/ago.ts` from the
   browser's time that the view keeps in its state, set by its timer and when a reading
-  arrives, never while it renders (feature 008). The view reads its task again by one
+  arrives, never while it renders (feature 008); and who started a task when another
+  agent did (`started-by.tsx`, from the row's `caller`), on the list's row and on the
+  task's page, which then offers no follow-up box and says why (feature 009). The view
+  reads its task again by one
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
   every `AGENT_SECONDS` while an agent task is awaited, its row alone every
   `FOLLOW_SECONDS` while it reads its own run's stream, so that a stop asked in another
@@ -407,7 +427,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
   during a run, and Stop (it moves the page's clock with `page.clock` in place of waiting
   five or fifteen seconds), `tasks-progress.spec.ts` what a working agent last reported, its
-  age, and its box (feature 008), with
+  age, and its box (feature 008), `tasks-callers.spec.ts` the tasks other agents started
+  (feature 009), with
   `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
   its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
   its decision, `followedUp` and `agentTask` for a follow-up and an agent task,
@@ -471,7 +492,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `test_a2a_progress.py` the tests of feature 008, the progress of pending agent tasks, in
   eight parts, from what counts as progress to the stream of an agent that does not stream;
   `a2a_caller.py` the stand-in caller of feature 009, the SDK's own client behind a small
-  class and a command, as another agent would call Freyja; the feature's tests are
+  class and a command, as another agent would call Freyja; `a2a_requests.py` the requests
+  the feature's tests make to the A2A routes, with the stand-in caller and without it;
+  `fakes.py`'s `StreamingChatModel` streams a reply in pieces and can hold between two; the
+  feature's tests are
   `test_a2a_server_*.py` and `test_received_tasks.py`, with
   `integration/test_received_tasks_postgres.py` for the store on Postgres;
   `integration/` holds the Postgres tests, skipped unless

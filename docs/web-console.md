@@ -51,6 +51,10 @@ When the service refuses values, they are shown beside the action, and the task 
 
 **Large whole numbers.** A whole number beyond 2^53, such as a 64-bit id, is shown digit for digit and sent as it was entered in a browser that gives a number's own text when it reads JSON, as current Chromium and Firefox do. A browser that does not would show and send another number: there the card says that such an argument may be shown inexactly, and an edit that holds one is not sent, with the number named beside it. Approving sends no arguments, so it is exact in either.
 
+### Tasks another agent started
+
+A task that another agent handed Freyja over A2A (see [Receive tasks from agents](a2a-server.md)) says who started it, on its row and on its page: "Started by an agent on this machine" for an agent that called the service's own address. Its proposals are decided, and its run stopped, as for any task. Only the agent that started it sends messages on it, so its page has no box for another message and says why; the service refuses such a message with `409` `caller_thread` all the same.
+
 ### Another message
 
 Under the conversation, a box sends **another message** on the same task. Freyja answers with the whole conversation in mind, and the reply streams below the conversation as it was. It is how a task that failed or stopped is continued.
