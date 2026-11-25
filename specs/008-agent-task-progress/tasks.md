@@ -46,8 +46,10 @@ suites passing and the README true. They follow the plan's phases:
 | 3 | 3 | Phase 5 and Phase 6 (T032 to T039) | The check lists it (US3); a hand-off to an agent that does not stream reports a changed text (US4) |
 | 4 | 4 | Phase 7 (T040 to T044) | The quickstart walked by hand; the documents read against the code |
 
-Phase 2 has no request of its own: alone it changes nothing a client sees. Phase 1 has no
-change and is done at the start of request 1's branch.
+Phase 2 has no request of its own: alone it changes nothing a client sees. Phase 1 changes
+no code. It was run in a request of its own, at the owner's word, before request 1: that
+request ticks its two tasks and records the starting numbers in plan.md under
+Implementation Notes, where T042 reads them.
 
 ## Standing rules for every task
 
@@ -99,16 +101,16 @@ change and is done at the start of request 1's branch.
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: know the starting point. No file changes.
+**Purpose**: know the starting point. No code changes.
 
-- [ ] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
-      created from `main`, and note the two coverage numbers for the description of request
-      1; they are what the floors in `pyproject.toml` and `web/vitest.config.mts` are
-      compared with in T042. If
+- [X] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
+      created from `main`, and record the two coverage numbers in plan.md; they are what
+      the floors in `pyproject.toml` and `web/vitest.config.mts` are compared with in
+      T042. If
       `tests/test_thread_index_api.py::test_a_run_that_died_in_the_middle_is_stopped_once_its_lease_expired`
       fails, run it alone: it failed once under load during the plan's commit and passed
       alone; note it, and do not change it in this feature
-- [ ] T002 [P] Make sure the opt-in Postgres tests run: the database `freyja_test` exists in
+- [X] T002 [P] Make sure the opt-in Postgres tests run: the database `freyja_test` exists in
       the compose Postgres, which listens on port 5434 on this machine
       (`docker compose exec postgres createdb -U freyja freyja_test` when it does not), and
       `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5434/freyja_test uv run
