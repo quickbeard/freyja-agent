@@ -13,6 +13,7 @@ from typing import Any
 import pytest
 
 from freyja_agent.runtime.agent_tasks import (
+    UPDATABLE,
     AgentSend,
     AgentTaskRecord,
     AgentTaskStore,
@@ -337,6 +338,71 @@ async def test_pending_tasks_are_counted_by_agent_and_ref(store: AgentTaskStore)
         ("stub", None): 1,
         ("hello", None): 1,
     }
+
+
+# Feature 008, T003: a task's kept progress (008 research R2, data-model.md "Agent task").
+
+
+async def test_a_task_has_no_progress_until_it_is_given_some(store: AgentTaskStore) -> None:
+    task = await a_task(store)
+    assert (task.progress, task.progress_at) == (None, None)
+    await store.record_task(task)
+    found = await store.get_task("stub", "t1")
+    assert found is not None and (found.progress, found.progress_at) == (None, None)
+
+
+async def test_progress_is_kept_with_the_task_and_read_back_everywhere(
+    store: AgentTaskStore,
+) -> None:
+    learned = await store.now()
+    await store.record_task(await a_task(store, progress="Half done", progress_at=learned))
+    found = await store.get_task("stub", "t1")
+    (listed,) = await store.list_tasks("th-1")
+    (claimed,) = await store.claim_due("instance-a", 30)
+    for task in (found, listed, claimed):
+        assert task is not None and (task.progress, task.progress_at) == ("Half done", learned)
+
+
+async def test_progress_is_set_only_by_an_update_that_names_it(
+    store: AgentTaskStore, advance: Advance
+) -> None:
+    assert {"progress", "progress_at"} <= UPDATABLE
+    await store.record_task(await a_task(store))
+    learned = await store.now()
+    assert await store.update_task(
+        "stub", "t1", when_state=("working",), progress="Step 1 of 3", progress_at=learned
+    )
+    await advance(1)
+    # A check that finds the same text sets the time it checked, and nothing of the progress.
+    assert await store.update_task("stub", "t1", last_checked_at=await store.now())
+    task = await store.get_task("stub", "t1")
+    assert task is not None and (task.progress, task.progress_at) == ("Step 1 of 3", learned)
+    assert task.last_checked_at > learned
+
+
+async def test_nothing_that_ends_or_gives_up_a_task_clears_its_progress(
+    store: AgentTaskStore, advance: Advance
+) -> None:
+    """FR-007: the last progress stays when a task ends, is given up, or is delivered."""
+    learned = await store.now()
+    kept = {"progress": "Half done", "progress_at": learned}
+    await store.record_task(await a_task(store, "given-up", agent_ref="0af3:1", **kept))
+    await store.record_task(await a_task(store, "ended", **kept))
+    await advance(1)
+    now = await store.now()
+    assert await store.give_up_pending(["0af3:1"], MOVED) == 1
+    await store.update_task(
+        "stub", "ended", state="completed", ended_at=now, outcome="done", outcome_ready=True
+    )
+    await store.set_followup([("stub", "ended")], attempts=1, next_at=now, error="model_error")
+    await store.clear_followups("th-1")
+    await store.mark_delivered("stub", "ended")
+    await store.mark_delivered("stub", "given-up")
+    for task_id, state in (("given-up", "given_up"), ("ended", "completed")):
+        task = await store.get_task("stub", task_id)
+        assert task is not None and task.state == state
+        assert task.delivered_at is not None
+        assert (task.progress, task.progress_at) == ("Half done", learned)
 
 
 # Feature 005, T052: the proposed calls (research R8, data-model.md "Proposed call").

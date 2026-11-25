@@ -130,13 +130,13 @@ client yet.
 
 ### Tests
 
-- [ ] T003 [P] Add to `tests/test_agent_task_store.py`, against `InMemoryAgentTaskStore`:
+- [X] T003 [P] Add to `tests/test_agent_task_store.py`, against `InMemoryAgentTaskStore`:
       `AgentTaskRecord` has `progress` and `progress_at`, both `None` by default;
       `record_task`, `get_task`, `list_tasks`, and `claim_due` carry them; `update_task`
       accepts both as columns (they are in `UPDATABLE`) and sets them only when named;
       `give_up_pending`, `mark_delivered`, `set_followup`, `clear_followups`, and an
       `update_task` that names other columns leave them as they were (FR-007)
-- [ ] T004 [P] Add to `tests/integration/test_a2a_tasks_postgres.py`, with a fixture of its
+- [X] T004 [P] Add to `tests/integration/test_a2a_tasks_postgres.py`, with a fixture of its
       own that creates `freyja_agent_tasks` as it was before this feature (with
       `agent_ref`, without the two columns) and puts one working row in it, as
       `earlier_database` in `tests/integration/test_saved_agents_postgres.py` does for
@@ -145,7 +145,7 @@ client yet.
       second `setup()` changes nothing; a task recorded with progress, and one updated with
       it, read back the same through `get_task`, `list_tasks`, and `claim_due`; the
       statement that gives tasks up (`give_up_pending`) leaves both as they were
-- [ ] T005 [P] Create `tests/test_a2a_progress.py` with its module docstring (feature 008,
+- [X] T005 [P] Create `tests/test_a2a_progress.py` with its module docstring (feature 008,
       the spec's requirements it covers) and part 1, `progress_text` from
       `freyja_agent.delegates.a2a_agents`, on statuses built with `a2a.types`: a working
       status with a text gives the text; a submitted status gives it too (FR-002); completed,
@@ -157,7 +157,7 @@ client yet.
       (`PROGRESS_LIMIT == 2000`); a text that is blank once its characters are dropped gives
       `None`; spaces at its start and end are kept; a text holding an address the scrubber
       knows (`SCRUBBER.mark_saved`) is returned as written
-- [ ] T006 Add part 2 to `tests/test_a2a_progress.py`, the stand-in, read through a real
+- [X] T006 Add part 2 to `tests/test_a2a_progress.py`, the stand-in, read through a real
       `AgentLink` over `StreamingASGITransport` as `tests/test_a2a_pending.py` does: a `hold`
       task's status reads "Working on it." (`StubAgent.working_text`'s default);
       `report("Half done")` makes the next `get_task` return a working status with that
@@ -170,7 +170,7 @@ client yet.
 
 ### Implementation
 
-- [ ] T007 [P] In `src/freyja_agent/runtime/agent_tasks.py`: add `progress: str | None =
+- [X] T007 [P] In `src/freyja_agent/runtime/agent_tasks.py`: add `progress: str | None =
       None` and `progress_at: datetime | None = None` to `AgentTaskRecord`, after
       `agent_ref`, with a comment from data-model.md ("at most 2,000 characters, in the
       agent's own words"; "Null exactly when `progress` is null"); add `progress text` and
@@ -179,7 +179,7 @@ client yet.
       progress text` and the same for `progress_at timestamptz`, so a deployment's table
       gains them under the lock timeout feature 005 set (R2); extend the module docstring
       with one paragraph on feature 008. No statement is added
-- [ ] T008 [P] In `src/freyja_agent/delegates/a2a_agents.py`: add `PROGRESS_LIMIT = 2000`
+- [X] T008 [P] In `src/freyja_agent/delegates/a2a_agents.py`: add `PROGRESS_LIMIT = 2000`
       and `progress_text(status: TaskStatus) -> str | None`, beside `state_name` and
       `_text`, in R1's order: `None` when `state_name(status.state)` is not `"working"`, and
       `None` when the status has no message; the message's text parts joined by `"\n"` (`_text`); NUL
@@ -187,7 +187,7 @@ client yet.
       `surrogatepass`, or an equivalent that keeps every other character); cut to
       `PROGRESS_LIMIT` characters; `None` when the result is empty or only blank space.
       Nothing else is done to the text; it does not pass through the scrubber (FR-004)
-- [ ] T009 [P] In `tests/a2a_stub.py`: add `StubAgent.working_text: str | None = "Working
+- [X] T009 [P] In `tests/a2a_stub.py`: add `StubAgent.working_text: str | None = "Working
       on it."`, used for the first working status (no message when `None`); add
       `StubAgent.report(text: str | None)`, callable from the test's own thread as
       `release()` is, after which every `hold` task that is waiting sends one working status
@@ -218,7 +218,7 @@ The stand-in received exactly the requests it receives without this feature.
 
 ### Tests for User Story 1
 
-- [ ] T010 [US1] Add part 3 to `tests/test_a2a_progress.py`, keeping progress through the
+- [X] T010 [US1] Add part 3 to `tests/test_a2a_progress.py`, keeping progress through the
       API, with `make_a2a_app`, the stand-in, a call time limit short enough that a `hold`
       task becomes pending, the suite's `FakeClock`, and `worker.tick()` through the
       client's portal: right after the hand-off ends as pending, before any check, the
@@ -235,7 +235,7 @@ The stand-in received exactly the requests it receives without this feature.
       completes within the call time limit records its task as completed with
       `progress.text` "Step 2 of 2", the last text it saw while the task was working
       (FR-006: a task its hand-off records as ended carries that progress too)
-- [ ] T011 [US1] Add part 4 to `tests/test_a2a_progress.py`, endings and edge cases, each
+- [X] T011 [US1] Add part 4 to `tests/test_a2a_progress.py`, endings and edge cases, each
       starting from a pending task with kept progress: the task ends completed (`hold`
       released), failed, rejected, canceled by the agent, and asking for authentication
       (`hold fail`, `hold reject`, `hold cancel`, `hold auth`), and in each case the state
@@ -258,7 +258,7 @@ The stand-in received exactly the requests it receives without this feature.
       time unchanged; the agent no longer knows the task: it ends failed and the progress
       stays; a task given up for its age, and one given up when its saved agent is removed,
       keep their progress; two tasks of one thread each keep their own
-- [ ] T012 [US1] Add part 5 to `tests/test_a2a_progress.py`, what progress never does: the
+- [X] T012 [US1] Add part 5 to `tests/test_a2a_progress.py`, what progress never does: the
       same scenario (a hand-off that ends pending, three ticks, the task completed) run once
       with the stand-in reporting texts and once with `working_text = None` and no reports
       gives the same count of requests in `transport.requests`, the same messages in the
@@ -270,49 +270,49 @@ The stand-in received exactly the requests it receives without this feature.
       the pending proposal is the same before and after (FR-016, SC-003); a second runtime on
       the same stores (`second_instance`) and a runtime opened again on them return the same
       progress (FR-008, SC-008)
-- [ ] T013 [US1] Add part 6 to `tests/test_a2a_progress.py`, the log (FR-018a, SC-011), with
+- [X] T013 [US1] Add part 6 to `tests/test_a2a_progress.py`, the log (FR-018a, SC-011), with
       `caplog.at_level(logging.DEBUG)` and a recognizable progress text
       (`"progress-marker-0008 step"`): through a hand-off that ends pending, two ticks,
       readings of the thread's state, and the task's completion, no record of a logger named
       `freyja_agent` or under it, at any level, and no record of any logger at INFO or above,
       holds the marker. Leave a hook in the test for the check, which T033 adds
-- [ ] T014 [P] [US1] In `tests/test_state.py`: the keys of an agent task in the thread's
+- [X] T014 [P] [US1] In `tests/test_state.py`: the keys of an agent task in the thread's
       state include `progress`; the two whole entries pinned there gain `"progress": None`
       or the text and time the scenario leads to; a task recorded without progress, as a
       row written before this feature is, has `progress: null` (FR-009, FR-021)
 
 ### Implementation for User Story 1
 
-- [ ] T015 [US1] In `src/freyja_agent/delegates/a2a_agents.py`: add `progress: str | None =
+- [X] T015 [US1] In `src/freyja_agent/delegates/a2a_agents.py`: add `progress: str | None =
       None` and `progress_seen: float | None = None` to `SendOutcome`, documented as in
       data-model.md, "In memory, during a hand-off"; add a helper that, given a status,
       sets both when `progress_text` gives a text other than `outcome.progress`, with
       `progress_seen` the running loop's `time()`; call it in `_send` at the `task` event
       and at each `status_update`, and in `_poll` at each read. The stream's events do not
       change in this task (R4)
-- [ ] T016 [US1] In `src/freyja_agent/delegates/a2a_tools.py`, `_record`: when
+- [X] T016 [US1] In `src/freyja_agent/delegates/a2a_tools.py`, `_record`: when
       `outcome.progress` is set, its time is the `now` `_record` already reads less the
       seconds since `outcome.progress_seen` on the running loop's clock (R4). A task it
       records (`record_task`) carries `progress` and `progress_at`. A row it updates gets
       them only when the row it read (`known_task`) holds another text and holds no
       progress or progress learned earlier than the hand-off's (FR-006, R4); otherwise the
       update names neither column
-- [ ] T017 [P] [US1] In `src/freyja_agent/delegates/delegation_worker.py`, `_check`: compute
+- [X] T017 [P] [US1] In `src/freyja_agent/delegates/delegation_worker.py`, `_check`: compute
       `progress_text(found.status)` where the status is read; when the state found is
       `working`, the `update_task` that sets `last_checked_at` also sets `progress` and
       `progress_at` (the same `now`) when that text is not `None` and differs from
       `current.progress`, and names neither column otherwise (R3). A task whose row waits
       for input still writes nothing while the agent says it is pending. No request, no
       statement, and no log line is added
-- [ ] T018 [P] [US1] In `src/freyja_agent/api/schemas.py`, add `AgentTaskProgress` (`text:
+- [X] T018 [P] [US1] In `src/freyja_agent/api/schemas.py`, add `AgentTaskProgress` (`text:
       str`, `learned_at: datetime`) and `AgentTask.progress: AgentTaskProgress | None`, with
       comments from contracts/openapi.yaml; in `src/freyja_agent/api/threads.py`,
       `_read_state` fills it from `task.progress` and `task.progress_at` when both are set,
       for every agent task whatever its status (FR-009, R6)
-- [ ] T019 [US1] Run `uv run pytest`. Change only the tests FR-022 allows, those that pin an
+- [X] T019 [US1] Run `uv run pytest`. Change only the tests FR-022 allows, those that pin an
       agent task's whole shape in the thread's state, and name each in request 1's Tests
       section; any other test that fails is a defect of this phase
-- [ ] T020 [P] [US1] In `README.md`: the thread-state section (the paragraph that lists an
+- [X] T020 [P] [US1] In `README.md`: the thread-state section (the paragraph that lists an
       agent task's keys) gains `progress`, what it holds, that its time stays while the
       agent repeats itself, and that it is learned with no request to the agent; the startup
       paragraph's account of the agent tables needs no change. In `AGENTS.md`, Layout:
@@ -321,7 +321,7 @@ The stand-in received exactly the requests it receives without this feature.
       its progress updates, and its kept progress, pass as written and are not searched, as
       feature 005, FR-028, has it, since this request already returns kept progress
       unsearched in the thread's state
-- [ ] T021 [US1] Walk `specs/008-agent-task-progress/quickstart.md`, section 1, on a check
+- [X] T021 [US1] Walk `specs/008-agent-task-progress/quickstart.md`, section 1, on a check
       instance by the standing rules, and correct the section where the built feature
       differs
 
