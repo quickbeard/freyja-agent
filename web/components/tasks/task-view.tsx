@@ -960,6 +960,7 @@ export function TaskView({ threadId }: { threadId: string }) {
           // Another proposal is another card: nothing of a decision on the earlier one stays.
           key={pending.interrupt_id}
           pending={pending}
+          caller={caller}
           send={(decisions) => decideNow(pending.interrupt_id, decisions)}
           onStale={stale}
           onRefused={() => {

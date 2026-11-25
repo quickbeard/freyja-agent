@@ -1,8 +1,14 @@
-import { expect, test } from "@playwright/test";
+import { expect, type Page, test } from "@playwright/test";
 import {
   ai,
+  byCaller,
   callerTask,
+  continued,
   human,
+  notify,
+  pausedTask,
+  proposal,
+  runningTask,
   summary,
   TaskService,
   threadState,
@@ -82,4 +88,84 @@ test("a task another agent started has no box for another message, and says why"
   await expect(page.getByRole("textbox")).toBeVisible();
   await expect(page.getByText(/Started by/)).toHaveCount(0);
   await expect(page.getByText(/only that agent sends messages/)).toHaveCount(0);
+});
+
+// User Story 2: a person decides what a caller's task proposes, as for any task.
+
+const PAUSED_ID = "5d2f0c1e9a7b4c33a1f08e6d2b7c9a40";
+const CARD = "Freyja proposes an action that needs your decision";
+const SAID =
+  "Started by an agent on this machine. No person asked for this action: the agent's task led Freyja to propose it.";
+
+const tasksItem = (page: Page) =>
+  page
+    .getByRole("navigation", { name: "Sections" })
+    .getByRole("link", { name: /^Tasks/ })
+    .locator("xpath=..");
+
+async function pausedByCaller(page: Page): Promise<TaskService> {
+  const task = byCaller(
+    pausedTask(
+      PAUSED_ID,
+      "Compile and tell #ops.",
+      proposal("int-9", notify()),
+    ),
+  );
+  const service = new TaskService();
+  service.tasks.set(PAUSED_ID, task);
+  service.answerDecisionsWith(() =>
+    continued(task, "Notification to #ops recorded.", "Told them."),
+  );
+  await service.serve(page);
+  await page.goto("/tasks");
+  await expect(tasksItem(page)).toContainText("1 to decide");
+  await page.goto(`/tasks/${PAUSED_ID}`);
+  await expect(page.getByRole("region", { name: CARD })).toContainText(SAID);
+  return service;
+}
+
+test("a caller's task that needs a decision is counted, says who started it, and is approved", async ({
+  page,
+}) => {
+  const service = await pausedByCaller(page);
+  await page.getByRole("button", { name: "Approve send_notification" }).click();
+  await expect(page.getByRole("list", { name: "Conversation" })).toContainText(
+    "Told them.",
+  );
+  await expect(page.getByRole("heading", { name: CARD })).toBeHidden();
+  expect(service.decided).toEqual([
+    {
+      threadId: PAUSED_ID,
+      interrupt_id: "int-9",
+      decisions: [{ type: "approve" }],
+    },
+  ]);
+});
+
+test("a caller's task's proposal is rejected as any", async ({ page }) => {
+  const service = await pausedByCaller(page);
+  await page.getByRole("button", { name: "Reject send_notification" }).click();
+  await page
+    .getByRole("button", { name: "Reject send_notification now" })
+    .click();
+  await expect(page.getByRole("heading", { name: CARD })).toBeHidden();
+  expect(service.decided[0].decisions).toEqual([{ type: "reject" }]);
+});
+
+test("Stop is offered for a caller's task's run in progress", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  service.tasks.set(
+    PAUSED_ID,
+    byCaller(runningTask(PAUSED_ID, "Read every file.")),
+  );
+  await service.serve(page);
+  await page.goto(`/tasks/${PAUSED_ID}`);
+  await page
+    .getByRole("button", { name: "Stop the run of the task: Read every file." })
+    .click();
+  await expect.poll(() => service.stops).toEqual([PAUSED_ID]);
+  // And still no box for another message.
+  await expect(page.getByRole("textbox")).toHaveCount(0);
 });

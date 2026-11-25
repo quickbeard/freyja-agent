@@ -60,6 +60,46 @@ function renderCard(
 const button = (name: string) => screen.getByRole("button", { name });
 
 describe("the proposal card", () => {
+  it("on a task another agent started, says who started the run and that no person asked for it", () => {
+    render(
+      <ProposalCard
+        pending={proposal(HANDOFF)}
+        send={vi.fn(async () => {})}
+        onStale={vi.fn()}
+        caller={{ name: "local", canceled: false, configured: true }}
+      />,
+    );
+    const card = screen.getByRole("region", {
+      name: "Freyja proposes an action that needs your decision",
+    });
+    expect(card.textContent).toContain(
+      "Started by an agent on this machine. No person asked for this action: the agent's task led Freyja to propose it.",
+    );
+  });
+
+  it("says the same of several actions a caller's task led to", () => {
+    render(
+      <ProposalCard
+        pending={proposal(NOTIFY, HANDOFF)}
+        send={vi.fn(async () => {})}
+        onStale={vi.fn()}
+        caller={{ name: "local", canceled: false, configured: true }}
+      />,
+    );
+    expect(
+      screen.getByRole("region", {
+        name: "Freyja proposes 2 actions that need your decision",
+      }).textContent,
+    ).toContain(
+      "Started by an agent on this machine. No person asked for these actions: the agent's task led Freyja to propose them.",
+    );
+  });
+
+  it("on a task a person started, says nothing of who started it", () => {
+    renderCard(proposal(NOTIFY, HANDOFF));
+    expect(screen.queryByText(/Started by|No person asked/)).toBeNull();
+  });
+
   it("shows each action's name, where it goes, its description, and its arguments in full", () => {
     renderCard(proposal(NOTIFY, HANDOFF, LOOKUP));
     const notify = screen.getByRole("article", {

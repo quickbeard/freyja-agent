@@ -258,6 +258,9 @@ class UnattendedRuns:
         # Every drive in progress, also one whose run has ended and gives its lease back.
         self._tasks: set[asyncio.Task[None]] = set()
         self._closing = False
+        # Told of each run as it starts, before its first event (feature 009): a follower of
+        # a caller's task joins the run a person's decision started.
+        self.on_start: Callable[[str], None] | None = None
 
     def armed(self, thread_id: str) -> bool:
         return thread_id in self._runs
@@ -304,6 +307,11 @@ class UnattendedRuns:
         reader = _Reader()
         run.readers.append(reader)
         self._runs[thread_id] = run
+        if self.on_start is not None:
+            try:
+                self.on_start(thread_id)
+            except Exception:
+                logger.exception("Thread %s: telling of the run's start failed", thread_id)
         run.task = asyncio.create_task(self._drive(run, events), name=f"freyja-run-{thread_id}")
         self._tasks.add(run.task)
         run.task.add_done_callback(self._tasks.discard)

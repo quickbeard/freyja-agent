@@ -39,6 +39,9 @@ def _receive_tasks(runtime: Runtime) -> ReceivedTasks:
     received = ReceivedTasks(runtime)
     if isinstance(runtime.locks, IndexedRunLocks):
         runtime.locks.on_release = received.on_release
+    # A follower joins the run a person's decision starts on its thread (T058).
+    if runtime.unattended is not None:
+        runtime.unattended.on_start = received.on_run_started
     return received
 
 
@@ -48,6 +51,8 @@ async def _stop_receiving(runtime: Runtime, received: ReceivedTasks) -> None:
     for."""
     if isinstance(runtime.locks, IndexedRunLocks):
         runtime.locks.on_release = None
+    if runtime.unattended is not None:
+        runtime.unattended.on_start = None
     await received.close()
 
 

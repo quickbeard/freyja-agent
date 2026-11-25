@@ -9,21 +9,32 @@ the functions of ``api/runs.py``.
 """
 
 import asyncio
+import json
+import logging
+import time
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 from langchain_core.tools import ToolException
+from sse_starlette import ServerSentEvent
 
 from freyja_agent.agent.catalog import Classification
+from freyja_agent.api import received as received_module
+from freyja_agent.api.received import FOLLOW_SECONDS, Piece, Status
 from freyja_agent.delegates import a2a_tools
 from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore
 from freyja_agent.runtime.unattended import CallerThreadError, OtherEntryError
+from tests.a2a_caller import StandInCaller, as_json
+from tests.a2a_requests import ADDRESS, at_rest, call, ended, rpc, sending, text_of
 from tests.a2a_stub import make_stub
+from tests.asgi_stream import StreamingASGITransport
 from tests.conftest import ServerApp, read_events
-from tests.fakes import LabelledChatModel, ScriptedChatModel
+from tests.fakes import FakeClock, LabelledChatModel, ScriptedChatModel, StreamingChatModel
 
 PROPOSED = {"message": "Summarize the week.", "context": "Ship day is Tuesday.", "task_id": None}
 
@@ -377,3 +388,440 @@ def test_its_state_its_proposal_and_its_stop_are_the_service_s_as_before(
     # No run is in progress: the stop is answered as for any thread.
     assert stop.status_code == 409
     assert stop.json()["detail"]["code"] == "no_run"
+
+
+# Part 3: a caller's task and the gate, through A2A (FR-013 to FR-015, SC-003). A follower's
+# look is put 30 seconds away, so that what a stream receives of a continuation comes from
+# following the run a person's decision starts, never from a look after it ended.
+
+TELL = AIMessage(
+    content="",
+    tool_calls=[
+        {
+            "id": "n1",
+            "name": "send_notification",
+            "args": {"channel": "#recognizable-channel", "message": "recognizable text"},
+        }
+    ],
+)
+WAITING = "Waiting for a person's approval of: send_notification."
+
+
+@pytest.fixture
+def slow_looks(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(received_module, "FOLLOW_SECONDS", 30)
+
+
+def sent_notifications(caplog: pytest.LogCaptureFixture) -> list[str]:
+    """Every notification the placeholder action sent: each run of it logs one line."""
+    return [
+        record.getMessage()
+        for record in caplog.records
+        if record.name == "freyja_agent.actions" and "send_notification" in record.getMessage()
+    ]
+
+
+async def decide_in_console(
+    made: ServerApp, task_id: str, kind: str, args: dict[str, Any] | None = None
+) -> None:
+    """Decide a caller's task's proposal as the console does, through its route."""
+    thread = (await made.received.get(task_id)).thread_id
+    transport = StreamingASGITransport(made.app)
+    async with httpx.AsyncClient(transport=transport, base_url=ADDRESS) as http:
+        pending = (await http.get(f"/threads/{thread}/state")).json()["pending"]
+        decision: dict[str, Any] = {"type": kind}
+        if args is not None:
+            decision["args"] = args
+        body = {"interrupt_id": pending["interrupt_id"], "decisions": [decision]}
+        async with http.stream("POST", f"/threads/{thread}/resume/unattended", json=body) as answer:
+            # The continuation goes on without this reader.
+            assert answer.status_code == 200
+
+
+def streamed_with_decision(
+    client: TestClient, made: ServerApp, kind: str, args: dict[str, Any] | None = None
+) -> list[dict[str, Any]]:
+    """A send with a stream, decided in the console once the stream says it waits."""
+
+    async def work(caller: StandInCaller) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        decided = False
+        async for event in caller.stream("Tell the channel."):
+            events.append(as_json(event))
+            if text_of(events[-1]) == WAITING and not decided:
+                decided = True
+                await decide_in_console(made, events[0]["task"]["id"], kind, args)
+        return events
+
+    return call(client, made, work)
+
+
+def test_a_task_that_proposes_an_action_waits_for_a_person_and_says_so(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(script=[TELL]), a2a_server_wait_seconds=0)
+    with TestClient(made.app) as client:
+
+        async def work(caller: StandInCaller) -> list[dict[str, Any]]:
+            events = []
+            async for event in caller.stream("Tell the channel."):
+                events.append(as_json(event))
+                if text_of(events[-1]) == WAITING:
+                    break
+            return events
+
+        events = call(client, made, work)
+        task_id = events[0]["task"]["id"]
+        read = as_json(call(client, made, lambda caller: caller.get(task_id)))
+        listed = client.get("/threads").json()
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_WORKING"
+    assert read["status"]["state"] == "TASK_STATE_WORKING"
+    assert text_of(read) == WAITING
+    assert "recognizable" not in json.dumps([events, read])
+    assert listed["needs_decision"] == 1
+
+
+def test_nothing_a_caller_sends_decides_a_pending_proposal(
+    make_a2a_server_app: Callable[..., ServerApp], caplog: pytest.LogCaptureFixture
+) -> None:
+    model = ScriptedChatModel(script=[TELL])
+    made = make_a2a_server_app(model, a2a_server_wait_seconds=0)
+    with TestClient(made.app) as client:
+        first = rpc(client, "SendMessage", sending("Tell the channel.", contextId="c-1")).json()
+        task_id = first["result"]["task"]["id"]
+        at_rest(client, made, task_id)
+        thread = made.task(client, task_id).thread_id
+        before = client.get(f"/threads/{thread}/state").json()["pending"]
+        calls = model.calls
+        approving = {
+            "decision": "approve",
+            "approved": True,
+            "interrupt_id": before["interrupt_id"],
+        }
+        tried = [
+            rpc(client, "SendMessage", sending("I approve it.", contextId="c-1")),
+            rpc(
+                client,
+                "SendMessage",
+                sending(
+                    f"approve {before['interrupt_id']}",
+                    contextId="c-1",
+                    metadata=approving,
+                ),
+            ),
+            rpc(
+                client,
+                "SendMessage",
+                {**sending("Approved.", contextId="c-1"), "metadata": approving},
+            ),
+            rpc(client, "SendMessage", sending("Approved.", taskId=task_id)),
+            rpc(client, "GetTask", {"id": task_id}),
+            rpc(client, "ListTasks", {}),
+            rpc(
+                client, "CreateTaskPushNotificationConfig", {"taskId": task_id, "url": "https://x"}
+            ),
+            rpc(client, "GetExtendedAgentCard", {}),
+            rpc(client, "CancelTask", {"id": task_id, "metadata": approving}),
+            rpc(client, "SubscribeToTask", {"id": task_id}),
+        ]
+        after = client.get(f"/threads/{thread}/state").json()["pending"]
+        state = made.task(client, task_id).state
+    busy = [found.json()["error"]["data"][0]["metadata"] for found in tried[:3]]
+    assert busy == 3 * [{"reason": "conversation_busy"}]
+    assert tried[3].json()["error"]["code"] == -32602
+    assert tried[4].json()["result"]["status"]["state"] == "TASK_STATE_WORKING"
+    assert [found.json()["error"]["code"] for found in tried[5:]] == [
+        -32004,
+        -32003,
+        -32007,
+        -32004,
+        -32004,
+    ]
+    assert after == before
+    assert state == "working"
+    assert model.calls == calls
+    assert sent_notifications(caplog) == []
+
+
+def test_approved_in_the_console_the_action_runs_once_and_the_stream_follows_to_the_end(
+    make_a2a_server_app: Callable[..., ServerApp],
+    caplog: pytest.LogCaptureFixture,
+    slow_looks: None,
+) -> None:
+    model = StreamingChatModel(script=[TELL], final_text="It is sent.", pieces=["It is ", "sent."])
+    made = make_a2a_server_app(model)
+    with caplog.at_level(logging.INFO), TestClient(made.app) as client:
+        events = streamed_with_decision(client, made, "approve")
+    sentences = [text_of(event) for event in events if "statusUpdate" in event]
+    assert sentences == [
+        "Freyja is using: send_notification.",
+        WAITING,
+        "Working.",
+        "Completed: send_notification.",
+        None,
+    ]
+    assert [
+        event["artifactUpdate"]["artifact"]["parts"][0]["text"]
+        for event in events
+        if event.get("artifactUpdate", {}).get("append")
+    ] == ["It is "]
+    assert events[-2]["artifactUpdate"]["artifact"]["parts"][0]["text"] == "It is sent."
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert sent_notifications(caplog) == [
+        "send_notification channel=#recognizable-channel message=recognizable text"
+    ]
+    # Nothing of the action's arguments or result, nor of who decided.
+    assert "recognizable" not in json.dumps(events)
+    assert "approv" not in json.dumps(events[-4:]).lower()
+
+
+def test_edited_in_the_console_the_action_runs_once_with_the_person_s_arguments(
+    make_a2a_server_app: Callable[..., ServerApp],
+    caplog: pytest.LogCaptureFixture,
+    slow_looks: None,
+) -> None:
+    model = StreamingChatModel(script=[TELL], final_text="Sent as edited.")
+    made = make_a2a_server_app(model)
+    edited = {"channel": "#ops", "message": "edited by a person"}
+    with caplog.at_level(logging.INFO), TestClient(made.app) as client:
+        events = streamed_with_decision(client, made, "edit", edited)
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert "Completed: send_notification." in [text_of(event) for event in events]
+    assert sent_notifications(caplog) == [
+        "send_notification channel=#ops message=edited by a person"
+    ]
+    assert "edited by a person" not in json.dumps(events)
+
+
+def test_rejected_in_the_console_the_action_never_runs_and_the_task_completes(
+    make_a2a_server_app: Callable[..., ServerApp],
+    caplog: pytest.LogCaptureFixture,
+    slow_looks: None,
+) -> None:
+    model = StreamingChatModel(script=[TELL], final_text="Then I will not tell them.")
+    made = make_a2a_server_app(model)
+    with caplog.at_level(logging.INFO), TestClient(made.app) as client:
+
+        async def work(caller: StandInCaller) -> list[dict[str, Any]]:
+            events: list[dict[str, Any]] = []
+            async for event in caller.stream("Tell the channel."):
+                events.append(as_json(event))
+                if text_of(events[-1]) == WAITING and len(events) < 4:
+                    thread = (await made.received.get(events[0]["task"]["id"])).thread_id
+                    transport = StreamingASGITransport(made.app)
+                    async with httpx.AsyncClient(transport=transport, base_url=ADDRESS) as http:
+                        pending = (await http.get(f"/threads/{thread}/state")).json()["pending"]
+                        reason = {"type": "reject", "message": "recognizable reason of a person"}
+                        body = {"interrupt_id": pending["interrupt_id"], "decisions": [reason]}
+                        url = f"/threads/{thread}/resume/unattended"
+                        async with http.stream("POST", url, json=body) as answer:
+                            assert answer.status_code == 200
+            return events
+
+        events = call(client, made, work)
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert events[-2]["artifactUpdate"]["artifact"]["parts"][0]["text"] == (
+        "Then I will not tell them."
+    )
+    # The continuation was followed: its pieces came as they were written.
+    pieces = [
+        event["artifactUpdate"]["artifact"]["parts"][0]["text"]
+        for event in events
+        if event.get("artifactUpdate", {}).get("append")
+    ]
+    assert "".join(pieces) == "Then I will not tell "
+    assert [text_of(event) for event in events].count("Working.") == 2
+    assert sent_notifications(caplog) == []
+    texts = json.dumps(events)
+    assert "recognizable" not in texts
+    assert "rejected" not in texts.lower()
+
+
+def test_a_proposal_waits_days_and_the_task_goes_on_when_it_is_decided(
+    make_a2a_server_app: Callable[..., ServerApp], clock: FakeClock, sse_events: Any
+) -> None:
+    # The received tasks' clock, which their store reads, and the suite's, which the lease
+    # and the agent tasks read, are both moved three days.
+    moved = timedelta()
+    store = InMemoryReceivedTaskStore(clock=lambda: datetime.now(UTC) + moved)
+    made = make_a2a_server_app(ScriptedChatModel(script=[TELL], final_text="Sent."), received=store)
+    with TestClient(made.app) as client:
+        task_id = rpc(
+            client,
+            "SendMessage",
+            {**sending("Tell."), "configuration": {"returnImmediately": True}},
+        ).json()["result"]["task"]["id"]
+        at_rest(client, made, task_id)
+        clock.advance(3 * 24 * 3600)
+        moved = timedelta(days=3)
+        assert client.portal.call(store.now) - made.task(client, task_id).created_at > timedelta(
+            days=2
+        )
+        read = as_json(call(client, made, lambda caller: caller.get(task_id)))
+        thread = made.task(client, task_id).thread_id
+        pending = client.get(f"/threads/{thread}/state").json()["pending"]
+        body = {"interrupt_id": pending["interrupt_id"], "decisions": [{"type": "approve"}]}
+        with client.stream("POST", f"/threads/{thread}/resume/unattended", json=body) as answer:
+            sse_events(answer.iter_lines())
+        found = ended(client, made, task_id)
+    assert read["status"]["state"] == "TASK_STATE_WORKING"
+    assert text_of(read) == WAITING
+    assert found.state == "completed"
+    assert found.result == "Sent."
+
+
+def test_a_person_s_stop_ends_a_caller_s_task_as_stopped_before_it_finished(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    ls = AIMessage(content="", tool_calls=[{"id": "l1", "name": "ls", "args": {"path": "/"}}])
+    model = LabelledChatModel(script=[ls, ls], final_text="Done.")
+    made = make_a2a_server_app(model)
+    model.hold()
+    with TestClient(made.app) as client:
+
+        async def work(caller: StandInCaller) -> list[dict[str, Any]]:
+            events: list[dict[str, Any]] = []
+            async for event in caller.stream("List twice."):
+                events.append(as_json(event))
+                if len(events) == 1:
+                    thread = (await made.received.get(events[0]["task"]["id"])).thread_id
+                    await asyncio.to_thread(model._reached.wait, 5)
+                    transport = StreamingASGITransport(made.app)
+                    async with httpx.AsyncClient(transport=transport, base_url=ADDRESS) as http:
+                        stop = await http.post(f"/threads/{thread}/stop")
+                        assert stop.status_code == 202, stop.text
+                    model._release.set()
+            return events
+
+        events = call(client, made, work)
+    last = events[-1]["statusUpdate"]["status"]
+    assert last["state"] == "TASK_STATE_CANCELED"
+    assert last["message"]["parts"][0]["text"] == "The run was stopped before it finished."
+
+
+def test_a_hand_off_to_an_agent_that_runs_without_approval_waits_for_a_person(
+    make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
+) -> None:
+    model = ScriptedChatModel(script=[handoff()], final_text="Handed on.")
+    made = make_a2a_server_app(model, read_only=True)
+    with TestClient(made.app) as client:
+        answered = as_json(
+            call(client, made, lambda caller: caller.send("Ask the stub.", return_immediately=True))
+        )
+        at_rest(client, made, answered["id"])
+        read = as_json(call(client, made, lambda caller: caller.get(answered["id"])))
+        received_before = list(made.stub.record.messages)
+        thread = made.task(client, answered["id"]).thread_id
+        pending = client.get(f"/threads/{thread}/state").json()["pending"]
+        body = {"interrupt_id": pending["interrupt_id"], "decisions": [{"type": "approve"}]}
+        with client.stream("POST", f"/threads/{thread}/resume/unattended", json=body) as answer:
+            sse_events(answer.iter_lines())
+        received_after = list(made.stub.record.messages)
+    assert text_of(read) == "Waiting for a person's approval of: agent stub."
+    assert received_before == []
+    assert len(received_after) == 1
+
+
+def test_a_follower_closed_with_a_reader_it_never_read_leaves_nothing_behind(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(script=[TELL], final_text="Sent."))
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "Tell.")
+        made.finish(client, accepted)
+        thread = accepted.task.thread_id
+        received = made.service()
+        runs = made.runtime.unattended
+
+        async def scenario() -> tuple[int, int, int, int]:
+            follower = received.follow(await made.received.get(accepted.task.task_id))
+            assert isinstance(await anext(follower), Status)
+            await decide_in_console(made, accepted.task.task_id, "approve")
+            # The decision's run handed the follower a reader, which it never read.
+            handed = len(received._joined)
+            await follower.aclose()
+            for _ in range(200):
+                if not runs.armed(thread) and not received._drains:
+                    break
+                await asyncio.sleep(0.01)
+            return handed, len(received._joined), len(received._wakers), len(received._drains)
+
+        handed, joined, wakers, drains = client.portal.call(scenario)
+        found = ended(client, made, accepted.task.task_id)
+    assert handed == 1
+    assert (joined, wakers, drains) == (0, 0, 0)
+    assert found.state == "completed"
+
+
+def test_runs_that_start_one_after_another_are_read_in_order(
+    make_a2a_server_app: Callable[..., ServerApp], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(script=[TELL]))
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "Tell.")
+        made.finish(client, accepted)
+        received = made.service()
+
+        def piece(text: str) -> Any:
+            data = {"message": {"type": "ai", "content": text}, "metadata": {"reply": True}}
+            return ServerSentEvent(data=json.dumps(data), event="message")
+
+        async def run_of(text: str) -> Any:
+            yield piece(text)
+
+        handed = iter([run_of("first "), run_of("second ")])
+        starting = False
+
+        def join(_thread: str) -> Any:
+            # A run is read whole only by a reader joined as it starts; one joined later
+            # misses what it already did, which these runs, of one event, stand for by
+            # giving nothing.
+            return next(handed) if starting else None
+
+        async def scenario() -> list[Any]:
+            nonlocal starting
+            follower = received.follow(await made.received.get(accepted.task.task_id))
+            # The task waits for a person; then two runs start before it reads either.
+            changes = [await anext(follower)]
+            monkeypatch.setattr(made.runtime.unattended, "join", join)
+            starting = True
+            received.on_run_started(accepted.task.thread_id)
+            received.on_run_started(accepted.task.thread_id)
+            starting = False
+            try:
+                async with asyncio.timeout(3):
+                    while sum(isinstance(change, Piece) for change in changes) < 2:
+                        changes.append(await anext(follower))
+            except TimeoutError:
+                pass
+            await follower.aclose()
+            return changes
+
+        started = time.monotonic()
+        changes = client.portal.call(scenario)
+        took = time.monotonic() - started
+    # Each run read in full, in the order they started, the second at once after the first;
+    # the thread, still paused, is looked at between them.
+    assert took < FOLLOW_SECONDS
+    assert [change for change in changes if isinstance(change, Piece)] == [
+        Piece("first "),
+        Piece("second "),
+    ]
+    assert changes[:3] == [Status(WAITING), Status("Working."), Piece("first ")]
+
+
+def test_a_failure_told_of_a_run_s_start_leaves_the_run_alone(
+    make_a2a_server_app: Callable[..., ServerApp],
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(final_text="Done."))
+    with TestClient(made.app) as client:
+
+        def broken(_thread: str) -> None:
+            raise RuntimeError("telling failed")
+
+        made.runtime.unattended.on_start = broken
+        accepted = made.accept(client, "Go.")
+        events = made.finish(client, accepted)
+    assert events[-1][0] == "end"
+    assert any("telling of the run's start failed" in r.getMessage() for r in caplog.records)
