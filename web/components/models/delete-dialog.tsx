@@ -12,7 +12,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
 import { ApiError, isGone } from "@/lib/api";
-import { deleteProfile, type LlmProfile } from "@/lib/llm";
+import { deleteProfile, type LlmProfile } from "@/lib/models";
 
 function Confirmation({
   profile,

@@ -55,7 +55,7 @@ function waiting(count: number): Reply {
   return { json };
 }
 
-const navigation = vi.hoisted(() => ({ pathname: "/llm" }));
+const navigation = vi.hoisted(() => ({ pathname: "/models" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
 }));
@@ -130,26 +130,27 @@ function described(): string | null {
 
 describe("AppSidebar", () => {
   beforeEach(() => {
-    navigation.pathname = "/llm";
+    navigation.pathname = "/models";
     threadReplies = [{ json: NO_TASKS }];
     threadAsks = 0;
     // The sidebar asks for the list of agents wherever it is shown.
     stubFetch(list(HELLO));
   });
 
-  it("lists the console's sections as links", () => {
+  it("lists the console's sections as links, Tasks first", () => {
     renderSidebar();
     const links = screen.getAllByRole("link");
-    // Feature 007 adds the Tasks section (its FR-027 names this change).
+    // Feature 007 added the Tasks section (its FR-027 names this change); it is now the
+    // first, and the profiles' section is called Models at its old address.
     expect(links.map((link) => link.textContent)).toEqual([
-      "LLM",
-      "Agents",
       "Tasks",
+      "Agents",
+      "Models",
     ]);
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
-      "/llm",
-      "/agents",
       "/tasks",
+      "/agents",
+      "/models",
     ]);
   });
 
@@ -169,7 +170,7 @@ describe("AppSidebar", () => {
   it("marks the section in use and no other", () => {
     renderSidebar();
     expect(
-      screen.getByRole("link", { name: "LLM" }).getAttribute("aria-current"),
+      screen.getByRole("link", { name: "Models" }).getAttribute("aria-current"),
     ).toBe("page");
     expect(
       screen.getByRole("link", { name: "Agents" }).getAttribute("aria-current"),
@@ -183,7 +184,7 @@ describe("AppSidebar", () => {
       screen.getByRole("link", { name: "Agents" }).getAttribute("aria-current"),
     ).toBe("page");
     expect(
-      screen.getByRole("link", { name: "LLM" }).getAttribute("aria-current"),
+      screen.getByRole("link", { name: "Models" }).getAttribute("aria-current"),
     ).toBeNull();
   });
 
@@ -205,10 +206,10 @@ describe("AppSidebar", () => {
   });
 
   it("marks a section for a page inside it", () => {
-    navigation.pathname = "/llm/anything";
+    navigation.pathname = "/models/anything";
     renderSidebar();
     expect(
-      screen.getByRole("link", { name: "LLM" }).getAttribute("aria-current"),
+      screen.getByRole("link", { name: "Models" }).getAttribute("aria-current"),
     ).toBe("page");
   });
 
@@ -241,7 +242,7 @@ describe("AppSidebar", () => {
     expect(described()).toBe("2 agents cannot be used");
     // The entry is still named Agents, and still leads to the section.
     expect(agentsLink().getAttribute("href")).toBe("/agents");
-    expect(screen.getByRole("link", { name: "LLM" })).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Models" })).toBeTruthy();
   });
 
   it("says one agent in the singular", async () => {
@@ -319,8 +320,8 @@ describe("AppSidebar", () => {
     expect(fetchStub).toHaveBeenCalledTimes(1);
   });
 
-  it("shows the badge on the LLM section and on the Agents section alike", async () => {
-    for (const pathname of ["/llm", "/agents"]) {
+  it("shows the badge on the Models section and on the Agents section alike", async () => {
+    for (const pathname of ["/models", "/agents"]) {
       navigation.pathname = pathname;
       stubFetch(list(agent("stub", "unreachable")));
       const { unmount } = renderSidebar();
@@ -349,7 +350,7 @@ describe("AppSidebar, the Tasks entry", () => {
   };
 
   beforeEach(() => {
-    navigation.pathname = "/llm";
+    navigation.pathname = "/models";
     threadAsks = 0;
     stubAll(list(HELLO));
   });

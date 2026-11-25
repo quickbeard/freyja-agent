@@ -17,7 +17,7 @@ import {
   testProfile,
   toDraft,
   updateProfile,
-} from "@/lib/llm";
+} from "@/lib/models";
 
 const LIST: LlmProfileList = {
   profiles: [],

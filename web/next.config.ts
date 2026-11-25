@@ -25,9 +25,10 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [{ source: "/api/:path*", destination: `${apiUrl()}/:path*` }];
   },
-  // The console has no page of its own at its address: it opens on the LLM section.
+  // The console has no page of its own at its address: it opens on the Tasks section, the
+  // sidebar's first.
   async redirects() {
-    return [{ source: "/", destination: "/llm", permanent: false }];
+    return [{ source: "/", destination: "/tasks", permanent: false }];
   },
   // No page of another origin may show the console in a frame: a frame is how such a page
   // would get a person to click a confirmation they cannot see. frame-ancestors is the

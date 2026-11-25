@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { type Reply, stubFetch } from "@/__tests__/testing";
-import { ProfileForm } from "@/components/llm/profile-form";
-import type { LlmProfile } from "@/lib/llm";
+import { ProfileForm } from "@/components/models/profile-form";
+import type { LlmProfile } from "@/lib/models";
 
 const KEY = "sk-recognizable-key-0001";
 

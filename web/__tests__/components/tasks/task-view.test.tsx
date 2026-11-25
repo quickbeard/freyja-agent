@@ -135,7 +135,7 @@ describe("a task's page", () => {
     expect(screen.queryByText("Freyja wrote a reply")).toBeNull();
   });
 
-  it("says a run failed and why, and points to the LLM section", async () => {
+  it("says a run failed and why, and points to the Models section", async () => {
     service({
       row: () => ({
         json: summary({
@@ -155,9 +155,9 @@ describe("a task's page", () => {
     expect(alerts[0].textContent).toContain("The run failed.");
     expect(
       screen
-        .getByRole("link", { name: "Go to the LLM section" })
+        .getByRole("link", { name: "Go to the Models section" })
         .getAttribute("href"),
-    ).toBe("/llm");
+    ).toBe("/models");
     await waitFor(() => expect(conversation()).toContain("Earlier."));
   });
 
@@ -993,14 +993,14 @@ describe("a task's page and another message", () => {
     fireEvent.click(sendMessage());
 
     await waitFor(() => expect(screen.getByText("Failed")).toBeTruthy());
-    // The run is forgotten, and the reason is the service's, with the way to the LLM section.
+    // The run is forgotten, and the reason is the service's, with the way to the Models section.
     await waitFor(() => expect(get("t-1")).toBeUndefined());
     expect(screen.getAllByRole("alert")).toHaveLength(1);
     expect(
       screen
-        .getByRole("link", { name: "Go to the LLM section" })
+        .getByRole("link", { name: "Go to the Models section" })
         .getAttribute("href"),
-    ).toBe("/llm");
+    ).toBe("/models");
     // Nothing of the message was recorded: it is in the box, to be sent again.
     await waitFor(() => expect(followUp().value).toBe("And the week before?"));
     expect(conversation()).not.toContain("And the week before?");

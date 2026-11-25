@@ -10,7 +10,7 @@ import {
   type LlmProfileList,
   listProfiles,
   PROFILES_PATH,
-} from "@/lib/llm";
+} from "@/lib/models";
 import { ActivateDialog } from "./activate-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { ProfileCard } from "./profile-card";
@@ -22,7 +22,7 @@ function reason(error: unknown): string {
     : "The profiles could not be loaded.";
 }
 
-/** The LLM section: every profile as a card, read from the service in the browser. */
+/** The Models section: every profile as a card, read from the service in the browser. */
 export function ProfileList() {
   // How often the list has been read: a card that got a result of its own shows the list's
   // once the list has been read again.

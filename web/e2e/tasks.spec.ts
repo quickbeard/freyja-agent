@@ -105,8 +105,8 @@ test("a new task sent with no usable model says why and offers its text again", 
   await expect(page).toHaveURL(/\/tasks\/[0-9a-f]{32}$/);
   await expect(alerts(page)).toContainText(NO_USABLE_MODEL);
   await expect(
-    page.getByRole("link", { name: "Go to the LLM section" }),
-  ).toHaveAttribute("href", "/llm");
+    page.getByRole("link", { name: "Go to the Models section" }),
+  ).toHaveAttribute("href", "/models");
   await expect(page.getByText("Task not found")).toBeHidden();
   const again = page.getByLabel("Send the message again");
   await expect(again).toHaveValue("Summarize the week.");
@@ -247,7 +247,7 @@ test("the sidebar says how many tasks need a decision, on another section", asyn
   await answerThreads(page, {
     list: { threads: [], needs_decision: 3, total: 3, more: false },
   });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(tasksItem(page)).toContainText("3 to decide");
   expect(await said(page)).toBe("3 tasks need a decision");
@@ -276,7 +276,7 @@ test("the sidebar's number appears within fifteen seconds of a change made elsew
     });
   });
   await page.clock.install();
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(tasksEntry(page)).toBeVisible();
   await expect.poll(() => readings).toBeGreaterThan(0);
   await expect(tasksItem(page)).not.toContainText("to decide");
@@ -311,7 +311,7 @@ test("the number goes once the proposal is decided, without a reload", async ({
   await service.serve(page);
   await answerProfiles(page, { list: profileList(environmentProfile()) });
 
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(tasksItem(page)).toContainText("1 to decide");
   await tasksEntry(page).click();
   await expect(rows(page)).toHaveCount(1);
@@ -340,7 +340,7 @@ test("with the service stopped, the list says so and the sidebar says the number
 });
 
 // Edge Cases, "The Tasks section is opened in a narrow window": every control stays
-// reachable, as in the LLM and Agents sections (T094).
+// reachable, as in the Models and Agents sections (T094).
 test.describe("the Tasks section in a narrow window", () => {
   // Under the sidebar's 768-pixel breakpoint, and narrower than a phone held upright.
   test.use({ viewport: { width: 360, height: 740 } });

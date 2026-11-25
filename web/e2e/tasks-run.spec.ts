@@ -328,7 +328,7 @@ test("a task that paused after its page was left is found from the sidebar and d
   service.answerDecisionsWith(() =>
     continued(task, "Notification to #ops recorded.", "Sent."),
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   const tasksEntry = page
     .getByRole("navigation", { name: "Sections" })
     .getByRole("link", { name: "Tasks" });

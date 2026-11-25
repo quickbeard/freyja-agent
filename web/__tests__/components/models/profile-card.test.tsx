@@ -1,8 +1,8 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { type Reply, stubFetch } from "@/__tests__/testing";
-import { ProfileCard } from "@/components/llm/profile-card";
-import type { LlmProfile } from "@/lib/llm";
+import { ProfileCard } from "@/components/models/profile-card";
+import type { LlmProfile } from "@/lib/models";
 
 const SAVED: LlmProfile = {
   id: "5b1f0c2e9a7d4e3fb6a81c0d2e4f6a8b",

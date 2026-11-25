@@ -267,7 +267,7 @@ export function AgentCard({
           <Claim card={agent.card} />
         )}
         {checked && (
-          // A status, as the result of a profile's test is in the LLM section. It is not
+          // A status, as the result of a profile's test is in the Models section. It is not
           // inside a region marked `aria-live`: the dialog that adds an agent leaves such
           // a region, and what is around it, reachable behind itself.
           <output className="flex flex-col gap-1 text-sm">

@@ -17,7 +17,7 @@ import {
   providerLabel,
   testProfile,
   type UnusableReason,
-} from "@/lib/llm";
+} from "@/lib/models";
 import { TestResult } from "./test-result";
 
 const UNUSABLE: Record<UnusableReason, string> = {

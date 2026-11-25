@@ -55,7 +55,7 @@ test("Add saves a profile, which shows as a new card that is not active", async 
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
 
   await fill(page);
@@ -102,7 +102,7 @@ test("the choice of API is offered for an OpenAI-compatible endpoint only", asyn
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
   const choice = form(page).getByRole("switch", { name: /Responses API/ });
   await expect(choice).toBeChecked();
@@ -137,7 +137,7 @@ test("a name that is taken is said at the name, and nothing is saved until it ch
     environmentProfile(),
     savedProfile("Claude"),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(cards(page)).toHaveCount(2);
   await openForm(page);
 
@@ -166,7 +166,7 @@ test("a base URL that is not a web address, and missing values, are said at thei
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
 
   await save(page);
@@ -190,7 +190,7 @@ test("a form that was closed opens again empty, the key included", async ({
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
   await fill(page);
 
@@ -219,7 +219,7 @@ test("Set active asks first, and confirming moves the Active mark to that profil
     claude,
     savedProfile("Spare", { id: "f".repeat(32) }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   // The active profile offers nothing to activate; the others do.
   await expect(
     card(page, "Environment").getByRole("button", { name: "Set active" }),
@@ -262,7 +262,7 @@ test("cancelling the confirmation changes nothing", async ({ page }) => {
     environmentProfile(),
     savedProfile("Claude"),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "Claude")
     .getByRole("button", { name: "Set active" })
@@ -282,7 +282,7 @@ test("a profile added through the form can be activated, and the environment's a
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
   await fill(page);
   await save(page);
@@ -326,7 +326,7 @@ test("a refused activation is shown in the confirmation, and the mark stays wher
   const service = await new ProfileService(environmentProfile(), stale).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(card(page, "Claude")).toBeVisible();
   service.profiles = service.profiles.map((profile) =>
     profile.id === stale.id ? { ...profile, usable: false } : profile,
@@ -360,7 +360,7 @@ test("Test on a card shows that the profile works, and the result is still there
   const service = await new ProfileService(environmentProfile(), claude).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(card(page, "Claude").getByText(NOT_TESTED)).toBeVisible();
 
   await card(page, "Claude").getByRole("button", { name: "Test" }).click();
@@ -402,7 +402,7 @@ test("a failed test names the step that failed and shows the endpoint's reason",
     savedProfile("Refuses", { model: "refuse-conversation" }),
     savedProfile("Rejected", { id: "e".repeat(32), model: "reject-key" }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "Refuses").getByRole("button", { name: "Test" }).click();
   await expect(
@@ -423,7 +423,7 @@ test("a failed test names the step that failed and shows the endpoint's reason",
 
 test("the environment's card can be tested the same way", async ({ page }) => {
   await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await card(page, "Environment").getByRole("button", { name: "Test" }).click();
   await expect(
     card(page, "Environment").getByText(/Last test passed/),
@@ -437,7 +437,7 @@ test("a card whose profile changed since its test says it has not been tested si
   const service = await new ProfileService(environmentProfile(), claude).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(
     card(page, "Claude").getByText(/Last test passed/),
   ).toBeVisible();
@@ -458,7 +458,7 @@ test("the confirmation says when a profile was never tested, tests it first when
   const service = await new ProfileService(environmentProfile(), claude).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "Claude")
     .getByRole("button", { name: "Set active" })
@@ -503,7 +503,7 @@ test("the confirmation says when the last test failed, and the profile can still
   const service = await new ProfileService(environmentProfile(), refuses).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "Refuses")
     .getByRole("button", { name: "Set active" })
@@ -536,7 +536,7 @@ test("a profile whose last test passed is activated with no warning", async ({
     environmentProfile(),
     savedProfile("Claude", { last_test: testOf("ok") }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await card(page, "Claude")
     .getByRole("button", { name: "Set active" })
     .click();
@@ -552,7 +552,7 @@ test("the form tests its values before they are saved, and a test saves nothing"
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
   await fill(page, { Name: "", "Model id": "refuse-conversation" });
 
@@ -617,7 +617,7 @@ test("Edit opens with the profile's values and no key, and a save without one ke
   const service = await new ProfileService(environmentProfile(), vllm).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Local vLLM");
 
   await expect(edit.getByLabel("Name", { exact: true })).toHaveValue(
@@ -670,7 +670,7 @@ test("a key typed in the Edit form replaces the stored one, and the card says it
   const service = await new ProfileService(environmentProfile(), claude).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Claude");
 
   await edit.getByLabel("API key", { exact: true }).fill(NEW_KEY);
@@ -693,7 +693,7 @@ test("a taken name is said at the name in the Edit form, and nothing changes", a
     savedProfile("Claude"),
     savedProfile("Spare", { id: "f".repeat(32) }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Spare");
 
   await edit.getByLabel("Name", { exact: true }).fill("claude");
@@ -719,7 +719,7 @@ test("changing the active profile asks first, and nothing is sent until it is co
     environmentProfile({ active: false }),
     claude,
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Claude");
 
   await edit.getByLabel("Model id", { exact: true }).fill("claude-opus-5-5");
@@ -752,7 +752,7 @@ test("the Edit form tests its values with the stored key when the key is left em
   const service = await new ProfileService(environmentProfile(), claude).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Claude");
 
   await edit
@@ -789,7 +789,7 @@ test("Delete asks first, and confirming removes the card", async ({ page }) => {
     claude,
     savedProfile("Spare", { id: "f".repeat(32) }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(cards(page)).toHaveCount(3);
 
   // Cancelling leaves it.
@@ -824,7 +824,7 @@ test("the active profile is not deleted: the service's refusal is shown and the 
     environmentProfile({ active: false }),
     savedProfile("Claude", { active: true }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "Claude").getByRole("button", { name: "Delete" }).click();
   const confirmation = page.getByRole("alertdialog");
@@ -846,7 +846,7 @@ test("the environment's card offers neither Edit nor Delete, and a saved card of
   await new ProfileService(environmentProfile(), savedProfile("Claude")).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(card(page, "Claude").getByRole("button")).toHaveText([
     "Test",
@@ -875,7 +875,7 @@ test("a key is nowhere on the page or in the browser's storage after adding, tes
   page,
 }) => {
   const service = await new ProfileService().serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   // Added through the form, after testing the values there.
   await openForm(page);
@@ -920,7 +920,7 @@ test("a save that is refused leaves the key out of what the page shows", async (
   await new ProfileService(environmentProfile(), savedProfile("Claude")).serve(
     page,
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   await openForm(page);
   await fill(page, { Name: "Claude" });
   await save(page);
@@ -955,7 +955,7 @@ test("a card whose key cannot be read says why, and its form asks for the key ag
     environmentProfile(),
     unreadable,
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   const claude = card(page, "Claude");
   await expect(claude.getByText("Not usable")).toBeVisible();
@@ -997,7 +997,7 @@ test("pressing Save twice on the active profile does not change it: confirming t
     environmentProfile({ active: false }),
     savedProfile("Claude", { active: true }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   const edit = await openEdit(page, "Claude");
   const model = edit.getByLabel("Model id", { exact: true });
   await model.fill("claude-opus-5-5");
@@ -1030,7 +1030,7 @@ test("a profile another operator deleted goes from the list when the service say
     claude,
     savedProfile("Spare", { id: "f".repeat(32) }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(cards(page)).toHaveCount(3);
 
   // Deleted elsewhere: this page still shows its card.
@@ -1066,7 +1066,7 @@ test("in a short, narrow window the confirmation's buttons can be reached under 
     environmentProfile(),
     savedProfile("A profile with a rather long name", { model: "long-reason" }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await card(page, "A profile with a rather long name")
     .getByRole("button", { name: "Set active" })

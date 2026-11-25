@@ -4,7 +4,7 @@
 
 import type { Page, Route } from "@playwright/test";
 import type { Agent, AgentCard, AgentCheck, AgentList } from "../lib/agents";
-import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/llm";
+import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/models";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
 export function environmentProfile(
@@ -1044,7 +1044,7 @@ export function agentsWarning(page: Page) {
   return page.getByRole("note", { name: "Agents that cannot be used" });
 }
 
-/** Every card on the page: profiles in the LLM section, agents in the Agents section. */
+/** Every card on the page: profiles in the Models section, agents in the Agents section. */
 export function cards(page: Page) {
   return page.locator('[data-slot="card"]');
 }

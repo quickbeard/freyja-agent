@@ -240,8 +240,8 @@ function Failure({ error }: { error: RunError }) {
       <p className="whitespace-pre-wrap break-words text-sm">{error.message}</p>
       {error.code === NO_USABLE_MODEL && (
         <p className="text-sm">
-          <Link href="/llm" className="underline underline-offset-4">
-            Go to the LLM section
+          <Link href="/models" className="underline underline-offset-4">
+            Go to the Models section
           </Link>{" "}
           to activate a usable profile.
         </p>
