@@ -82,9 +82,10 @@ of the code it covers. End-to-end tests are `*.spec.ts` files under `web/e2e/`.
 ## Pull requests
 
 Each pull request goes to GitHub with a matching merge request on GitLab, is built on a
-branch recreated from the latest `main`, and leaves both suites passing, the README true, and
-the feature off by default. Request N is the plan's phase N; the task phases below are
-numbered one higher, since Phase 1 is the setup. They follow the plan's phases:
+branch recreated from the latest `main`, and leaves both suites passing, the README and
+`docs/` true, and the feature off by default. Request N is the plan's phase N; the task
+phases below are numbered one higher, since Phase 1 is the setup. They follow the plan's
+phases:
 
 | Request | Plan phase | Task phases | Tasks | What it delivers |
 |---|---|---|---|---|
@@ -732,14 +733,18 @@ answer as an unknown path.
       `web/e2e/tasks-api.ts`, let `TaskService` answer rows with a caller
 - [ ] T053 [US1] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`; no existing test
       changed apart from T039's fixture
-- [ ] T054 [P] [US1] In `README.md`, a section on receiving tasks from agents: how to turn it
+- [ ] T054 [P] [US1] Create `docs/a2a-server.md`, "Receive tasks from agents": how to turn it
       on, the card and the operation's address, what a caller can do in this request, that a
       send without a stream can be answered with a task that is still working, continuing a
       conversation, how a task waiting for a person looks to its caller, the form of a
-      message, the two limits, that only the caller sends messages on its conversation
-      (`caller_thread`), and the settings with the others (FR-030, as far as built);
-      in `AGENTS.md`, the stand-in caller's command among the Commands and the new modules
-      in Layout; in `web/README.md`, who started a task and why its page has no box
+      message, the two limits, and that only the caller sends messages on its conversation
+      (`caller_thread`) (FR-030, as far as built). List it in the README's Docs after Agents,
+      and make the **Next:** link of `docs/agents.md` lead to it and its own lead to
+      `docs/web-console.md`, as AGENTS.md's rule for `docs/` has it. The new setting goes
+      in the README's Configuration table with the others. In `AGENTS.md`, the stand-in
+      caller's command among the Commands and the new modules in Layout; in
+      `docs/web-console.md`, Tasks: who started a task and why its page has no box; in
+      `web/README.md`, Layout: `components/tasks/started-by.tsx`
 - [ ] T055 [US1] Walk quickstart.md section 1 and the limit of section 5 on a check instance
       by the standing rules, and correct the sections where the built feature differs
 
@@ -796,10 +801,10 @@ completes; reject, and the agent receives nothing; the caller cannot decide.
       that needs a decision is counted, its card says who started the run, approving and
       rejecting work as for any task, and Stop is offered for a run in progress;
       `web/e2e/tasks-api.ts` answers the paused caller's task
-- [ ] T061 [US2] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In `README.md`, how an
-      approval looks to a caller, where a person decides it, that every message to a
-      delegate agent from a caller's thread waits for a person; in `web/README.md`, what the
-      proposal's card says of a caller's task
+- [ ] T061 [US2] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+      `docs/a2a-server.md`, how an approval looks to a caller, where a person decides it,
+      that every message to a delegate agent from a caller's thread waits for a person; in
+      `docs/web-console.md`, Tasks: what the proposal's card says of a caller's task
 - [ ] T062 [US2] Walk quickstart.md section 2 on a check instance by the standing rules, and
       correct it where the built feature differs
 
@@ -909,10 +914,10 @@ console no longer counts it.
       caller's task is not counted among those that need a decision and says the agent
       canceled; an approval refused with `requester_gone` is said so; `web/e2e/tasks-api.ts`
       answers both
-- [ ] T078 [US4] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In `README.md`,
-      continuing a conversation, subscribing, reading a task after a restart, and cancel,
-      with what it does to a run and to a proposal; in `web/README.md`, what a canceled
-      caller's task shows
+- [ ] T078 [US4] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+      `docs/a2a-server.md`, subscribing, reading a task after a restart, and cancel, with
+      what it does to a run and to a proposal; in `docs/web-console.md`, Tasks: what a
+      canceled caller's task shows
 - [ ] T079 [US4] Walk quickstart.md section 4 on a check instance by the standing rules, and
       correct it where the built feature differs
 
@@ -1049,10 +1054,11 @@ removing a caller cancels its task.
 - [ ] T095 [US3] Add User Story 3's part to `web/e2e/tasks-callers.spec.ts`: a task started by
       agent `artex`, and one whose caller is no longer configured; `web/e2e/tasks-api.ts`
       answers both
-- [ ] T096 [US3] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In `README.md`, how to
-      name a caller, how to open the outside listener and what it serves, the token at both
-      addresses, the warning, what encrypts the connection, a named caller's file area, and
-      what removing or renaming a caller does; in `AGENTS.md`, `runtime/callers.py` and
+- [ ] T096 [US3] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+      `docs/a2a-server.md`, how to name a caller, how to open the outside listener and what
+      it serves, the token at both addresses, the warning, what encrypts the connection, a
+      named caller's file area, and what removing or renaming a caller does; in the README's
+      Configuration table, the four settings T087 adds; in `AGENTS.md`, `runtime/callers.py` and
       `api/a2a_listener.py`, and a convention that a caller's token appears nowhere,
       searched by `tests/test_a2a_server_nowhere.py`, to which a new operation or log line
       about callers is added
@@ -1120,8 +1126,9 @@ automated proof of FR-018 and FR-019 passes.
       the thread by its alias (R6) where they name it by its id today, made by the same
       function wherever the send ledger makes them again; messages from every other thread
       are sent as today
-- [ ] T105 [US5] Run `uv run pytest`. In `README.md`, the hand-over count's name, its limit,
-      and that it is a partial guard (FR-030)
+- [ ] T105 [US5] Run `uv run pytest`. In `docs/a2a-server.md`, the hand-over count's name,
+      its limit, and that it is a partial guard (FR-030); in the README's Configuration
+      table, `FREYJA_A2A_SERVER_MAX_HOPS`
 - [ ] T106 [US5] Walk the hand-over count of quickstart.md section 5 on a check instance by the
       standing rules, and correct it where the built feature differs
 
@@ -1136,9 +1143,10 @@ automated proof of FR-018 and FR-019 passes.
 - [ ] T107 Walk the whole of quickstart.md on a check instance by the standing rules, in its
       order, and correct it where the built feature differs; record in plan.md anything the
       walk found that no test covers
-- [ ] T108 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` against the code: they
-      describe only what exists, name every file this feature added, and cover every point of
-      FR-030; every setting is in `.env.example`
+- [ ] T108 [P] Read `README.md`, `docs/a2a-server.md`, `docs/web-console.md`, `AGENTS.md`,
+      and `web/README.md` against the code: they describe only what exists, name every file
+      this feature added, and cover every point of FR-030; every setting is in `.env.example`
+      and in the README's Configuration table
 - [ ] T109 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
       `pyproject.toml` or a threshold in `web/vitest.config.mts` only with the owner's word;
       say in the request what the opt-in Postgres tests, which CI does not run, leave out of

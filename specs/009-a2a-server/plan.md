@@ -328,6 +328,8 @@ web/
     └── tasks-api.ts           # rows with a caller; the two refusals
 
 .env.example, README.md, AGENTS.md, web/README.md   # what exists once each phase is built
+docs/a2a-server.md             # new: the feature's user documentation, from phase 2
+docs/web-console.md            # the console's Tasks section: who started a task
 Dockerfile, .gitignore         # the files directory: writable in the image, ignored by git
 pyproject.toml, uv.lock        # the SDK's extra named, with the owner's word (R19)
 ```
@@ -363,8 +365,8 @@ Files of other features that this one changes, and whose owners should know:
 
 ### Phases
 
-Each phase is one pull request, and leaves the suite passing and the README true. The
-feature stays off by default throughout, and a deployment that turns it on after any phase
+Each phase is one pull request, and leaves the suite passing and the README and `docs/` true.
+The feature stays off by default throughout, and a deployment that turns it on after any phase
 gets what that phase's row says and nothing less safe.
 
 | Phase | What it builds | Stories | Shown working by |
@@ -375,7 +377,7 @@ gets what that phase's row says and nothing less safe.
 | 4 | Subscribing; a task read after a restart and through another instance; cancel; rejecting by rule and `requester_gone`; the sweep. | 4 | Section 4; `tests/test_a2a_server_tasks.py` |
 | 5 | Named callers and their tokens, at both addresses, with `Callers` and the settings of callers and of the outside listener; the outside listener; the card at each address; tokens out of messages and log records; the tasks of a caller that is no longer named, canceled at startup. With it, in the same phase, the proofs of what it opens: no token anywhere, one named caller against another's tasks, and a named caller's files. | 3, and the isolation of 5 | Section 3; `tests/test_a2a_server_callers.py`, `tests/test_a2a_server_nowhere.py`, and the files' and the callers' tests in `tests/test_a2a_server_limits.py` |
 | 6 | The hand-over count, on messages in and out; the proof of what a caller is never given, over every operation and every kind of task the phases before made possible. | the rest of 5 | Section 5; `tests/test_a2a_server_limits.py`, `tests/test_a2a_server_nowhere.py` |
-| 7 | The quickstart walked by hand and corrected; `README.md`, `AGENTS.md`, and `web/README.md` read against the code. | all | Every section of the quickstart |
+| 7 | The quickstart walked by hand and corrected; `README.md`, `docs/a2a-server.md`, `docs/web-console.md`, `AGENTS.md`, and `web/README.md` read against the code. | all | Every section of the quickstart |
 
 Why this order:
 
