@@ -420,3 +420,48 @@ and the browser's time in the view's state. What differs from the tasks, and why
   - Left as they are: the exact time is in the age's title only, as R8 chose, so a keyboard
     or a touch reaches it no more than a title; and the test that no timer is added counts
     `setInterval` only.
+
+### Request 3: Phases 5 and 6, the check and the stream (2026-11-25)
+
+Built as planned: `task_line` lists a working task's progress under its entry, the check's
+description says so, `pending_line` is unchanged, and `_poll` reports a changed text as well
+as a changed state. What differs from the tasks, and why:
+
+- **The text's lines are split by `str.splitlines()`**, so a carriage return or another line
+  separator in an agent's text starts an indented line too, and no reader that breaks a line
+  there sees a line of the text that is not indented.
+- **The last step of `steps` is seldom read** by a hand-off that reads the task's status: the
+  stand-in completes right after it (research R10). T036 expected "Step 3 of 3" before the
+  completion; the test takes that update as optional, and section 4 of the quickstart says
+  that the fifth step is seldom seen.
+- **Part 8's reports are made from a thread of their own**, since the test's thread reads the
+  run's stream while the hand-off follows the task; `StubAgent.report()` is thread-safe since
+  request 1's review.
+- **The stand-in model gains the keyword `check`**, one call of `check_agent_tasks`, with its
+  tests in `tests/test_llm_stub_tools.py`, so that section 3 could be walked without a real
+  model.
+- **No existing test changed (FR-022)**: none pinned the check's whole result, or the updates
+  of a hand-off to an agent that does not stream, in a way this feature changes.
+- **The quickstart walk (T039)**, sections 3 and 4, ran through the API against a check
+  instance with the stand-in model. Section 3 was as written: the check's result listed the
+  task, the line "Progress the agent reported, in its own words (learned ...):", and "Step 3
+  of 30" indented by four spaces, and the stand-in received no request during that run.
+  Section 4 gave "Working on it.", "Step 1 of 5" to "Step 4 of 5" four seconds apart, each
+  within a second of being reported, then the completion after twenty seconds, with no line
+  repeated; "Step 5 of 5" was not seen, and the section now says why. The service's log
+  held no progress text. A real model's answer in its own words is left to the walk of
+  request 4 (T040).
+- **The review** by a reader who did not write the diff found no defect in the code, and the
+  part 8 tests did not fail in 72 runs in parallel. Two tests were added for what no test
+  held, each shown to fail with the mutation it is for: `_poll` does not report again the
+  text the send returned (with the last text seen starting from nothing, it did), and every
+  kind of line break in a progress text starts an indented line (with the text split on
+  `\n` alone, a carriage return or U+2028 did not). The README now says that a blank text,
+  or one alike in its first 2,000 characters, is no change.
+- **Left open, older than this feature:** the entry's own line of the check is feature
+  003's, and holds the task id, which the agent chose (up to 256 characters, any of them),
+  and the first 200 characters of the task's message as they are. A line break in either
+  starts a line of the result that is not indented, and the task id also reaches the line
+  the model is told on every call. The progress text is set apart; those two are not. The
+  docstring of `task_line` says so. Closing it changes feature 003's lines, and is the
+  owner's to decide.

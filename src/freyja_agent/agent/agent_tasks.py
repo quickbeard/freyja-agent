@@ -59,12 +59,28 @@ def pending_line(task: AgentTaskRecord) -> str:
 
 
 def task_line(task: AgentTaskRecord) -> str:
-    """One task as ``check_agent_tasks`` lists it: the pending line, then when it was checked."""
+    """One task as ``check_agent_tasks`` lists it: the pending line, then when it was checked.
+
+    A task an agent is working on, with progress kept, is followed by the progress, set apart
+    (feature 008, FR-013): a line in fixed words that say whose text it is and when it was
+    learned, indented by two spaces, then every line of the text indented by four, however
+    its lines are broken (``splitlines``). An entry starts at the beginning of a line with
+    ``- Agent``, so no line of the progress text, whatever it holds, can pass for another
+    entry or for the service's own words. The entry's own line is feature 003's: its task id,
+    which the agent chose, and its message are written as they are.
+    """
     line = f"{pending_line(task)}, last checked {task.last_checked_at.isoformat()}"
     if task.ended_at is not None:
         line += f", ended {task.ended_at.isoformat()}"
     message = task.message[:MESSAGE_PREVIEW]
-    return f"{line}. Task message: {message}"
+    entry = f"{line}. Task message: {message}"
+    if task.state != "working" or task.progress is None or task.progress_at is None:
+        return entry
+    words = "\n".join(f"    {text}" for text in task.progress.splitlines())
+    return (
+        f"{entry}\n  Progress the agent reported, in its own words "
+        f"(learned {task.progress_at.isoformat()}):\n{words}"
+    )
 
 
 @dataclass(frozen=True)
@@ -253,7 +269,9 @@ def check_agent_tasks(store: AgentTaskStore) -> StructuredTool:
         name=CHECK_AGENT_TASKS,
         description=(
             "List the agent tasks started on this thread, or only the named ones, with their "
-            "status: pending (working or waiting for input) or ended, and when."
+            "status: pending (working or waiting for input) or ended, and when. For a task an "
+            "agent is working on, it also gives the progress the agent last reported, in the "
+            "agent's own words."
         ),
         args_schema=CheckArgs,
         coroutine=call,

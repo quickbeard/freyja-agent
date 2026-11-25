@@ -122,7 +122,7 @@ def user(text: Any) -> dict[str, Any]:
     return {"role": "user", "content": text}
 
 
-TOOLS = ["ls", "send_notification", "handoff_to_stub"]
+TOOLS = ["ls", "send_notification", "handoff_to_stub", "check_agent_tasks"]
 RESULT = {"role": "tool", "content": "Notification to #ops recorded."}
 ASKED = {"role": "assistant", "content": None}
 
@@ -147,6 +147,13 @@ ASKED = {"role": "assistant", "content": None}
             Plan(call=("handoff_to_stub", {"message": "Compile the report."})),
         ),
         ([user("handoff stub")], Plan(call=("handoff_to_stub", {"message": "hello"}))),
+        # Feature 008: the orchestrator's check of its agent tasks.
+        ([user("check How far is the agent?")], Plan(call=("check_agent_tasks", {}))),
+        ([user("check")], Plan(call=("check_agent_tasks", {}))),
+        (
+            [user("check"), ASKED, {"role": "tool", "content": "No agent tasks."}],
+            Plan(text="Done: No agent tasks."),
+        ),
         ([user("steps 2")], Plan(call=("ls", {"path": "/"}), step=True)),
         ([user("steps 2"), ASKED, RESULT], Plan(call=("ls", {"path": "/"}), step=True)),
         ([user("steps 2"), ASKED, RESULT, ASKED, RESULT], Plan(text="Took 2 steps.", step=True)),
@@ -181,7 +188,7 @@ def test_what_it_answers_is_read_from_the_last_message_of_a_person(
 
 
 def test_a_tool_it_was_not_handed_is_never_called() -> None:
-    for message in ("notify Ready.", "steps 2", "handoff stub Do it."):
+    for message in ("notify Ready.", "steps 2", "handoff stub Do it.", "check"):
         planned = plan([user(message)], [])
         assert planned.call is None
         assert planned.text.endswith("is not among the tools I was given.")
