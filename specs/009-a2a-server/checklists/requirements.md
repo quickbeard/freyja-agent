@@ -90,11 +90,21 @@
   - pieces of a reply are sent only where the text is known to be Freyja's own (FR-017);
   - each refusal has one named answer, and both limits one reason (FR-025, FR-026a);
   - the hand-over count's form, and which message's count is carried on (FR-027).
-- Three things are left for the plan and named in the spec so that they are not lost: which
-  versions of the protocol ARTEX and heimdall speak as clients, to be checked first
-  (Assumptions, "Scope"); how a run's end by a stop is told from one that was cut off, for
-  runs that are not console runs (FR-016); and the protocol's error used for a request the
-  agent does not take (FR-026a).
+- Two things are left for the plan and named in the spec so that they are not lost: how a
+  run's end by a stop is told from one that was cut off, for runs that are not console runs
+  (FR-016); and the protocol's error used for a request the agent does not take (FR-026a).
 - The spec changes five earlier requirements, each only for a thread a caller started, and
   lists them at the end of Assumptions. With the feature off, nothing changes (FR-001,
   SC-002).
+- Validated again on 2026-11-25 after `/speckit-clarify`: 16 of 16 items still pass. Five
+  questions were asked and answered; each is in the spec's Clarifications section. They
+  settled candidates 1, 2, 3, and 7 above and what a restart does to a running task, and
+  confirmed each as written: every hand-off from a caller's thread waits for a person
+  (FR-013a), a named caller has a file area of its own (FR-009a), a send without a stream
+  waits at most 30 seconds (FR-011), an ordinary restart cancels a running task and nothing
+  continues by itself (FR-016), and the deployment encrypts the way to the outside listener
+  (FR-029). No requirement changed its meaning. Candidates 4 to 6 and 8 to 10 were not asked
+  about and stay as written.
+- The versions of the protocol that ARTEX and heimdall speak were looked up in their
+  repositories in the same session, not asked: both serve version 1.0, which is what
+  Freyja reaches them with, and neither has a client yet (Assumptions, "Scope").
