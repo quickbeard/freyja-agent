@@ -118,8 +118,11 @@ startup and exits with an error naming the connection when it is unreachable.
   `connect` reads the agent's card and builds the client, so nothing is sent over a link that
   holds no usable card. It pins every request to the configured address, sends messages and
   reads and cancels tasks under the call time limit, records each agent's status, and removes
-  every known address from everything it emits (`describe`). `agent_cards.py` reads an
-  agent's card under one time limit and one size limit and says in the service's own
+  every known address from everything it emits (`describe`). `progress_text` says what of a
+  status is a task's progress (feature 008): the text of a working status's message, cleaned
+  and cut to `PROGRESS_LIMIT` characters, used by the hand-off and the worker alike.
+  `agent_cards.py` reads an agent's card under one time limit and one size limit and says
+  in the service's own
   sentence why a card cannot be used (`read_card`, `CardError`, the nine `CardProblem`
   codes), and cuts and cleans what a card says of its agent into the details that are kept
   and shown (`card_details`, `cleaned`). `addresses.py` is the process's one address
@@ -174,7 +177,9 @@ startup and exits with an error naming the connection when it is unreachable.
   and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, agent
   tasks, and the calls of agents' tools that a model proposed (`PostgresAgentTaskStore` with
-  its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); `saved_agents.py` is the `SavedAgentStore` for the agents an operator
+  its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); a task keeps the progress
+  its agent last reported and when it was learned (`progress`, `progress_at`, feature 008),
+  added to a deployment's table at startup as `agent_ref` was; `saved_agents.py` is the `SavedAgentStore` for the agents an operator
   saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
   `InMemorySavedAgentStore`); `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation
@@ -468,6 +473,11 @@ startup and exits with an error naming the connection when it is unreachable.
   environment agent's appears nowhere. Text that may hold one goes through the scrubber
   (`delegates/addresses.py`), and card details are cleaned again where they are used
   (`cleaned`), because an address may become an agent's after a card that names it was read.
+  What an agent writes in its own words is not searched for an address, as feature 005
+  (FR-028) has it: its replies and progress updates, as a run's stream and the thread carry
+  them, and the progress kept with its task and returned in the thread's state (feature
+  008). Only the console's runs take an address out of every text of every event they hand
+  on (`UnattendedRuns._scrubbed`, feature 007).
   `tests/test_agents_address_nowhere.py` searches everything the service gives back and
   everything the checkpointer keeps. A new route or log line about agents is added to that
   test, and a new route or refusal code also to its table `CONTRACT`: the file's last test

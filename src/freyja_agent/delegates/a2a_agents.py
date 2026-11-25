@@ -39,6 +39,7 @@ from a2a.types import (
     Task,
     TaskArtifactUpdateEvent,
     TaskState,
+    TaskStatus,
     TaskStatusUpdateEvent,
 )
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, VERSION_HEADER
@@ -389,6 +390,11 @@ class SendOutcome:
     from such a reply is kept (FR-009). ``acknowledged_at`` is when the acknowledgment arrived,
     read from the clock ``send_message`` was given: a task starts then, not when the call ends
     (FR-017, FR-021).
+
+    ``progress`` is the last progress text the send received (``progress_text``), and
+    ``progress_seen`` the event loop's clock when it first received that text. They live for
+    one send, and are how the hand-off's last progress reaches the task's row
+    (008 data-model.md "In memory, during a hand-off").
     """
 
     task: Task | None = None
@@ -398,6 +404,8 @@ class SendOutcome:
     unreachable: bool = False
     malformed: str | None = None
     acknowledged_at: datetime | None = None
+    progress: str | None = None
+    progress_seen: float | None = None
 
     @property
     def acknowledged(self) -> bool:
@@ -419,6 +427,50 @@ def _text(message: Message | None) -> str:
     if message is None:
         return ""
     return "\n".join(part.text for part in message.parts if part.WhichOneof("content") == "text")
+
+
+# The most of an agent's progress text that is kept (feature 008, FR-004).
+PROGRESS_LIMIT = 2000
+
+
+def progress_text(status: TaskStatus) -> str | None:
+    """The progress text a status carries, as it is kept, or None (008 research R1).
+
+    Only a status that says the task is working carries progress: an ending, a question, and
+    a request to sign in are outcomes (008 FR-002). The text is the message's text parts
+    joined by line breaks, as a progress update in a run's stream has it; a NUL character and
+    a lone surrogate are dropped, since a text column takes neither, and the text is cut to
+    ``PROGRESS_LIMIT`` characters. A text that is then empty or blank is none (FR-003).
+    Nothing else is done to it: it is the agent's own words, and is not searched for an
+    address (FR-004).
+    """
+    if state_name(status.state) != "working" or not status.HasField("message"):
+        return None
+    return kept_progress(_text(status.message))
+
+
+def kept_progress(text: str) -> str | None:
+    """``text`` as a progress text is kept: what a text column takes, cut, and not blank.
+
+    A protocol message cannot hold a lone surrogate (its strings are UTF-8), so one reaches
+    nothing here today; it is dropped all the same, as the spec says, should a message ever
+    come from elsewhere.
+    """
+    text = text.replace("\x00", "")
+    text = text.encode("utf-8", "surrogatepass").decode("utf-8", "ignore")[:PROGRESS_LIMIT]
+    return text if text.strip() else None
+
+
+def _note_progress(outcome: SendOutcome, status: TaskStatus) -> None:
+    """Note the progress ``status`` carries, when it is a text the send has not yet received.
+
+    A text equal to the one noted is not noted again, so ``progress_seen`` is when the send
+    first received it (008 research R4).
+    """
+    text = progress_text(status)
+    if text is not None and text != outcome.progress:
+        outcome.progress = text
+        outcome.progress_seen = asyncio.get_running_loop().time()
 
 
 async def _note_acknowledgment(outcome: SendOutcome, clock: Clock | None) -> None:
@@ -460,6 +512,7 @@ async def _send(
         if kind == "task":
             outcome.task = Task()
             outcome.task.CopyFrom(event.task)
+            _note_progress(outcome, event.task.status)
             if event.task.status.HasField("message"):
                 on_progress(
                     event.task.id,
@@ -470,6 +523,7 @@ async def _send(
             _acknowledged(outcome, event.status_update)
             outcome.task.status.CopyFrom(event.status_update.status)
             update = event.status_update.status
+            _note_progress(outcome, update)
             on_progress(outcome.task.id, state_name(update.state), _text(update.message))
         elif kind == "artifact_update":
             _acknowledged(outcome, event.artifact_update)
@@ -535,6 +589,7 @@ async def _poll(client: Client, outcome: SendOutcome, on_progress: OnProgress) -
         await asyncio.sleep(POLL_SECONDS)
         task = await client.get_task(GetTaskRequest(id=outcome.task.id))
         outcome.task = task
+        _note_progress(outcome, task.status)
         if task.status.state != seen:
             seen = task.status.state
             on_progress(task.id, state_name(seen), _text(task.status.message))

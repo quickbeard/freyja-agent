@@ -43,7 +43,7 @@ every `<seconds>`, and then completes.
 
 ## 1. Read how far a pending agent task is (User Story 1)
 
-In the Tasks section, send the task `Hand this to the stub agent: steps 12 10` and approve
+In the Tasks section, send the task `Hand this to the stub agent: steps 6 25` and approve
 the hand-off. Copy the task's id from the page's address into `T`.
 
 - The run waits thirty seconds for the agent and ends with the note that the agent task is
@@ -52,8 +52,9 @@ the hand-off. Copy the task's id from the page's address into `T`.
 ```bash
 T=<the id>
 curl -s localhost:8000/threads/$T/state | jq '.agent_tasks[0] | {status, last_checked_at, progress}'
-# status "working", and progress with a text such as "Step 3 of 12" and its learned_at:
-# the task was recorded with the progress its hand-off last received
+# status "working", and progress with the text "Step 1 of 6" and a learned_at about five
+# seconds before last_checked_at: the task was recorded with the progress its hand-off last
+# received, dated when the hand-off received it
 ```
 
 Run the same command every few seconds:
@@ -61,30 +62,34 @@ Run the same command every few seconds:
 - `progress.text` moves on to a later step within about ten seconds of the agent reporting
   it, and `learned_at` moves with it.
 - Between two changes, `last_checked_at` moves every ten seconds and `learned_at` does not:
-  the time says since when the agent has reported nothing new.
+  the time says since when the agent has reported nothing new. The agent reports a step
+  every twenty-five seconds, so two or three checks see each one.
 
 Count what the agent received: terminal 3 shows one `POST /` for the hand-off and one for
 each check, every ten seconds, and no more than a task without progress gets.
 
-When the twelve steps are done, about two minutes after the approval:
+When the six steps are done, about two and a half minutes after the approval:
 
 ```bash
 curl -s localhost:8000/threads/$T/state | jq '.agent_tasks[0] | {status, progress}'
-# status "completed"; progress is still the last text learned while it was working
+# status "completed"; progress is still the last text learned while it was working,
+# "Step 5 of 6": the stand-in completes right after its last step, so no check sees it
 ```
 
 The conversation holds the outcome, recorded by a run of the service's own, and no message
 for any step of the progress.
 
 A restart keeps it: stop the service in terminal 1 while a task is pending, start it again,
-and the same command shows the progress it had.
+and the same command shows the progress it had. The checks resume once the stopped
+service's claim on the task has lapsed, up to thirty seconds later; a step the agent
+reported and replaced in that time is not seen.
 
 ## 2. See an agent's progress on the task's page (User Story 2)
 
 Send `Hand this to the stub agent: steps 30 10` and approve. Stay on the task's page.
 
 - Once the run has ended, the agent task is listed as pending, "The agent is working", and
-  under it the page shows what the agent last reported, "Step 3 of 30" or a later one, and
+  under it the page shows what the agent last reported, "Step 2 of 30" or a later one, and
   how long ago, "just now".
 - Without a reload and without touching the page, the text changes to a later step within
   about half a minute of the agent reporting it: the service looks every ten seconds and the

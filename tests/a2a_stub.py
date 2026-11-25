@@ -10,17 +10,25 @@ the message text:
 
 - (default) completes with the message and the conversation's context id;
 - ``ask``: asks one question (input required) and completes once answered in the same task,
-  after ``<seconds>`` when the answer starts with ``slow <seconds>``;
+  after ``<seconds>`` when the answer starts with ``slow <seconds>``; such an answer first sends
+  a working status with ``working_text``;
 - ``slow <seconds>``: stays working that long, then completes;
 - ``hold``: stays working until the test calls ``StubAgent.release()``, then completes; ``hold
   <ending>`` ends as ``fail``, ``reject``, ``auth``, ``ask``, or ``cancel`` instead, so a task
-  that is already pending can end each way;
+  that is already pending can end each way. While it waits, ``StubAgent.report(text)`` makes
+  it send a working status with that text, or with no message for None (feature 008);
 - ``fail``, ``reject``, ``auth``: fails, rejects, or asks for authentication;
 - ``parts``: completes with a text, a data, a raw-bytes, and a URL part;
 - ``chunks``: completes with one artifact sent in several updates: a draft, then its
   replacement, then two chunks appended to it, with a data part after the text;
 - ``progress <n>``: sends n status updates before completing;
+- ``steps <n> <seconds>``: stays working and sends "Step k of n" for k = 1 to n, the first
+  ``<seconds>`` after its first working status and each later one ``<seconds>`` after the one
+  before, then completes right after the last (feature 008, for a run by hand too);
 - ``message``: answers with a direct message instead of a task.
+
+Every task's first working status carries ``StubAgent.working_text``, "Working on it." unless a
+test changes it; with None it carries no message.
 
 Card options cover what startup must refuse or ignore: no streaming, security requirements,
 input modes without text, no JSON-RPC interface, another advertised address, no skills, and a
@@ -39,7 +47,9 @@ import argparse
 import asyncio
 import gzip
 import json
-from collections.abc import Callable
+import threading
+import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -57,6 +67,7 @@ from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.agent_execution.simple_request_context_builder import (
     SimpleRequestContextBuilder,
 )
+from a2a.server.context import ServerCallContext
 from a2a.server.events import EventQueue
 from a2a.server.id_generator import IDGenerator, IDGeneratorContext
 from a2a.server.request_handlers import DefaultRequestHandler
@@ -85,6 +96,8 @@ ELSEWHERE = "http://elsewhere.example:1234/a2a"
 # How a replaced card body is typed, and the size of the pieces a chunked one is sent in.
 JSON = "application/json"
 CHUNK = 64 * 1024
+# How long ``StubAgent.report`` waits for the held tasks to store what it asked them to send.
+REPORT_SECONDS = 5.0
 
 
 @dataclass
@@ -117,6 +130,7 @@ class _Executor(AgentExecutor):
         self.stub = stub
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
+        self.stub.loop = asyncio.get_running_loop()
         message = context.message
         text = get_message_text(message) if message is not None else ""
         self.stub.record.messages.append(
@@ -146,17 +160,23 @@ class _Executor(AgentExecutor):
         def say(words: str) -> Any:
             return new_text_message(words, context_id=task.context_id, task_id=task.id)
 
+        def working(words: str | None) -> Any:
+            """A working status with ``words``, or with no message for None."""
+            return updater.update_status(
+                TaskState.TASK_STATE_WORKING, message=say(words) if words is not None else None
+            )
+
         # An answer to an earlier question continues that task; one starting with ``slow
-        # <seconds>`` takes that long.
+        # <seconds>`` reports ``working_text`` and takes that long.
         if task.status.state == TaskState.TASK_STATE_INPUT_REQUIRED:
             if keyword == "slow":
-                await updater.update_status(TaskState.TASK_STATE_WORKING)
+                await working(self.stub.working_text)
                 await asyncio.sleep(float(rest.split()[0].rstrip(":")))
             await updater.add_artifact(parts=[new_text_part(f"Answered: {text}")])
             await updater.complete()
             return
 
-        await updater.update_status(TaskState.TASK_STATE_WORKING, message=say("Working on it."))
+        await working(self.stub.working_text)
         if await self._ended(keyword, updater, say):
             return
         if keyword == "progress":
@@ -164,19 +184,19 @@ class _Executor(AgentExecutor):
                 await updater.update_status(
                     TaskState.TASK_STATE_WORKING, message=say(f"Step {step}")
                 )
+        stop = self.stub.cancel_events.setdefault(task.id, asyncio.Event())
+        if keyword == "steps":
+            count, seconds = rest.split()[:2]
+            total = int(count)
+            for step in range(1, total + 1):
+                if await _stopped(stop, asyncio.sleep(float(seconds.rstrip(":")))):
+                    return
+                await working(f"Step {step} of {total}")
         if keyword in ("slow", "hold"):
-            stop = self.stub.cancel_events.setdefault(task.id, asyncio.Event())
-            wait = (
-                asyncio.sleep(float(rest.split()[0].rstrip(":")))
-                if keyword == "slow"
-                else self.stub.released.wait()
-            )
-            waiter = asyncio.ensure_future(wait)
-            stopper = asyncio.ensure_future(stop.wait())
-            await asyncio.wait({waiter, stopper}, return_when=asyncio.FIRST_COMPLETED)
-            waiter.cancel()
-            stopper.cancel()
-            if stop.is_set():
+            if keyword == "slow":
+                if await _stopped(stop, asyncio.sleep(float(rest.split()[0].rstrip(":")))):
+                    return
+            elif not await self._hold(task.id, stop, working, context.call_context):
                 return
             ending = rest.split()[0].rstrip(":").lower() if keyword == "hold" and rest else ""
             if ending == "cancel":
@@ -216,6 +236,56 @@ class _Executor(AgentExecutor):
         await updater.add_artifact(parts=parts)
         await updater.complete()
 
+    async def _hold(
+        self,
+        task_id: str,
+        stop: asyncio.Event,
+        working: Callable[[str | None], Awaitable[None]],
+        call: ServerCallContext,
+    ) -> bool:
+        """Wait for the release, sending each report meanwhile; False when canceled.
+
+        A report made before the task began to wait is not this task's. Each one is sent
+        once, and the count of those sent is noted only once the status is in the task store,
+        so that ``StubAgent.report`` returns when a read of the task would show it.
+        """
+        stub = self.stub
+        # Under the lock ``report`` appends under, so a report is either before this task
+        # began to wait, and not its own, or waited for by ``report`` until it is stored.
+        with stub.lock:
+            sent = len(stub.reports)
+            stub.holding[task_id] = sent
+        try:
+            while True:
+                reported = stub.reported
+                if stop.is_set():
+                    return False
+                if len(stub.reports) > sent:
+                    for words in stub.reports[sent:]:
+                        if stop.is_set():
+                            return False
+                        await working(words)
+                        await stub.stored(task_id, words, call)
+                        sent += 1
+                        with stub.lock:
+                            stub.holding[task_id] = sent
+                    continue
+                waiters = {
+                    asyncio.ensure_future(stub.released.wait()),
+                    asyncio.ensure_future(stop.wait()),
+                    asyncio.ensure_future(reported.wait()),
+                }
+                await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)
+                for waiter in waiters:
+                    waiter.cancel()
+                if stop.is_set():
+                    return False
+                if stub.released.is_set():
+                    return True
+        finally:
+            with stub.lock:
+                stub.holding.pop(task_id, None)
+
     async def _ended(self, keyword: str, updater: TaskUpdater, say: Any) -> bool:
         """End the task the way ``keyword`` asks, if it names an ending; True when it did."""
         if keyword == "ask":
@@ -238,6 +308,31 @@ class _Executor(AgentExecutor):
             event_queue=event_queue, task_id=task_id, context_id=context.context_id or ""
         )
         await updater.cancel()
+
+
+async def _stopped(stop: asyncio.Event, wait: Awaitable[Any]) -> bool:
+    """Wait for ``wait`` or for the task's cancel, whichever comes first; True on the cancel."""
+    waiter = asyncio.ensure_future(wait)
+    stopper = asyncio.ensure_future(stop.wait())
+    await asyncio.wait({waiter, stopper}, return_when=asyncio.FIRST_COMPLETED)
+    waiter.cancel()
+    stopper.cancel()
+    return stop.is_set()
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    """The event loop running in this thread, or None."""
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _status_text(task: Any) -> str | None:
+    """The text of a stored task's status message, or None when it has none."""
+    if not task.status.HasField("message"):
+        return None
+    return get_message_text(task.status.message)
 
 
 class _CallableIds(IDGenerator):
@@ -337,10 +432,87 @@ class StubAgent:
     question: str = "Which date should it be?"
     released: asyncio.Event = field(default_factory=asyncio.Event)
     cancel_events: dict[str, asyncio.Event] = field(default_factory=dict)
+    # The text of every task's first working status; None sends that status with no message.
+    working_text: str | None = "Working on it."
+    # The task store the stand-in's server keeps, and the loop its tasks run in.
+    task_store: InMemoryTaskStore | None = None
+    loop: asyncio.AbstractEventLoop | None = None
+    # Every report made, in order, and the event the next one sets.
+    reports: list[str | None] = field(default_factory=list)
+    reported: asyncio.Event = field(default_factory=asyncio.Event)
+    # Each waiting ``hold`` task, by id, with how many reports it has sent and stored.
+    holding: dict[str, int] = field(default_factory=dict)
+    lock: threading.Lock = field(default_factory=threading.Lock)
 
     def release(self) -> None:
-        """Let every ``hold`` task finish."""
-        self.released.set()
+        """Let every ``hold`` task finish.
+
+        From the test's own thread the event is set in the stand-in's loop, which is woken
+        for it; before any task ran, or once that loop has stopped, it is set at once.
+        """
+        loop = self.loop
+        if loop is None or not loop.is_running() or _running_loop() is loop:
+            self.released.set()
+        else:
+            loop.call_soon_threadsafe(self.released.set)
+
+    def report(self, text: str | None) -> None:
+        """Have every waiting ``hold`` task send one working status with ``text``.
+
+        With None the status carries no message. Each task goes on waiting for its release,
+        its cancel, or the next report. Called from the test's own thread, it returns once
+        every such task's status is in the stand-in's task store, so the next read of a task
+        shows it; called in the stand-in's own loop, it returns at once. A report with no
+        task waiting is a mistake of the test's, and raises.
+        """
+        with self.lock:
+            self.reports.append(text)
+            wanted = len(self.reports)
+            waiting = list(self.holding)
+        loop = self.loop
+        if not waiting or loop is None:
+            raise RuntimeError("no hold task is waiting for a report")
+        if _running_loop() is loop:
+            self._wake()
+            return
+        loop.call_soon_threadsafe(self._wake)
+        deadline = time.monotonic() + REPORT_SECONDS
+        while True:
+            with self.lock:
+                # A task that stopped waiting meanwhile, released or canceled, is not behind.
+                behind = [task for task in waiting if self.holding.get(task, wanted) < wanted]
+            if not behind:
+                return
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"the stand-in did not store the report for {behind}")
+            time.sleep(0.005)
+
+    def _wake(self) -> None:
+        """In the stand-in's loop: wake every waiting task for the reports made so far."""
+        reported, self.reported = self.reported, asyncio.Event()
+        reported.set()
+
+    async def task(self, task_id: str) -> Any:
+        """The task as the stand-in's server keeps it, read without a request: a test that
+        counts the requests the agent received can wait on it."""
+        assert self.task_store is not None
+        return await self.task_store.get(task_id, ServerCallContext())
+
+    async def stored(self, task_id: str, text: str | None, call: ServerCallContext) -> None:
+        """Wait until the task store holds a working status with ``text`` for the task."""
+        assert self.task_store is not None
+        deadline = time.monotonic() + REPORT_SECONDS
+        while True:
+            task = await self.task_store.get(task_id, call)
+            if (
+                task is not None
+                and task.status.state == TaskState.TASK_STATE_WORKING
+                and _status_text(task) == text
+            ):
+                return
+            if time.monotonic() > deadline:
+                raise TimeoutError(f"the stand-in did not store a report for {task_id}")
+            await asyncio.sleep(0.005)
 
 
 def make_stub(
@@ -371,10 +543,10 @@ def make_stub(
         raise ValueError("redirect_card_to serves no body: give it no card_* option")
     card = card or stub_card(name)
     record = StubRecord()
-    stub = StubAgent(app=None, card=card, record=record)
+    stub = StubAgent(app=None, card=card, record=record, task_store=InMemoryTaskStore())
     handler = DefaultRequestHandler(
         agent_executor=_Executor(stub),
-        task_store=InMemoryTaskStore(),
+        task_store=stub.task_store,
         agent_card=card,
         request_context_builder=(
             SimpleRequestContextBuilder(task_id_generator=_CallableIds(task_ids))

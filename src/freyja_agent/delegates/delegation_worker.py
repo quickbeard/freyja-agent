@@ -53,7 +53,12 @@ from freyja_agent.api.outcomes import (
     take_undelivered,
 )
 from freyja_agent.api.streaming import lease_owner, run_stream, take_context
-from freyja_agent.delegates.a2a_agents import ERROR_TEXT_LIMIT, AgentLink, state_name
+from freyja_agent.delegates.a2a_agents import (
+    ERROR_TEXT_LIMIT,
+    AgentLink,
+    progress_text,
+    state_name,
+)
 from freyja_agent.delegates.a2a_tools import a2a_result_text, record_outcome
 from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.delegates.agent_cards import SENTENCES, CardError
@@ -277,6 +282,7 @@ class DelegationWorker:
         current = await store.get_task(task.agent, task.task_id)
         if current is None or current.state not in PENDING_STATES:
             return
+        progress: str | None = None
         try:
             found = await link.get_task(task.task_id)
         except TaskNotFoundError:
@@ -291,6 +297,7 @@ class DelegationWorker:
         else:
             link.mark(True)
             state, text = state_name(found.status.state), a2a_result_text(found)
+            progress = progress_text(found.status)
         if task.state == "input_required" and state in PENDING_STATES:
             # Still waiting, or working on an answer whose hand-off is still following it: the
             # question is recorded already, and that hand-off records what the answer leads
@@ -300,8 +307,16 @@ class DelegationWorker:
             return
         if state == "working":
             now = await store.now()
+            # A text the row does not hold yet is kept, with the time it was first learned,
+            # in the statement that already sets the check's time. The same text again, or
+            # none, names neither column, so its time stays (008 FR-003, research R3).
+            learned = (
+                {"progress": progress, "progress_at": now}
+                if progress is not None and progress != current.progress
+                else {}
+            )
             await store.update_task(
-                task.agent, task.task_id, when_state=("working",), last_checked_at=now
+                task.agent, task.task_id, when_state=("working",), last_checked_at=now, **learned
             )
             return
         # Recorded only while the task is still pending here: one Freyja canceled meanwhile

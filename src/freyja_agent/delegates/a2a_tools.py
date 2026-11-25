@@ -34,6 +34,7 @@ import json
 import logging
 from collections.abc import Collection
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import Annotated, Any
 
 from a2a.client.errors import A2AClientError, A2AClientTimeoutError
@@ -666,7 +667,9 @@ async def _record(
         "outcome_ready": False,
         "delivered_at": None,
     }
+    progress = _progress(outcome, now)
     if known_task is None:
+        known |= progress
         await store.record_task(
             AgentTaskRecord(
                 agent=link.name,
@@ -691,8 +694,34 @@ async def _record(
         # change gave up (005 FR-024, R10). A task that was already given up for its age
         # when it was answered takes the state the answer led to, as it always has.
         unchanged = (*PENDING_STATES, *([before] if before is not None else []))
+        if progress and _learned_later(known_task, progress):
+            known |= progress
         await store.update_task(link.name, task.id, when_state=unchanged, **known)
     return result, ok
+
+
+def _progress(outcome: SendOutcome, now: datetime) -> dict[str, Any]:
+    """The task's progress as the send left it, as the two columns take it, or nothing.
+
+    Its time is the store's clock, ``now``, less the seconds since the send first received
+    the text, on the event loop's clock: never the agent's clock, and never this instance's
+    wall clock (008 FR-005, research R4).
+    """
+    if outcome.progress is None or outcome.progress_seen is None:
+        return {}
+    since = max(0.0, asyncio.get_running_loop().time() - outcome.progress_seen)
+    return {"progress": outcome.progress, "progress_at": now - timedelta(seconds=since)}
+
+
+def _learned_later(row: AgentTaskRecord, progress: dict[str, Any]) -> bool:
+    """Whether the send's progress replaces the row's: another text, learned later.
+
+    A check may have kept a later text while the send was under way, and the text learned
+    last is the one kept, not the one written last (008 FR-006, the spec's Edge Cases).
+    """
+    if row.progress == progress["progress"]:
+        return False
+    return row.progress_at is None or row.progress_at < progress["progress_at"]
 
 
 # What a task was in before it could be canceled: pending, or given up by Freyja (FR-022).

@@ -101,6 +101,19 @@ AgentTaskStatus = Literal[
 ]
 
 
+class AgentTaskProgress(BaseModel):
+    """An agent's own claim about its work (feature 008). It is shown, and it decides nothing:
+    ``status`` alone says whether the task is working, has ended, or waits for input."""
+
+    # The text parts of the status message the agent attached to a working status, joined by
+    # line breaks and cut to 2,000 characters. Untrusted text in the agent's own words: it may
+    # hold several lines, markup, links, or an address, and passes as the agent wrote it.
+    text: str
+    # When the service first learned this text, on the database's clock, never a time the
+    # agent supplied. It stays while the agent repeats the same text.
+    learned_at: datetime
+
+
 class AgentTask(BaseModel):
     """One task an agent created for the thread (feature 003, FR-017)."""
 
@@ -118,6 +131,10 @@ class AgentTask(BaseModel):
     # True once a run recorded the task's outcome in the thread's messages, and from the start
     # for a task whose outcome the hand-off itself returned.
     outcome_delivered: bool
+    # The progress the agent last reported, or None when the service has learned none. Kept,
+    # and returned, for a task of any status: for one that ended, was given up, or waits for
+    # input, the last progress learned while it was working (feature 008, FR-009).
+    progress: AgentTaskProgress | None
 
 
 class ThreadState(BaseModel):

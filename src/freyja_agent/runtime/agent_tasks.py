@@ -20,6 +20,12 @@ that a saved agent's tasks can be told from the tasks of another agent under its
   about which agent held the name then; the row does, so a proposal is never sent to
   another agent that has the name by the time it is decided (005 FR-023, research R8).
 
+Feature 008 adds a task's kept progress (008 research R2): the text an agent last attached to a
+working status, in its own words, and when the service first learned it (``progress``,
+``progress_at``). The hand-off and the worker write it through the statements they already
+make, and nothing that ends a task or gives it up names it, so a task keeps the last progress
+learned while it was working (008 FR-007).
+
 ``PostgresAgentTaskStore`` is the service's store and ``InMemoryAgentTaskStore`` the suite's.
 Both take every time they set or compare from their own clock: the database's ``now()`` and
 the injected clock, so instances never compare their own clocks (spec Assumptions).
@@ -121,6 +127,12 @@ class AgentTaskRecord:
     # for a saved agent. None for an environment agent's task, which follows the agent's
     # name, and for every task recorded before feature 005 (005 research R2).
     agent_ref: str | None = None
+    # The progress text the service last learned for the task: at most 2,000 characters, in
+    # the agent's own words. None for a task that has none (008 data-model.md).
+    progress: str | None = None
+    # When the service first learned that text, on the store's clock. None exactly when
+    # ``progress`` is None: the two are always written together.
+    progress_at: datetime | None = None
 
     @property
     def pending(self) -> bool:
@@ -550,6 +562,8 @@ _CREATE = (
         followup_next_at  timestamptz,
         followup_error    text,
         agent_ref         text,
+        progress          text,
+        progress_at       timestamptz,
         PRIMARY KEY (agent, task_id)
     )
     """,
@@ -580,9 +594,10 @@ _HAS_COLUMN = (
     " AND table_name = %(table)s AND column_name = %(column)s"
 )
 # The columns added to tables that exist in deployments, with the statement that adds each:
-# a task's ``agent_ref`` (005 research R2), and a proposed call's ``decided``, which the
-# table created by 005's fifth phase lacks. A boolean with a constant default is added
-# without rewriting the table.
+# a task's ``agent_ref`` (005 research R2), a proposed call's ``decided``, which the table
+# created by 005's fifth phase lacks, and a task's kept progress and its time (008 research
+# R2). A boolean with a constant default, and a nullable column with none, are added without
+# rewriting the table.
 _ADDED_COLUMNS = (
     (
         "freyja_agent_tasks",
@@ -594,6 +609,16 @@ _ADDED_COLUMNS = (
         "decided",
         "ALTER TABLE freyja_agent_calls ADD COLUMN IF NOT EXISTS decided boolean NOT NULL"
         " DEFAULT false",
+    ),
+    (
+        "freyja_agent_tasks",
+        "progress",
+        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS progress text",
+    ),
+    (
+        "freyja_agent_tasks",
+        "progress_at",
+        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS progress_at timestamptz",
     ),
 )
 LOCK_TIMEOUT = "5s"

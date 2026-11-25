@@ -309,3 +309,63 @@ feature. T042 compares the finished branch with these numbers.
   run alone, since it did not fail.
 - The database `freyja_test` already existed in the compose Postgres on port 5434; nothing
   was created.
+
+### Request 1: Phases 2 and 3, the service keeps progress (2026-11-25)
+
+Built as planned: the two fields and columns, `progress_text`, the hand-off's `progress` and
+`progress_seen`, the guard of `_record`, the worker's update, and the state's `progress`.
+What differs from the tasks, and why:
+
+- **A lone surrogate cannot reach `progress_text`.** A protocol message's strings are UTF-8,
+  so `a2a.types` refuses to build a status that holds one (T005 asked for that case). The
+  cleaning is a function of its own, `kept_progress(text)`, which `progress_text` calls,
+  and the case is tested on it; the test also shows that such a status cannot be built.
+- **The stand-in's `report()` returns once the status is stored.** It is called from the
+  test's thread while the stand-in runs in the client's event loop. It wakes the held tasks
+  through that loop and waits until each one's status is in the stand-in's task store, so
+  the next read of the task shows it. `StubAgent.task(task_id)` reads that store without a
+  request, for the test that counts requests (T012). A `steps` task stops at a cancel, as
+  `slow` and `hold` do.
+- **The README's startup paragraph changed**, though T020 said it needed no change: it said
+  a task table of an earlier version gains its `agent_ref` column, and it now gains
+  `progress` and `progress_at` too.
+- **Tests:** T010's hand-off time is held within the call limit of the start plus one second,
+  for what recording takes; T012 compares the messages the agent received without their
+  ids, which hold the step's namespace and differ from run to run; T011's removed agent uses
+  the helpers of `tests/test_agents_tasks.py`.
+- **The quickstart walk (T021)** ran through the API rather than the console, with the
+  stand-in model (`call-tools`, `handoff stub ...`) in place of a real one, and an
+  environment built from `.env.example` with the check's overrides rather than a copy of
+  the owner's `.env`, so no key of the owner's was copied and no provider was called. What
+  it changed in the quickstart:
+  - Section 1 uses `steps 6 25`, not `steps 12 10`. With a step every ten seconds each check
+    found a new step, so `learned_at` moved with `last_checked_at` and the time that stays
+    could not be seen. With a step every twenty-five seconds, two or three checks see each.
+  - The hand-off records the step before the one that arrives at the thirtieth second: the
+    call limit ends as it arrives. Section 1 now names "Step 1 of 6", and section 2 "Step 2
+    of 30" (it said "Step 3 of 30"); section 2 is walked in request 2.
+  - The stand-in completes right after its last step, so the kept progress of a completed
+    task is the step before it ("Step 5 of 6").
+  - After a restart, the checks resume once the stopped instance's claim has lapsed, up to
+    thirty seconds later; a step reported and replaced meanwhile is not seen. The walk saw
+    it: a task restarted at "Step 8 of 12" completed with that progress.
+  - The stand-in received one request for each hand-off and one for each check, every ten
+    seconds, and the service's log held no progress text and no error.
+
+- **The review** by a reader who did not write the diff found nothing to change in the
+  service. It found that the log test could not see a debug line of Freyja's: the app's
+  startup raises Freyja's loggers to info after the test had lowered them, so the test now
+  lowers them once the app has started, and fails, shown with a debug line added for the
+  run, where it passed before. The stand-in's `report()` now registers a waiting task and
+  appends a report under one lock, raises when no task is waiting, and no task sends a
+  report after its cancel; `release()` is set in the stand-in's loop, as `report()` wakes
+  it. The test of a row that waits for input now shows the agent was asked. The address
+  sentences of `README.md` and `AGENTS.md` say that an agent's own words, its kept progress
+  among them, pass as written, and that the console's runs take an address out of every
+  event. Left as it is: a status in a state the protocol does not name counts as working,
+  as `state_name` has always had it.
+
+Numbers at the end of the request: `uv run pytest --cov`, 1,948 passed and 133 skipped,
+91.45% of statements (91.39% at the start); the opt-in Postgres tests, 133 passed. The
+only existing test changed is `tests/test_state.py`, which pins an agent task's whole shape
+(FR-022).
