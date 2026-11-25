@@ -59,7 +59,7 @@ The stand-in caller, in a fourth terminal:
 ```bash
 caller() { uv run python -m tests.a2a_caller --url http://localhost:8000 "$@"; }
 caller card                      # the card
-caller send "<text>"             # send, wait for the answer, print the task
+caller send "<text>"             # send, wait for the answer, print the task or the refusal
 caller stream "<text>"           # send and print each event as it arrives
 caller get <task id>             # read a task
 caller follow <task id>          # subscribe
@@ -78,6 +78,8 @@ caller stream "List the files in your workspace and say how many there are."
   push notifications are not, and declares no security.
 - The stream prints, in order: the task as working; `Freyja is using: ls.`; `Completed: ls.`;
   pieces of the reply; the whole reply as the artifact `reply`; and the task as completed.
+  With the stand-in model, send `steps 1` for the one step of `ls`; it sends its reply in
+  one piece.
 - `caller send "Say hello."` prints one completed task with its reply.
 - In the console's Tasks section both are listed, each with "Started by an agent on this
   machine", and neither page has a box for another message.

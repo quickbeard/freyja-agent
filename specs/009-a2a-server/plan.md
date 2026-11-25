@@ -525,3 +525,79 @@ or changes a skill. What it found:
 | Low: with the feature off every run reads `freyja_a2a_conversations`, up to three times, and fails when that read fails. | Kept: it fails closed, as the review of the tasks decided (research R6) |
 | Low: an acceptance that takes over 60 seconds before its run starts can be failed by another instance's look; `mark_started` then raises and the caller is told. | Left: the row stays consistent |
 | Low: no sweep yet, so a task whose release function did not run waits for the next acceptance to be looked at. | Request 4 builds the sweep (R9) |
+
+### Request 2 (2026-11-25): an agent hands Freyja a task and reads the result
+
+**Built otherwise than the tasks say, and why:**
+
+- The routes are the SDK's `Route`s, which both walkers of the existing suite already know
+  (`tests/test_threads_other_origins.py`, `tests/test_allowed_hosts.py`): neither file
+  changed. The new tests import their `_routes` and their headers, and run them on an
+  application with the feature on, inside its lifespan, where the routes exist.
+- The size limit reads the body itself, piece by piece, and hands the dispatcher a request
+  that replays it; a `Content-Length` above 256 KiB, or one that is no number, is refused
+  without reading. The caller's name reaches the handler through the request's scope, which
+  the context builder reads; a request that reached the dispatcher another way is refused
+  with the internal error.
+- `FreyjaRequestHandler` validates a message's form itself, in the contract's order, and not
+  with the SDK's `validate_request_params`, whose required-field check would answer a
+  message with no parts with its own sentence.
+- The fifth stream of one task (`stream_limit`) is not refused yet: a task has one stream
+  until subscribing exists, which request 4 builds with the limit.
+- The hand-over count is not read: every task of this request keeps 0, until request 6.
+- A request with an `Authorization` header is refused without a log line; the sparing
+  warning of FR-028 comes with named callers in request 5. `caller.configured` is true for
+  `local` alone until then.
+- A send without a stream follows its task (`ReceivedTasks.settle`): a task waiting for a
+  person has not ended, so the send waits out `FREYJA_A2A_SERVER_WAIT_SECONDS`, as the
+  contract has it. A reader of a run that nobody follows, as after `returnImmediately`, is
+  read to its end by a task of its own (`leave`), so the run never fills its backlog.
+- What is read from the thread is cleaned of every address the scrubber knows and of the
+  keys of the active profile and the environment's (`ReceivedTasks.clean`), and a result is
+  kept cleaned once its task has ended. A key of a saved profile that was never active
+  while its task was read is not known without decrypting every profile, and is not looked
+  for. Pieces are sent up to their last whitespace and cleaned there (`_ready`): an address
+  or a key holds none, so one written over several pieces is cleaned whole.
+- A tool name the catalog does not have is named `a tool Freyja does not have`, never as
+  the model wrote it. A task id that is not 32 hexadecimal characters is answered as not
+  found without a lookup.
+- `metadata.reply` is true for an AI message with text, a whole one too, so that a model
+  that does not stream still has its reply marked; the library's mark of an internal call
+  is `lc_internal_call` in the call's metadata, with `lc_source` beside it.
+- A no-usable-model run on a new thread writes no state, so the thread has no row (007).
+  The test of the row's reason therefore sends a follow-up on a thread with state, after a
+  restart with another secret.
+- The tests share their requests in `tests/a2a_requests.py`, and the streaming model is
+  `StreamingChatModel` in `tests/fakes.py`. The tests were written alongside the code, not
+  before it; those of the review's findings were seen to fail without their fix (below).
+
+**Review of request 2.** An independent reviewer read the change against the design and
+the installed SDK before its first commit. It found no field of any operation that reaches
+a resume or a decision, no caller's thread run on the ordinary build, nothing different
+with the feature off apart from the planned `caller: null` and its read, `caller_thread`
+before the lease on both routes, and the console's text in text nodes. What it found:
+
+| Finding | What was done |
+|---|---|
+| High: each piece of a stream was cleaned by itself, so an address or a key a model writes over two pieces, as providers stream a token at a time, reached the caller. | Pieces are sent up to their last whitespace and cleaned there (`test_an_address_and_a_key_written_over_several_pieces_are_cleaned_in_them`) |
+| Medium: at shutdown the service waited for the reader of a run nobody follows to reach the run's end, so such a run went on to its end instead of stopping at its next boundary. | The readers are cancelled at close; the run stops at its next boundary (`test_the_service_stopping_stops_a_run_nobody_follows_at_its_next_step`) |
+| Medium: a result was kept raw and cleaned with the keys active when read; after another profile was activated, `GetTask` returned the earlier one's key. | Kept cleaned (`test_a_reply_is_kept_cleaned_so_another_profile_activated_later_changes_nothing`) |
+| Low: a tool name the catalog does not have went out as the model wrote it. | Named by a fixed text (`test_a_tool_the_catalog_does_not_have_is_not_named_as_the_model_wrote_it`) |
+| Low: a task id holding a NUL would make Postgres raise, an internal error in place of not found. | The id's form is checked first (`test_a_task_id_the_service_could_not_have_made_is_not_looked_up`) |
+| Low: the card read the package's version from disk on every request. | Read once |
+| Low: tests that did not show what they named: the wake after a run's end, the continuation's `reply`, a hand-off named in a stream, the startup line, a recognizable profile in the card; a hold set after the run started. | Each written to show it (`test_a_follower_waiting_on_a_person_is_woken_when_the_decision_s_run_ends` fails without the wake) |
+| Low: the SDK checks a method's name and its params' form before the version, so a request without the version header and an unknown method gets `-32601`. | Left: the SDK's dispatcher decides it; every operation Freyja serves or refuses is checked for the version first |
+| Low: a value that is no number in `FREYJA_A2A_SERVER_WAIT_SECONDS` stops startup with the feature off, as request 1's limits do. | Left, as request 1's limits; the README says the limits are not checked, not that any text is taken |
+| Low: a busy conversation found under the lease has its task row written and removed again. | Left: the data model's design (accepting a message, step 4) |
+
+Each test above failed before its fix.
+
+**Checked by hand (T055)**, on a check instance from `.env.example` on port 8020, with the
+database `freyja_check_009` (not `freyja_check_a2a`, which tasks.md's standing rules name and
+which is not this feature's), the stand-in model as the active profile `call-tools`, the
+stand-in agent on 9978 added to run without approval, and the console on 3020: section 1
+(the card, a stream with `steps 1`, a send, the console's list and page, and the feature off
+answering the card, `POST /a2a`, and an unknown path with the same 404) and the limit of
+section 5 (five tasks waiting for a person, the sixth `task_limit`, one rejected in the
+console, the next accepted; the stand-in agent received nothing). The quickstart now says to
+send `steps 1` with the stand-in model, and that a send prints a refusal too.

@@ -554,7 +554,7 @@ answer as an unknown path.
 
 ### Tests for User Story 1
 
-- [ ] T032 [US1] Add part 2 to `tests/test_a2a_server_send.py`, the card (FR-006): read by
+- [X] T032 [US1] Add part 2 to `tests/test_a2a_server_send.py`, the card (FR-006): read by
       the stand-in caller at the service's own address, it has the name `Freyja`, the
       description of contracts/a2a-server.md verbatim, the service's version, one
       `supportedInterfaces` entry with the address it was asked under and `/a2a`,
@@ -562,7 +562,7 @@ answer as an unknown path.
       false, `text/plain` as the one input and output mode, the one skill of the contract,
       and no security; with an agent, a tool server, a model, and a profile of recognizable
       names configured, none of them is in it; it is the same for every request
-- [ ] T033 [US1] Add part 3 to `tests/test_a2a_server_send.py`, a send with a stream (FR-017,
+- [X] T033 [US1] Add part 3 to `tests/test_a2a_server_send.py`, a send with a stream (FR-017,
       SC-009): the events arrive in the contract's order: the task working with `Working.`;
       `Freyja is using: ls.` and `Completed: ls.`; `artifactUpdate` pieces of the artifact
       `reply` with `append: true`, the first before the reply is complete (add to
@@ -579,7 +579,7 @@ answer as an unknown path.
       argument (FR-014): the stream's last event so far is the task working with `Waiting for
       a person's approval of: send_notification.`, and no event holds the argument or the
       interrupt's id
-- [ ] T034 [US1] Add part 4 to `tests/test_a2a_server_send.py`, a send without a stream and
+- [X] T034 [US1] Add part 4 to `tests/test_a2a_server_send.py`, a send without a stream and
       `GetTask` (FR-011, FR-019): the task is answered completed with its result when it
       ends within `FREYJA_A2A_SERVER_WAIT_SECONDS`; with the limit at 0, and with
       `returnImmediately`, it is answered working and the run goes on to its end; `GetTask`
@@ -596,7 +596,7 @@ answer as an unknown path.
       model that repeats its profile's recognizable key (`LeakyModel`, `tests/nowhere.py`),
       neither the address nor the key beyond its last four characters is in the whole-reply
       artifact, `GetTask`'s artifact, or any piece
-- [ ] T035 [US1] Add part 5 to `tests/test_a2a_server_send.py`, the refusals of
+- [X] T035 [US1] Add part 5 to `tests/test_a2a_server_send.py`, the refusals of
       contracts/a2a-server.md that this request makes (FR-007, FR-026a), each refused before
       the model: `ListTasks` with -32004; the four push notification methods, and a push
       configuration in a send, with -32003; `GetExtendedAgentCard` with -32007; a request
@@ -612,7 +612,7 @@ answer as an unknown path.
       a header with an oversized body gets 401; an oversized body without the version header
       gets 413; then the version, the operation, the message's form, the conversation and the
       task, and the limits, each before the next)
-- [ ] T036 [US1] Add part 6 to `tests/test_a2a_server_send.py`, the feature off and the routes
+- [X] T036 [US1] Add part 6 to `tests/test_a2a_server_send.py`, the feature off and the routes
       (FR-001, FR-002, SC-002, R3): with the feature off, `GET` and `POST` of both paths, and
       every other method, are answered byte for byte as an unknown path is, and no row and
       no log line about a caller is made; with it on, the routes exist only while the
@@ -623,7 +623,7 @@ answer as an unknown path.
       service does not answer for, on an application with the feature on. Where a walker
       meets the SDK's Starlette `Route` as a kind it does not know, it learns it, held to the
       same rule, and the change is named in the request
-- [ ] T037 [US1] Add part 7 to `tests/test_a2a_server_send.py`: `metadata.reply`
+- [X] T037 [US1] Add part 7 to `tests/test_a2a_server_send.py`: `metadata.reply`
       (contracts/sse-events.md) is on every `message` event of a run on a caller's thread,
       true only for text of an AI chunk of Freyja's own `model` node that is not an internal
       call, and false for the subagent's, a tool's, a call's arguments, and a summarizing
@@ -634,7 +634,7 @@ answer as an unknown path.
       true}` and the caller's first message as `first_message`, a console thread `caller`
       null, and answer 500 as they do for the index when the callers' rows cannot be read,
       never showing a caller's thread as a person's
-- [ ] T038 [P] [US5] Add part 2 to `tests/test_a2a_server_limits.py`, a message's form and the
+- [X] T038 [P] [US5] Add part 2 to `tests/test_a2a_server_limits.py`, a message's form and the
       limits (FR-008, FR-025, FR-026a, SC-012), each refused before the model: no text and
       only blank text with -32602 `The message holds no text.`; 32,000 characters accepted
       and 32,001 refused with `The message is longer than 32,000 characters.`; a message
@@ -648,20 +648,20 @@ answer as an unknown path.
       when one has ended.`, and `reason` `task_limit` in the error's data; a task that ended
       frees its place; the log line of the refusal names the caller and which limit. The
       total limit with two callers is shown in T084, once a second caller can exist
-- [ ] T039 [US1] In `web/__tests__/tasks-testing.ts`, the fixture of a row (`summary`)
+- [X] T039 [US1] In `web/__tests__/tasks-testing.ts`, the fixture of a row (`summary`)
       gains `caller: null` unless a test gives one. Create
       `web/__tests__/components/tasks/started-by.test.tsx`: `local` reads "Started by an
       agent on this machine" and a named caller "Started by agent <name>", as text; null
       renders nothing. In `web/__tests__/components/tasks/task-list.test.tsx` and
       `task-view.test.tsx`: a caller's row and page say who started the task; a console
       task's say nothing new
-- [ ] T040 [US2] Add part 2 to `tests/test_a2a_server_approval.py`, `caller_thread` (FR-024):
+- [X] T040 [US2] Add part 2 to `tests/test_a2a_server_approval.py`, `caller_thread` (FR-024):
       `POST /threads/{id}/runs` and `/runs/unattended` on a caller's thread answer 409
       `caller_thread` with the message of contracts/openapi.yaml verbatim, before the lease
       (the same answer while another run holds it), and add nothing to the thread; a lookup
       that fails answers 500 and starts nothing; the thread's state, a decision, and Stop
       through the service's own routes are unchanged
-- [ ] T041 [US4] Add part 3 to `tests/test_a2a_server_tasks.py`, conversations (FR-009,
+- [X] T041 [US4] Add part 3 to `tests/test_a2a_server_tasks.py`, conversations (FR-009,
       FR-010, FR-012): a message in a conversation whose last task ended and whose thread is
       at rest makes a new task on the same thread, and the model's input holds the earlier
       messages; a message is refused with `conversation_busy` while the last task works,
@@ -669,15 +669,15 @@ answer as an unknown path.
       and adds nothing to the thread; two
       messages at once under one new conversation id make one thread and one refusal; a
       conversation id the caller never used starts a conversation
-- [ ] T042 [US2] In `web/__tests__/components/tasks/task-view.test.tsx`: a caller's task
+- [X] T042 [US2] In `web/__tests__/components/tasks/task-view.test.tsx`: a caller's task
       has no follow-up box and says that only the agent that started it sends messages on
       it; a console task keeps the box (FR-024)
 
 ### Implementation for User Story 1
 
-- [ ] T043 [P] [US1] In `src/freyja_agent/config.py`, add `a2a_server_wait_seconds: float =
+- [X] T043 [P] [US1] In `src/freyja_agent/config.py`, add `a2a_server_wait_seconds: float =
       30`, "0 to 600"; document it in `.env.example`
-- [ ] T044 [US1] In `src/freyja_agent/api/received.py`: the status sentences and reasons of
+- [X] T044 [US1] In `src/freyja_agent/api/received.py`: the status sentences and reasons of
       contracts/a2a-server.md and data-model.md as fixed texts; a task's view (state, status
       sentence, result), with every text read from the thread, the result above all,
       cleaned before it is sent of every agent address the scrubber knows (`SCRUBBER`,
@@ -690,7 +690,7 @@ answer as an unknown path.
       the release function or for `FOLLOW_SECONDS` (4) and looks; the wait of R14; the log
       lines of FR-028 for a task accepted (its id, its thread, the caller) and a message
       refused for a limit (the caller and which limit)
-- [ ] T045 [US1] Create `src/freyja_agent/api/a2a_server.py`: the card of
+- [X] T045 [US1] Create `src/freyja_agent/api/a2a_server.py`: the card of
       contracts/a2a-server.md, built per request from the address it was asked under and
       served by a route of Freyja's own at `GET /.well-known/agent-card.json` (the SDK's
       `card_modifier` is given the card and not the request); `POST /a2a` from the SDK's
@@ -704,36 +704,36 @@ answer as an unknown path.
       the contract says, and whose every method ends in one place that turns anything
       unexpected into -32603 with `An internal error.`; the protocol's types made from a
       task's view and from the follower's changes. Needs T003's yes
-- [ ] T046 [P] [US1] In `src/freyja_agent/api/streaming.py`, put `metadata.reply` on the
+- [X] T046 [P] [US1] In `src/freyja_agent/api/streaming.py`, put `metadata.reply` on the
       `message` events of a run on the strict build, from the chunk's namespace, node, type,
       and the library's mark of an internal call (R13); every other run's events are
       unchanged
-- [ ] T047 [US1] In `src/freyja_agent/api/app.py`, the lifespan adds the two routes after the
+- [X] T047 [US1] In `src/freyja_agent/api/app.py`, the lifespan adds the two routes after the
       runtime is open when the feature is on and removes them when it ends (R3), and logs at
       INFO that the feature is on, how many callers are named (none until request 5), and
       that the outside listener is off
-- [ ] T048 [US1] In `src/freyja_agent/api/thread_index_schemas.py`, add the caller's
+- [X] T048 [US1] In `src/freyja_agent/api/thread_index_schemas.py`, add the caller's
       summary (`name`, `canceled`, `configured`) and `ThreadSummary.caller`, with the
       descriptions of contracts/openapi.yaml; in `src/freyja_agent/api/thread_index.py`,
       fill it from the store in one read for the listed threads, on or off, so that a
       caller's thread is never shown as a person's, and answer 500 when that read fails
-- [ ] T049 [US1] In `web/lib/tasks.ts`, add `caller` to `ThreadSummary`; create
+- [X] T049 [US1] In `web/lib/tasks.ts`, add `caller` to `ThreadSummary`; create
       `web/components/tasks/started-by.tsx`, who started a task in words; use it in
       `web/components/tasks/task-list.tsx` on a row and in
       `web/components/tasks/task-view.tsx` on the page
-- [ ] T050 [US2] In `src/freyja_agent/api/threads.py` and
+- [X] T050 [US2] In `src/freyja_agent/api/threads.py` and
       `src/freyja_agent/api/thread_index.py`, refuse a message to a caller's thread in the two
       message routes with 409 `caller_thread`, before the lease, and not in the function of
       `api/runs.py` that `ReceivedTasks` calls (R20); 500 when the lookup fails
-- [ ] T051 [US2] In `web/components/tasks/task-view.tsx`, offer no follow-up box on a
+- [X] T051 [US2] In `web/components/tasks/task-view.tsx`, offer no follow-up box on a
       caller's task and say why
-- [ ] T052 [US1] Create `web/e2e/tasks-callers.spec.ts` with User Story 1's part: a caller's
+- [X] T052 [US1] Create `web/e2e/tasks-callers.spec.ts` with User Story 1's part: a caller's
       task is listed and opened with "Started by an agent on this machine", its page has no
       follow-up box and says why, and a console task is not marked and keeps its box; in
       `web/e2e/tasks-api.ts`, let `TaskService` answer rows with a caller
-- [ ] T053 [US1] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`; no existing test
+- [X] T053 [US1] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`; no existing test
       changed apart from T039's fixture
-- [ ] T054 [P] [US1] Create `docs/a2a-server.md`, "Receive tasks from agents": how to turn it
+- [X] T054 [P] [US1] Create `docs/a2a-server.md`, "Receive tasks from agents": how to turn it
       on, the card and the operation's address, what a caller can do in this request, that a
       send without a stream can be answered with a task that is still working, continuing a
       conversation, how a task waiting for a person looks to its caller, the form of a
@@ -745,7 +745,7 @@ answer as an unknown path.
       caller's command among the Commands and the new modules in Layout; in
       `docs/web-console.md`, Tasks: who started a task and why its page has no box; in
       `web/README.md`, Layout: `components/tasks/started-by.tsx`
-- [ ] T055 [US1] Walk quickstart.md section 1 and the limit of section 5 on a check instance
+- [X] T055 [US1] Walk quickstart.md section 1 and the limit of section 5 on a check instance
       by the standing rules, and correct the sections where the built feature differs
 
 **Checkpoint**: request 2. An agent on the service's machine hands Freyja a task and reads
