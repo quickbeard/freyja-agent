@@ -42,7 +42,7 @@ The stand-in's keyword `steps <n> <seconds>` keeps a task working, reports "Step
 every `<seconds>`, and then completes. It acts on the keyword only at the start of the message
 it receives, and a model often words a hand-off its own way ("Please handle the following:
 steps 6 25. ..."). So each hand-off below is approved with its message edited to the keyword
-alone: on the proposal card, **Edit the arguments**, make them `{"message": "steps 6 25"}`
+alone: on the proposal card, **Edit the arguments of handoff_to_stub**, make them `{"message": "steps 6 25"}`
 (or the section's own keyword), and **Approve handoff_to_stub with these arguments**. When
 the model proposed the keyword alone, approve it as proposed.
 

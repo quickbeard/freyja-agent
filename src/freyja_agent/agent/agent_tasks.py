@@ -51,9 +51,29 @@ def _thread_id() -> str | None:
     return str(thread_id) if thread_id else None
 
 
+# How a line break in a field of a task's line is written: in sight, and on the same line.
+LINE_BREAK = " ⏎ "
+
+
+def one_line(text: str) -> str:
+    """``text`` on one line, each of its line breaks, of any kind, written as ``LINE_BREAK``.
+
+    A task's line is read line by line, and every entry starts a line with ``- Agent``. A
+    line break inside a field would start a line that could pass for another entry or for
+    the service's own words.
+    """
+    return LINE_BREAK.join(text.splitlines())
+
+
 def pending_line(task: AgentTaskRecord) -> str:
+    """One task as the model is told of it on every call, and as the check's entry begins.
+
+    The agent's name is a configured one. The task's id is the agent's choice: a reply whose
+    id holds a line break is refused as malformed (``a2a_agents.malformed``), and the id is
+    written on one line all the same, for a task recorded before that was so.
+    """
     return (
-        f"- Agent '{task.agent}', task {task.task_id}: {task.state}, "
+        f"- Agent '{task.agent}', task {one_line(task.task_id)}: {task.state}, "
         f"started {task.started_at.isoformat()}"
     )
 
@@ -66,13 +86,13 @@ def task_line(task: AgentTaskRecord) -> str:
     learned, indented by two spaces, then every line of the text indented by four, however
     its lines are broken (``splitlines``). An entry starts at the beginning of a line with
     ``- Agent``, so no line of the progress text, whatever it holds, can pass for another
-    entry or for the service's own words. The entry's own line is feature 003's: its task id,
-    which the agent chose, and its message are written as they are.
+    entry or for the service's own words. The entry's own line holds the task's id and the
+    start of its message on that one line (``one_line``), so neither can start a line either.
     """
     line = f"{pending_line(task)}, last checked {task.last_checked_at.isoformat()}"
     if task.ended_at is not None:
         line += f", ended {task.ended_at.isoformat()}"
-    message = task.message[:MESSAGE_PREVIEW]
+    message = one_line(task.message[:MESSAGE_PREVIEW])
     entry = f"{line}. Task message: {message}"
     if task.state != "working" or task.progress is None or task.progress_at is None:
         return entry

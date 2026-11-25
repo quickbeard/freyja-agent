@@ -464,7 +464,10 @@ as a changed state. What differs from the tasks, and why:
   starts a line of the result that is not indented, and the task id also reaches the line
   the model is told on every call. The progress text is set apart; those two are not. The
   docstring of `task_line` says so. Closing it changes feature 003's lines, and is the
-  owner's to decide.
+  owner's to decide. *Closed after the feature, at the owner's word, by the fix of the
+  check's task line:* a reply whose task or conversation id holds a control character or a
+  line break is malformed, and the message's start, and the id of a task recorded before,
+  are written on one line, each line break shown as `⏎` (`tests/test_agent_task_lines.py`).
 
 ### Request 4: Phase 7, the walk with a real model and the gates (2026-11-25)
 
@@ -537,7 +540,8 @@ above, with its reason):
 - No existing test was changed beyond `tests/test_state.py` (request 1); FR-022's allowance
   for the check's result and a non-streaming hand-off's updates went unused.
 - Left open for the owner: the check's entry line holds the agent's task id and the task's
-  message as they are (feature 003), so a line break in either is not set apart.
+  message as they are (feature 003), so a line break in either is not set apart. Closed
+  since, by the fix of the check's task line (request 3's notes say how).
 
 **Coverage against the starting point (T042)**: the service's statements 91.48% (91.39% at
 the start, `fail_under = 88`); the web app's statements 97.44%, branches 94.38%, functions
@@ -555,3 +559,31 @@ the second, with nothing written meanwhile, passed): 1,962 tests passed and 133 
 Postgres tests against `freyja_test` on port 5434: 133 passed. Semgrep: no finding over the
 tree, nor over this feature's test files scanned by name. Trivy: no finding in the lock files
 or the Dockerfiles, nor in the service's image built from this branch.
+
+### Phase 8: the convergence tasks (2026-11-25)
+
+The eight LOW tasks `/speckit-converge` recorded, done at the owner's word. What differs from
+their texts, and why:
+
+- **T045 and T046** set the view's time in two more places beside the timer and the answered
+  readings: when the page is shown again (a `visibilitychange` listener), and when the view
+  mounts. Neither is a timer or a reading (FR-011), and neither reads the clock while
+  rendering (R8). Each has a test that failed before: a page shown while the service cannot
+  be reached kept "just now" for two minutes of age, and a page opened again within the
+  reading library's two seconds showed its text with no age.
+- **T047** describes the box by its age line (`aria-describedby`), so a keyboard user who
+  reaches it hears how long ago its text was learned.
+- **T048** adds two end-to-end cases, in Chromium and Firefox: a `learned_at` with
+  microseconds gives its age and its exact time, and a text that starts with a right-to-left
+  override stays in its box, which both browsers isolate (`unicode-bidi: isolate`), with the
+  agent task's other lines as written. Both held before; they guard what the walks saw only
+  in Chromium.
+- **T050** shows through the API that an agent's text holding an address the scrubber knows
+  is returned as written, in the state and in the check; it fails when the state's answer is
+  scrubbed.
+- **T051** is a test of its own, not more steps in the first log test: an app's startup
+  raises Freyja's loggers to info, so its levels are lowered once that app has started. It
+  covers a hand-off that reads an agent that does not stream and an answer's hand-off, and
+  fails with a debug line of `_poll` that holds the text, which the first log test does not
+  see. The search is one helper the two tests share (`held`).
+- **T049** and **T052** are the quickstart's button label and the test module's docstring.

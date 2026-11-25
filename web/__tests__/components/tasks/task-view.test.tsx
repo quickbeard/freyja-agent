@@ -1535,8 +1535,8 @@ describe("a task's page and its agent tasks", () => {
       visibility.mockReturnValue("visible");
       document.dispatchEvent(new Event("visibilitychange"));
       await readsOf(reads, read + 1);
-      // The reading made as the page is shown words the age from the browser's time again,
-      // though it brings the same task.
+      // Shown again, the page words the age from the browser's time at once (T045); that the
+      // reading made then does too is the test of the age moving at each reading.
       expect(lastReported()).toContain("2 minutes ago");
     } finally {
       visibility.mockRestore();
@@ -1580,6 +1580,63 @@ describe("a task's page and its agent tasks", () => {
       expect(without).toBeGreaterThan(0);
     } finally {
       timers.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  // Phase 8 (T045, T046): the age is worded at once when the page is shown or opened again.
+
+  it("words the age as soon as a hidden page is shown again, also when the service cannot be reached", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(Date.parse(LEARNED) + 30_000);
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      let down = false;
+      waiting(() => (down ? { down: true } : { task: reported("Half done") }));
+      renderView();
+      await waitFor(() => expect(lastReported()).toContain("just now"));
+
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.advanceTimersByTime(10 * AGENT_SECONDS * 1000);
+      // Shown again while the service cannot be reached: the reading made then fails, and
+      // no tick of the timer has come yet.
+      down = true;
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(lastReported()).toContain("2 minutes ago");
+      expect(progressText()).toBe("Half done");
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("words the age as soon as the page is opened again, though its reading is one already answered", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(Date.parse(LEARNED) + 30_000);
+    try {
+      waiting(() => ({ task: reported("Half done") }));
+      // One cache for both pages, and a reading made within two seconds of another taken
+      // as that one, as the reading library does by default.
+      const cache = new Map();
+      const page = () => (
+        <SWRConfig value={{ provider: () => cache, dedupingInterval: 2000 }}>
+          <TaskView threadId="t-1" />
+        </SWRConfig>
+      );
+      const first = render(page());
+      await waitFor(() => expect(lastReported()).toContain("just now"));
+      first.unmount();
+
+      vi.setSystemTime(Date.parse(LEARNED) + 90_000);
+      render(page());
+      await waitFor(() => expect(progressText()).toBe("Half done"));
+      expect(lastReported()).toContain("1 minute ago");
+    } finally {
       vi.useRealTimers();
     }
   });
