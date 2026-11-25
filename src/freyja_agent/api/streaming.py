@@ -158,6 +158,10 @@ async def take_context(runtime: Runtime, thread_id: str, run_id: str) -> RunCont
     expires.
     """
     try:
+        # Feature 009: the thread's own build, the strict one for a caller's thread. A lookup
+        # that fails takes no context, so nothing runs.
+        if await runtime.caller_of(thread_id) is not None:
+            return await runtime.begin_run(thread_id)
         return await runtime.begin_run()
     except Exception:
         logger.exception(

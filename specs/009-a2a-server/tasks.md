@@ -192,10 +192,10 @@ numbered one higher, since Phase 1 is the setup. They follow the plan's phases:
 **Purpose**: know the starting point and settle the one question for the owner. No code
 changes apart from T003's, with the owner's word.
 
-- [ ] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
+- [X] T001 Run `uv run pytest --cov` and, in `web/`, `pnpm test:coverage` on the branch as
       made from `main`, and record the two coverage numbers in plan.md; T109 compares the
       finished feature with them
-- [ ] T002 [P] Make a database of this feature's own for the opt-in Postgres tests:
+- [X] T002 [P] Make a database of this feature's own for the opt-in Postgres tests:
       `docker exec freyja-agent-postgres-1 createdb -p 5434 -U freyja freyja_test_a2a` (the
       compose project belongs to the main checkout, so `docker compose exec` from the
       worktree does not find it; the server in that container listens on 5434 on this
@@ -203,7 +203,7 @@ changes apart from T003's, with the owner's word.
       `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5434/freyja_test_a2a uv
       run pytest tests/integration` passes. Never use `freyja_test`, which the 008 session
       uses, and never stop the container
-- [ ] T003 Ask the owner whether `pyproject.toml` may name `a2a-sdk[http-server]` among the
+- [X] T003 Ask the owner whether `pyproject.toml` may name `a2a-sdk[http-server]` among the
       runtime dependencies (plan, "What is asked of the owner"; R19). Only with a yes: move
       the extra from the development group's entry to the service's own in `pyproject.toml`,
       run `uv lock`, and show that `uv sync` installs and removes no package (the list of
@@ -231,7 +231,7 @@ exists to prevent.
 
 ### Tests
 
-- [ ] T004 In `tests/conftest.py`, add the fixture `make_a2a_server_app`: an application
+- [X] T004 In `tests/conftest.py`, add the fixture `make_a2a_server_app`: an application
       assembled the production way, as `make_a2a_app` does, with `FREYJA_A2A_SERVER` on and
       any setting of this feature given as a keyword, the stand-in agent (approval choice
       given, run without approval by default), the scripted model, the suite's clock, and an
@@ -239,7 +239,7 @@ exists to prevent.
       agent's record, and the model, and a way to make a second application on the same
       stores with other settings (the feature off, other callers). Its first lines say
       which tasks extend it: T090 adds the outside application
-- [ ] T005 [P] Write `tests/a2a_caller.py`, the stand-in caller: the SDK's own client
+- [X] T005 [P] Write `tests/a2a_caller.py`, the stand-in caller: the SDK's own client
       (`a2a.client`) behind a small class that takes an httpx transport or a base URL, an
       optional token sent as `Authorization: Bearer`, and offers `card()`, `send(text,
       context=None, hops=None, return_immediately=False)`, `stream(text, ...)` yielding each
@@ -254,7 +254,7 @@ exists to prevent.
       of the worker answer as on `main`, each context taken for a thread makes one lookup of
       who started it (a spy on the store), and nothing of this feature writes a row or a log
       line
-- [ ] T006 [P] Create `tests/test_a2a_server_callers.py` with its module docstring and part 1,
+- [X] T006 [P] Create `tests/test_a2a_server_callers.py` with its module docstring and part 1,
       the settings this phase reads, one test per rule of contracts/settings.md:
       `FREYJA_A2A_SERVER` defaults to `false`; `FREYJA_A2A_SERVER_CALLER_TASKS` defaults to
       5 and is "1 to 100"; `FREYJA_A2A_SERVER_TASKS` defaults to 20 and is "At least the
@@ -265,7 +265,7 @@ exists to prevent.
       `FREYJA_A2A_SERVER` off these four rules are not applied (contracts/settings.md: "Off:
       every other variable here may be set and is not used"); the errors that hold with the
       feature off concern the outside listener and come in T080
-- [ ] T007 [P] Create `tests/test_received_tasks.py`, the store's rules, each case a function
+- [X] T007 [P] Create `tests/test_received_tasks.py`, the store's rules, each case a function
       that takes a store so that T008 runs the same cases on Postgres, here on
       `InMemoryReceivedTaskStore` with the suite's clock: `setup()` twice changes nothing;
       accepting a message for a new caller and conversation id makes the conversation with a
@@ -293,7 +293,7 @@ exists to prevent.
       whether any conversation exists; a conversation's last task; the rows not released,
       at most a given number; a task read with another caller's name is not found
       (FR-020); a context id and a result with a NUL character are kept without it
-- [ ] T008 [P] Create `tests/integration/test_received_tasks_postgres.py`: every case of
+- [X] T008 [P] Create `tests/integration/test_received_tasks_postgres.py`: every case of
       `tests/test_received_tasks.py` against `PostgresReceivedTaskStore` on
       `FREYJA_TEST_DATABASE_URI`, skipped without it as the other integration tests are; the
       two tables have the columns, types, nullability, keys, and defaults of data-model.md
@@ -302,7 +302,7 @@ exists to prevent.
       is null"; a second `setup()` leaves tables that exist alone; two accepts at once
       through two stores on two pools, as two instances, give one task for one new
       conversation and respect a limit of one (the advisory lock)
-- [ ] T009 [P] Create `tests/test_a2a_server_approval.py` with its module docstring and part
+- [X] T009 [P] Create `tests/test_a2a_server_approval.py` with its module docstring and part
       1, the strict build on threads marked by hand, with the stand-in agent set to run
       without approval and runs started through `ReceivedTasks.accept` or the functions of
       `api/runs.py` (FR-013a, R6): a hand-off proposed on a caller's thread pauses, the
@@ -323,7 +323,7 @@ exists to prevent.
       `invoke`, `astream_events`, and `stream` on a `SegmentedGraph` raise; with the feature
       on, a change of the active profile and of the agent set rebuilds both builds, and with
       it off one orchestrator is built per revision, as today
-- [ ] T010 [P] Create `tests/test_a2a_server_limits.py` with its module docstring and part 1,
+- [X] T010 [P] Create `tests/test_a2a_server_limits.py` with its module docstring and part 1,
       `CallerFiles` on the strict build (FR-009a, R16), with threads marked by hand for two
       named callers, `alpha` and `beta`, for the local caller, and a console thread, run
       through the start function of `api/runs.py`, and the scripted model calling the file
@@ -342,13 +342,13 @@ exists to prevent.
       run's config inside `asyncio.to_thread` and in the pool the sync `glob` uses; the
       strict build's tool names equal a fixed list in the test, so that a tool that comes to
       read the graph's store is noticed
-- [ ] T011 [P] Create `tests/test_a2a_server_nowhere.py` with its module docstring and part 1,
+- [X] T011 [P] Create `tests/test_a2a_server_nowhere.py` with its module docstring and part 1,
       the alias (R6), with threads run through the start function of `api/runs.py`: on a
       caller's thread every model call, the subagent's included, is told
       `c-` and the first 16 hexadecimal characters of the SHA-256 of the thread's id, and no
       message any model call receives holds the thread's id; a second runtime on the same
       stores tells the same alias; a console thread's model is told the thread's id, as today
-- [ ] T012 Create `tests/test_a2a_server_tasks.py` with its module docstring and part 1, the
+- [X] T012 Create `tests/test_a2a_server_tasks.py` with its module docstring and part 1, the
       feature off with callers' threads (FR-001 and its edge case, R6): an app with the
       feature on makes a caller's thread paused on a `send_notification` proposal, and
       another whose stand-in agent's outcome is ready and not delivered; a second app with
@@ -364,7 +364,7 @@ exists to prevent.
       thread through the application that is off is refused with `a2a_server_off`, and its
       worker leaves the thread alone (an instance that is off never runs a thread another
       instance gave a caller)
-- [ ] T013 Add part 2 to `tests/test_a2a_server_tasks.py`, where a thread stands and ending a
+- [X] T013 Add part 2 to `tests/test_a2a_server_tasks.py`, where a thread stands and ending a
       task (FR-016, SC-014, R7, R9), on an app with the feature on, with tasks accepted through
       `ReceivedTasks.accept` and looks made by the release function or called directly. One
       test per row of R7's table, in its order: a task whose run has not taken the lease is
@@ -396,7 +396,7 @@ exists to prevent.
       runs after the lease is given back, for a console run, a run of the routes, and a run of
       the worker; a look that blocks does not delay the release; one that raises is logged and
       the lease is released all the same
-- [ ] T014 [P] In `tests/test_unattended_runs.py`: `UnattendedRuns.join(thread_id)` gives one
+- [X] T014 [P] In `tests/test_unattended_runs.py`: `UnattendedRuns.join(thread_id)` gives one
       more reader of a run in progress on this instance, from the events that follow, ending
       with the run's last event; it gives `None` when no run of the thread is in progress
       here; a joined reader that falls `READER_BACKLOG` events behind is disconnected and the
@@ -407,13 +407,13 @@ exists to prevent.
 
 ### Implementation
 
-- [ ] T015 [P] In `src/freyja_agent/config.py`, add `a2a_server: bool = False`,
+- [X] T015 [P] In `src/freyja_agent/config.py`, add `a2a_server: bool = False`,
       `a2a_server_caller_tasks: int = 5`, `a2a_server_tasks: int = 20`, and
       `a2a_server_files_dir: Path = Path("caller-files")`, with the rules of
       contracts/settings.md checked only while `a2a_server` is on, and errors that name the
       variable and no value (T006). In `.env.example`, document each, commented out, with
       what it does as of this request and nothing it will do later
-- [ ] T016 [P] Create `src/freyja_agent/runtime/received_tasks.py`: the records of a
+- [X] T016 [P] Create `src/freyja_agent/runtime/received_tasks.py`: the records of a
       conversation and a received task with the fields of data-model.md, the reason codes as
       one fixed set, the `ReceivedTaskStore` protocol, `InMemoryReceivedTaskStore` (one
       `asyncio.Lock` for accepting, the suite's clock), and `PostgresReceivedTaskStore` on the
@@ -425,7 +425,7 @@ exists to prevent.
       that names the state it replaces; and the reads T007 lists. The module docstring says
       that the conversation row is what makes a thread a caller's, and that its
       `context_id` "is returned to its caller and appears nowhere else"
-- [ ] T017 [P] Create `src/freyja_agent/agent/caller_files.py`: `CallerFiles`, a backend of
+- [X] T017 [P] Create `src/freyja_agent/agent/caller_files.py`: `CallerFiles`, a backend of
       deepagents' protocol that reads `configurable["freyja_caller_files"]` from
       `langgraph.config.get_config()` on each call and delegates: the empty string to the
       shared workspace's backend (the same object the ordinary build has); a caller's name
@@ -435,24 +435,24 @@ exists to prevent.
       every write, edit, and delete with an error result; no key at all to an error, reading
       and writing nothing (R16). A caller's area is made when a run first writes there and
       is never removed
-- [ ] T018 [P] In `src/freyja_agent/agent/context.py`, let `ThreadContextMiddleware` be told
+- [X] T018 [P] In `src/freyja_agent/agent/context.py`, let `ThreadContextMiddleware` be told
       to name the thread by an alias: `c-` and the first 16 hexadecimal characters of the
       SHA-256 of the thread's id; by default it names the thread's id, as today (R6)
-- [ ] T019 In `src/freyja_agent/agent/factory.py`, give `build_agent` two keyword parameters,
+- [X] T019 In `src/freyja_agent/agent/factory.py`, give `build_agent` two keyword parameters,
       the file backend (default: the `FilesystemBackend` on `workspace_dir` built today) and
       whether the thread is named by its alias (default: no), passed to the orchestrator and
       to its subagent alike; every existing caller of `build_agent` is unchanged
-- [ ] T020 [P] In `src/freyja_agent/delegates/a2a_tools.py`, let `agent_tools` be told that
+- [X] T020 [P] In `src/freyja_agent/delegates/a2a_tools.py`, let `agent_tools` be told that
       it builds for the strict build; there, `_still_allowed` refuses a call whose row
       records no approve or edit, and a call with no row, whatever the agent's record says
       (today a call with no row follows the tool), so that the last check
       before a message leaves agrees with the strict build's gate (R6). Everything else of
       the module is unchanged
-- [ ] T021 [P] In `src/freyja_agent/llm/active.py`, let `ModelManager` be given a second build
+- [X] T021 [P] In `src/freyja_agent/llm/active.py`, let `ModelManager` be given a second build
       function; when it has one, every rebuild builds the strict orchestrator beside the
       ordinary one around the same model and agent set, and `current` gives both. Without
       one, as with the feature off, it builds what it builds today
-- [ ] T022 [P] In `src/freyja_agent/runtime/unattended.py`: `SegmentedGraph` is told whether
+- [X] T022 [P] In `src/freyja_agent/runtime/unattended.py`: `SegmentedGraph` is told whether
       it wraps the strict build and is given the lookup of who started a thread; in
       `astream`, before the check of whether the thread is armed, so for every run and not
       only a console run's, it looks the thread up, raises for a caller's thread on the
@@ -461,11 +461,11 @@ exists to prevent.
       caller's name otherwise); `ainvoke`, `invoke`, `astream_events`, `stream`, and the
       batch entries raise; `astream` and every attribute that only reads are as today. Add
       `UnattendedRuns.join(thread_id)` (R10)
-- [ ] T023 [P] In `src/freyja_agent/runtime/thread_index.py`, let `IndexedRunLocks` be given a
+- [X] T023 [P] In `src/freyja_agent/runtime/thread_index.py`, let `IndexedRunLocks` be given a
       function that it calls with the thread's id after a release, once the inner lease is
       back and the index was told; it starts the call as a task of its own so the release is
       never held up, and logs its failure by kind (R9)
-- [ ] T024 In `src/freyja_agent/runtime/runtime.py`: `_build` takes whether it builds the
+- [X] T024 In `src/freyja_agent/runtime/runtime.py`: `_build` takes whether it builds the
       strict orchestrator (every agent tool `gated=True` and built for the strict build,
       `CallerFiles` as the backend, the alias on); `Runtime` holds the store
       (`received_tasks`), set up with the other stores in `assemble` and `open`, Postgres in
@@ -478,7 +478,7 @@ exists to prevent.
       instance that is off never runs a thread another instance on the same database gave a
       caller (research R6, as the review of these tasks changed it); with it off only one
       orchestrator is built
-- [ ] T025 Create `src/freyja_agent/api/runs.py`: move the bodies of `start_run` and
+- [X] T025 Create `src/freyja_agent/api/runs.py`: move the bodies of `start_run` and
       `resume_run` out of `src/freyja_agent/api/threads.py` without a change of behavior, as
       two functions that take the runtime, the thread's id, and the request's values; move
       the function that hands a run's events to `UnattendedRuns` (`_go_on` in
@@ -491,7 +491,7 @@ exists to prevent.
       only then, the refusal of a caller's thread with an agent task awaited, which
       `ReceivedTasks.accept` turns into "not now" (R8); the routes never pass the parameter,
       so they answer with no code the contracts do not define
-- [ ] T026 Create `src/freyja_agent/api/received.py` with `ReceivedTasks`: `accept(caller,
+- [X] T026 Create `src/freyja_agent/api/received.py` with `ReceivedTasks`: `accept(caller,
       context_id, text, hops)`, which accepts the message through the store and starts the
       run through `api/runs.py` as a console run, removes the task's row when the run is
       refused, and writes `started_at` and `base_checkpoint` once the run holds the lease,
@@ -501,24 +501,24 @@ exists to prevent.
       written once from a consistent look and released in the same write; and
       the function the lease's release calls while the feature is on, which looks at the
       thread's last task. It imports nothing from `a2a`
-- [ ] T027 Give the thread's id to every context taken for one thread:
+- [X] T027 Give the thread's id to every context taken for one thread:
       `take_context` in `src/freyja_agent/api/streaming.py`, `read_state` in
       `src/freyja_agent/api/threads.py`, the three in `src/freyja_agent/api/thread_index.py`,
       and the delivery's look in `src/freyja_agent/delegates/delegation_worker.py`, which
       also leaves a caller's thread alone while the feature is off, as it leaves a paused
       one. The worker's round, `api/tools.py`, and `api/agents.py` take contexts for no
       thread and are unchanged
-- [ ] T028 In `src/freyja_agent/api/app.py`, the lifespan makes `ReceivedTasks` after the
+- [X] T028 In `src/freyja_agent/api/app.py`, the lifespan makes `ReceivedTasks` after the
       runtime is open when the feature is on, and gives its release function to the lease;
       with the feature off it makes nothing of this feature
-- [ ] T029 [P] Keep a named caller's files out of git and writable in the image: add
+- [X] T029 [P] Keep a named caller's files out of git and writable in the image: add
       `caller-files/` to `.gitignore`; in `Dockerfile`, make `/app/caller-files` owned by 65532
       as `/app/workspace/cases` is; add a test to `tests/test_container_images.py` that the
       `Dockerfile` makes both directories and gives them to 65532. Build the image (`docker
       build --network host -t freyja-agent .`) and scan it as AGENTS.md gives it
-- [ ] T030 Run `uv run pytest` and the opt-in Postgres tests against `freyja_test_a2a`: every
+- [X] T030 Run `uv run pytest` and the opt-in Postgres tests against `freyja_test_a2a`: every
       test of this phase passes, and no existing test changed
-- [ ] T031 [P] In `AGENTS.md`, Layout: the new modules (`runtime/received_tasks.py`,
+- [X] T031 [P] In `AGENTS.md`, Layout: the new modules (`runtime/received_tasks.py`,
       `agent/caller_files.py`, `api/runs.py`, `api/received.py`), the changes to
       `SegmentedGraph`, `IndexedRunLocks`, `begin_run`, and `build_agent`, and the new test
       files and `tests/a2a_caller.py`; Conventions: a caller's thread is never run on the

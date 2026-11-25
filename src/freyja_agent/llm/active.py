@@ -106,12 +106,17 @@ class ModelManager:
         build: Callable[[BaseChatModel, "AgentSet | None"], Orchestrator],
         environment_secrets: tuple[str, ...] = (),
         environment_unusable: str | None = None,
+        strict_build: Callable[[BaseChatModel, "AgentSet | None"], Orchestrator] | None = None,
     ) -> None:
         self._store = store
         self._secret = secret
         self._factory = factory
         self._environment = environment
         self._build = build
+        # Feature 009: while the feature is on, the strict orchestrator for callers' threads,
+        # built beside the other around the same model and agents at every rebuild (R6).
+        self._strict_build = strict_build
+        self.strict: Orchestrator | None = None
         self._environment_secrets = environment_secrets
         # Why the environment's profile cannot be used before a model is even built: its
         # provider's key is not set (FR-011a). None when nothing is known against it.
@@ -142,6 +147,14 @@ class ModelManager:
         Rebuilt when the choice of profile moved, or when ``agents`` is not the set the
         orchestrator was built for.
         """
+        orchestrator, _strict, active = await self.builds(agents)
+        return orchestrator, active
+
+    async def builds(
+        self, agents: "AgentSet | None" = None
+    ) -> tuple[Orchestrator, Orchestrator | None, ActiveModel]:
+        """``current``, with the strict orchestrator of the same build, or None without one
+        (feature 009). The two are made and replaced together, so they are one build."""
         state = await self._store.state()
         if self._stale(state, agents):
             async with self._lock:
@@ -151,7 +164,7 @@ class ModelManager:
                     await self._apply(state, agents)
         if self.orchestrator is None:  # _apply either sets it or raises
             raise RuntimeError("the orchestrator was not built")
-        return self.orchestrator, self.active
+        return self.orchestrator, self.strict, self.active
 
     async def _apply(self, state: LlmState, agents: "AgentSet | None") -> Orchestrator:
         """Build the orchestrator for the active profile, usable or not (FR-016, research R8).
@@ -166,8 +179,9 @@ class ModelManager:
         """
         if state.revision == self.active.revision and self._model is not None:
             orchestrator = self._build(self._model, agents)
+            strict = self._build_strict(self._model, agents)
             logger.info("The orchestrator was rebuilt for a changed set of agents")
-            self.orchestrator, self._agents = orchestrator, agents
+            self.orchestrator, self.strict, self._agents = orchestrator, strict, agents
             return orchestrator
         model: BaseChatModel | None = None
         secrets: tuple[str, ...] = ()
@@ -216,6 +230,7 @@ class ModelManager:
             # error in the debug stream and saves it with the thread (FR-020, FR-021).
             model = guard_model(model, secrets)
         orchestrator = self._build(model, agents)
+        strict = self._build_strict(model, agents)
         if self.orchestrator is None:
             pass  # startup: the runtime logs every profile that is not usable, this one too
         elif reason is not None:
@@ -230,7 +245,7 @@ class ModelManager:
             logger.info(
                 "LLM profile in use is now %s (%s, %s)", profile.name, profile.id, profile.source
             )
-        self.orchestrator = orchestrator
+        self.orchestrator, self.strict = orchestrator, strict
         self._model, self._agents = model, agents
         self.active = ActiveModel(
             revision=state.revision,
@@ -241,3 +256,6 @@ class ModelManager:
             secrets=secrets,
         )
         return orchestrator
+
+    def _build_strict(self, model: BaseChatModel, agents: "AgentSet | None") -> Orchestrator | None:
+        return self._strict_build(model, agents) if self._strict_build is not None else None

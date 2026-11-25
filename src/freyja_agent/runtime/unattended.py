@@ -16,6 +16,14 @@ that had not started is not started (spec FR-022).
   not armed, which is every run but a console run, is passed straight to the real graph.
 - ``UnattendedRuns`` drives the console runs of this instance, arms their threads, hands
   their events to readers, notes how each ended in the index, and applies a stop.
+
+Feature 009 makes ``SegmentedGraph`` the place a thread a caller started over A2A is held to
+the strict build: every run of every kind goes through its ``astream``, which asks first who
+started the thread. A caller's thread is refused on the ordinary build, and so is any thread
+whose lookup fails; on the strict build the run's config says whose files it works in
+(research R6, R16). Every other way to run a graph raises on the wrapper, so that none
+becomes a way around. ``UnattendedRuns.join`` gives one more reader of a console run in
+progress (research R10).
 """
 
 from __future__ import annotations
@@ -31,11 +39,19 @@ import anyio
 from langgraph.errors import GraphRecursionError
 from sse_starlette import ServerSentEvent
 
+from freyja_agent.agent.caller_files import FILES_KEY
 from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.runtime.received_tasks import LOCAL
 from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS
 
 if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from freyja_agent.runtime.received_tasks import Conversation
     from freyja_agent.runtime.thread_index import ThreadIndex
+
+    # Who started a thread: its conversation, or None for a thread no caller started.
+    Lookup = Callable[[str], Awaitable[Conversation | None]]
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +68,15 @@ TERMINAL = frozenset({"end", "interrupt", "error"})
 
 class MissingNodeError(RuntimeError):
     """The graph has no node a console run needs to stop at."""
+
+
+class CallerThreadError(RuntimeError):
+    """A thread a caller started would have run on the ordinary build, or whether a caller
+    started it could not be read: the run is refused and nothing of it runs."""
+
+
+class OtherEntryError(RuntimeError):
+    """A graph of a run context was run another way than ``astream``."""
 
 
 class Arming(Protocol):
@@ -76,7 +101,14 @@ class SegmentedGraph:
     armed straight through, with the arguments it was given.
     """
 
-    def __init__(self, graph: Any, runs: Arming) -> None:
+    def __init__(
+        self,
+        graph: Any,
+        runs: Arming,
+        *,
+        strict: bool = False,
+        lookup: Lookup | None = None,
+    ) -> None:
         nodes = getattr(graph, "nodes", {})
         for node in BOUNDARY_NODES:
             if node not in nodes:
@@ -86,18 +118,59 @@ class SegmentedGraph:
                 )
         self.graph = graph
         self.runs = runs
+        # Feature 009: whether this wraps the strict build, and how to learn who started a
+        # thread. A runtime put together by hand has no lookup, and no caller's thread.
+        self.strict = strict
+        self.lookup = lookup
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.graph, name)
 
     async def astream(self, input: Any, config: Any = None, **kwargs: Any) -> AsyncIterator[Any]:
         thread_id = _thread_of(config)
+        if thread_id is not None and self.lookup is not None:
+            config = await self._held_to_its_build(thread_id, config)
         if thread_id is None or not self.runs.armed(thread_id):
             async for chunk in self.graph.astream(input, config, **kwargs):
                 yield chunk
             return
         async for chunk in self._segments(thread_id, input, config, kwargs):
             yield chunk
+
+    async def _held_to_its_build(self, thread_id: str, config: Any) -> Any:
+        """``config`` for a run of ``thread_id`` on this build; raises where it may not run.
+
+        Asked before every run, whether a console run or not (research R6).
+        """
+        if self.lookup is None:  # pragma: no cover - the caller asked first
+            return config
+        try:
+            conversation = await self.lookup(thread_id)
+        except Exception as exc:
+            raise CallerThreadError(
+                f"Thread {thread_id}: whether another agent started it could not be read "
+                f"({type(exc).__name__}); the run was refused"
+            ) from None
+        if conversation is None:
+            return config
+        if not self.strict:
+            raise CallerThreadError(
+                f"Thread {thread_id} was started by another agent and runs only on the "
+                "orchestrator kept for such threads; the run was refused"
+            )
+        caller = conversation.caller
+        configurable = {**config["configurable"], FILES_KEY: "" if caller == LOCAL else caller}
+        return {**config, "configurable": configurable}
+
+    def _other_entry(self, *_: Any, **__: Any) -> Any:
+        raise OtherEntryError(
+            "A run context's graph is run through astream only, where who started the thread "
+            "is asked; this entry is not offered."
+        )
+
+    ainvoke = invoke = astream_events = stream = _other_entry
+    abatch = batch = abatch_as_completed = batch_as_completed = _other_entry
+    astream_log = transform = atransform = _other_entry
 
     async def _step(self, config: Any) -> int:
         """The step of the thread's last checkpoint; -1 for a thread with none."""
@@ -234,6 +307,17 @@ class UnattendedRuns:
         run.task = asyncio.create_task(self._drive(run, events), name=f"freyja-run-{thread_id}")
         self._tasks.add(run.task)
         run.task.add_done_callback(self._tasks.discard)
+        return self._read(run, reader)
+
+    def join(self, thread_id: str) -> AsyncIterator[ServerSentEvent] | None:
+        """One more reader of the console run in progress on ``thread_id`` on this instance,
+        from the events that follow; None when no such run is in progress here (feature 009,
+        research R10). A reader that falls behind is disconnected as any other is."""
+        run = self._runs.get(thread_id)
+        if run is None:
+            return None
+        reader = _Reader()
+        run.readers.append(reader)
         return self._read(run, reader)
 
     async def _read(self, run: _Run, reader: _Reader) -> AsyncIterator[ServerSentEvent]:

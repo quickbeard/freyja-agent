@@ -355,11 +355,15 @@ class DelegationWorker:
         if any(task.followup_next_at and task.followup_next_at > now for task in retrying):
             return  # a failed attempt waits for its retry interval
         config = {"configurable": {"thread_id": thread_id}}
+        # Feature 009: a thread another agent started is run only while receiving tasks from
+        # agents is on; with it off the worker leaves it alone, as it leaves a paused one.
+        if not runtime.settings.a2a_server and await runtime.caller_of(thread_id) is not None:
+            return
         # A thread paused on a proposal is left alone without its lease. Taking the lease to
         # find that out would refuse a resume arriving meanwhile as "run_active", every poll
         # interval for as long as the pause lasts. The check under the lease below still
         # decides: this one only keeps the worker off threads it cannot deliver to.
-        looking = await runtime.begin_run()
+        looking = await runtime.begin_run(thread_id)
         try:
             if (await looking.agent.aget_state(config)).interrupts:
                 return

@@ -13,10 +13,10 @@ by one read of the thread's state, and what was found is kept (research R6).
 Three routes start, continue, and stop a console run: a run that goes on whether or not its
 reader stays (research R2, R3, R5). The two that run call the handlers of ``api/threads.py``,
 so every refusal and every check of a decision is the existing code, and take the run's
-events out of the response it returns. ``api/threads.py`` is not changed for them.
+events out of the response it returns. Since feature 009 what they do around that, and the
+stop, is in ``api/runs.py``, where the A2A service starts its console runs too.
 """
 
-import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -24,6 +24,7 @@ from sse_starlette import EventSourceResponse
 
 from freyja_agent.api import threads
 from freyja_agent.api.guards import refuse_other_origins
+from freyja_agent.api.runs import ask_stop, console_runs, go_on, open_first, refuse_while_off
 from freyja_agent.api.schemas import ResumeRequest, RunRequest
 from freyja_agent.api.thread_index_schemas import (
     RunError,
@@ -193,7 +194,7 @@ async def read_thread(thread_id: ThreadIdPath, request: Request) -> ThreadSummar
     is put right by being opened.
     """
     runtime = _runtime(request)
-    context = await runtime.begin_read()
+    context = await runtime.begin_read(thread_id)
     try:
         try:
             record = await runtime.threads.get(thread_id)
@@ -232,51 +233,12 @@ NO_TRANSFORM = "no-store, no-transform"
 
 def _console_runs(request: Request) -> UnattendedRuns:
     """The console runs of this instance; asked before a handler takes a lease."""
-    runs = _runtime(request).unattended
-    if runs is None:  # a runtime put together by hand, which the service never runs on
-        raise _error(500, "internal", "This instance cannot run a task without a reader.")
-    return runs
+    return console_runs(_runtime(request))
 
 
 async def _open_first(runtime: Runtime, thread_id: str) -> bool:
-    """Give a thread that has a state and no row its row before a console run starts on it.
-
-    True once the row is known to be in order: there was one, or one was made, or the
-    thread is new. False when the lookup failed or was given up: the run's text may then be
-    a follow-up on a thread that has begun, and is not to be kept as its first message.
-
-    A console run tells the index the text it was started with, which a row that has no
-    first message takes for how the thread began. For a thread from before the index, or
-    one whose row could not be written, that text is a follow-up: so such a thread is opened
-    first, as reading it would, and its row has the first message its state holds (FR-002,
-    FR-004). A thread that is new has no state, and gets no row here.
-
-    Keeping the list never fails or holds up a run for long (FR-023): whatever goes wrong
-    here is logged, and the run starts.
-    """
-    try:
-        async with asyncio.timeout(INDEX_WRITE_SECONDS):
-            if await runtime.threads.get(thread_id) is not None:
-                return True
-            context = await runtime.begin_read()
-            try:
-                await open_thread(
-                    runtime.threads,
-                    context,
-                    runtime.agent_tasks,
-                    thread_id,
-                    lease_active=await runtime.locks.is_active(thread_id),
-                )
-            finally:
-                await context.release()
-    except Exception:
-        logger.warning(
-            "Thread %s: its row could not be looked up before its run; the run starts",
-            thread_id,
-            exc_info=True,
-        )
-        return False
-    return True
+    """``runs.open_first``, held to this module's time limit for the lookup."""
+    return await open_first(runtime, thread_id, seconds=INDEX_WRITE_SECONDS)
 
 
 async def _go_on(
@@ -289,10 +251,9 @@ async def _go_on(
 
     The handler took the thread's lease and made the run's events; nothing of the run has
     started. It is handed over at once, with nothing awaited before, so that nothing can
-    leave the lease taken. The row is marked as a console run's at the run's first event.
+    leave the lease taken (``runs.go_on``).
     """
-    reader = runs.start(thread_id, response.body_iterator, first_message)
-    logger.info("Thread %s: a run started that goes on without a reader", thread_id)
+    reader = go_on(runs, thread_id, response.body_iterator, first_message)
     return EventSourceResponse(reader, ping=PING_SECONDS, headers={"Cache-Control": NO_TRANSFORM})
 
 
@@ -306,6 +267,8 @@ async def start_unattended(
     """Start a run that goes on when its reader leaves; the same refusals and events as
     ``POST /threads/{thread_id}/runs``, from the same code."""
     runs = _console_runs(request)
+    # Feature 009: refused before the row is looked up, so a refused thread gets no row.
+    await refuse_while_off(_runtime(request), thread_id)
     known = await _open_first(_runtime(request), thread_id)
     response = await threads.start_run(thread_id, body, request, debug)
     # Without the lookup, the row takes its first message from the thread's state once the
@@ -331,33 +294,7 @@ async def resume_unattended(
 async def stop_run(thread_id: ThreadIdPath, request: Request) -> StopAnswer:
     """Ask the console run in progress to stop after the step under way (research R5).
 
-    The answer says the stop was asked for, not that the run has ended. The mark is read by
-    the instance that runs the thread, between two steps, so this works from any instance.
+    The answer says the stop was asked for, not that the run has ended (``runs.ask_stop``).
     """
-    runtime = _runtime(request)
-    try:
-        record = await runtime.threads.get(thread_id)
-        running = await runtime.locks.is_active(thread_id)
-    except Exception as exc:
-        raise _unreadable(f"thread {thread_id}", exc) from exc
-    if record is None:
-        raise _error(404, "thread_not_found", "No run on this thread is known.")
-    if not running or record.run_owner is None:
-        raise _error(409, "no_run", "No run is in progress on this thread.")
-    if not record.run_unattended:
-        raise _error(
-            409,
-            "not_stoppable",
-            "This run was not started by the console, so it cannot be stopped from here: a "
-            "client that reads its own stream stops it by closing the stream, and a run the "
-            "service started ends by itself.",
-        )
-    try:
-        # For the run that was read: one that has just ended is not stopped in its place.
-        marked = await runtime.threads.request_stop(thread_id, record.run_owner)
-    except Exception as exc:
-        raise _unreadable(f"thread {thread_id}", exc) from exc
-    if marked is None:
-        raise _error(409, "no_run", "No run is in progress on this thread.")
-    logger.info("Thread %s: a stop was asked for the run in progress", thread_id)
+    marked = await ask_stop(_runtime(request), thread_id)
     return StopAnswer(thread_id=thread_id, run=marked.runs)

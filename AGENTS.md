@@ -96,6 +96,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
   a Fernet key or unset, which protects stored API keys and stops startup when it is not a
   Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
+  Four belong to receiving tasks from other agents (feature 009), checked only while it is
+  on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_CALLER_TASKS`, `FREYJA_A2A_SERVER_TASKS`, and
+  `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace, be inside it, or contain it.
 - `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
   (`build_agent`; the service, the tests, and any future CLI call it). `build_agent` takes the
   tool server tools as `delegate_tools` and returns an `Orchestrator`: the compiled graph as
@@ -108,7 +111,12 @@ startup and exits with an error naming the connection when it is unreachable.
   records which agent each call of an agent's tool was proposed for, and, in a resume, right
   after the approval gate, which of those calls a person approved or edited; and the
   `check_agent_tasks` tool; both are added only when an agent is configured
-  (`build_agent(agent_tasks=...)`).
+  (`build_agent(agent_tasks=...)`). `build_agent` also takes the file backend and whether to
+  name the thread by its alias (feature 009): `caller_files.py` is `CallerFiles`, the strict
+  build's backend, which gives a named caller `<files dir>/<name>` and the skills read-only,
+  by the key `freyja_caller_files` of the run's config, and refuses a call without it; and
+  `context.py`'s `thread_alias` is what the strict build tells the model in place of a
+  thread's id.
 - `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
   connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
   applies the call time limit, records each server's status, and redacts `pass_env` values from
@@ -185,7 +193,11 @@ startup and exits with an error naming the connection when it is unreachable.
   its agent last reported and when it was learned (`progress`, `progress_at`, feature 008),
   added to a deployment's table at startup as `agent_ref` was; `saved_agents.py` is the `SavedAgentStore` for the agents an operator
   saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
-  `InMemorySavedAgentStore`); `runtime.py` is the `Runtime` dataclass with the catalog, the tool
+  `InMemorySavedAgentStore`); `received_tasks.py` is the `ReceivedTaskStore` of feature 009,
+  the conversations and received tasks of other agents (`PostgresReceivedTaskStore` with
+  `freyja_a2a_conversations` and `freyja_a2a_tasks`, and `InMemoryReceivedTaskStore`), whose
+  conversation row is what makes a thread a caller's and which accepts a message under one
+  advisory lock; `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation
   worker. `Runtime.assemble` opens the tool servers, starts the registry, builds the agent, and
   runs the worker; `Runtime.open` adds
@@ -196,7 +208,11 @@ startup and exits with an error naming the connection when it is unreachable.
   takes a `RunContext` from `Runtime.begin_run()`: the graph, the catalog, the active model,
   and the agent set of one build, in step with the active profile and the saved agents, held
   until it is released. `Runtime.agent` and `Runtime.catalog` are what the instance last
-  built. `Runtime.environment` is the environment's profile as the list shows it, described
+  built. While feature 009 is on the model manager builds a second, strict orchestrator
+  beside the first (`ModelManager.builds`), kept apart as `Runtime.strict_agent` and
+  `Runtime.strict_catalog`; `begin_run(thread_id)` and `begin_read(thread_id)` ask the
+  received-task store who started the thread, on or off (`Runtime.caller_of`), and give a
+  caller's thread the strict build. `Runtime.environment` is the environment's profile as the list shows it, described
   once at startup. `Runtime.model_to_check` builds the model a profile's test asks, and
   `Runtime.checks` and `Runtime.environment_test` hold the tests in progress and the
   environment's last result, in memory. `thread_index.py` is the index of threads
@@ -204,7 +220,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `InMemoryThreadIndex`), one row per thread that has had a run; `IndexedRunLocks`, which
   `Runtime.assemble` wraps the run lease in, so that every run that takes the lease and gives
   it back is told to the index, whoever starts it, and whose own writes never fail the lease
-  and hold it up for `INDEX_WRITE_SECONDS` at most; and `settle_thread`, `open_thread`, and
+  and hold it up for `INDEX_WRITE_SECONDS` at most, and which calls `on_release`, when one is
+  set, after every release (feature 009); and `settle_thread`, `open_thread`, and
   `status_of`, which read a thread's state once, keep what a row needs of it, and turn a row
   into its one status. `Runtime.threads` is the index. A write that is for one run names
   that run's lease owner, and one made from a reading of a thread's state names the number
@@ -220,12 +237,24 @@ startup and exits with an error naming the connection when it is unreachable.
   `SegmentedGraph`, which `Runtime.begin_run` puts in every context in place of the graph,
   runs an armed thread in segments that end before each `model` and `tools` step, gives each
   segment what is left of the step limit, and asks between two segments, and nowhere else,
-  whether to stop. Every other thread is passed straight to the graph. `Runtime.unattended`
-  is the console's runs of this instance.
+  whether to stop. Every other thread is passed straight to the graph. Since feature 009 it
+  first asks, for every run, who started the thread: it refuses a caller's thread on the
+  ordinary build and any thread whose lookup fails, puts `freyja_caller_files` into the
+  config of a caller's thread on the strict build, and refuses every way to run a graph but
+  `astream`; `UnattendedRuns.join` gives one more reader of a console run in progress.
+  `Runtime.unattended` is the console's runs of this instance.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `hosts.py` is `AllowedHosts`, the middleware `create_app` puts
   before every route, which refuses a request made for a host name the service does not
-  answer for (403 `unknown_host`); `threads.py` the three thread routes (runs, state, resume),
+  answer for (403 `unknown_host`); `runs.py` the bodies of the two thread routes that run a
+  thread (`start_message`, `start_resume`), what the console's routes do around them
+  (`open_first`, `go_on`, `start_console_run`), and the stop (`ask_stop`), so that the routes
+  and the A2A service start runs through one piece of code; with feature 009 off it refuses
+  a message or a decision on a caller's thread with 409 `a2a_server_off`; `received.py` the
+  feature's service, `ReceivedTasks`: accepting a caller's message as a console run, where a
+  caller's thread stands (`standing`, research R7's table and its three fences), writing a
+  task's end once (`look`), and the function every release calls while the feature is on;
+  `threads.py` the three thread routes (runs, state, resume),
   each of which takes a context, the two that run under the thread's lease, and validates
   a decision on the orchestrator that then carries it out;
   `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
@@ -419,8 +448,10 @@ startup and exits with an error naming the connection when it is unreachable.
   and questions equal on both sides.
 - `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
   runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
-  with stub tool servers, `make_a2a_app` with stand-in agents, and `make_llm_app` with LLM
-  profiles and a model factory. `fakes.py` holds the scripted chat model, a labelled one that
+  with stub tool servers, `make_a2a_app` with stand-in agents, `make_llm_app` with LLM
+  profiles and a model factory, and `make_a2a_server_app` with feature 009 on, one stand-in
+  agent, and a received-task store a second app can share (`again`), with helpers to accept
+  a caller's message through `ReceivedTasks` and read its run to the end. `fakes.py` holds the scripted chat model, a labelled one that
   can hold a call open, and the test model factory; `nowhere.py` what the three proofs
   that no key and no agent address gets out share; `llm_stub.py` the stand-in model
   endpoint, OpenAI-compatible, which the suite reaches through the real client, and whose
@@ -438,6 +469,10 @@ startup and exits with an error naming the connection when it is unreachable.
   share (a tool step a test holds open, a stream read in a thread of its own);
   `test_a2a_progress.py` the tests of feature 008, the progress of pending agent tasks, in
   eight parts, from what counts as progress to the stream of an agent that does not stream;
+  `a2a_caller.py` the stand-in caller of feature 009, the SDK's own client behind a small
+  class and a command, as another agent would call Freyja; the feature's tests are
+  `test_a2a_server_*.py` and `test_received_tasks.py`, with
+  `integration/test_received_tasks_postgres.py` for the store on Postgres;
   `integration/` holds the Postgres tests, skipped unless
   `FREYJA_TEST_DATABASE_URI` is set.
 - `.specify/`: Spec Kit templates, scripts, installed extensions, and the constitution. Feature
@@ -541,6 +576,13 @@ startup and exits with an error naming the connection when it is unreachable.
   `tests/nowhere.py`: `Seen`, which keeps everything the service gave back, `kept`, what the
   checkpointer holds, `logged`, and the searches `no_key` and `no_address`. A proof imports
   them from there, never from another test file.
+- A thread another agent started over A2A (feature 009) runs on the strict build and on no
+  other: `SegmentedGraph` asks who started a thread before every run, of every kind, and
+  refuses a caller's thread on the ordinary build and any thread whose lookup fails. A
+  context taken for a thread asks the received-task store, with the feature on or off, so
+  that an instance with the feature off never runs a thread another instance gave a caller.
+  A new way to run a graph goes through a context's `astream`, which every other entry of
+  the wrapper refuses. `tests/test_a2a_server_approval.py` holds it.
 - A console run is stopped only between two steps, never by cancelling it, also when the
   service stops: `SegmentedGraph` is the one place that decides where (`BOUNDARY_NODES`),
   so that an action under way is never cut off (principle I). `tests/test_unattended_stop.py`

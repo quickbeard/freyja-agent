@@ -449,3 +449,77 @@ other build is the one failure the design exists to prevent.
 
 Nothing else on the list of things to ask about is touched: no CI file, no
 `web/vitest.config.mts`, no `.gitleaks.toml`, no `web/playwright.config.ts`, no constitution.
+
+## Implementation Notes
+
+### Request 1 (2026-11-25): the foundations
+
+**Starting point (T001)**, on the branch as made from `main`: the service suite passed 2011
+tests and skipped 133, with 91.51% of lines covered; the web app's 790 unit tests passed,
+with 97.46% of statements, 94.39% of branches, 97.2% of functions, and 97.96% of lines.
+
+**The opt-in Postgres tests (T002)** run against `freyja_test_a2a`, made in the shared
+container with `docker exec freyja-agent-postgres-1 createdb -h 127.0.0.1 -p 5434 -U freyja
+freyja_test_a2a`: its server listens on loopback, on 5434, and `docker compose` from the
+worktree is another compose project.
+
+**The SDK's extra (T003, research R19).** The owner said yes on 2026-11-25. `pyproject.toml`
+names `a2a-sdk[http-server]` among the runtime dependencies and no longer in the development
+group; `uv lock` changed the lock's metadata only. The packages a production install takes
+(`uv export --no-dev`) are the same, at the same versions, and the installed set did not
+change.
+
+**Built otherwise than the tasks say, and why:**
+
+- Existing tests reach three seams by name, and they pass unchanged: the console's run
+  routes still call `threads.start_run` and `threads.resume_run` and keep `_open_first` and
+  `_go_on`, now thin wrappers over `api/runs.py`; `take_context` calls `begin_run()` with no
+  argument for a thread no caller started; and the runtime makes `SegmentedGraph` with two
+  arguments and sets `strict` and `lookup` after. `runs.start_console_run` is the one the A2A
+  service calls. The console's resume through `api/runs.py` is not built: request 4 needs it.
+- The store has no read of "whether any conversation exists": the review of the tasks made
+  every context look a thread up, on or off, so nothing asks it.
+- `FREYJA_A2A_SERVER` is a plain boolean, as the other switches, since `StrictBool` refuses
+  the environment's `true`. The refusal is `RefusedError` (Ruff's N818).
+- The log lines of FR-028 for an accepted task and a limit are written from this request, by
+  `ReceivedTasks`, which nothing serves yet.
+
+**What the tests found that the design did not say:**
+
+- A link in a named caller's area that leads out of it makes deepagents' backend raise, as it
+  does on the shared workspace: the run fails with an internal error, and nothing is read.
+  The task ends failed with `internal` (`test_a_link_out_of_the_area_reads_nothing_and_fails_the_run`).
+- Two changes of one path in one model step are refused by deepagents itself ("parallel file
+  mutations"), before the read-only skills are asked.
+- `CallerFiles` learns its caller in its async methods, on the event loop, before it hands
+  the call on, and the graph reaches only those, so the question of `get_config()` in a
+  worker thread (R16, "to verify") does not arise.
+
+**Cases of T013 not written end to end, with what covers them:** a run of the worker's on a
+caller's thread that is cut off, fails, or is given up (SC-014), and a continuation that
+fails while its proposal is pending. The first ends as a thread with a next step or with no
+agent task awaited, and both rows are tested (`test_a_thread_left_with_a_next_step_ends_its_task_as_interrupted`,
+`test_which_agent_tasks_a_received_task_waits_for`); the second reads as the pending
+proposal it leaves, a tested row. Both come again in request 4, whose tests drive the
+worker's runs on callers' threads with cancel. T009's rebuild on a change of profile or of
+agents is shown by construction: both builds are made in one `_apply`, which the test shows
+gives one build, and the feature off gives one orchestrator.
+
+**Review of request 1.** An independent reviewer read the change against the design and the
+installed libraries before its first commit. It found no path by which a caller's thread
+runs on the ordinary build or without its files key, no message to an agent that leaves
+without a person's approve or edit, and nothing that reaches outside a named caller's area
+or changes a skill. What it found:
+
+| Finding | What was done |
+|---|---|
+| Medium: a completed task whose run wrote no reply took the previous task's reply, since the reply was looked for back to the thread's start. | The reply is looked for since the caller's last message only (`test_a_task_whose_run_wrote_no_reply_is_never_given_an_earlier_one`) |
+| Low: one look that failed, before the limits were counted, refused every caller's message. | Each look is guarded and logged; its task stays counted (`test_a_look_that_fails_keeps_its_task_counted_and_blocks_no_message`) |
+| Low: `CallerFiles` took a caller's name as a path; the rule for names comes in request 5. | A name that is not an agent's name's form reads nothing (`test_a_caller_s_name_that_is_no_directory_name_reaches_no_file`) |
+| Low: with the feature off, `/runs/unattended` looked a thread's row up before refusing it. | Refused first |
+| Low: the fallback of a read named the wrong cause when the lookup failed; `last_task` did not clean its conversation id as `accept` does. | Both fixed |
+| Low: an agent's card can be read for a call on the strict build before the call is refused, when no row records a decision; no message or cancel leaves. | Left: the gate prevents such a call reaching the tool |
+| Low: a runtime put together by hand has no fence. | Left: only tests put one together; the service always has both |
+| Low: with the feature off every run reads `freyja_a2a_conversations`, up to three times, and fails when that read fails. | Kept: it fails closed, as the review of the tasks decided (research R6) |
+| Low: an acceptance that takes over 60 seconds before its run starts can be failed by another instance's look; `mark_started` then raises and the caller is told. | Left: the row stays consistent |
+| Low: no sweep yet, so a task whose release function did not run waits for the next acceptance to be looked at. | Request 4 builds the sweep (R9) |

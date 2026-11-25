@@ -618,6 +618,10 @@ class IndexedRunLocks:
         # the locks themselves once and writes to the index of the runtime that holds it.
         self.inner: RunLocks = inner.inner if isinstance(inner, IndexedRunLocks) else inner
         self.index = index
+        # Feature 009: told the thread's id after every release, once the lease is back and
+        # the index was told (research R9). It must not wait for anything: what it does, it
+        # does in a task of its own.
+        self.on_release: Callable[[str], None] | None = None
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
@@ -651,6 +655,11 @@ class IndexedRunLocks:
                 await self.index.run_ended(thread_id, owner)
         except Exception as exc:
             self._not_kept("ended", thread_id, exc)
+        if self.on_release is not None:
+            try:
+                self.on_release(thread_id)
+            except Exception:
+                logger.exception("Thread %s: what follows a run's end failed to start", thread_id)
 
     async def is_active(self, thread_id: str) -> bool:
         return await self.inner.is_active(thread_id)

@@ -721,3 +721,48 @@ def test_a_graph_that_cannot_be_wrapped_leaves_no_agents_held(
             client.portal.call(runtime.begin_run)
         held = sum(runtime.registry._holders.values())
     assert held == 0
+
+
+# Feature 009 (research R10): one more reader of a console run in progress.
+
+
+async def test_a_reader_that_joins_gets_the_events_that_follow_to_the_run_s_end(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runs = UnattendedRuns(InMemoryThreadIndex(), "instance-a")
+    assert runs.join("t-1") is None
+    step = asyncio.Event()
+
+    async def events() -> AsyncIterator[ServerSentEvent]:
+        yield ServerSentEvent(event="start", data=json.dumps({"run_id": "r1"}))
+        await step.wait()
+        yield ServerSentEvent(event="update", data=json.dumps({"n": 1}))
+        yield ServerSentEvent(event="end", data=json.dumps({"status": "completed"}))
+
+    first = runs.start("t-1", events())
+    await asyncio.sleep(0.01)
+    joined = runs.join("t-1")
+    assert joined is not None
+    step.set()
+    got = [event.event async for event in joined]
+    assert got == ["update", "end"]
+    assert [event.event async for event in first] == ["start", "update", "end"]
+    assert runs.join("t-1") is None
+
+    # A joined reader that falls behind is disconnected, as any other is.
+    monkeypatch.setattr(unattended, "READER_BACKLOG", 2)
+    flood = asyncio.Event()
+
+    async def many() -> AsyncIterator[ServerSentEvent]:
+        yield ServerSentEvent(event="start", data=json.dumps({"run_id": "r2"}))
+        await flood.wait()
+        for number in range(5):
+            yield ServerSentEvent(event="update", data=json.dumps({"n": number}))
+        yield ServerSentEvent(event="end", data=json.dumps({"status": "completed"}))
+
+    runs.start("t-2", many())
+    await asyncio.sleep(0.01)
+    slow = runs.join("t-2")
+    flood.set()
+    await runs.close()
+    assert [event async for event in slow] == []

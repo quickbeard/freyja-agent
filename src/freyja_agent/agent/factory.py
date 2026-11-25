@@ -16,6 +16,7 @@ from typing import Any
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware._prompt_caching import append_prompt_caching_middleware
 from deepagents.middleware.filesystem import FilesystemMiddleware
 from deepagents.middleware.patch_tool_calls import PatchToolCallsMiddleware
@@ -72,6 +73,8 @@ def build_agent(
     system_prompt: str = DEFAULT_PROMPT,
     agent_tasks: AgentTaskStore | None = None,
     openai_responses_api: bool = True,
+    backend: BackendProtocol | None = None,
+    alias_threads: bool = False,
 ) -> Orchestrator:
     """Build the orchestrator and its catalog.
 
@@ -97,10 +100,15 @@ def build_agent(
     are what they were before feature 003 (FR-024). The middleware is told which agent each
     agent tool among ``delegate_tools`` sends to, and records every call of one that the
     model proposes, on the orchestrator and on its subagent (feature 005, FR-023).
+
+    Feature 009 builds a second, strict orchestrator for the threads callers start over A2A
+    with the same function. ``backend`` is the file backend of the orchestrator and its
+    subagent, the shared workspace's when none is given; the strict build passes
+    ``CallerFiles``, which gives a named caller its own area (FR-009a). ``alias_threads``
+    tells the model an alias in place of its thread's id (research R6).
     """
-    root = Path(workspace_dir)
-    root.mkdir(parents=True, exist_ok=True)
-    backend = FilesystemBackend(root_dir=root, virtual_mode=True)
+    if backend is None:
+        backend = workspace_backend(workspace_dir)
     delegate_entries = [_delegate_entry(tool) for tool in delegate_tools]
     own_tools: list[BaseTool] = [send_notification]
     task_middleware: list[Any] = []
@@ -123,7 +131,7 @@ def build_agent(
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
     chat_model = resolve_model(model, openai_responses_api=openai_responses_api)
     subagent_graph, subagent = _general_purpose_subagent(
-        chat_model, tools, backend, max_steps, gate, agent_tasks, agent_tools
+        chat_model, tools, backend, max_steps, gate, agent_tasks, agent_tools, alias_threads
     )
     agent = create_deep_agent(
         model=chat_model,
@@ -132,7 +140,7 @@ def build_agent(
         backend=backend,
         skills=[SKILLS_SOURCE],
         interrupt_on=gate,
-        middleware=[ThreadContextMiddleware(), *task_middleware],
+        middleware=[ThreadContextMiddleware(alias=alias_threads), *task_middleware],
         subagents=[subagent],
         checkpointer=checkpointer,
         store=store,
@@ -233,14 +241,23 @@ def resolve_model(
     return init_chat_model(model, **defaults)
 
 
+def workspace_backend(workspace_dir: str | Path) -> FilesystemBackend:
+    """The file tools' backend on the shared workspace, which every thread but a named
+    caller's works in (FR-017; feature 009, FR-009a)."""
+    root = Path(workspace_dir)
+    root.mkdir(parents=True, exist_ok=True)
+    return FilesystemBackend(root_dir=root, virtual_mode=True)
+
+
 def _general_purpose_subagent(
     model: BaseChatModel,
     tools: list[Any],
-    backend: FilesystemBackend,
+    backend: BackendProtocol,
     max_steps: int,
     gate: dict[str, Any],
     agent_tasks: AgentTaskStore | None,
     agent_tools: dict[str, AgentTool],
+    alias_threads: bool = False,
 ) -> tuple[Any, dict[str, Any]]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
@@ -259,7 +276,7 @@ def _general_purpose_subagent(
         create_summarization_middleware(model, backend),
         PatchToolCallsMiddleware(),
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
-        ThreadContextMiddleware(),
+        ThreadContextMiddleware(alias=alias_threads),
         *([AgentTasksMiddleware(agent_tasks, agent_tools)] if agent_tasks is not None else []),
     ]
     append_prompt_caching_middleware(middleware)

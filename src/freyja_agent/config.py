@@ -1,5 +1,6 @@
 import ipaddress
 import re
+from pathlib import Path
 from typing import Annotated, Self
 from urllib.parse import SplitResult, urlsplit
 
@@ -268,6 +269,38 @@ class Settings(BaseSettings):
     background_retry_seconds: Annotated[float, Field(gt=0)] = 60
     # Background runs under way at once on one instance; further ones wait (003 SC-003).
     background_run_concurrency: Annotated[int, Field(gt=0)] = 4
+    # Feature 009: whether Freyja receives work from other agents over A2A. Off by default,
+    # and with it off the three settings below are not used and not checked
+    # (specs/009-a2a-server/contracts/settings.md).
+    a2a_server: bool = False
+    # Received tasks in progress at once: for one caller, and for all callers (FR-025).
+    a2a_server_caller_tasks: int = 5
+    a2a_server_tasks: int = 20
+    # Where a named caller's runs keep their files, one directory per caller (FR-009a). It
+    # is beside the workspace and never inside it, so that no thread that works in the
+    # workspace reaches a caller's files.
+    a2a_server_files_dir: str = "caller-files"
+
+    @model_validator(mode="after")
+    def _a2a_server_rules(self) -> Self:
+        # Named in the message: an error raised here belongs to no one field.
+        if not self.a2a_server:
+            return self
+        if not 1 <= self.a2a_server_caller_tasks <= 100:
+            raise ValueError("FREYJA_A2A_SERVER_CALLER_TASKS must be from 1 to 100")
+        if not self.a2a_server_caller_tasks <= self.a2a_server_tasks <= 1000:
+            raise ValueError(
+                "FREYJA_A2A_SERVER_TASKS must be at least FREYJA_A2A_SERVER_CALLER_TASKS and "
+                "at most 1000"
+            )
+        files = Path(self.a2a_server_files_dir).resolve()
+        workspace = Path(self.workspace_dir).resolve()
+        if files == workspace or workspace in files.parents or files in workspace.parents:
+            raise ValueError(
+                "FREYJA_A2A_SERVER_FILES_DIR must not be the workspace, be inside it, or "
+                "contain it (FREYJA_WORKSPACE_DIR)"
+            )
+        return self
 
     @field_validator("allowed_hosts")
     @classmethod
