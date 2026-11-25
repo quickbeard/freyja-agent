@@ -519,6 +519,17 @@ export function TaskView({ threadId }: { threadId: string }) {
   // taken from SWR's `isValidating`: a component that reads that is rendered again each
   // time a reading begins or ends, which this view's effects are not written for.
   const reading = useRef({ row: false, state: false });
+  // Feature 008: the browser's time, which how long ago an agent reported is worded from. It
+  // is read only in the timer below and when a reading of the task's state is answered,
+  // never while rendering, and is null until then (research R8). SWR hands the view the
+  // same data when a reading equals the one before, so an age worked out from the data
+  // alone would stand still: the count of answered readings moves at each one.
+  const [now, setNow] = useState<number | null>(null);
+  useEffect(() => {
+    if (stateReads > 0) {
+      setNow(Date.now());
+    }
+  }, [stateReads]);
   useEffect(() => {
     if (period === null) {
       return;
@@ -528,6 +539,7 @@ export function TaskView({ threadId }: { threadId: string }) {
       if (document.visibilityState === "hidden") {
         return;
       }
+      setNow(Date.now());
       // A reading asked for while one is under way takes its place, and the earlier one's
       // answer is dropped: with a service slower than the period, none would ever be
       // shown. A reading that gets no answer is given up by itself (`ANSWER_SECONDS`).
@@ -935,7 +947,7 @@ export function TaskView({ threadId }: { threadId: string }) {
           }}
         />
       )}
-      <AgentTasks tasks={agentTasks} />
+      <AgentTasks tasks={agentTasks} now={now} />
       {conversed && (
         <FollowUp
           key={draft.box}

@@ -1444,6 +1444,171 @@ describe("a task's page and its agent tasks", () => {
       vi.useRealTimers();
     }
   });
+
+  // Feature 008 (T025): what a working agent last reported, and how long ago (FR-010,
+  // FR-011, research R8). The clock is faked with the timer, so the age moves with it.
+
+  const LEARNED = "2026-11-25T08:00:00Z";
+  const reported = (text: string) =>
+    agentTask({ progress: { text, learned_at: LEARNED } });
+  const lastReported = () =>
+    screen.queryByText(/^Last reported by the agent/)?.textContent ?? "";
+  const progressText = () =>
+    screen.queryByRole("region", { name: "Progress reported by stub" })
+      ?.textContent ?? null;
+
+  /**
+   * Wait, in real time, until the task's state has been asked for `count` times. Testing
+   * Library's own wait looks again by the faked `setInterval`, or when the page changes,
+   * which a reading that answers the same task does not do.
+   */
+  async function readsOf(reads: (tail: string) => number, count: number) {
+    for (
+      let waited = 0;
+      reads("/state") < count && waited < 2000;
+      waited += 10
+    ) {
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      });
+    }
+    expect(reads("/state")).toBe(count);
+    // The count moves when the request is made; the reading is answered a moment later, and
+    // the view asks for no other while one is under way.
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  }
+
+  /** One reading of the view's timer, answered. */
+  async function oneReading(reads: (tail: string) => number) {
+    const before = reads("/state");
+    vi.advanceTimersByTime(AGENT_SECONDS * 1000);
+    await readsOf(reads, before + 1);
+  }
+
+  it("shows how long ago the agent reported, and the age moves at each reading though the task did not", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(Date.parse(LEARNED) + 30_000);
+    try {
+      const reads = waiting(() => ({ task: reported("Half done") }));
+      renderView();
+      await waitFor(() => expect(lastReported()).toContain("just now"));
+      expect(progressText()).toBe("Half done");
+
+      // Five readings that answer the same task: 90 seconds after the text was learned.
+      for (let n = 0; n < 5; n += 1) {
+        await oneReading(reads);
+      }
+      await waitFor(() => expect(lastReported()).toContain("1 minute ago"));
+      // Eight: 126 seconds.
+      for (let n = 0; n < 3; n += 1) {
+        await oneReading(reads);
+      }
+      await waitFor(() => expect(lastReported()).toContain("2 minutes ago"));
+      expect(progressText()).toBe("Half done");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("neither reads nor moves the age while the page is hidden, and reads once it is shown", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(Date.parse(LEARNED) + 30_000);
+    const visibility = vi.spyOn(document, "visibilityState", "get");
+    try {
+      const reads = waiting(() => ({ task: reported("Half done") }));
+      renderView();
+      await waitFor(() => expect(lastReported()).toContain("just now"));
+      const read = reads("/state");
+
+      visibility.mockReturnValue("hidden");
+      document.dispatchEvent(new Event("visibilitychange"));
+      vi.advanceTimersByTime(10 * AGENT_SECONDS * 1000);
+      // What the timer's callbacks changed is rendered before the age is looked at.
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      });
+      expect(reads("/state")).toBe(read);
+      expect(lastReported()).toContain("just now");
+
+      visibility.mockReturnValue("visible");
+      document.dispatchEvent(new Event("visibilitychange"));
+      await readsOf(reads, read + 1);
+      // The reading made as the page is shown words the age from the browser's time again,
+      // though it brings the same task.
+      expect(lastReported()).toContain("2 minutes ago");
+    } finally {
+      visibility.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows another text when a reading brings one", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      let text = "Step 1 of 3";
+      const reads = waiting(() => ({ task: reported(text) }));
+      renderView();
+      await waitFor(() => expect(progressText()).toBe("Step 1 of 3"));
+
+      text = "Step 2 of 3";
+      await oneReading(reads);
+      await waitFor(() => expect(progressText()).toBe("Step 2 of 3"));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("starts no timer more for a task whose agent reports progress", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const timers = vi.spyOn(globalThis, "setInterval");
+    try {
+      const started = async (task: ReturnType<typeof agentTask>) => {
+        timers.mockClear();
+        const reads = waiting(() => ({ task }));
+        const { unmount } = renderView();
+        await waitFor(() => expect(agentTasks()).toContain("slow 40"));
+        await oneReading(reads);
+        const count = timers.mock.calls.length;
+        unmount();
+        return count;
+      };
+      const without = await started(agentTask());
+      const withProgress = await started(reported("Half done"));
+      expect(withProgress).toBe(without);
+      expect(without).toBeGreaterThan(0);
+    } finally {
+      timers.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the progress it last read when readings fail, under feature 007's notice, and its age goes on", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    vi.setSystemTime(Date.parse(LEARNED) + 30_000);
+    try {
+      let down = false;
+      const reads = waiting(() =>
+        down ? { down: true } : { task: reported("Half done") },
+      );
+      renderView();
+      await waitFor(() => expect(lastReported()).toContain("just now"));
+
+      down = true;
+      for (let n = 0; n < 5; n += 1) {
+        await oneReading(reads);
+      }
+      expect((await screen.findByRole("alert")).textContent).toMatch(
+        /cannot be reached/,
+      );
+      expect(progressText()).toBe("Half done");
+      // The age is the browser's: it never claims the text is newer than it is.
+      expect(lastReported()).toContain("1 minute ago");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // Phase 12 (T100), FR-013: a page that was hidden reads the task again when it is shown,

@@ -104,6 +104,7 @@ export function agentTask(values: Partial<AgentTask> = {}): AgentTask {
     last_checked_at: "2026-11-20T08:00:03Z",
     ended_at: null,
     outcome_delivered: false,
+    progress: null,
     ...values,
   };
 }
