@@ -35,6 +35,7 @@ import { type Blocked, FollowUp, inWords } from "./follow-up";
 import { contentText, MessageView } from "./message";
 import { ProposalCard } from "./proposal-card";
 import { SendBox } from "./send-box";
+import { StartedBy } from "./started-by";
 import { TaskStatus } from "./status";
 import { StopButton, type StopState } from "./stop-button";
 
@@ -879,10 +880,13 @@ export function TaskView({ threadId }: { threadId: string }) {
   const conversed =
     live !== null ||
     (state.data !== undefined && !noConversation && row.data !== undefined);
+  // Another agent started this task (feature 009): only it sends messages on it, so the
+  // page offers no box for one (FR-024). Its proposals are decided here as any.
+  const caller = row.data?.caller ?? null;
 
   return (
     <section className="flex flex-col gap-4">
-      <Header status={status} />
+      <Header status={status} caller={caller} />
       <output
         ref={statusRef}
         tabIndex={-1}
@@ -965,7 +969,14 @@ export function TaskView({ threadId }: { threadId: string }) {
         />
       )}
       <AgentTasks tasks={agentTasks} now={now} />
-      {conversed && (
+      {conversed && caller !== null && (
+        <p className="text-sm text-muted-foreground">
+          Another agent started this task, and only that agent sends messages on
+          it. Its proposals are decided here, and its run is stopped here, as
+          for any task.
+        </p>
+      )}
+      {conversed && caller === null && (
         <FollowUp
           key={draft.box}
           threadId={threadId}
@@ -996,11 +1007,18 @@ function CutNotice() {
   );
 }
 
-function Header({ status }: { status?: ThreadSummary["status"] }) {
+function Header({
+  status,
+  caller = null,
+}: {
+  status?: ThreadSummary["status"];
+  caller?: ThreadSummary["caller"];
+}) {
   return (
     <div className="flex flex-wrap items-center gap-3">
       <h1 className="font-heading text-2xl font-semibold">Task</h1>
       {status !== undefined && <TaskStatus status={status} />}
+      <StartedBy caller={caller} className="text-sm text-muted-foreground" />
     </div>
   );
 }

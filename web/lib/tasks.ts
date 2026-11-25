@@ -14,6 +14,16 @@ export type ThreadStatus =
   | "waiting_for_agent"
   | "done";
 
+/** Who started a task over A2A (feature 009); null on a task a person started. */
+export type CallerSummary = {
+  /** The caller's name, or `local` for an agent that called on this machine. */
+  name: string;
+  /** Whether the caller canceled the task's last run. */
+  canceled: boolean;
+  /** Whether the deployment still names the caller; always true for `local`. */
+  configured: boolean;
+};
+
 /** A task as the list has it. */
 export type ThreadSummary = {
   thread_id: string;
@@ -31,6 +41,8 @@ export type ThreadSummary = {
   runs: number;
   /** Whether a stop was asked for the run in progress and it has not ended yet. */
   stopping: boolean;
+  /** Who started the task, when another agent did; null when a person did. */
+  caller: CallerSummary | null;
 };
 
 export type ThreadList = {

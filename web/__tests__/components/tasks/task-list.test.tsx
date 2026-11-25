@@ -79,6 +79,23 @@ const rows = () =>
   screen.queryAllByRole("listitem").map((item) => item.textContent ?? "");
 
 describe("the list of tasks", () => {
+  it("says on a row that another agent started its task, and nothing on a person's", async () => {
+    serve(() =>
+      list([
+        summary({
+          thread_id: "from-agent",
+          first_message: "Compile the report.",
+          caller: { name: "local", canceled: false, configured: true },
+        }),
+        summary({ thread_id: "from-person", first_message: "Summarize." }),
+      ]),
+    );
+    renderList();
+    await waitFor(() => expect(rows()).toHaveLength(2));
+    expect(rows()[0]).toContain("Started by an agent on this machine");
+    expect(rows()[1]).not.toContain("Started by");
+  });
+
   it("shows one row per task in the service's order, each opening the task", async () => {
     serve(() => list(FOUR));
     const { container } = renderList();

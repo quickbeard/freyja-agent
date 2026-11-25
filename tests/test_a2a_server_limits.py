@@ -17,6 +17,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from freyja_agent.agent.caller_files import READ_ONLY, CallerFiles, NoFilesError
 from freyja_agent.agent.factory import tool_node_tools, workspace_backend
+from tests.a2a_requests import at_rest, ended, rpc, sending
 from tests.conftest import ServerApp
 from tests.fakes import ScriptedChatModel
 
@@ -292,3 +293,166 @@ def test_a_caller_s_name_that_is_no_directory_name_reaches_no_file(
         return
     with pytest.raises(NoFilesError):
         listing()
+
+
+# Part 2: a message's form and the limits (FR-008, FR-025, FR-026a, SC-012), each refused
+# before the model is asked and before a thread, a conversation, or a task is made.
+
+
+def refused_before_the_model(
+    client: TestClient, made: ServerApp, model: ScriptedChatModel, params: dict[str, Any]
+) -> dict[str, Any]:
+    before = model.calls
+    answer = rpc(client, "SendMessage", params)
+    assert answer.status_code == 200, answer.text
+    assert "error" in answer.json(), answer.json()
+    assert model.calls == before
+    return answer.json()["error"]
+
+
+def nothing_made(client: TestClient, made: ServerApp) -> None:
+    assert client.portal.call(made.received.unreleased, 100) == []
+    assert client.get("/threads").json()["total"] == 0
+
+
+@pytest.mark.parametrize(
+    ("message", "sentence"),
+    [
+        ({"parts": []}, "The message holds no text."),
+        ({"parts": [{"text": ""}]}, "The message holds no text."),
+        ({"parts": [{"text": " \n\t"}, {"text": "  "}]}, "The message holds no text."),
+        ({"parts": [{"text": "x" * 32_001}]}, "The message is longer than 32,000 characters."),
+        ({"parts": [{"text": "x" * 16_000}, {"text": "y" * 16_000}]}, None),
+        (
+            {"parts": [{"text": "hi"}], "taskId": "t-1"},
+            "A message names no task: a task takes one message. Continue a conversation by "
+            "its contextId.",
+        ),
+        (
+            {"parts": [{"text": "hi"}], "contextId": "c" * 129},
+            "The contextId is longer than 128 characters.",
+        ),
+    ],
+)
+def test_what_is_wrong_with_the_message_itself_is_refused_with_its_sentence(
+    make_a2a_server_app: Callable[..., ServerApp], message: dict[str, Any], sentence: str | None
+) -> None:
+    model = ScriptedChatModel()
+    made = make_a2a_server_app(model)
+    params = {"message": {"messageId": "m-1", "role": "ROLE_USER", **message}}
+    with TestClient(made.app) as client:
+        if sentence is None:
+            # 16,000 and 16,000 with the line break between: 32,001 characters.
+            found = refused_before_the_model(client, made, model, params)
+            assert found["message"] == "The message is longer than 32,000 characters."
+        else:
+            found = refused_before_the_model(client, made, model, params)
+            assert (found["code"], found["message"]) == (-32602, sentence)
+        nothing_made(client, made)
+
+
+@pytest.mark.parametrize(
+    "part",
+    [
+        {"raw": "aGVsbG8=", "mediaType": "text/plain"},
+        {"url": "https://example.com/file.txt"},
+        {"data": {"k": "v"}},
+    ],
+)
+def test_a_part_that_is_not_text_is_refused_as_an_unsupported_content_type(
+    make_a2a_server_app: Callable[..., ServerApp], part: dict[str, Any]
+) -> None:
+    model = ScriptedChatModel()
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        params = {"message": {**sending()["message"], "parts": [{"text": "hi"}, part]}}
+        found = refused_before_the_model(client, made, model, params)
+        nothing_made(client, made)
+    assert found["code"] == -32005
+
+
+def test_output_modes_without_text_are_refused_and_text_ones_taken(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = ScriptedChatModel(final_text="Yes.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        json_only = {**sending(), "configuration": {"acceptedOutputModes": ["application/json"]}}
+        assert refused_before_the_model(client, made, model, json_only)["code"] == -32005
+        for index, modes in enumerate(
+            [["text/*"], ["*/*"], [], ["application/json", "text/plain"]]
+        ):
+            params = {
+                **sending(contextId=f"c-{index}"),
+                "configuration": {"acceptedOutputModes": modes},
+            }
+            answer = rpc(client, "SendMessage", params).json()
+            assert answer["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED", modes
+
+
+def test_the_longest_message_and_conversation_id_are_taken_and_parts_are_joined(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = ScriptedChatModel(final_text="Read.")
+    made = make_a2a_server_app(model)
+    longest = "x" * 32_000
+    with TestClient(made.app) as client:
+        first = rpc(client, "SendMessage", sending(longest, contextId="c" * 128)).json()
+        joined = {
+            "message": {
+                "messageId": "m-2",
+                "role": "ROLE_USER",
+                "parts": [{"text": "first line"}, {"text": "second line"}],
+            }
+        }
+        second = rpc(client, "SendMessage", joined).json()
+    assert first["result"]["task"]["contextId"] == "c" * 128
+    assert second["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    told = [str(message.content) for seen in model.seen for message in seen]
+    assert longest in told
+    assert "first line\nsecond line" in told
+
+
+NOTIFY = AIMessage(
+    content="",
+    tool_calls=[{"id": "n1", "name": "send_notification", "args": {"channel": "#ops"}}],
+)
+
+
+def test_tasks_waiting_for_a_person_count_against_the_limit_until_they_end(
+    make_a2a_server_app: Callable[..., ServerApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    model = ScriptedChatModel(script=[NOTIFY, NOTIFY], final_text="Rejected, then.")
+    made = make_a2a_server_app(
+        model, a2a_server_caller_tasks=2, a2a_server_tasks=2, a2a_server_wait_seconds=0
+    )
+    with TestClient(made.app) as client:
+        first = rpc(client, "SendMessage", sending("one", contextId="c-1")).json()
+        second = rpc(client, "SendMessage", sending("two", contextId="c-2")).json()
+        at_rest(client, made, first["result"]["task"]["id"], second["result"]["task"]["id"])
+        calls = model.calls
+        third = rpc(client, "SendMessage", sending("three", contextId="c-3")).json()
+        assert model.calls == calls
+        # A person rejects the first proposal: its task ends, and frees its place.
+        thread = made.task(client, first["result"]["task"]["id"]).thread_id
+        pending = client.get(f"/threads/{thread}/state").json()["pending"]
+        body = {"interrupt_id": pending["interrupt_id"], "decisions": [{"type": "reject"}]}
+        with client.stream("POST", f"/threads/{thread}/resume", json=body) as answer:
+            sse_events(answer.iter_lines())
+        ended(client, made, first["result"]["task"]["id"])
+        fourth = rpc(client, "SendMessage", sending("four", contextId="c-4")).json()
+    error = third["error"]
+    assert (error["code"], error["message"]) == (
+        -32004,
+        "A limit on tasks in progress was reached. Send again when one has ended.",
+    )
+    assert error["data"][0]["metadata"] == {"reason": "task_limit"}
+    assert fourth["result"]["task"]["status"]["state"] == "TASK_STATE_WORKING"
+    refusals = [
+        record.getMessage() for record in caplog.records if "was refused" in record.getMessage()
+    ]
+    assert refusals == [
+        "A message of caller local was refused: the caller's limit on tasks in progress was reached"
+    ]

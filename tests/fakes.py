@@ -4,6 +4,8 @@ The agent always calls ``bind_tools`` and expects tool-call messages, which no s
 langchain-core supports, so the suite carries its own (research R11).
 """
 
+import json
+import re
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
@@ -11,8 +13,8 @@ from typing import Any
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, BaseMessage
-from langchain_core.outputs import ChatGeneration, ChatResult
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field, PrivateAttr
 
 from freyja_agent.llm.providers import ModelSpec
@@ -134,6 +136,68 @@ class LabelledChatModel(ScriptedChatModel):
         """Inside: a run has reached the model and waits there."""
         try:
             assert self._reached.wait(5), f"no run reached the held model {self.label}"
+            yield
+        finally:
+            self._release.set()
+
+
+class StreamingChatModel(ScriptedChatModel):
+    """A scripted model that streams each reply in pieces, as a provider does (feature 009).
+
+    A reply with tool calls is one chunk that carries them. A reply in text is sent in
+    ``pieces`` when they make it up, otherwise word by word. ``hold()`` makes the next reply
+    in text wait after its first piece until the test leaves ``held()``: the model streams
+    in a worker thread, so holding it holds one run and leaves the event loop free.
+    """
+
+    pieces: list[str] = Field(default_factory=list)
+    _armed: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _reached: threading.Event = PrivateAttr(default_factory=threading.Event)
+    _release: threading.Event = PrivateAttr(default_factory=threading.Event)
+
+    def _stream(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
+        **kwargs: Any,
+    ) -> Iterator[ChatGenerationChunk]:
+        self.calls += 1
+        self.seen.append(list(messages))
+        message = self.next_message()
+        if message.tool_calls:
+            calls = [
+                {
+                    "name": call["name"],
+                    "args": json.dumps(call["args"]),
+                    "id": call["id"],
+                    "index": index,
+                }
+                for index, call in enumerate(message.tool_calls)
+            ]
+            chunk = AIMessageChunk(content=message.content, tool_call_chunks=calls)
+            yield ChatGenerationChunk(message=chunk)
+            return
+        text = message.text
+        parts = self.pieces if "".join(self.pieces) == text else re.findall(r"\S+\s*", text)
+        for index, part in enumerate(parts):
+            yield ChatGenerationChunk(message=AIMessageChunk(content=part))
+            if index == 0 and self._armed.is_set():
+                self._armed.clear()
+                self._reached.set()
+                assert self._release.wait(10), "the held reply was never released"
+
+    def hold(self) -> None:
+        """Make the next reply in text wait after its first piece."""
+        self._reached.clear()
+        self._release.clear()
+        self._armed.set()
+
+    @contextmanager
+    def held(self) -> Iterator[None]:
+        """Inside: a reply's first piece was sent, and the rest waits."""
+        try:
+            assert self._reached.wait(5), "no reply reached the held piece"
             yield
         finally:
             self._release.set()

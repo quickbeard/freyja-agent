@@ -18,6 +18,7 @@ NAMES = (
     "FREYJA_A2A_SERVER_CALLER_TASKS",
     "FREYJA_A2A_SERVER_TASKS",
     "FREYJA_A2A_SERVER_FILES_DIR",
+    "FREYJA_A2A_SERVER_WAIT_SECONDS",
 )
 
 
@@ -81,6 +82,25 @@ def test_limits_at_their_bounds_are_taken(monkeypatch: pytest.MonkeyPatch, works
     monkeypatch.setenv("FREYJA_A2A_SERVER_TASKS", "1000")
     settings = Settings(workspace_dir=str(workspace))
     assert (settings.a2a_server_caller_tasks, settings.a2a_server_tasks) == (100, 1000)
+
+
+@pytest.mark.parametrize("value", ["-1", "600.5", "nan"])
+def test_a_send_waits_0_to_600_seconds(
+    monkeypatch: pytest.MonkeyPatch, workspace: Path, value: str
+) -> None:
+    error = refused(monkeypatch, workspace, FREYJA_A2A_SERVER_WAIT_SECONDS=value)
+    assert "FREYJA_A2A_SERVER_WAIT_SECONDS" in error
+    assert f"input_value='{value}'" not in error
+
+
+def test_a_wait_at_its_bounds_is_taken_and_30_by_default(
+    monkeypatch: pytest.MonkeyPatch, workspace: Path
+) -> None:
+    assert Settings(workspace_dir=str(workspace)).a2a_server_wait_seconds == 30
+    monkeypatch.setenv("FREYJA_A2A_SERVER", "true")
+    for value in ("0", "600"):
+        monkeypatch.setenv("FREYJA_A2A_SERVER_WAIT_SECONDS", value)
+        assert Settings(workspace_dir=str(workspace)).a2a_server_wait_seconds == float(value)
 
 
 @pytest.mark.parametrize("where", ["the workspace", "inside it", "around it"])

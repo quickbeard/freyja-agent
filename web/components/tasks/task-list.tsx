@@ -15,6 +15,7 @@ import {
   type ThreadList,
   type ThreadSummary,
 } from "@/lib/tasks";
+import { StartedBy } from "./started-by";
 import { TaskStatus } from "./status";
 
 function Row({ task }: { task: ThreadSummary }) {
@@ -33,6 +34,11 @@ function Row({ task }: { task: ThreadSummary }) {
           <span className="truncate text-sm">
             {begins === "" ? `Task ${task.thread_id}` : begins}
           </span>
+          {/* Another agent started it (feature 009): said as text. */}
+          <StartedBy
+            caller={task.caller ?? null}
+            className="text-xs text-muted-foreground"
+          />
           {/* Why it failed, in the service's words, as text too (FR-003). */}
           {reason !== null && (
             <span className="line-clamp-2 text-xs text-muted-foreground">

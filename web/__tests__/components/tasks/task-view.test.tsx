@@ -390,6 +390,38 @@ describe("a task's page", () => {
   });
 });
 
+// Feature 009: a task another agent started.
+
+describe("a task another agent started", () => {
+  const LOCAL = { name: "local", canceled: false, configured: true };
+
+  it("says who started it and offers no box for another message, saying why", async () => {
+    service({
+      row: () => ({ json: summary({ caller: LOCAL }) }),
+      state: () => ({ json: state([human("Compile it."), ai("Done.")]) }),
+    });
+    renderView();
+    expect(
+      await screen.findByText("Started by an agent on this machine"),
+    ).toBeTruthy();
+    expect(
+      await screen.findByText(/only that agent sends messages on it/),
+    ).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("keeps the box on a task a person started, and says nothing new", async () => {
+    service({
+      row: () => ({ json: summary() }),
+      state: () => ({ json: state([human("Compile it."), ai("Done.")]) }),
+    });
+    renderView();
+    expect(await screen.findByRole("textbox")).toBeTruthy();
+    expect(screen.queryByText(/Started by/)).toBeNull();
+    expect(screen.queryByText(/only that agent sends messages/)).toBeNull();
+  });
+});
+
 // Phase 5: a task paused on a proposal.
 
 const PROPOSAL = (id: string): PendingDecision => ({

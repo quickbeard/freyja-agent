@@ -24,9 +24,17 @@ from sse_starlette import EventSourceResponse
 
 from freyja_agent.api import threads
 from freyja_agent.api.guards import refuse_other_origins
-from freyja_agent.api.runs import ask_stop, console_runs, go_on, open_first, refuse_while_off
+from freyja_agent.api.runs import (
+    ask_stop,
+    console_runs,
+    go_on,
+    open_first,
+    refuse_caller_thread,
+    refuse_while_off,
+)
 from freyja_agent.api.schemas import ResumeRequest, RunRequest
 from freyja_agent.api.thread_index_schemas import (
+    CallerSummary,
     RunError,
     StopAnswer,
     ThreadList,
@@ -34,6 +42,7 @@ from freyja_agent.api.thread_index_schemas import (
 )
 from freyja_agent.api.threads import DebugQuery, ThreadIdPath
 from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.runtime.received_tasks import LOCAL, CallerMark
 from freyja_agent.runtime.runtime import RunContext, Runtime
 from freyja_agent.runtime.thread_index import (
     INDEX_WRITE_SECONDS,
@@ -71,7 +80,25 @@ def _unreadable(what: str, exc: Exception) -> HTTPException:
     return _error(500, "internal", "The list of threads could not be read.")
 
 
-def _summary(record: ThreadRecord, lease_active: bool) -> ThreadSummary:
+def _caller(mark: CallerMark | None) -> CallerSummary | None:
+    """Who started a thread over A2A, as its row says it (feature 009). Only the local
+    caller can call until named callers exist, and it is always configured."""
+    if mark is None:
+        return None
+    return CallerSummary(name=mark.name, canceled=mark.canceled, configured=mark.name == LOCAL)
+
+
+async def _callers(runtime: Runtime, records: list[ThreadRecord]) -> dict[str, CallerMark]:
+    """Which of ``records`` a caller started, in one read, with the feature on or off: a
+    caller's thread is never shown as a person's. A read that fails fails the answer."""
+    if not records:
+        return {}
+    return await runtime.received_tasks.callers_of([record.thread_id for record in records])
+
+
+def _summary(
+    record: ThreadRecord, lease_active: bool, caller: CallerMark | None = None
+) -> ThreadSummary:
     status = status_of(record, lease_active)
     return ThreadSummary(
         thread_id=record.thread_id,
@@ -93,6 +120,7 @@ def _summary(record: ThreadRecord, lease_active: bool) -> ThreadSummary:
         stoppable=stoppable(record, lease_active),
         stopping=stopping(record, lease_active),
         runs=record.runs,
+        caller=_caller(caller),
     )
 
 
@@ -166,11 +194,15 @@ async def list_threads(request: Request) -> ThreadList:
         try:
             for record in await runtime.threads.unsettled():
                 await _view_or_skip(runtime, context, record)
-            threads = []
+            views = []
             for record in await runtime.threads.list(LIST_LIMIT):
                 view = await _view_or_skip(runtime, context, record)
                 if view is not None:
-                    threads.append(_summary(*view))
+                    views.append(view)
+            callers = await _callers(runtime, [record for record, _ in views])
+            threads = [
+                _summary(record, lease, callers.get(record.thread_id)) for record, lease in views
+            ]
             needs_decision, total = await runtime.threads.counts()
         except Exception as exc:
             raise _unreadable("list", exc) from exc
@@ -211,6 +243,7 @@ async def read_thread(thread_id: ThreadIdPath, request: Request) -> ThreadSummar
             else:
                 view = await _view(runtime, context, record, again=True)
                 missing = view is None and await runtime.threads.get(thread_id) is None
+            callers = await _callers(runtime, [view[0]] if view is not None else [])
         except Exception as exc:
             raise _unreadable(f"thread {thread_id}", exc) from exc
     finally:
@@ -220,7 +253,7 @@ async def read_thread(thread_id: ThreadIdPath, request: Request) -> ThreadSummar
             raise _error(404, "thread_not_found", "This thread has never been used.")
         # Runs kept starting and ending while the row was read; the next request reads it.
         raise _error(500, "internal", "The list of threads could not be read.")
-    return _summary(*view)
+    return _summary(*view, callers.get(thread_id))
 
 
 # A sign of life on a console run's stream. The console's forwarding ends a stream that is
@@ -267,8 +300,10 @@ async def start_unattended(
     """Start a run that goes on when its reader leaves; the same refusals and events as
     ``POST /threads/{thread_id}/runs``, from the same code."""
     runs = _console_runs(request)
-    # Feature 009: refused before the row is looked up, so a refused thread gets no row.
+    # Feature 009: refused before the row is looked up, so a refused thread gets no row; and
+    # a thread another agent started takes no message here.
     await refuse_while_off(_runtime(request), thread_id)
+    await refuse_caller_thread(_runtime(request), thread_id)
     known = await _open_first(_runtime(request), thread_id)
     response = await threads.start_run(thread_id, body, request, debug)
     # Without the lookup, the row takes its first message from the thread's state once the

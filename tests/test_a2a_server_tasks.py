@@ -11,6 +11,7 @@ three fences, the minute a task may wait for its run, and the function every rel
 """
 
 import asyncio
+import functools
 import json
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -21,11 +22,14 @@ import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
-from freyja_agent.api.received import ReceivedTasks
+from freyja_agent.api.received import ReceivedTasks, RefusedError
+from freyja_agent.api.runs import start_resume
+from freyja_agent.api.schemas import ResumeRequest
 from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore
 from freyja_agent.runtime.unattended import CallerThreadError
+from tests.a2a_requests import rpc, sending
 from tests.a2a_stub import make_stub
-from tests.conftest import ServerApp
+from tests.conftest import ServerApp, read_events
 from tests.fakes import FailingChatModel, LabelledChatModel, LoopingChatModel, ScriptedChatModel
 
 NOTIFY = AIMessage(
@@ -511,3 +515,138 @@ def test_a_look_that_fails_keeps_its_task_counted_and_blocks_no_message(
         made.finish(client, second)
     assert second.task.task_id != first.task.task_id
     assert any(first.task.task_id in line and "still counts" in line for line in caplog.messages)
+
+
+# Part 3: conversations (FR-009, FR-010, FR-012).
+
+
+def test_a_message_in_a_conversation_at_rest_is_a_new_task_on_the_same_thread(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = ScriptedChatModel(final_text="Noted.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        first = rpc(client, "SendMessage", sending("My name is Ada.", contextId="c-1")).json()
+        second = rpc(client, "SendMessage", sending("What is my name?", contextId="c-1")).json()
+        one = made.task(client, first["result"]["task"]["id"])
+        two = made.task(client, second["result"]["task"]["id"])
+    assert one.task_id != two.task_id
+    assert one.thread_id == two.thread_id
+    assert second["result"]["task"]["contextId"] == "c-1"
+    told = [str(message.content) for message in model.seen[-1]]
+    assert "My name is Ada." in told and "What is my name?" in told
+
+
+def busy_answer(client: TestClient, thread: str) -> dict[str, Any]:
+    before = len(client.get(f"/threads/{thread}/state").json()["messages"])
+    answer = rpc(client, "SendMessage", sending("Anything new?", contextId="c-1")).json()
+    assert len(client.get(f"/threads/{thread}/state").json()["messages"]) == before
+    return answer["error"]
+
+
+BUSY = (
+    "This conversation takes no message now: its last task has not ended, or work it started "
+    "is still going on."
+)
+
+
+def test_a_message_is_refused_while_the_last_task_works(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = LabelledChatModel(final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        model.hold()
+        accepted = made.accept(client, "Take your time.", context="c-1")
+        held = client.portal.start_task_soon(read_events, accepted.events)
+        with model.held():
+            error = busy_answer(client, accepted.task.thread_id)
+        held.result(timeout=5)
+    assert (error["code"], error["message"]) == (-32004, BUSY)
+    assert error["data"][0]["metadata"] == {"reason": "conversation_busy"}
+
+
+def test_a_message_is_refused_while_a_proposal_is_pending_and_while_a_decision_runs(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = LabelledChatModel(script=[NOTIFY], final_text="Sent.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "Tell ops.", context="c-1")
+        made.finish(client, accepted)
+        thread = accepted.task.thread_id
+        pending = busy_answer(client, thread)
+        # The task was ended by hand, as a cancel will end it: the conversation is at rest
+        # for the store, and the thread still holds its proposal.
+        client.portal.call(
+            functools.partial(
+                made.received.end, accepted.task.task_id, "canceled", reason="canceled"
+            )
+        )
+        on_the_thread = busy_answer(client, thread)
+        # A person's decision runs: the lease is held.
+        model.hold()
+        body = decision(client, thread, "approve")
+        held = client.portal.start_task_soon(
+            functools.partial(read_events, _resume(client, thread, body))
+        )
+        with model.held():
+            running = busy_answer(client, thread)
+        held.result(timeout=5)
+    for error in (pending, on_the_thread, running):
+        assert error["data"][0]["metadata"] == {"reason": "conversation_busy"}
+
+
+def _resume(client: TestClient, thread: str, body: dict[str, Any]) -> Any:
+    runtime = client.app.state.runtime
+
+    async def start() -> Any:
+        return await start_resume(runtime, thread, ResumeRequest.model_validate(body))
+
+    return client.portal.call(start)
+
+
+def test_two_messages_at_once_in_a_new_conversation_make_one_thread_and_one_refusal(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = LabelledChatModel(final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        model.hold()
+
+        async def both() -> list[Any]:
+            service = made.service()
+            return await asyncio.gather(
+                service.accept("local", "c-new", "one"),
+                service.accept("local", "c-new", "two"),
+                return_exceptions=True,
+            )
+
+        found = client.portal.call(both)
+        accepted = [item for item in found if not isinstance(item, BaseException)]
+        refused = [item for item in found if isinstance(item, BaseException)]
+        held = client.portal.start_task_soon(read_events, accepted[0].events)
+        with model.held():
+            pass
+        held.result(timeout=5)
+        conversation = client.portal.call(made.received.conversation_of, accepted[0].task.thread_id)
+    assert len(accepted) == len(refused) == 1
+    assert isinstance(refused[0], RefusedError) and refused[0].why == "busy"
+    assert conversation is not None and conversation.context_id == "c-new"
+
+
+def test_a_conversation_id_never_used_starts_a_conversation(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(final_text="Hi."))
+    with TestClient(made.app) as client:
+        one = rpc(client, "SendMessage", sending("a", contextId="first-id")).json()
+        two = rpc(client, "SendMessage", sending("b", contextId="second-id")).json()
+        threads = {
+            made.task(client, found["result"]["task"]["id"]).thread_id for found in (one, two)
+        }
+    assert len(threads) == 2
+    assert [found["result"]["task"]["contextId"] for found in (one, two)] == [
+        "first-id",
+        "second-id",
+    ]

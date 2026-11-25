@@ -17,6 +17,19 @@ class RunError(BaseModel):
     message: str
 
 
+class CallerSummary(BaseModel):
+    """Who started a thread over A2A (feature 009, contracts/openapi.yaml)."""
+
+    # The caller's name as the deployment configured it, or ``local`` for an agent that
+    # called on the service's own address without a token.
+    name: str
+    # True while the last task of the conversation is one its caller canceled, or one the
+    # service canceled because the deployment no longer names the caller.
+    canceled: bool
+    # Whether the settings name the caller now. Always true for ``local``.
+    configured: bool
+
+
 class ThreadSummary(BaseModel):
     """What the list holds of one thread."""
 
@@ -37,6 +50,9 @@ class ThreadSummary(BaseModel):
     # How many runs have started on the thread. The status is of the last of them, so a
     # client that asked to stop run ``n`` knows whether a row still speaks of that run.
     runs: int
+    # Feature 009: null for a thread started in the console or through this API; for a
+    # thread a caller started over A2A, who, and whether it canceled its last task.
+    caller: CallerSummary | None
 
 
 class ThreadList(BaseModel):

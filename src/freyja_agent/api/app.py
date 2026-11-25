@@ -3,7 +3,9 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
 from fastapi import FastAPI
+from starlette.routing import BaseRoute
 
+from freyja_agent.api import a2a_server
 from freyja_agent.api.agents import router as agents_router
 from freyja_agent.api.hosts import AllowedHosts
 from freyja_agent.api.llm import router as llm_router
@@ -17,6 +19,8 @@ from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import IndexedRunLocks
 
 OpenRuntime = Callable[[Settings], AbstractAsyncContextManager[Runtime]]
+
+logger = logging.getLogger(__name__)
 
 
 def configure_logging() -> None:
@@ -70,9 +74,23 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
             # the application is made before its runtime (research R3).
             received = _receive_tasks(runtime) if runtime.settings.a2a_server else None
             app.state.received = received
+            # The card and the operations, served while the feature is on and only while this
+            # lifespan runs: a lifespan entered again never serves a closed runtime's (R3).
+            added: list[BaseRoute] = []
+            if received is not None:
+                added = list(a2a_server.routes(received))
+                app.router.routes.extend(added)
+                logger.info(
+                    "Receiving tasks from other agents over A2A is on: the card and the "
+                    "operations are served at this address; %d callers are named; the "
+                    "outside listener is off",
+                    0,
+                )
             try:
                 yield
             finally:
+                for route in added:
+                    app.router.routes.remove(route)
                 if received is not None:
                     await _stop_receiving(runtime, received)
 

@@ -19,10 +19,11 @@ from langchain_core.tools import ToolException
 
 from freyja_agent.agent.catalog import Classification
 from freyja_agent.delegates import a2a_tools
+from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore
 from freyja_agent.runtime.unattended import CallerThreadError, OtherEntryError
 from tests.a2a_stub import make_stub
 from tests.conftest import ServerApp, read_events
-from tests.fakes import ScriptedChatModel
+from tests.fakes import LabelledChatModel, ScriptedChatModel
 
 PROPOSED = {"message": "Summarize the week.", "context": "Ship day is Tuesday.", "task_id": None}
 
@@ -275,3 +276,104 @@ async def test_read_events_reads_a_stream_to_its_end() -> None:
         yield ServerSentEvent(data="", event="end")
 
     assert await read_events(two()) == [("start", {"a": 1}), ("end", None)]
+
+
+# Part 2: a message to a caller's thread through the service's own routes (FR-024).
+
+CALLER_THREAD = {
+    "detail": {
+        "code": "caller_thread",
+        "message": (
+            "This task was started by another agent, and only that agent sends messages on it. "
+            "Its proposals are decided and its run is stopped here as for any task."
+        ),
+    }
+}
+NOTIFY = AIMessage(
+    content="",
+    tool_calls=[{"id": "n1", "name": "send_notification", "args": {"channel": "#ops"}}],
+)
+
+
+def messages_of(client: TestClient, thread: str) -> list[Any]:
+    return client.get(f"/threads/{thread}/state").json()["messages"]
+
+
+@pytest.mark.parametrize("route", ["runs", "runs/unattended"])
+def test_a_message_to_a_caller_s_thread_is_refused_before_the_lease(
+    make_a2a_server_app: Callable[..., ServerApp], route: str
+) -> None:
+    model = LabelledChatModel(final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "First.")
+        made.finish(client, accepted)
+        thread = accepted.task.thread_id
+        before = messages_of(client, thread)
+        calls = model.calls
+        answer = client.post(f"/threads/{thread}/{route}", json={"message": "From a person."})
+        # The same answer while another run holds the thread.
+        model.hold()
+        second = made.accept(client, "Second.", context="c-1")
+        held = client.portal.start_task_soon(read_events, second.events)
+        with model.held():
+            busy = client.post(f"/threads/{thread}/{route}", json={"message": "Again."})
+        held.result(timeout=5)
+        client.portal.call(made.service().close)
+        after = messages_of(client, thread)
+    assert answer.status_code == busy.status_code == 409
+    assert answer.json() == busy.json() == CALLER_THREAD
+    assert model.calls == calls + 1
+    assert "From a person." not in str(after) and "Again." not in str(after)
+    assert len(after) == len(before) + 2
+
+
+class Unreadable(InMemoryReceivedTaskStore):
+    """A store whose lookups fail once ``broken`` is set."""
+
+    broken = False
+
+    async def conversation_of(self, thread_id: str) -> Any:
+        if self.broken:
+            raise RuntimeError("the table is gone")
+        return await super().conversation_of(thread_id)
+
+
+@pytest.mark.parametrize("route", ["runs", "runs/unattended"])
+def test_a_lookup_that_fails_answers_500_and_starts_nothing(
+    make_a2a_server_app: Callable[..., ServerApp], route: str
+) -> None:
+    model = ScriptedChatModel()
+    store = Unreadable()
+    made = make_a2a_server_app(model, received=store)
+    with TestClient(made.app) as client:
+        store.broken = True
+        answer = client.post(f"/threads/k-1/{route}", json={"message": "hi"})
+        store.broken = False
+        state = client.get("/threads/k-1/state")
+    assert answer.status_code == 500
+    assert answer.json()["detail"]["code"] == "internal"
+    assert model.calls == 0
+    assert state.status_code == 404
+
+
+def test_its_state_its_proposal_and_its_stop_are_the_service_s_as_before(
+    make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(script=[NOTIFY], final_text="Sent."))
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "Tell ops.")
+        made.finish(client, accepted)
+        thread = accepted.task.thread_id
+        state = client.get(f"/threads/{thread}/state")
+        pending = state.json()["pending"]
+        body = {"interrupt_id": pending["interrupt_id"], "decisions": [{"type": "approve"}]}
+        with client.stream("POST", f"/threads/{thread}/resume", json=body) as answer:
+            assert answer.status_code == 200
+            events = sse_events(answer.iter_lines())
+        stop = client.post(f"/threads/{thread}/stop")
+    assert state.status_code == 200
+    assert events[-1][0] == "end"
+    # No run is in progress: the stop is answered as for any thread.
+    assert stop.status_code == 409
+    assert stop.json()["detail"]["code"] == "no_run"

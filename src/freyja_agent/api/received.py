@@ -31,8 +31,10 @@ the task's start nor than the thread's last checkpoint.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import json
 import logging
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -42,6 +44,8 @@ from langchain_core.messages import AIMessage, HumanMessage
 
 from freyja_agent.api.runs import Events, awaited, start_console_run, state_of
 from freyja_agent.api.serialize import interrupt_to_pending
+from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.llm.secrets import redact
 from freyja_agent.runtime.received_tasks import ReceivedTask, Refusal, TaskState, kept
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import ThreadRecord
@@ -51,12 +55,55 @@ logger = logging.getLogger(__name__)
 # How long a task may be accepted with no run started: past it, the process that accepted
 # it died before the run took the thread's lease (research R7).
 UNSTARTED_SECONDS = 60
+# How long a follower waits to be woken before it looks at its task's thread (research R13).
+FOLLOW_SECONDS = 4
 # A failed run's code, as the index notes it, to the fixed reason a caller is given.
 _REASONS = {
     "no_usable_model": "no_usable_model",
     "model_error": "model_error",
     "step_limit": "step_limit",
 }
+
+# What a caller is told, each a fixed text of contracts/a2a-server.md: the reason of a task
+# that failed or was canceled, by its code (data-model.md, "Reasons").
+REASON_SENTENCES = {
+    "no_usable_model": "No usable model is active.",
+    "model_error": "The model could not be used.",
+    "step_limit": "The run reached its step limit.",
+    "interrupted": "The run was interrupted.",
+    "internal": "An internal error.",
+    "stopped": "The run was stopped before it finished.",
+    "canceled": "The caller canceled the task.",
+}
+WORKING = "Working."
+# The name a status gives work Freyja handed its subagent.
+SUBAGENT_TOOL = "task"
+SUBAGENT = "a subagent"
+UNKNOWN_TOOL = "a tool Freyja does not have"
+
+
+def _listed(names: Iterable[str]) -> str:
+    return ", ".join(dict.fromkeys(names))
+
+
+def using(names: Iterable[str]) -> str:
+    """A step of Freyja's own asked for actions."""
+    return f"Freyja is using: {_listed(names)}."
+
+
+def completed(names: Iterable[str]) -> str:
+    """A step that ran them completed."""
+    return f"Completed: {_listed(names)}."
+
+
+def waiting_for_person(names: Iterable[str]) -> str:
+    """The run paused on a proposal."""
+    return f"Waiting for a person's approval of: {_listed(names)}."
+
+
+def waiting_for_agent(names: Iterable[str]) -> str:
+    """The run ended and an agent task is awaited."""
+    return f"Waiting for agent {_listed(names)}."
 
 
 @dataclass(frozen=True)
@@ -111,9 +158,93 @@ def _last_reply(snapshot: Any) -> str | None:
     return None
 
 
-def _action_name(request: dict[str, Any]) -> str:
-    agent = request.get("agent")
-    return f"agent {agent}" if agent else str(request.get("name"))
+def _action_name(action: dict[str, Any]) -> str:
+    """An action of a proposal as a status names it: its agent, the subagent, or its tool."""
+    agent = action.get("agent")
+    if agent:
+        return f"agent {agent}"
+    name = str(action.get("name"))
+    return SUBAGENT if name == SUBAGENT_TOOL else name
+
+
+@dataclass(frozen=True)
+class View:
+    """A received task as its caller is told it: the state, the status's sentence, and the
+    result, every text of which was read from the thread and cleaned (research R13)."""
+
+    task: ReceivedTask
+    state: TaskState
+    # A working task's sentence, or a failed or canceled task's reason; None when completed.
+    sentence: str | None
+    result: str | None
+
+
+@dataclass(frozen=True)
+class Status:
+    """A working task's status changed: its sentence."""
+
+    sentence: str
+
+
+@dataclass(frozen=True)
+class Piece:
+    """A piece of the text of Freyja's own reply, as it is written."""
+
+    text: str
+
+
+@dataclass(frozen=True)
+class Ended:
+    """The task has ended, as ``view`` says."""
+
+    view: View
+
+
+Change = Status | Piece | Ended
+
+
+def _event_data(event: Any) -> dict[str, Any]:
+    try:
+        data = json.loads(event.data) if isinstance(event.data, str) else event.data
+    except ValueError:
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _text_of(content: Any) -> str:
+    """The text of a message's content, as the run's stream carries it: a string, or blocks."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block
+            if isinstance(block, str)
+            else str(block.get("text") or "")
+            if isinstance(block, dict) and block.get("type") == "text"
+            else ""
+            for block in content
+        )
+    return ""
+
+
+def _ready(text: str) -> tuple[str, str]:
+    """``text`` split after its last whitespace: what can be cleaned and sent now, and what
+    is held for the pieces that follow. An address or a key holds no whitespace, so one
+    that a model writes over several pieces is whole in what is sent, and cleaned there;
+    what follows the last whitespace may be the start of one (research R13)."""
+    for index in range(len(text) - 1, -1, -1):
+        if text[index].isspace():
+            return text[: index + 1], text[index + 1 :]
+    return "", text
+
+
+def _messages_of(update: Any) -> list[dict[str, Any]]:
+    messages = update.get("messages") if isinstance(update, dict) else None
+    if isinstance(messages, dict):
+        messages = [messages]
+    if not isinstance(messages, list):
+        return []
+    return [message for message in messages if isinstance(message, dict)]
 
 
 class ReceivedTasks:
@@ -126,6 +257,11 @@ class ReceivedTasks:
         # the index is written by (research R7).
         self._clock = clock or (lambda: datetime.now(UTC))
         self._looks: set[asyncio.Task[None]] = set()
+        # The readers of runs nobody follows, read to their end; cancelled when the service
+        # stops, which leaves each run to stop at its next boundary as any console run.
+        self._drains: set[asyncio.Task[None]] = set()
+        # The followers of a thread's task on this instance, woken when a run on it ends.
+        self._wakers: dict[str, set[asyncio.Event]] = {}
 
     async def accept(self, caller: str, context_id: str, text: str, *, hops: int = 0) -> Accepted:
         """Accept a message of ``caller`` in its conversation ``context_id`` and start its run.
@@ -261,8 +397,12 @@ class ReceivedTasks:
         ends is released in the same write: a look ends a task only when nothing of its
         thread is in progress, pending, or awaited.
         """
+        return (await self._looked(task))[0]
+
+    async def _looked(self, task: ReceivedTask) -> tuple[ReceivedTask, Standing]:
+        """``look``, with where the thread stood for a task that is still working."""
         if task.ended:
-            return task
+            return task, Standing(task.state, task.reason, task.result)
         store = self.store
         if task.started_at is None:
             if await store.now() - task.created_at > timedelta(seconds=UNSTARTED_SECONDS):
@@ -272,26 +412,34 @@ class ReceivedTasks:
                     task.task_id,
                     task.caller,
                 )
-                return await store.get(task.task_id) or task
-            return task
+                ended = await store.get(task.task_id) or task
+                return ended, Standing(ended.state, ended.reason, ended.result)
+            return task, Standing("working")
         standing = await self.standing(task)
         if standing.state == "working":
-            return task
+            return task, standing
         runtime, thread_id = self.runtime, task.thread_id
+        # A run started meanwhile: the task works, and is looked at again later.
         if await runtime.locks.is_active(thread_id):
-            return task
+            return task, Standing("working")
         context = await runtime.begin_read(thread_id)
         try:
             again = _checkpoint(await state_of(context, thread_id))
         finally:
             await context.release()
         if again != standing.checkpoint:
-            return task
+            return task, Standing("working")
         if await store.end(
             task.task_id,
             standing.state,
             reason=standing.reason,
-            result=standing.result if standing.state == "completed" else None,
+            # Cleaned when kept, with the keys of the model in use now, as well as when sent:
+            # another profile may be active when it is read again.
+            result=(
+                self.clean(standing.result)
+                if standing.state == "completed" and standing.result is not None
+                else None
+            ),
             released=True,
         ):
             logger.info(
@@ -302,7 +450,178 @@ class ReceivedTasks:
                 if standing.reason is None
                 else f"{standing.state} ({standing.reason})",
             )
-        return await store.get(task.task_id) or task
+        ended = await store.get(task.task_id) or task
+        return ended, Standing(ended.state, ended.reason, ended.result)
+
+    def clean(self, text: str) -> str:
+        """``text`` as a caller may be sent it: without any agent's address and without the
+        keys of the models this instance uses (research R13). A text read from a thread can
+        hold either: an agent's reply quoted by Freyja, or a model that repeats its key."""
+        runtime = self.runtime
+        secrets = (*runtime.applied_model().secrets, *runtime.environment_secrets)
+        return redact(SCRUBBER.scrub(text), secrets)
+
+    def _view(self, task: ReceivedTask, standing: Standing) -> View:
+        if task.ended:
+            result = self.clean(task.result or "") if task.state == "completed" else None
+            sentence = (
+                None
+                if task.state == "completed"
+                else REASON_SENTENCES.get(task.reason or "", REASON_SENTENCES["internal"])
+            )
+            return View(task, task.state, sentence, result)
+        if standing.waiting == "person":
+            sentence = waiting_for_person(standing.names)
+        elif standing.waiting == "agent":
+            sentence = waiting_for_agent(standing.names)
+        else:
+            sentence = WORKING
+        return View(task, "working", sentence, None)
+
+    def as_accepted(self, task: ReceivedTask) -> View:
+        """``task`` as it is told when its message was just accepted: working, or as it
+        ended when its run could not start."""
+        return self._view(task, Standing("working"))
+
+    async def view(self, task: ReceivedTask) -> View:
+        """``task`` as its caller is told it now, after a look at its thread."""
+        return self._view(*await self._looked(task))
+
+    def _label(self, name: str) -> str:
+        """A tool as a status names it: by the catalog's name, an agent's tool by its agent,
+        and the subagent as a subagent; nothing of its arguments (FR-018)."""
+        if name == SUBAGENT_TOOL:
+            return SUBAGENT
+        catalog = self.runtime.strict_catalog or self.runtime.catalog
+        tool = catalog.get(name) if catalog is not None else None
+        if tool is None:
+            # A name the model wrote and the catalog does not have is not repeated.
+            return UNKNOWN_TOOL
+        if tool.agent is not None:
+            return f"agent {tool.agent}"
+        return name
+
+    def _change(self, event: Any) -> Change | None:
+        """What a run's event changes for a caller, by the table of research R13; names
+        only, and the text of Freyja's own reply."""
+        kind, data = event.event, _event_data(event)
+        if kind == "update":
+            messages = _messages_of(data.get("data"))
+            if data.get("node") == "model":
+                names = [
+                    self._label(str(call.get("name")))
+                    for message in messages
+                    if message.get("type") == "ai"
+                    for call in message.get("tool_calls") or []
+                    if isinstance(call, dict)
+                ]
+                return Status(using(names)) if names else None
+            if data.get("node") == "tools":
+                names = [
+                    self._label(str(message.get("name")))
+                    for message in messages
+                    if message.get("type") == "tool" and message.get("name")
+                ]
+                return Status(completed(names)) if names else None
+            return None
+        if kind == "message":
+            if (data.get("metadata") or {}).get("reply") is not True:
+                return None
+            text = _text_of((data.get("message") or {}).get("content"))
+            # Raw: the follower cleans the reply's text across pieces (``_pieces``).
+            return Piece(text) if text else None
+        if kind == "interrupt":
+            requests = data.get("action_requests") or []
+            names = [_action_name(request) for request in requests if isinstance(request, dict)]
+            return Status(waiting_for_person(names)) if names else None
+        return None
+
+    def _join(self, thread_id: str) -> Events | None:
+        runs = self.runtime.unattended
+        return runs.join(thread_id) if runs is not None else None
+
+    async def follow(
+        self, task: ReceivedTask, events: Events | None = None
+    ) -> AsyncIterator[Change]:
+        """What changes for ``task``, as it changes, until it has ended (research R13).
+
+        While a console run of its thread is in progress on this instance, the run's events
+        are read and turned into changes: ``events``, the first reader of the run a message
+        started, or one more reader of a run in progress. Otherwise the follower waits to be
+        woken by the end of a run on the thread here, or for ``FOLLOW_SECONDS``, and looks at
+        the thread. The last change is ``Ended``. Close it to stop following; the run goes on.
+        """
+        wake = asyncio.Event()
+        woken = self._wakers.setdefault(task.thread_id, set())
+        woken.add(wake)
+        sentence: str | None = WORKING
+        try:
+            while True:
+                reader, events = (
+                    (events if events is not None else self._join(task.thread_id)),
+                    None,
+                )
+                if reader is not None:
+                    held = ""
+                    async with contextlib.aclosing(reader) as run:
+                        async for event in run:
+                            change = self._change(event)
+                            if isinstance(change, Piece):
+                                ready, held = _ready(held + change.text)
+                                if ready:
+                                    yield Piece(self.clean(ready))
+                                continue
+                            if isinstance(change, Status):
+                                if change.sentence == sentence:
+                                    continue
+                                sentence = change.sentence
+                            if change is not None:
+                                yield change
+                task, standing = await self._looked(await self.store.get(task.task_id) or task)
+                view = self._view(task, standing)
+                if task.ended:
+                    yield Ended(view)
+                    return
+                if view.sentence is not None and view.sentence != sentence:
+                    sentence = view.sentence
+                    yield Status(sentence)
+                with contextlib.suppress(TimeoutError):
+                    async with asyncio.timeout(FOLLOW_SECONDS):
+                        await wake.wait()
+                wake.clear()
+        finally:
+            woken.discard(wake)
+            if not woken and self._wakers.get(task.thread_id) is woken:
+                del self._wakers[task.thread_id]
+
+    async def settle(self, accepted: Accepted, seconds: float) -> View:
+        """The task of a send that asked for no stream, once it has ended or ``seconds``
+        have passed, whichever is first (research R14). The run goes on either way."""
+        if seconds <= 0:
+            self.leave(accepted.events)
+            return await self.view(accepted.task)
+        with contextlib.suppress(TimeoutError):
+            async with (
+                asyncio.timeout(seconds),
+                contextlib.aclosing(self.follow(accepted.task, accepted.events)) as changes,
+            ):
+                async for change in changes:
+                    if isinstance(change, Ended):
+                        return change.view
+        found = await self.store.get(accepted.task.task_id) or accepted.task
+        return await self.view(found)
+
+    def leave(self, events: Events) -> None:
+        """Read a run's events nobody follows to their end, so the run never waits on them."""
+        drain = asyncio.create_task(self._drain(events), name="freyja-a2a-drain")
+        self._drains.add(drain)
+        drain.add_done_callback(self._drains.discard)
+
+    @staticmethod
+    async def _drain(events: Events) -> None:
+        async with contextlib.aclosing(events) as run:
+            async for _ in run:
+                pass
 
     async def released(self, thread_id: str) -> None:
         """What follows the end of any run on a thread: its last task is looked at (R9)."""
@@ -325,8 +644,17 @@ class ReceivedTasks:
                 thread_id,
                 type(exc).__name__,
             )
+        finally:
+            # Its followers on this instance look now, not at their next interval.
+            for wake in self._wakers.get(thread_id, ()):
+                wake.set()
 
     async def close(self) -> None:
-        """Wait for the looks under way; the service is stopping."""
-        if self._looks:
-            await asyncio.gather(*self._looks, return_exceptions=True)
+        """Stop reading the runs nobody follows, and wait for the looks under way; the
+        service is stopping. A run whose reader is let go goes on, and is stopped at its
+        next boundary by the console's runs, as every console run is."""
+        for drain in list(self._drains):
+            drain.cancel()
+        waited = [*self._looks, *self._drains]
+        if waited:
+            await asyncio.gather(*waited, return_exceptions=True)

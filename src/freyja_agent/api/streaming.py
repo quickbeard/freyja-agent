@@ -17,6 +17,8 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Literal
 
 import anyio
+from langchain.agents.middleware.internal_call_transformer import INTERNAL_CALL_METADATA_KEY
+from langchain_core.messages import AIMessage, BaseMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.types import Interrupt
 from sse_starlette import ServerSentEvent
@@ -89,6 +91,28 @@ def _is_model_error(exc: BaseException) -> bool:
 
 
 _INTERNAL = {"code": "internal", "message": "The run failed because of an internal error."}
+
+# The node of Freyja's own graph that calls the model (feature 009, contracts/sse-events.md).
+MODEL_NODE = "model"
+
+
+def is_reply(namespace: tuple[str, ...], message: BaseMessage, metadata: dict[str, Any]) -> bool:
+    """Whether a streamed piece is text of Freyja's own reply (feature 009, research R13).
+
+    True only for an AI message or chunk with text, from the ``model`` node of Freyja's own
+    graph, not of a subagent's at any depth, and not from a call the libraries make for
+    themselves, such as the one that summarizes a long conversation. A chunk that only writes
+    a call's arguments has no text, and a tools step's messages are no AI messages.
+    """
+    return (
+        not namespace
+        and metadata.get("langgraph_node") == MODEL_NODE
+        and isinstance(message, AIMessage)
+        and not metadata.get(INTERNAL_CALL_METADATA_KEY)
+        and metadata.get("lc_source") is None
+        and bool(message.text)
+    )
+
 
 # The code of a resume that a tightened approval choice blocks (005 contracts/sse-events.md).
 APPROVAL_NOW_REQUIRED = "approval_now_required"
@@ -330,12 +354,13 @@ async def run_stream(
                         yield _event("update", {"node": node, "data": update_to_dict(update)})
                 elif stream_mode == "messages":
                     message, metadata = chunk
+                    kept = {k: metadata.get(k) for k in _MESSAGE_METADATA_KEYS}
+                    if context.strict:
+                        # Feature 009: on a caller's thread, what is Freyja's own reply.
+                        kept["reply"] = is_reply(namespace, message, metadata)
                     yield _event(
                         "message",
-                        {
-                            "message": message_to_dict(message),
-                            "metadata": {k: metadata.get(k) for k in _MESSAGE_METADATA_KEYS},
-                        },
+                        {"message": message_to_dict(message), "metadata": kept},
                     )
                 elif stream_mode == "debug":
                     yield _event("debug", chunk)

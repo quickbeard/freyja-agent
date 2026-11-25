@@ -16,7 +16,8 @@ As a command, for the quickstart (specs/009-a2a-server/quickstart.md)::
 
 ``--context`` continues a conversation, ``--token`` presents a caller's token, ``--hops``
 sets the hand-over count, and ``--return-immediately`` asks a send not to wait. Each task or
-event is printed as one JSON object.
+event is printed as one JSON object; a refusal of the protocol as the JSON-RPC error it was,
+``{"error": {"code", "message", "data": [{"metadata"}]}}``.
 """
 
 from __future__ import annotations
@@ -50,6 +51,7 @@ from a2a.utils.constants import (
     PROTOCOL_VERSION_CURRENT,
     VERSION_HEADER,
 )
+from a2a.utils.errors import JSON_RPC_ERROR_CODE_MAP, A2AError
 from google.protobuf.json_format import MessageToDict
 
 # The name a message carries its hand-over count under (feature 009, FR-027).
@@ -153,6 +155,17 @@ class StandInCaller:
         return await (await self.client()).cancel_task(CancelTaskRequest(id=task_id))
 
 
+def error_json(error: A2AError) -> dict[str, Any]:
+    """A refusal the client raised, as the JSON-RPC error the service answered with."""
+    return {
+        "error": {
+            "code": JSON_RPC_ERROR_CODE_MAP.get(type(error)),
+            "message": error.message,
+            "data": [{"metadata": error.data or {}}],
+        }
+    }
+
+
 def _out(value: dict[str, Any]) -> None:
     sys.stdout.write(json.dumps(value) + "\n")
     sys.stdout.flush()
@@ -207,4 +220,7 @@ if __name__ == "__main__":  # pragma: no cover - run by hand
         asyncio.run(_main(parsed))
     except httpx.HTTPStatusError as error:
         sys.stderr.write(json.dumps({"status": error.response.status_code}) + "\n")
+        sys.exit(1)
+    except A2AError as error:
+        _out(error_json(error))
         sys.exit(1)

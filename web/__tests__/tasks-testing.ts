@@ -120,6 +120,7 @@ export function summary(values: Partial<ThreadSummary> = {}): ThreadSummary {
     stoppable: false,
     runs: 1,
     stopping: false,
+    caller: null,
     ...values,
   };
 }
