@@ -326,9 +326,14 @@ progress text and changes it:
 - `StubAgent.report(text)`: every `hold` task sends a working status with that text, or with
   no message when it is `None`. The wait of a `hold` task listens for it beside its release
   and its cancel. This is the prototype of R1.
-- A keyword for a run by hand, `steps <n> <seconds>`: the task stays working, reports
-  "Step k of n" every `<seconds>`, and then completes. The quickstart uses it with the
+- A keyword for a run by hand, `steps <n> <seconds>`: after its first working status, the
+  task stays working, reports "Step k of n" every `<seconds>`, the first `<seconds>` after
+  that status, and completes right after the last. The quickstart uses it with the
   stand-in served on loopback, with and without `--no-streaming`.
+- An answer that starts with `slow` sends its working status with `working_text`, where it
+  sends none today, so that an answer's hand-off has progress to keep (FR-006). This is the
+  one existing behavior that changes; the existing tests that send such an answer check
+  only its result.
 
 *verified* The stand-in's first working status already carries "Working on it.", so with
 this feature every `hold` task in the existing suite has that as its kept progress. Tests

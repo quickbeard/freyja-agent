@@ -84,7 +84,7 @@ and the same command shows the progress it had.
 Send `Hand this to the stub agent: steps 30 10` and approve. Stay on the task's page.
 
 - Once the run has ended, the agent task is listed as pending, "The agent is working", and
-  under it the page shows what the agent last reported, "Step 4 of 30" or a later one, and
+  under it the page shows what the agent last reported, "Step 3 of 30" or a later one, and
   how long ago, "just now".
 - Without a reload and without touching the page, the text changes to a later step within
   about half a minute of the agent reporting it: the service looks every ten seconds and the
@@ -130,10 +130,11 @@ curl -sN -X POST localhost:8000/threads/q4-$(date +%s)/runs -H 'content-type: ap
   -d '{"message": "Hand this to the stub agent: steps 5 4"}' | grep '"node": *"agent"'
 ```
 
-- One `update` with `node: "agent"` arrives for "Step 1 of 5", then one for "Step 2 of 5",
-  and so on, each within about a second of the agent reporting it, until the task
-  completes after twenty seconds. Before this feature there was one, when the task began to
-  work, and nothing until the hand-off returned.
+- After the `update` with `node: "agent"` for the task beginning to work, "Working on it.",
+  one arrives for "Step 1 of 5", then one for "Step 2 of 5", and so on, each within about a
+  second of the agent reporting it, until the task completes after twenty seconds. Before
+  this feature there was only the first, when the task began to work, and nothing until the
+  hand-off returned.
 - No two lines in a row hold the same state and the same text.
 
 Set the agent back to requiring approval afterwards.
