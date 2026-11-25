@@ -644,3 +644,18 @@ each adds a few lines.
   recorded in plan.md with the reason, not dropped.
 - Commit after each task or each small group of tasks; the commit hook runs the suites.
 - Stop at any checkpoint to validate the phase by hand before its request.
+
+## Phase 8: Convergence
+
+**Purpose**: the work `/speckit-converge` found left on 2026-11-25. Every finding is LOW:
+polish, a test that could be stronger, or wording. The owner's rule for this loop stops at
+LOW, so these are recorded and left open.
+
+- [ ] T045 [P] In `web/components/tasks/task-view.tsx`, set the view's time when a hidden page is shown again, so that a page shown while the service cannot be reached does not keep, until the timer's next tick, the age it had before it was hidden, per Edge Cases (a reading fails; its age goes on) and research R8 (partial)
+- [ ] T046 [P] In `web/components/tasks/task-view.tsx`, give the view a time when it mounts, so that a page opened again within SWR's deduplication interval, whose reading is answered for another hook and counts no answered reading here, shows the age at once and not after the timer's next tick, per FR-010 and SC-004 (partial)
+- [ ] T047 [P] In `web/components/tasks/agent-tasks.tsx`, tie the progress region to the line that says how long ago its text was learned (`aria-describedby`), so that a keyboard user who reaches the box hears its age, per FR-012 (partial)
+- [ ] T048 [P] Add to `web/e2e/tasks-progress.spec.ts` a `learned_at` with microseconds, as the service writes it, and a progress text holding a right-to-left override (U+202E) that leaves the words around the box in their order, in Chromium and Firefox, per FR-023 and plan.md's test map (FR-010, FR-012: isolated in direction) (partial)
+- [ ] T049 [P] In `specs/008-agent-task-progress/quickstart.md`, Setup, name the button as the console labels it, "Edit the arguments of handoff_to_stub", as the section already does for "Approve handoff_to_stub with these arguments", per quickstart.md Setup (partial)
+- [ ] T050 [P] Add to `tests/test_a2a_progress.py` a test that a progress text holding an agent address the scrubber knows is returned as written by `GET /threads/{id}/state` and by the check, after a report and a check, per FR-004 and plan.md's test map (FR-004: "on `progress_text` and through a check") (partial)
+- [ ] T051 Add to the logged scenario of `test_no_log_line_holds_a_progress_text` in `tests/test_a2a_progress.py` a hand-off that reads the status of an agent that does not stream, and an answer's hand-off, with recognizable texts, per SC-011 and research R9 (partial)
+- [ ] T052 [P] Name parts 7 and 8, and the requirements they cover (FR-013, FR-014, FR-017, FR-019, FR-020), in the module docstring of `tests/test_a2a_progress.py`, per T005 (partial)
