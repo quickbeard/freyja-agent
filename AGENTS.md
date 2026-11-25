@@ -323,7 +323,10 @@ startup and exits with an error naming the connection when it is unreachable.
   follow-up box (`follow-up.tsx`), which sends another message on a task through the same
   `send-box.tsx` and is given why it cannot be sent, a run in progress or a pending
   proposal, by the view, and the list of a task's agent tasks (`agent-tasks.tsx`), whose
-  `awaited` says whether a task still waits for one. The view reads its task again by one
+  `awaited` says whether a task still waits for one, and which shows under a working agent
+  task what its agent last reported and how long ago, worded by `web/lib/ago.ts` from the
+  browser's time that the view keeps in its state, set by its timer and when a reading
+  arrives, never while it renders (feature 008). The view reads its task again by one
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
   every `AGENT_SECONDS` while an agent task is awaited, its row alone every
   `FOLLOW_SECONDS` while it reads its own run's stream, so that a stop asked in another
@@ -369,7 +372,8 @@ startup and exits with an error naming the connection when it is unreachable.
   frame, `tasks-decide.spec.ts` deciding a proposal, and
   `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
   during a run, and Stop (it moves the page's clock with `page.clock` in place of waiting
-  five or fifteen seconds), with
+  five or fifteen seconds), `tasks-progress.spec.ts` what a working agent last reported, its
+  age, and its box (feature 008), with
   `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
   its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
   its decision, `followedUp` and `agentTask` for a follow-up and an agent task,

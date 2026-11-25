@@ -94,6 +94,12 @@ export type AgentTask = {
   last_checked_at: string;
   ended_at: string | null;
   outcome_delivered: boolean;
+  /**
+   * Feature 008: what the agent last reported about its work, in its own words, and when the
+   * service first learned it; null when it has reported nothing. It is the agent's claim and
+   * decides nothing: the page shows it only while `status` is `working`.
+   */
+  progress: { text: string; learned_at: string } | null;
 };
 
 /** The conversation and what waits in it, from `GET /threads/{id}/state`. */

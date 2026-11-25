@@ -6,6 +6,7 @@ import {
   AgentTasks,
   awaited,
 } from "@/components/tasks/agent-tasks";
+import { exactTime } from "@/lib/ago";
 import type { AgentTask } from "@/lib/tasks";
 
 // 007, User Story 4: what Freyja handed to delegate agents for a task (FR-009).
@@ -214,5 +215,168 @@ describe("whether a task still waits for an agent", () => {
         }),
       ),
     ).toBe(false);
+  });
+});
+
+// Feature 008, User Story 2: what a working agent's progress shows (FR-010, FR-012, R8).
+
+const LEARNED = "2026-11-25T08:00:00Z";
+const progress = (text: string) => ({ text, learned_at: LEARNED });
+const region = (agent = "stub") =>
+  screen.getByRole("region", { name: `Progress reported by ${agent}` });
+
+describe("an agent task's progress", () => {
+  it("shows what a working agent last reported, how long ago, and the exact time", () => {
+    render(
+      <AgentTasks
+        tasks={[agentTask({ progress: progress("Step 2 of 6") })]}
+        now={Date.parse(LEARNED) + 150_000}
+      />,
+    );
+
+    const [item] = items();
+    expect(item.textContent).toContain(
+      "Last reported by the agent 2 minutes ago:",
+    );
+    const time = item.querySelector("time");
+    expect(time?.textContent).toBe("2 minutes ago");
+    expect(time?.getAttribute("dateTime")).toBe(LEARNED);
+    expect(time?.getAttribute("title")).toBe(exactTime(LEARNED));
+    expect(region().textContent).toBe("Step 2 of 6");
+    // The text comes after the line that says what it is.
+    expect(
+      item.textContent?.indexOf("Last reported by the agent") ?? -1,
+    ).toBeLessThan(item.textContent?.indexOf("Step 2 of 6") ?? -1);
+  });
+
+  it("shows the text without its age until the page has a time to compare with", () => {
+    render(
+      <AgentTasks tasks={[agentTask({ progress: progress("Half done") })]} />,
+    );
+
+    const [item] = items();
+    expect(item.textContent).toContain("Last reported by the agent:");
+    expect(item.querySelector("time")).toBeNull();
+    expect(region().textContent).toBe("Half done");
+  });
+
+  it("shows a working agent task with no progress exactly as before", () => {
+    render(
+      <AgentTasks tasks={[agentTask({ progress: null })]} now={Date.now()} />,
+    );
+
+    // What feature 007 shows: the agent, the mark, the status, and the message, and no more.
+    const [item] = items();
+    expect(Array.from(item.children, (child) => child.tagName)).toEqual([
+      "P",
+      "P",
+      "P",
+    ]);
+    expect(item.textContent).toBe(
+      "stubPendingThe agent is workingStarted with:slow 40",
+    );
+    expect(screen.queryAllByText(/Last reported/)).toEqual([]);
+    expect(
+      screen.queryAllByRole("region", { name: /^Progress reported by/ }),
+    ).toEqual([]);
+  });
+
+  it.each([
+    "input_required",
+    "completed",
+    "failed",
+    "rejected",
+    "canceled",
+    "given_up",
+  ] as const)("shows no progress for an agent task that is %s, whatever it holds", (status) => {
+    render(
+      <AgentTasks
+        tasks={[
+          agentTask({
+            status,
+            ended_at:
+              status === "input_required" ? null : "2026-11-25T08:05:00Z",
+            progress: progress("Step 5 of 6"),
+          }),
+        ]}
+        now={Date.parse(LEARNED) + 60_000}
+      />,
+    );
+
+    const [item] = items();
+    expect(item.textContent).not.toContain("Step 5 of 6");
+    expect(item.textContent).not.toContain("Last reported");
+    expect(
+      screen.queryAllByRole("region", { name: /^Progress reported by/ }),
+    ).toEqual([]);
+  });
+
+  it("shows a text that holds markup and a link as those characters", () => {
+    const text =
+      '<b>bold</b><script>alert(1)</script> see <a href="https://example.com">here</a>';
+    render(
+      <AgentTasks
+        tasks={[agentTask({ progress: progress(text) })]}
+        now={Date.now()}
+      />,
+    );
+
+    const box = region();
+    expect(box.textContent).toBe(text);
+    expect(box.querySelector("b, script, a")).toBeNull();
+    expect(box.children).toHaveLength(0);
+  });
+
+  it("keeps the line breaks of a text of several lines", () => {
+    render(
+      <AgentTasks
+        tasks={[
+          agentTask({ progress: progress("Step 2 of 3\n\nCharts next") }),
+        ]}
+        now={Date.now()}
+      />,
+    );
+
+    const box = region();
+    expect(box.textContent).toBe("Step 2 of 3\n\nCharts next");
+    expect(box.className).toContain("whitespace-pre-wrap");
+    // A word longer than the box, such as a long address, is broken too.
+    expect(box.className).toContain("wrap-anywhere");
+  });
+
+  it("shows the longest text whole, in a box that scrolls inside itself", () => {
+    const text = "0123456789".repeat(200);
+    render(
+      <AgentTasks
+        tasks={[agentTask({ progress: progress(text) })]}
+        now={Date.now()}
+      />,
+    );
+
+    const box = region();
+    expect(box.textContent).toBe(text);
+    expect(box.className).toMatch(/max-h-/);
+    expect(box.className).toContain("overflow-y-auto");
+  });
+
+  it("can be reached by keyboard, is named, takes its direction from its text, and is no live region", () => {
+    render(
+      <AgentTasks
+        tasks={[
+          agentTask({
+            agent: "research",
+            progress: progress("שלב 2 מתוך 6"),
+          }),
+        ]}
+        now={Date.now()}
+      />,
+    );
+
+    const box = region("research");
+    expect(box.tabIndex).toBe(0);
+    expect(box.getAttribute("dir")).toBe("auto");
+    expect(box.getAttribute("aria-live")).toBeNull();
+    expect(box.closest("[aria-live]")).toBeNull();
+    expect(box.querySelector("[aria-live]")).toBeNull();
   });
 });

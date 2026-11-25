@@ -369,3 +369,54 @@ Numbers at the end of the request: `uv run pytest --cov`, 1,948 passed and 133 s
 91.45% of statements (91.39% at the start); the opt-in Postgres tests, 133 passed. The
 only existing test changed is `tests/test_state.py`, which pins an agent task's whole shape
 (FR-022).
+
+### Request 2: Phase 4, the task's page shows progress (2026-11-25)
+
+Built as planned: `web/lib/ago.ts` (`ago`, `exactTime`, which `task-list.tsx` now uses in
+place of its own formatter), `AgentTask.progress`, the progress under a working agent task,
+and the browser's time in the view's state. What differs from the tasks, and why:
+
+- **The box is a `<section>` with an accessible name**, a region by its implicit role, not
+  a `div` with `role="region"`: Biome asks for the element (`useSemanticElements`). Its tab
+  stop carries a Biome suppression with its reason (`noNoninteractiveTabindex`): a box that
+  scrolls must be reachable by keyboard to be scrolled without a pointer.
+- **`AgentTasks` takes `now` as optional**, null by default, so feature 007's tests render
+  it unchanged. The colon follows "Last reported by the agent" with the age or without it.
+- **The effect that sets the time runs when a reading brings other data.** SWR hands the
+  view the same data when a reading equals the one before, and the timer's callback, which
+  asked for that reading, has moved the time already.
+- **Tests:** in the view's Vitest file `setInterval` is faked, and Testing Library's
+  `waitFor` looks again only by that timer or when the page changes, which a reading that
+  answers the same task does not do. The new tests wait for a reading in real time, and let
+  it be answered before the next one is asked for (the view asks for none while one is under
+  way). The hidden page's test lets React render before it looks at the age: without that it
+  passed with the time set before the check that the page is hidden, and now it fails so.
+  The end-to-end test shows the follow-up box is not covered by clicking it, which
+  Playwright refuses when another element would take the click, rather than by how much of
+  it is in the viewport, which depends on the window's height.
+- **The quickstart walk (T031)**, section 2, ran in headless Chromium against a check
+  instance: the stand-in model, an environment built from `.env.example`, the service on
+  8010, the stand-in on 9998, and the console with `pnpm dev` on 127.0.0.1:3010. Every step
+  was as written: "Step 3 of 30" and "just now" when the page opened, a later step 12
+  seconds after; with the stand-in stopped the text stayed, the agent task stayed pending,
+  and the age read "1 minute ago", then "2 minutes ago", with the exact time on hover; with
+  it started again the agent task ended failed, its progress was no longer shown, and the
+  conversation held the outcome. Hiding the tab was not walked, since a headless browser
+  cannot hide one; the view's tests cover it. The section is unchanged.
+- **The review** by a reader who did not write the diff found nothing against FR-010 to
+  FR-012 or R8. What it found, each checked before it was acted on:
+  - The time was set when a reading brought other data, so a reading that answered the
+    same task, as the one made when a hidden page is shown, left the age as it was until
+    the next tick of the timer. It is now set at every answered reading (`stateReads`).
+  - `break-words` does not lower the box's least width, so a long word with no space, such
+    as an address, widened the page at 1280 pixels in Chromium and Firefox. The box now
+    breaks such a word (`wrap-anywhere`), where T027 said `break-words`.
+  - Three tests could not fail for what they claimed, and now do: the failed reading's test
+    shows the age goes on, and fails when the time is set only by an answered reading; the
+    end-to-end test reaches by Tab the box of a short text, which a browser makes no stop of
+    by itself, and fails without `tabIndex`; the test of a working agent task without
+    progress pins feature 007's markup, and fails with a line added to it. The longest text
+    of the end-to-end test is now 2,000 characters; it was 1,991.
+  - Left as they are: the exact time is in the age's title only, as R8 chose, so a keyboard
+    or a touch reaches it no more than a title; and the test that no timer is added counts
+    `setInterval` only.

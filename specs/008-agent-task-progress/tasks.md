@@ -340,19 +340,19 @@ shows it without a reload; an ended agent task shows none.
 
 ### Tests for User Story 2
 
-- [ ] T022 [US2] In `web/lib/tasks.ts`, add `progress: { text: string; learned_at: string }
+- [X] T022 [US2] In `web/lib/tasks.ts`, add `progress: { text: string; learned_at: string }
       | null` to `AgentTask`, with a comment that it is the agent's claim and is shown only
       while the task is working; give `agentTask` in `web/__tests__/tasks-testing.ts` and in
       `web/e2e/tasks-api.ts` a default of `progress: null`, so every existing test reads as
       before
-- [ ] T023 [P] [US2] Create `web/__tests__/lib/ago.test.ts` for `ago(learnedAt: string, now:
+- [X] T023 [P] [US2] Create `web/__tests__/lib/ago.test.ts` for `ago(learnedAt: string, now:
       number): string`: under 60 seconds, and any time after `now`, give "just now"; 60
       seconds gives "1 minute ago", 119 seconds "1 minute ago", 120 "2 minutes ago", 3,599
       "59 minutes ago"; 3,600 gives "1 hour ago", 7,200 "2 hours ago", 86,399 "23 hours ago";
       86,400 gives "1 day ago", 172,800 "2 days ago" (whole units, rounded down); and for
       `exactTime(iso)`, the format `task-list.tsx` uses today (`Intl.DateTimeFormat("en",
       { dateStyle: "medium", timeStyle: "short" })`)
-- [ ] T024 [P] [US2] Add to `web/__tests__/components/tasks/agent-tasks.test.tsx`: a working
+- [X] T024 [P] [US2] Add to `web/__tests__/components/tasks/agent-tasks.test.tsx`: a working
       agent task with progress, given `now`, shows "Last reported by the agent" with the age
       in a `<time>` whose `dateTime` is `learned_at` and whose title is `exactTime`, then the
       text; without `now`, the text without an age; a working task with `progress: null` is
@@ -363,7 +363,7 @@ shows it without a reload; an ended agent task shows none.
       breaks; a text of 2,000 characters is whole in the page; the text's box is a region
       named "Progress reported by <agent>", can be reached by keyboard (`tabIndex` 0), and
       takes its direction from its own text (`dir="auto"`); nothing in it is a live region
-- [ ] T025 [P] [US2] Add to `web/__tests__/components/tasks/task-view.test.tsx`, with fake
+- [X] T025 [P] [US2] Add to `web/__tests__/components/tasks/task-view.test.tsx`, with fake
       timers and a task whose agent task is working with progress learned 30 seconds
       earlier: the page shows "just now"; after five of the view's readings
       (`AGENT_SECONDS` each, 90 seconds after the text was learned) that answer the same
@@ -376,11 +376,11 @@ shows it without a reload; an ended agent task shows none.
 
 ### Implementation for User Story 2
 
-- [ ] T026 [P] [US2] Create `web/lib/ago.ts` with `ago(learnedAt, now)` and
+- [X] T026 [P] [US2] Create `web/lib/ago.ts` with `ago(learnedAt, now)` and
       `exactTime(iso)` as T023 states them, and import `exactTime` in
       `web/components/tasks/task-list.tsx` in place of its own formatter, so the two pages
       write a time one way
-- [ ] T027 [US2] In `web/components/tasks/agent-tasks.tsx`: `AgentTasks` takes `now: number
+- [X] T027 [US2] In `web/components/tasks/agent-tasks.tsx`: `AgentTasks` takes `now: number
       | null`; under an agent task whose status is `working` and whose `progress` is not
       null it shows "Last reported by the agent", then, when `now` is a number, a space, the
       age from `ago` in a `<time dateTime={learned_at} title={exactTime(learned_at)}>`, and a
@@ -388,12 +388,12 @@ shows it without a reload; an ended agent task shows none.
       break-words`, `dir="auto"`, a greatest height that scrolls inside itself, `tabIndex={0}`,
       `role="region"`, and `aria-label` "Progress reported by <agent>". No other status
       shows it (FR-010, FR-012, R8)
-- [ ] T028 [US2] In `web/components/tasks/task-view.tsx`: hold the browser's time in state
+- [X] T028 [US2] In `web/components/tasks/task-view.tsx`: hold the browser's time in state
       (`now`, `null` at first); set it in the callback of the timer the view already has,
       after its check that the page is not hidden, and in an effect that runs when a
       reading of the task's state arrives; pass it to `AgentTasks`. No timer, reading, or
       clock read during render is added (FR-011, R8)
-- [ ] T029 [US2] Create `web/e2e/tasks-progress.spec.ts`, with `page.clock.install()` before
+- [X] T029 [US2] Create `web/e2e/tasks-progress.spec.ts`, with `page.clock.install()` before
       `goto` as `tasks-run.spec.ts` does, and `TaskService` answering a task whose agent task
       is working with progress: the text and its age are shown; after
       `page.clock.fastForward` of one reading (`AGENT_SECONDS`), with the service answering
@@ -401,13 +401,13 @@ shows it without a reload; an ended agent task shows none.
       as its characters; a text of 2,000 characters scrolls inside its box, and the
       follow-up box below it can still be used; Tab reaches the box; an agent task that
       completed shows no progress. Runs in Chromium and Firefox
-- [ ] T030 [P] [US2] In `web/README.md` and `README.md`'s account of the Tasks section: a
+- [X] T030 [P] [US2] In `web/README.md` and `README.md`'s account of the Tasks section: a
       working agent task shows what the agent last reported and how long ago. In
       `web/README.md`, also `ago.ts` in its list of `lib/` and `tasks-progress.spec.ts` in
       its list of end-to-end tests. In `AGENTS.md`, Layout: `web/lib/ago.ts`, and
       `agent-tasks.tsx` showing progress; in the list of end-to-end specs,
       `tasks-progress.spec.ts`
-- [ ] T031 [US2] Walk the quickstart's section 2 on a check instance by the standing rules,
+- [X] T031 [US2] Walk the quickstart's section 2 on a check instance by the standing rules,
       with the console on port 3010, and correct the section where the built feature
       differs
 

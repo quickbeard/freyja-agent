@@ -1,5 +1,6 @@
 import { useId } from "react";
 import { Badge } from "@/components/ui/badge";
+import { ago, exactTime } from "@/lib/ago";
 import type { AgentTask } from "@/lib/tasks";
 
 // What a delegate agent works on for a task is an "agent task" in every word the console
@@ -31,11 +32,69 @@ export function awaited(task: AgentTask): boolean {
 }
 
 /**
+ * Feature 008: what a working agent last reported, and how long before `now` the service
+ * learned it. The text is the agent's own words, put in a text node and never rendered as
+ * markup, with its line breaks, in a box that scrolls inside itself so that the longest text
+ * neither hides the page nor is cut (FR-012); a word longer than the box, such as a long
+ * address, is broken, so that it never widens the page. The box can be reached by keyboard to scroll
+ * it, takes its direction from its own text, and is no live region: a text read again every
+ * few seconds is not announced each time it changes (research R8). Until the page has a
+ * time to compare with, the text is shown without its age.
+ */
+function Progress({
+  agent,
+  progress,
+  now,
+}: {
+  agent: string;
+  progress: NonNullable<AgentTask["progress"]>;
+  now: number | null;
+}) {
+  return (
+    <>
+      <p className="text-xs text-muted-foreground">
+        Last reported by the agent
+        {now !== null && (
+          <>
+            {" "}
+            <time
+              dateTime={progress.learned_at}
+              title={exactTime(progress.learned_at)}
+            >
+              {ago(progress.learned_at, now)}
+            </time>
+          </>
+        )}
+        :
+      </p>
+      <section
+        aria-label={`Progress reported by ${agent}`}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: a box that scrolls must be reachable by keyboard to be scrolled without a pointer.
+        tabIndex={0}
+        dir="auto"
+        className="max-h-40 overflow-y-auto whitespace-pre-wrap wrap-anywhere rounded-md bg-muted/40 p-2 text-sm focus-visible:outline-2"
+      >
+        {progress.text}
+      </section>
+    </>
+  );
+}
+
+/**
  * A task's agent tasks, oldest first as the service lists them: each with its agent, its
  * status in words, and the message it was started with, the pending ones marked (FR-009).
- * Nothing is shown for a task that handed nothing to an agent.
+ * Under one that is working, what its agent last reported, with how long before `now` it
+ * was learned; under no other (feature 008, FR-010). Nothing is shown for a task that handed
+ * nothing to an agent.
  */
-export function AgentTasks({ tasks }: { tasks: readonly AgentTask[] }) {
+export function AgentTasks({
+  tasks,
+  now = null,
+}: {
+  tasks: readonly AgentTask[];
+  /** The browser's time, from the view's state; null until the view has read it. */
+  now?: number | null;
+}) {
   const heading = useId();
   if (tasks.length === 0) {
     return null;
@@ -75,6 +134,9 @@ export function AgentTasks({ tasks }: { tasks: readonly AgentTask[] }) {
             <p className="whitespace-pre-wrap break-words text-sm">
               {task.message}
             </p>
+            {task.status === "working" && task.progress !== null && (
+              <Progress agent={task.agent} progress={task.progress} now={now} />
+            )}
           </li>
         ))}
       </ul>

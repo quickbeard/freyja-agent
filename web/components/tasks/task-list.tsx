@@ -5,6 +5,7 @@ import useSWR from "swr";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useEvery } from "@/hooks/use-every";
+import { exactTime } from "@/lib/ago";
 import { ApiError } from "@/lib/api";
 import {
   LIST_SECONDS,
@@ -15,11 +16,6 @@ import {
   type ThreadSummary,
 } from "@/lib/tasks";
 import { TaskStatus } from "./status";
-
-const WHEN = new Intl.DateTimeFormat("en", {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
 
 function Row({ task }: { task: ThreadSummary }) {
   const begins = task.first_message ?? "";
@@ -49,7 +45,7 @@ function Row({ task }: { task: ThreadSummary }) {
           dateTime={task.changed_at}
           className="shrink-0 text-xs text-muted-foreground"
         >
-          {WHEN.format(new Date(task.changed_at))}
+          {exactTime(task.changed_at)}
         </time>
       </Link>
     </li>
