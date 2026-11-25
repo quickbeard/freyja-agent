@@ -165,7 +165,7 @@ A stream of the protocol's events, in this order:
 
 The stream then closes. Pieces are sent only for a run the answering instance drives; the
 whole reply at the end is always sent, and replaces the pieces. A follower that reads too
-slowly is disconnected and subscribes again. At most four streams follow one task.
+slowly is disconnected and subscribes again. At most four streams follow one task on one instance.
 
 ### `CancelTask`
 

@@ -131,7 +131,9 @@ thread is made or a model is asked.
 
 **Refused credentials are logged sparingly.** Anyone who reaches the outside listener can
 send requests without a token. One warning is written for the first refusal, and after that
-at most one in ten seconds for each address, saying how many were refused since (FR-028).
+at most one in ten seconds for each of the two addresses, the service's own and the outside
+listener, saying how many were refused since (FR-028). Counted per client address, the
+warnings and the record of them would grow with the number of clients.
 
 The refusal of other origins runs first on both addresses, by the rule the thread routes
 use (`refuse_other_origins`). `AllowedHosts` covers the own address as it covers every route
@@ -195,17 +197,23 @@ that caller's area.
 
 **With the feature off, a caller's thread is not run.** The strict build and the file
 backend exist only while the feature is on, so a thread a caller started must not be run
-without them. When the service starts with the feature off, it asks once whether any
-conversation exists. Where none does, nothing is looked up afterwards, and the service is
-what it was before this feature. Where one does, a context is still taken with the thread's
-id and one read; for a caller's thread the thread routes answer `409` with `a2a_server_off`
-to a message or a decision, the worker leaves the thread alone as it leaves a paused one,
-and `SegmentedGraph` refuses it as it refuses any caller's thread on the other build. No
-conversation can be made while the feature is off, so the answer to the question at startup
-stays true.
+without them. Every context taken for a thread looks the thread up, on or off: one
+single-row read by `thread_id`. For a caller's thread, with the feature off, the thread
+routes answer `409` with `a2a_server_off` to a message or a decision, the worker leaves the
+thread alone as it leaves a paused one, and `SegmentedGraph` refuses it as it refuses any
+caller's thread on the other build.
 
-**Cost**: a second graph is compiled at each rebuild, only while the feature is on. With it
-off and no conversation in the table, nothing is built or looked up.
+*Changed by the review of the tasks (2026-11-25).* This paragraph said that a service
+started with the feature off asks once whether any conversation exists, and looks nothing up
+afterwards where none does. That holds for one instance and not for several on one
+database: an instance started with the feature off and an empty table would run a
+conversation another instance, with the feature on, starts afterwards, on the ordinary
+build, with its hand-offs ungated and a named caller in the shared workspace, as during a
+rolling restart that turns the feature on. The read is made every time instead.
+
+**Cost**: a second graph is compiled at each rebuild, only while the feature is on. Taking a
+context for a thread costs one single-row read, on or off; with the feature off nothing else
+is built or read.
 
 ## R7. A received task's state is read from its thread, and kept once it has ended
 
@@ -496,7 +504,7 @@ has ended, when its client goes, or when the service stops.
 - **Through another instance**, or for a run of the worker's, there are no events: the loop
   sends each change of state and of the status message, and the result (FR-017).
 
-A task has at most four followers at once; a fifth is refused as "not now" (R12). The spec
+A task has at most four followers at once on one instance; a fifth there is refused as "not now" (R12). The spec
 does not ask for the number; it bounds what a caller can hold open.
 
 ## R14. A send that does not ask for a stream

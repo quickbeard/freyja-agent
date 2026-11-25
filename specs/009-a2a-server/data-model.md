@@ -152,7 +152,7 @@ has no state. When it has the lease, `started_at` and `base_checkpoint` are writ
 | The thread routes | Whether a thread is a caller's, to refuse a message; whether its conversation has a working task, to refuse an approval when it has none. |
 | `UnattendedRuns.should_stop` | Whether the last task of a caller's thread was canceled by its caller, at each boundary of a console run on it. |
 | The sweep, every 30 seconds | Every row with `released_at` null; in its first round, the working rows of callers the settings no longer name. |
-| Startup, with the feature off | Whether any conversation exists; while one does, which caller started a thread, to refuse to run it. |
+| Every context taken for a thread, with the feature off | Which caller started the thread, to refuse to run it (research R6). |
 | `GET /threads`, `GET /threads/{id}` | For the listed threads: the caller's name, and whether its last task was canceled by the caller. |
 | The lease's release | The conversation of a thread, to look at its task. |
 

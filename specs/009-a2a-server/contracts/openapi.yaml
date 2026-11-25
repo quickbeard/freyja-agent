@@ -30,8 +30,8 @@ paths:
     get:
       summary: List the threads and say how many need a decision
       description: >
-        Unchanged from 007 except that each row has `caller`. While the feature is on, the
-        list reads which of its rows are callers' in one more query; when that cannot be
+        Unchanged from 007 except that each row has `caller`. The list reads which of its
+        rows are callers' in one more query, with the feature on or off; when that cannot be
         read, the list answers 500 as it does when the index cannot be read, and never shows
         a caller's thread as a person's.
       responses:
