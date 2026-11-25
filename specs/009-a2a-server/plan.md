@@ -601,3 +601,50 @@ answering the card, `POST /a2a`, and an unknown path with the same 404) and the 
 section 5 (five tasks waiting for a person, the sixth `task_limit`, one rejected in the
 console, the next accepted; the stand-in agent received nothing). The quickstart now says to
 send `steps 1` with the stand-in model, and that a send prints a refusal too.
+
+### Request 3 (2026-11-25): a person decides what a caller's task proposes
+
+**Built otherwise than the tasks say, and why:**
+
+- A follower that waits on a person is handed a reader of the run a decision starts before
+  that run's first event: `UnattendedRuns.on_start` is told of every run as it starts, and
+  `ReceivedTasks.on_run_started` joins one reader for each follower of the thread and wakes
+  it (T058). Joining when woken would miss the steps a fast continuation takes first. A
+  reader that is handed over and never read, because its follower ended, is read to its end
+  by `leave`, as a run nobody follows is.
+- A follower on another instance, or of a run the worker drives, still sees a decision's
+  run by its looks, every four seconds, and its end; R13 has that.
+- The proposal's card says who started the run and that no person asked for the action, in
+  one sentence under its heading (T057, T059).
+- The console still labels the calling agent's message "You", as it labels a person's: no
+  task of this request changes it.
+- T056's tests put a follower's look 30 seconds away, so that what a stream receives of a
+  continuation can only come from following the decision's run; the two that check the
+  continuation's steps failed before T058, and pass with it. The others passed against the
+  code of request 2: they show what request 2 already did.
+
+**Review of request 3.** An independent reviewer read the change before its first commit.
+It found no operation or field of a caller that decides a proposal or runs an action, no
+change for a thread no caller started or with the feature off, and the readers handed over
+cleaned up. What it found:
+
+| Finding | What was done |
+|---|---|
+| Medium: a decision sent through `POST /threads/{thread_id}/resume` starts a run that is not the console's, so no follower is handed it; the docs said a caller follows any decision's run on its instance. | The docs say which decisions are followed step by step (the console's way, `/resume/unattended`) and that the others are seen by looks and at their end. R13 follows console runs only |
+| Medium: the test of a proposal that waits three days moved no clock the received tasks read. | It moves their store's clock too (`test_a_proposal_waits_days_and_the_task_goes_on_when_it_is_decided` fails with a one-day limit put in) |
+| Low: the rejection's test passed without T058. | It checks the continuation's pieces |
+| Low: after a decision the caller still read "Waiting for a person's approval of ..." until the next step. | A follower sends `Working.` when it starts reading another run of the thread |
+| Low: a second run that started before the follower read the first was joined late, from where it had got to. | Each follower keeps its handed readers in order, and reads one at once rather than waiting (`test_runs_that_start_one_after_another_are_read_in_order`) |
+| Low: a branch that could not run; no test of a handed reader never read, of `on_start` raising, or of the card's wording for several actions. | Removed; tests written (`test_a_follower_closed_with_a_reader_it_never_read_leaves_nothing_behind`, `test_a_failure_told_of_a_run_s_start_leaves_the_run_alone`) |
+| Low: a follower whose task's end was not written yet when the caller's next message starts a run is handed that run, and streams the next task's events under the earlier task's id. | Left: one caller's own conversation, as before this request, and the window is the moment between a run's end and its look |
+
+Each test above failed without its fix.
+
+**Checked by hand (T062)**, on a check instance from `.env.example` on port 8020 (database
+`freyja_check_009`, dropped afterwards), with the stand-in model active, the stand-in agent
+added to run without approval, and the console on 3020: a stream of `handoff stub say hello`
+stopped at `Waiting for a person's approval of: agent stub.` with the agent having received
+nothing; the console counted one task to decide and its card said who started the run and
+that no person asked for it; approved there, the open stream received `Completed: agent
+stub.`, the reply, and the task completed, and the agent received the message once; a second
+one rejected there completed with Freyja's reply and the agent received nothing more.

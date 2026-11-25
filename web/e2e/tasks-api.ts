@@ -95,6 +95,20 @@ export const CALLER_THREAD: Refusal = {
     "This task was started by another agent, and only that agent sends messages on it. Its proposals are decided and its run is stopped here as for any task.",
 };
 
+/** Who started a task another agent on this machine handed Freyja (feature 009). */
+export const LOCAL_CALLER = {
+  name: "local",
+  canceled: false,
+  configured: true,
+};
+
+/** `task` as one another agent on this machine started (feature 009). */
+export function byCaller<T extends { row: ThreadSummary; state: ThreadState }>(
+  task: T,
+): T {
+  return { ...task, row: { ...task.row, caller: LOCAL_CALLER } };
+}
+
 /** A task another agent started on this machine, that ended with `reply` (feature 009). */
 export function callerTask(
   service: TaskService,
@@ -103,10 +117,7 @@ export function callerTask(
   reply: string,
 ): void {
   service.tasks.set(threadId, {
-    row: summary(threadId, {
-      first_message: message,
-      caller: { name: "local", canceled: false, configured: true },
-    }),
+    row: summary(threadId, { first_message: message, caller: LOCAL_CALLER }),
     state: threadState(threadId, [human(message), ai(reply)]),
   });
 }

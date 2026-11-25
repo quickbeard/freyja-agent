@@ -6,6 +6,7 @@ import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
 import {
   type ActionRequest,
+  type CallerSummary,
   type Decision,
   type DecisionSent,
   inexact,
@@ -14,6 +15,7 @@ import {
   REJECT_REASON_LIMIT,
 } from "@/lib/tasks";
 import { argumentsText } from "./message";
+import { startedBy } from "./started-by";
 
 // The proposal card (FR-014 to FR-019). It offers the service's three decisions, only those
 // the service allows for each action, and decides nothing itself: what an edit may be, and
@@ -129,8 +131,11 @@ export function ProposalCard({
   send,
   onStale,
   onRefused,
+  caller = null,
 }: {
   pending: PendingDecision;
+  /** Who started the task, when another agent did (feature 009); null when a person did. */
+  caller?: CallerSummary | null;
   /** Sends the decisions; a refusal is raised as an `ApiError`. */
   send: (decisions: DecisionSent[]) => Promise<void>;
   /** Told why the page no longer shows the task as it is; the task is read again. */
@@ -248,6 +253,14 @@ export function ProposalCard({
           Nothing has run. An approved action runs once at most, and not at all
           when it is no longer set up on the service; a rejected one never runs.
         </p>
+        {/* Feature 009: another agent's task led to it, and no person asked for it. */}
+        {caller !== null && (
+          <p className="text-sm">
+            {single
+              ? `${startedBy(caller)}. No person asked for this action: the agent's task led Freyja to propose it.`
+              : `${startedBy(caller)}. No person asked for these actions: the agent's task led Freyja to propose them.`}
+          </p>
+        )}
       </div>
       <ol className="flex flex-col gap-4">
         {actions.map((action, index) => (

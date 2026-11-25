@@ -260,8 +260,12 @@ class ReceivedTasks:
         # The readers of runs nobody follows, read to their end; cancelled when the service
         # stops, which leaves each run to stop at its next boundary as any console run.
         self._drains: set[asyncio.Task[None]] = set()
-        # The followers of a thread's task on this instance, woken when a run on it ends.
+        # The followers of a thread's task on this instance, woken when a run on it starts
+        # or ends.
         self._wakers: dict[str, set[asyncio.Event]] = {}
+        # Readers of the runs that started on a follower's thread, joined for the follower
+        # before each run's first event, in the order the runs started, by its wake.
+        self._joined: dict[asyncio.Event, list[Events]] = {}
 
     async def accept(self, caller: str, context_id: str, text: str, *, hops: int = 0) -> Accepted:
         """Accept a message of ``caller`` in its conversation ``context_id`` and start its run.
@@ -557,11 +561,18 @@ class ReceivedTasks:
         sentence: str | None = WORKING
         try:
             while True:
-                reader, events = (
-                    (events if events is not None else self._join(task.thread_id)),
-                    None,
-                )
+                first, events = events, None
+                handed = self._joined.get(wake)
+                joined = handed.pop(0) if handed else None
+                if handed is not None and not handed:
+                    del self._joined[wake]
+                reader = first or joined or self._join(task.thread_id)
                 if reader is not None:
+                    if first is None and sentence != WORKING:
+                        # Another run on the thread, such as the one a person's decision
+                        # started: what the task waited for is behind it.
+                        sentence = WORKING
+                        yield Status(WORKING)
                     held = ""
                     async with contextlib.aclosing(reader) as run:
                         async for event in run:
@@ -585,14 +596,18 @@ class ReceivedTasks:
                 if view.sentence is not None and view.sentence != sentence:
                     sentence = view.sentence
                     yield Status(sentence)
-                with contextlib.suppress(TimeoutError):
-                    async with asyncio.timeout(FOLLOW_SECONDS):
-                        await wake.wait()
+                # A run that started meanwhile is read at once; otherwise wait to be woken.
+                if not self._joined.get(wake):
+                    with contextlib.suppress(TimeoutError):
+                        async with asyncio.timeout(FOLLOW_SECONDS):
+                            await wake.wait()
                 wake.clear()
         finally:
             woken.discard(wake)
             if not woken and self._wakers.get(task.thread_id) is woken:
                 del self._wakers[task.thread_id]
+            for left in self._joined.pop(wake, []):
+                self.leave(left)
 
     async def settle(self, accepted: Accepted, seconds: float) -> View:
         """The task of a send that asked for no stream, once it has ended or ``seconds``
@@ -628,6 +643,22 @@ class ReceivedTasks:
         task = await self.store.last_task_of_thread(thread_id)
         if task is not None and not task.ended:
             await self.look(task)
+
+    def on_run_started(self, thread_id: str) -> None:
+        """Given to the console's runs: hand each follower of ``thread_id`` on this instance
+        a reader of the run that starts there, before its first event, and wake it. This is
+        how a caller's stream follows the continuation a person's decision starts (FR-017).
+        """
+        runs = self.runtime.unattended
+        if runs is None:
+            return
+        for wake in list(self._wakers.get(thread_id, ())):
+            reader = runs.join(thread_id)
+            if reader is None:
+                return
+            # Kept in order: a follower still reading an earlier run reads this one next.
+            self._joined.setdefault(wake, []).append(reader)
+            wake.set()
 
     def on_release(self, thread_id: str) -> None:
         """Given to the lease: start ``released`` in a task of its own, never waiting."""

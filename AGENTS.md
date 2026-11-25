@@ -245,7 +245,9 @@ startup and exits with an error naming the connection when it is unreachable.
   first asks, for every run, who started the thread: it refuses a caller's thread on the
   ordinary build and any thread whose lookup fails, puts `freyja_caller_files` into the
   config of a caller's thread on the strict build, and refuses every way to run a graph but
-  `astream`; `UnattendedRuns.join` gives one more reader of a console run in progress.
+  `astream`; `UnattendedRuns.join` gives one more reader of a console run in progress, and
+  `UnattendedRuns.on_start` is told of each run before its first event, which is how a
+  caller's follower joins the run a person's decision starts (`ReceivedTasks.on_run_started`).
   `Runtime.unattended` is the console's runs of this instance.
 - `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
   `freyja-api` entry point; `hosts.py` is `AllowedHosts`, the middleware `create_app` puts
@@ -378,8 +380,9 @@ startup and exits with an error naming the connection when it is unreachable.
   task what its agent last reported and how long ago, worded by `web/lib/ago.ts` from the
   browser's time that the view keeps in its state, set by its timer and when a reading
   arrives, never while it renders (feature 008); and who started a task when another
-  agent did (`started-by.tsx`, from the row's `caller`), on the list's row and on the
-  task's page, which then offers no follow-up box and says why (feature 009). The view
+  agent did (`started-by.tsx`, from the row's `caller`), on the list's row, on the
+  task's page, which then offers no follow-up box and says why, and on the proposal's card,
+  which says that no person asked for the action (feature 009). The view
   reads its task again by one
   timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
   every `AGENT_SECONDS` while an agent task is awaited, its row alone every

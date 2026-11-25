@@ -53,7 +53,7 @@ When the service refuses values, they are shown beside the action, and the task 
 
 ### Tasks another agent started
 
-A task that another agent handed Freyja over A2A (see [Receive tasks from agents](a2a-server.md)) says who started it, on its row and on its page: "Started by an agent on this machine" for an agent that called the service's own address. Its proposals are decided, and its run stopped, as for any task. Only the agent that started it sends messages on it, so its page has no box for another message and says why; the service refuses such a message with `409` `caller_thread` all the same.
+A task that another agent handed Freyja over A2A (see [Receive tasks from agents](a2a-server.md)) says who started it, on its row and on its page: "Started by an agent on this machine" for an agent that called the service's own address. Its proposals are decided, and its run stopped, as for any task; the proposal's card says who started the run and that no person asked for the action. Every message to a delegate agent from such a task waits for a decision there, also to an agent that runs without approval. Only the agent that started it sends messages on it, so its page has no box for another message and says why; the service refuses such a message with `409` `caller_thread` all the same.
 
 ### Another message
 
