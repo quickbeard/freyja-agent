@@ -137,9 +137,11 @@ curl -sN -X POST localhost:8000/threads/q4-$(date +%s)/runs -H 'content-type: ap
 
 - After the `update` with `node: "agent"` for the task beginning to work, "Working on it.",
   one arrives for "Step 1 of 5", then one for "Step 2 of 5", and so on, each within about a
-  second of the agent reporting it, until the task completes after twenty seconds. Before
-  this feature there was only the first, when the task began to work, and nothing until the
-  hand-off returned.
+  second of the agent reporting it, until the task completes after twenty seconds. The
+  stand-in completes right after its fifth step, so a read seldom finds that step: the
+  update after "Step 4 of 5" is usually the one for the task completed. Before this feature
+  there was only the first, when the task began to work, and nothing until the hand-off
+  returned.
 - No two lines in a row hold the same state and the same text.
 
 Set the agent back to requiring approval afterwards.

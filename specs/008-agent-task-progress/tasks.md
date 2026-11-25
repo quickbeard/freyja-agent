@@ -426,7 +426,7 @@ stand-in receives nothing because of it.
 
 ### Tests for User Story 3
 
-- [ ] T032 [US3] Add part 7 to `tests/test_a2a_progress.py`, the check, through a run whose
+- [X] T032 [US3] Add part 7 to `tests/test_a2a_progress.py`, the check, through a run whose
       scripted model calls `check_agent_tasks` on a thread with a pending task: a working
       task with kept progress is listed as feature 003 lists it, then the line `  Progress
       the agent reported, in its own words (learned <time>):`, with `<time>` the ISO form of
@@ -443,12 +443,12 @@ stand-in receives nothing because of it.
       `send_notification`, and the run pauses for a decision as it does without the text
       (FR-017, SC-007); an outcome delivered by a background run is recorded with its own
       text and no progress line
-- [ ] T033 [US3] Extend part 6 of `tests/test_a2a_progress.py` (T013) with a run that calls
+- [X] T033 [US3] Extend part 6 of `tests/test_a2a_progress.py` (T013) with a run that calls
       the check, so the log search covers the check too (SC-011)
 
 ### Implementation for User Story 3
 
-- [ ] T034 [US3] In `src/freyja_agent/agent/agent_tasks.py`: `task_line` adds, for a task
+- [X] T034 [US3] In `src/freyja_agent/agent/agent_tasks.py`: `task_line` adds, for a task
       whose state is `working` and that has `progress`, a line break, two spaces, `Progress
       the agent reported, in its own words (learned {progress_at.isoformat()}):`, and each
       line of the text on a line of its own after four spaces; every other task as today.
@@ -457,7 +457,7 @@ stand-in receives nothing because of it.
       agent's own words." (R7). Then run `uv run pytest`: change only the tests FR-022
       allows, those that pin the whole result of the check, and name each in request 3's
       Tests section
-- [ ] T035 [P] [US3] In `README.md`, where `check_agent_tasks` is described: its result
+- [X] T035 [P] [US3] In `README.md`, where `check_agent_tasks` is described: its result
       gives a working task's last progress, in the agent's own words, read from the
       service's database with no request to the agent
 
@@ -476,7 +476,7 @@ that found nothing new.
 
 ### Tests for User Story 4
 
-- [ ] T036 [US4] Add part 8 to `tests/test_a2a_progress.py`, with `POLL_SECONDS`
+- [X] T036 [US4] Add part 8 to `tests/test_a2a_progress.py`, with `POLL_SECONDS`
       monkeypatched to 0.05 as `tests/test_a2a_handoff.py` does and a stand-in made with
       `stub_card(streaming=False)`: a `steps 3 0.2` task gives updates with `node: "agent"`
       for working "Working on it." (the change from submitted), then working "Step 1 of 3",
@@ -490,7 +490,7 @@ that found nothing new.
 
 ### Implementation for User Story 4
 
-- [ ] T037 [US4] In `src/freyja_agent/delegates/a2a_agents.py`, `_poll`: keep the last text
+- [X] T037 [US4] In `src/freyja_agent/delegates/a2a_agents.py`, `_poll`: keep the last text
       seen, starting from `progress_text` of the status the send returned. At each read,
       the last text seen becomes the read's `progress_text` whenever that is not `None`,
       whether or not the state changed. A read that finds another state gives the update it
@@ -501,10 +501,10 @@ that found nothing new.
       leaves the last text seen as it was (R5, contracts/sse-events.md). Then run `uv run
       pytest`: change only the tests FR-022 allows, those that pin the updates of a
       hand-off to an agent that does not stream, and name each in request 3's Tests section
-- [ ] T038 [P] [US4] In `README.md`, where the stream's `update` events with `node: "agent"`
+- [X] T038 [P] [US4] In `README.md`, where the stream's `update` events with `node: "agent"`
       are described: for an agent that does not stream, one event per change of state or of
       its text, about once a second
-- [ ] T039 [US4] Walk the quickstart's sections 3 and 4 on a check instance by the standing
+- [X] T039 [US4] Walk the quickstart's sections 3 and 4 on a check instance by the standing
       rules, with a model that calls tools, and correct them where the built feature
       differs
 

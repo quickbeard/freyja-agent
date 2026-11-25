@@ -36,7 +36,7 @@ Always go through uv. Never call python, pip, or pytest directly.
   endpoint for a manual run; use `http://127.0.0.1:9997/v1` as an LLM profile's base URL. It
   behaves by model id: `refuse-conversation`, `reject-key`, `repeat-key`, `never-answer`,
   `slow`, `call-tools`, which asks for tools by a keyword at the start of a message
-  (`notify`, `handoff <agent>`, `steps <n>`) and answers chat completions only, and any
+  (`notify`, `handoff <agent>`, `steps <n>`, `check`) and answers chat completions only, and any
   other id answers. A request that asks for a stream is answered as one, so
   a profile pointing at it can be run on.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest

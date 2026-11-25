@@ -23,6 +23,7 @@ It behaves by the model id it is asked for:
 
   - ``notify <text>``: one call of ``send_notification`` to ``#ops`` with the text;
   - ``handoff <agent> <text>``: one call of ``handoff_to_<agent>`` with the text;
+  - ``check``: one call of ``check_agent_tasks``, whatever follows the keyword (feature 008);
   - ``steps <n>``: ``n`` calls of ``ls``, one a reply, each after ``step_seconds``, so that
     a run lasts long enough to be stopped by hand;
   - once the call it asked for has its result, it answers ``Done: `` and the result; any
@@ -243,6 +244,8 @@ def plan(turns: list[dict[str, Any]], tools: list[str]) -> Plan:
         wanted = ("ls", {"path": "/"})
     elif keyword == "notify":
         wanted = ("send_notification", {"channel": "#ops", "message": rest or "hello"})
+    elif keyword == "check":
+        wanted = ("check_agent_tasks", {})
     elif keyword == "handoff" and re.fullmatch(r"[a-z][a-z0-9_-]*( .*)?", rest, re.S):
         agent, _, message = rest.partition(" ")
         wanted = (f"handoff_to_{agent}", {"message": message.strip() or "hello"})

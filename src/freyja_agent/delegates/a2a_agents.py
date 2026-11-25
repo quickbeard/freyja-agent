@@ -579,20 +579,31 @@ def _merge_artifact(task: Task, update: TaskArtifactUpdateEvent) -> None:
 async def _poll(client: Client, outcome: SendOutcome, on_progress: OnProgress) -> None:
     """Check a task of an agent that does not stream until it stops; report each change.
 
-    ``client`` is the one the message was sent with.
+    A change is another state, whatever its text, or, since feature 008, the same state with
+    a text that is not the last one seen (FR-019). Texts are compared as kept texts are made
+    (``progress_text``): blank is none, and two texts alike in their first 2,000 characters
+    are one. The update carries the status's whole text, as before. A read with no text
+    leaves the last text seen as it was, so a text that comes back is not sent again
+    (008 research R5). ``client`` is the one the message was sent with.
     """
     if outcome.task is None:
         raise RuntimeError("There is no task to check.")
     # The protocol's own states, so submitted to working counts as a change.
     seen = outcome.task.status.state
+    said = progress_text(outcome.task.status)
     while outcome.state not in _STOP:
         await asyncio.sleep(POLL_SECONDS)
         task = await client.get_task(GetTaskRequest(id=outcome.task.id))
         outcome.task = task
         _note_progress(outcome, task.status)
+        text = progress_text(task.status)
         if task.status.state != seen:
             seen = task.status.state
             on_progress(task.id, state_name(seen), _text(task.status.message))
+        elif text is not None and text != said:
+            on_progress(task.id, state_name(seen), _text(task.status.message))
+        if text is not None:
+            said = text
 
 
 async def send_message(
