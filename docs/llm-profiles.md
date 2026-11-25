@@ -89,3 +89,5 @@ uv run --env-file .env python -m tests.llm_stub --http 9997   # base URL http://
 ```
 
 Save a profile with provider `openai`, that base URL, any key, and `responses_api` false. The stand-in behaves by the model id it is asked for: `refuse-conversation` answers a first message and refuses a request with earlier turns, `reject-key` answers 401, `repeat-key` fails with an error that repeats the key, `never-answer` does not answer, `slow` answers after 20 seconds, `call-tools` asks for tools, and any other id, such as `ok`, answers everything. `call-tools` acts on a keyword at the start of a message: `notify <text>` proposes a notification to `#ops`, `handoff <agent> <text>` hands the text to that agent, and `steps <n>` takes `n` steps a second apart; it answers chat completions only, so its profile has `responses_api` false. With it the Tasks section can be tried from its first step to its last without a provider's key.
+
+**Next:** [Use the API](api.md): threads, runs, and deciding on a proposal.

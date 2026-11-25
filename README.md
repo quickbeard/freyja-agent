@@ -49,13 +49,13 @@ curl -N -X POST localhost:8000/threads/demo-1/runs \
   -d '{"message": "Summarize what you can do and which skills you have loaded."}'
 ```
 
-The rest is documented by topic under `docs/`:
+The rest is documented by topic under `docs/`, listed in the order a newcomer needs it. Each doc ends with a link to the next one, and each also stands alone as a reference:
 
-- [Use the API](docs/api.md): threads, runs and their events, deciding on a proposal, the list of threads, runs that go on without a reader, stopping a run, and the host names the service answers for.
-- [Tool servers](docs/tool-servers.md): connecting MCP servers, which of their tools run without approval, what happens when one fails, and the catalog.
-- [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
-- [LLM profiles](docs/llm-profiles.md): saving, testing, and activating the ways to reach a model, and how their keys are kept secret.
-- [Web console](docs/web-console.md): the console under `web/`, with its LLM, Agents, and Tasks sections.
+1. [LLM profiles](docs/llm-profiles.md): saving, testing, and activating the ways to reach a model, and how their keys are kept secret. Nothing runs without a usable model.
+2. [Use the API](docs/api.md): threads, runs and their events, deciding on a proposal, the list of threads, runs that go on without a reader, stopping a run, and the host names the service answers for.
+3. [Tool servers](docs/tool-servers.md): connecting MCP servers, which of their tools run without approval, what happens when one fails, and the catalog.
+4. [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
+5. [Web console](docs/web-console.md): the console under `web/`, with its LLM, Agents, and Tasks sections.
 
 ## Lint and format
 
