@@ -92,7 +92,7 @@ jobs:
             sleep 2
           done
           curl --silent --show-error --fail http://127.0.0.1:8000/healthz
-          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3000/llm
+          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3000/models
           # Through the console to the service.
           curl --silent --show-error --fail http://127.0.0.1:3000/api/healthz
           # Neither runs as root.
@@ -106,13 +106,13 @@ jobs:
           docker run --detach --name web-open --publish 127.0.0.1:3002:3000 \
             --env HOSTNAME=0.0.0.0 freyja-web:ci
           for _ in $(seq 1 15); do
-            curl --silent --fail --output /dev/null http://127.0.0.1:3002/llm && break
+            curl --silent --fail --output /dev/null http://127.0.0.1:3002/models && break
             sleep 2
           done
-          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3002/llm
+          curl --silent --show-error --fail --output /dev/null http://127.0.0.1:3002/models
           # The one left as built answers inside its container and nowhere else.
-          docker exec web-default node -e "fetch('http://127.0.0.1:3000/llm').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
-          if curl --silent --max-time 5 --output /dev/null http://127.0.0.1:3001/llm; then
+          docker exec web-default node -e "fetch('http://127.0.0.1:3000/models').then((r) => process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+          if curl --silent --max-time 5 --output /dev/null http://127.0.0.1:3001/models; then
             echo "The console answered on a published port without HOSTNAME=0.0.0.0." >&2
             exit 1
           fi

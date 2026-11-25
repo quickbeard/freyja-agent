@@ -157,7 +157,7 @@ describe("a task's page", () => {
       screen
         .getByRole("link", { name: "Go to the Models section" })
         .getAttribute("href"),
-    ).toBe("/llm");
+    ).toBe("/models");
     await waitFor(() => expect(conversation()).toContain("Earlier."));
   });
 
@@ -1000,7 +1000,7 @@ describe("a task's page and another message", () => {
       screen
         .getByRole("link", { name: "Go to the Models section" })
         .getAttribute("href"),
-    ).toBe("/llm");
+    ).toBe("/models");
     // Nothing of the message was recorded: it is in the box, to be sent again.
     await waitFor(() => expect(followUp().value).toBe("And the week before?"));
     expect(conversation()).not.toContain("And the week before?");

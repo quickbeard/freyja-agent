@@ -55,7 +55,7 @@ function waiting(count: number): Reply {
   return { json };
 }
 
-const navigation = vi.hoisted(() => ({ pathname: "/llm" }));
+const navigation = vi.hoisted(() => ({ pathname: "/models" }));
 vi.mock("next/navigation", () => ({
   usePathname: () => navigation.pathname,
 }));
@@ -130,7 +130,7 @@ function described(): string | null {
 
 describe("AppSidebar", () => {
   beforeEach(() => {
-    navigation.pathname = "/llm";
+    navigation.pathname = "/models";
     threadReplies = [{ json: NO_TASKS }];
     threadAsks = 0;
     // The sidebar asks for the list of agents wherever it is shown.
@@ -150,7 +150,7 @@ describe("AppSidebar", () => {
     expect(links.map((link) => link.getAttribute("href"))).toEqual([
       "/tasks",
       "/agents",
-      "/llm",
+      "/models",
     ]);
   });
 
@@ -206,7 +206,7 @@ describe("AppSidebar", () => {
   });
 
   it("marks a section for a page inside it", () => {
-    navigation.pathname = "/llm/anything";
+    navigation.pathname = "/models/anything";
     renderSidebar();
     expect(
       screen.getByRole("link", { name: "Models" }).getAttribute("aria-current"),
@@ -321,7 +321,7 @@ describe("AppSidebar", () => {
   });
 
   it("shows the badge on the Models section and on the Agents section alike", async () => {
-    for (const pathname of ["/llm", "/agents"]) {
+    for (const pathname of ["/models", "/agents"]) {
       navigation.pathname = pathname;
       stubFetch(list(agent("stub", "unreachable")));
       const { unmount } = renderSidebar();
@@ -350,7 +350,7 @@ describe("AppSidebar, the Tasks entry", () => {
   };
 
   beforeEach(() => {
-    navigation.pathname = "/llm";
+    navigation.pathname = "/models";
     threadAsks = 0;
     stubAll(list(HELLO));
   });

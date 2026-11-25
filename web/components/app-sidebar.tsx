@@ -34,11 +34,11 @@ import {
 
 // The console's sections, in the order the sidebar lists them.
 // Tasks first, where a person hands Freyja work (feature 007) and the console opens; then the
-// configuration: the agents, and the models, whose address stays `/llm`.
+// configuration: the agents, then the models (the LLM profiles).
 const SECTIONS = [
   { href: "/tasks", label: "Tasks", icon: ListTodoIcon },
   { href: "/agents", label: "Agents", icon: BotIcon },
-  { href: "/llm", label: "Models", icon: CpuIcon },
+  { href: "/models", label: "Models", icon: CpuIcon },
 ] as const;
 
 const AGENTS = "/agents";

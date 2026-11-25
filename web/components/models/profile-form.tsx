@@ -37,7 +37,7 @@ import {
   testDraft,
   toDraft,
   updateProfile,
-} from "@/lib/llm";
+} from "@/lib/models";
 import { TestResult } from "./test-result";
 
 type FieldName = "name" | "provider" | "model" | "baseUrl" | "apiKey";

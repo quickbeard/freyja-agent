@@ -284,7 +284,7 @@ test("an agent that cannot be used shows on the sidebar from the Models section,
     environmentAgent("hello"),
     savedAgent("stub", DOWN),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(card(page, "Environment")).toBeVisible();
   // The number, and in words what it means, on the entry that leads to the agents.
@@ -299,7 +299,7 @@ test("an agent that cannot be used shows on the sidebar from the Models section,
 
   // The console asked for the list once when it opened, and for nothing else of agents.
   await page.waitForLoadState("networkidle");
-  expect(page.url()).toContain("/llm");
+  expect(page.url()).toContain("/models");
   expect(service.asked).toEqual([
     { method: "GET", path: "/agents", body: undefined },
   ]);
@@ -397,7 +397,7 @@ test("with no answer for the list the sidebar shows no number, and a number show
   // The Models section with a service that answers for profiles only: the request for the
   // agents reaches the web app's server, which finds nothing at the service's address.
   await answerProfiles(page, { list: profileList(environmentProfile()) });
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(card(page, "Environment")).toBeVisible();
   await page.waitForLoadState("networkidle");
   await expect(agentsBadge(page)).toHaveCount(0);
@@ -447,7 +447,7 @@ test("the list read on the Models section is the one the Agents section starts f
 }) => {
   await answerProfiles(page, { list: profileList(environmentProfile()) });
   const service = await new AgentService(savedAgent("stub", DOWN)).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(agentsBadge(page)).toHaveText("1 cannot be used");
   await page.waitForLoadState("networkidle");
   expect(service.reads).toBe(1);

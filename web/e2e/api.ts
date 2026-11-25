@@ -4,7 +4,7 @@
 
 import type { Page, Route } from "@playwright/test";
 import type { Agent, AgentCard, AgentCheck, AgentList } from "../lib/agents";
-import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/llm";
+import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/models";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
 export function environmentProfile(

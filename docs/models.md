@@ -1,4 +1,4 @@
-# LLM profiles
+# Models
 
 An LLM profile is one way to reach a model: a name, a provider (`openai` for any OpenAI-compatible endpoint, `anthropic`, or `openrouter`), a model, an optional base URL, an API key, and, for `openai`, whether the Responses API or chat completions is used. Profiles are kept in the database and changed while the service runs, through the routes under `/llm` or in the Models section of the [web console](web-console.md#models). Exactly one profile is **active**: the one every run uses. The full contracts are in `specs/004-web-llm-profiles/contracts/`.
 

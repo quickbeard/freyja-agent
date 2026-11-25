@@ -2,9 +2,9 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { describe, expect, it, vi } from "vitest";
 import { type Reply, stubFetch } from "@/__tests__/testing";
-import { DeleteDialog } from "@/components/llm/delete-dialog";
-import { ProfileList } from "@/components/llm/profile-list";
-import type { LlmProfile, LlmProfileList } from "@/lib/llm";
+import { DeleteDialog } from "@/components/models/delete-dialog";
+import { ProfileList } from "@/components/models/profile-list";
+import type { LlmProfile, LlmProfileList } from "@/lib/models";
 
 const ENVIRONMENT: LlmProfile = {
   id: "environment",

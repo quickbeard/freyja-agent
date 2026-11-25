@@ -95,7 +95,7 @@ The Agents section shows every agent Freyja can hand work to as a card: its name
 
 ## Models
 
-The Models section, at `/llm`, shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
+The Models section, at `/models`, shows every profile as a card: its name, provider, model, base URL, the last four characters of its key, whether it is active, whether it can be used and why not, and its last test. **Add** saves a new profile, and its form can test the values before they are saved. A card has **Test**, **Set active**, **Edit**, and **Delete**; the environment's card has Test and Set active only. Activating a profile, deleting one, and changing the active one each ask for confirmation first, and activating one that is untested or failed its last test says so and offers to test it. A key typed into a form is sent once and kept nowhere in the browser.
 
 ## Where the console sends requests
 

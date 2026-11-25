@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { ProfileList } from "@/components/llm/profile-list";
+import { ProfileList } from "@/components/models/profile-list";
 
 export const metadata: Metadata = { title: "Models" };
 

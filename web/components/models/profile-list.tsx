@@ -10,7 +10,7 @@ import {
   type LlmProfileList,
   listProfiles,
   PROFILES_PATH,
-} from "@/lib/llm";
+} from "@/lib/models";
 import { ActivateDialog } from "./activate-dialog";
 import { DeleteDialog } from "./delete-dialog";
 import { ProfileCard } from "./profile-card";

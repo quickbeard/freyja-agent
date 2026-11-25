@@ -19,7 +19,7 @@ import {
   type LlmProfileList,
   type LlmTestResult,
   testProfile,
-} from "@/lib/llm";
+} from "@/lib/models";
 import { outcome, TestResult } from "./test-result";
 
 function Confirmation({

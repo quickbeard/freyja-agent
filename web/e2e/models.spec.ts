@@ -18,7 +18,7 @@ test("a service configured through its environment shows one card, active and re
   page,
 }) => {
   await answerProfiles(page, { list: profileList(environmentProfile()) });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   const environment = card(page, "Environment");
   await expect(environment).toBeVisible();
@@ -51,7 +51,7 @@ test("saved profiles follow the environment's, and only the active one is marked
       }),
     ),
   });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(page.getByRole("heading", { level: 3 })).toHaveText([
     "Environment",
@@ -91,7 +91,7 @@ test("the section says so when no usable model is active", async ({ page }) => {
       }),
     ),
   });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(alerts(page)).toContainText("No usable model is active");
   const environment = card(page, "Environment");
@@ -110,7 +110,7 @@ test("a refusal shows the service's reason and no card", async ({ page }) => {
       message: "The profiles cannot be read.",
     },
   });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(alerts(page)).toContainText("The profiles cannot be read.");
   await expect(cards(page)).toHaveCount(0);
@@ -127,7 +127,7 @@ test("Refresh reads the list again", async ({ page }) => {
       ),
     },
   );
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(card(page, "Environment")).toBeVisible();
   await expect(card(page, "Claude")).toHaveCount(0);
 
@@ -146,7 +146,7 @@ test("with the service stopped the section says so, and recovers when asked to t
 }) => {
   // No answer is handed to the page, so its request goes to the web app's server, which
   // forwards it to a service that is not there (playwright.config.ts).
-  await page.goto("/llm");
+  await page.goto("/models");
 
   const alert = alerts(page);
   await expect(alert).toContainText(UNREACHABLE);
@@ -165,7 +165,7 @@ test("cards shown before are not shown as current once the service stops answeri
   page,
 }) => {
   await answerProfiles(page, { list: profileList(environmentProfile()) });
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(card(page, "Environment")).toBeVisible();
 
   // From here the page's requests reach the web app's server and the absent service.
@@ -189,7 +189,7 @@ test("while the active profile is not usable the section says so, until a usable
       unusable_reason: "key_unreadable",
     }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   // The service did not fall back to the environment's profile: the unusable one is active.
   await expect(alerts(page)).toContainText("No usable model is active");
@@ -231,7 +231,7 @@ test("a console that opens on a service with no key in its environment says no u
       unusable_reason: "not_configured",
     }),
   ).serve(page);
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(alerts(page)).toContainText("No usable model is active");
   const environment = card(page, "Environment");

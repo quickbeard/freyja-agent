@@ -106,7 +106,7 @@ test("a new task sent with no usable model says why and offers its text again", 
   await expect(alerts(page)).toContainText(NO_USABLE_MODEL);
   await expect(
     page.getByRole("link", { name: "Go to the Models section" }),
-  ).toHaveAttribute("href", "/llm");
+  ).toHaveAttribute("href", "/models");
   await expect(page.getByText("Task not found")).toBeHidden();
   const again = page.getByLabel("Send the message again");
   await expect(again).toHaveValue("Summarize the week.");
@@ -247,7 +247,7 @@ test("the sidebar says how many tasks need a decision, on another section", asyn
   await answerThreads(page, {
     list: { threads: [], needs_decision: 3, total: 3, more: false },
   });
-  await page.goto("/llm");
+  await page.goto("/models");
 
   await expect(tasksItem(page)).toContainText("3 to decide");
   expect(await said(page)).toBe("3 tasks need a decision");
@@ -276,7 +276,7 @@ test("the sidebar's number appears within fifteen seconds of a change made elsew
     });
   });
   await page.clock.install();
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(tasksEntry(page)).toBeVisible();
   await expect.poll(() => readings).toBeGreaterThan(0);
   await expect(tasksItem(page)).not.toContainText("to decide");
@@ -311,7 +311,7 @@ test("the number goes once the proposal is decided, without a reload", async ({
   await service.serve(page);
   await answerProfiles(page, { list: profileList(environmentProfile()) });
 
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(tasksItem(page)).toContainText("1 to decide");
   await tasksEntry(page).click();
   await expect(rows(page)).toHaveCount(1);

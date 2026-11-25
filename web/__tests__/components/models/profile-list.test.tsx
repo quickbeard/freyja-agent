@@ -2,8 +2,8 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { SWRConfig } from "swr";
 import { describe, expect, it } from "vitest";
 import { type Reply, stubFetch } from "@/__tests__/testing";
-import { ProfileList } from "@/components/llm/profile-list";
-import type { LlmProfile, LlmProfileList } from "@/lib/llm";
+import { ProfileList } from "@/components/models/profile-list";
+import type { LlmProfile, LlmProfileList } from "@/lib/models";
 
 const ENVIRONMENT: LlmProfile = {
   id: "environment",

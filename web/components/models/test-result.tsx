@@ -1,4 +1,4 @@
-import { type LlmLastTest, TEST_STEPS } from "@/lib/llm";
+import { type LlmLastTest, TEST_STEPS } from "@/lib/models";
 
 const WHEN = new Intl.DateTimeFormat(undefined, {
   dateStyle: "medium",

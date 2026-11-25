@@ -26,7 +26,7 @@ test("the console opens on the Tasks section", async ({ page }) => {
   await expect(
     page.getByRole("heading", { level: 1, name: "Tasks" }),
   ).toBeVisible();
-  // The sidebar lists Tasks first, then Agents, then Models, whose address stays /llm.
+  // The sidebar lists Tasks first, then Agents, then Models.
   await expect(sections(page).getByRole("link")).toHaveText([
     "Tasks",
     "Agents",
@@ -37,12 +37,12 @@ test("the console opens on the Tasks section", async ({ page }) => {
   const models = sections(page).getByRole("link", { name: "Models" });
   await expect(tasks).toHaveAttribute("aria-current", "page");
   await expect(agents).not.toHaveAttribute("aria-current");
-  await expect(models).toHaveAttribute("href", "/llm");
+  await expect(models).toHaveAttribute("href", "/models");
   await expect(models).not.toHaveAttribute("aria-current");
 });
 
-test("the Models section is at /llm under its new name", async ({ page }) => {
-  await page.goto("/llm");
+test("the Models section is at /models", async ({ page }) => {
+  await page.goto("/models");
 
   await expect(page).toHaveTitle("Models · Freyja");
   await expect(
@@ -57,7 +57,7 @@ test("the sidebar leads to the Agents section, which lists the agents", async ({
   page,
 }) => {
   await answerAgents(page, { list: agentList(environmentAgent("hello")) });
-  await page.goto("/llm");
+  await page.goto("/models");
   await sections(page).getByRole("link", { name: "Agents" }).click();
 
   await expect(page).toHaveURL("/agents");
@@ -75,13 +75,13 @@ test("the sidebar leads to the Agents section, which lists the agents", async ({
 
   // And back again: the sidebar is still there.
   await sections(page).getByRole("link", { name: "Models" }).click();
-  await expect(page).toHaveURL("/llm");
+  await expect(page).toHaveURL("/models");
 });
 
 test("the sidebar is set apart from the page by its color and an edge", async ({
   page,
 }) => {
-  await page.goto("/llm");
+  await page.goto("/models");
   await expect(sections(page)).toBeVisible();
 
   const look = await page.evaluate(() => {
@@ -124,7 +124,7 @@ test.describe("in a narrow window", () => {
   test.use({ viewport: { width: 500, height: 800 } });
 
   test("the sidebar is hidden until its control opens it", async ({ page }) => {
-    await page.goto("/llm");
+    await page.goto("/models");
     await expect(
       page.getByRole("heading", { level: 3, name: "Environment" }),
     ).toBeVisible();
@@ -151,7 +151,7 @@ const FRAME_HEADERS = {
   "x-frame-options": "DENY",
 };
 
-for (const path of ["/llm", "/agents"]) {
+for (const path of ["/models", "/agents"]) {
   test(`${path} is answered with the headers that forbid a frame`, async ({
     request,
   }) => {
@@ -176,7 +176,7 @@ test("a page of another origin that frames the console is shown nothing of it", 
   }
   // The same server under its other name is another origin to a browser: the console runs
   // on localhost, and this page is served from 127.0.0.1.
-  const framedConsole = new URL("/llm", baseURL);
+  const framedConsole = new URL("/models", baseURL);
   expect(framedConsole.hostname).toBe("localhost");
   const origin = `http://127.0.0.1:${framedConsole.port}`;
   const elsewhere = `${origin}/a-page-of-another-origin`;

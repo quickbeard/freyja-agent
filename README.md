@@ -12,7 +12,7 @@ uv run pre-commit install       # one-time per clone: runs the linters and the u
 (cd web && pnpm install)        # web app dependencies; needs Node and pnpm
 ```
 
-`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. To save [LLM profiles](docs/llm-profiles.md) the service also needs `FREYJA_SECRET_KEY`, which is left unset there. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
+`.env` is git-ignored. The compose file and `.env.example` carry the same local-only database credentials, so the copied file connects without edits; only the model key needs filling in. To save [LLM profiles](docs/models.md) the service also needs `FREYJA_SECRET_KEY`, which is left unset there. uv stops reading `.env` at the first line it cannot parse, such as a model line still holding a `<...>` placeholder, and only warns, so every line after it is ignored: fill in or comment out the block you do not use.
 
 ## Run the dev server
 
@@ -28,7 +28,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the four agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`, `freyja_agent_calls`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`), the table of the thread index (`freyja_threads`), and the two tables of tasks received from other agents (`freyja_a2a_conversations`, `freyja_a2a_tasks`, made with `FREYJA_A2A_SERVER` off too, so that turning it on needs no step of its own) if they are missing. A task table created by an earlier version gains the columns added since: `agent_ref`, `progress`, and `progress_at`. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](docs/llm-profiles.md#no-usable-model)).
+Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the four agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`, `freyja_agent_calls`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`), the table of the thread index (`freyja_threads`), and the two tables of tasks received from other agents (`freyja_a2a_conversations`, `freyja_a2a_tasks`, made with `FREYJA_A2A_SERVER` off too, so that turning it on needs no step of its own) if they are missing. A task table created by an earlier version gains the columns added since: `agent_ref`, `progress`, and `progress_at`. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](docs/models.md#no-usable-model)).
 
 Check it is up:
 
@@ -51,7 +51,7 @@ curl -N -X POST localhost:8000/threads/demo-1/runs \
 
 The rest is documented by topic under `docs/`, listed in the order a newcomer needs it. Each doc ends with a link to the next one, and each also stands alone as a reference:
 
-1. [LLM profiles](docs/llm-profiles.md): saving, testing, and activating the ways to reach a model, and how their keys are kept secret. Nothing runs without a usable model.
+1. [Models](docs/models.md): saving, testing, and activating LLM profiles, the ways to reach a model, and how their keys are kept secret. Nothing runs without a usable model.
 2. [Use the API](docs/api.md): threads, runs and their events, deciding on a proposal, the list of threads, runs that go on without a reader, stopping a run, and the host names the service answers for.
 3. [Tool servers](docs/tool-servers.md): connecting MCP servers, which of their tools run without approval, what happens when one fails, and the catalog.
 4. [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
@@ -127,7 +127,7 @@ To try the stand-in agent by hand, serve it on loopback and list it as an agent:
 uv run python -m tests.a2a_stub --http 9998   # http://127.0.0.1:9998
 ```
 
-It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `steps <n> <seconds>` (a task that reports "Step k of n" every `<seconds>`, then completes), `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](docs/llm-profiles.md#try-it-with-the-stand-in-endpoint).
+It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `steps <n> <seconds>` (a task that reports "Step k of n" every `<seconds>`, then completes), `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](docs/models.md#try-it-with-the-stand-in-endpoint).
 
 The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
 
@@ -161,7 +161,7 @@ pnpm exec playwright install chromium firefox   # once per machine: downloads th
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the Models section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` for adding an agent, checking one, changing one's approval choice, moving one, and removing one. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `models.spec.ts` for the Models section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` for adding an agent, checking one, changing one's approval choice, moving one, and removing one. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 
@@ -194,7 +194,7 @@ docker build --build-arg FREYJA_API_URL=http://freyja-agent:8000 -t freyja-web w
 
 The base image and the image uv is taken from can come from a mirror: `--build-arg BASE_IMAGE=...` for both Dockerfiles and `--build-arg UV_IMAGE=...` for the service's. The service image carries Python and the service alone. A tool server that Freyja launches with a command (`FREYJA_MCP_SERVERS` with `command`) needs that command in the image, and `uvx`, `npx`, and `git` are not there: use a server with a `url`, or build an image of your own on top of this one.
 
-Each image has a health check: the service's asks `/healthz`, the console's its own Models page (`/llm`), both on loopback.
+Each image has a health check: the service's asks `/healthz`, the console's its own Models page (`/models`), both on loopback.
 
 ## Security scans
 
@@ -222,7 +222,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_PORT` | `8000` | Bind port for `freyja-api`. |
 | `FREYJA_ALLOWED_HOSTS` | `[]` | The host names the service answers for, as a JSON list of names alone (no scheme, port, or path). `localhost` and IP addresses need no entry. A request made for any other name is refused with `403` `unknown_host`; see **Host names** under [Use the API](docs/api.md). A deployment lists the name its console is opened under and, where the console reaches the service by a name, that name. An entry that is no host name stops startup. |
 | `FREYJA_DATABASE_URI` | none, required | Postgres connection for the checkpointer, store, and run locks. No default because it carries credentials; `.env.example` has the value the compose container uses. |
-| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. With the provider's variables below it is the environment's [LLM profile](docs/llm-profiles.md), used until a saved profile is activated. |
+| `FREYJA_MODEL` | `anthropic:claude-sonnet-5-5` | Model for the orchestrator, as a LangChain `provider:model` string. Installed providers: `openai`, `anthropic`, `openrouter`. With the provider's variables below it is the environment's [LLM profile](docs/models.md), used until a saved profile is activated. |
 | `FREYJA_OPENAI_RESPONSES_API` | `true` | Whether an `openai:` model is called through OpenAI's Responses API or, when `false`, through chat completions. Set `false` for an OpenAI-compatible server whose Responses API answers a first message and refuses every later one. Other providers ignore it. |
 | `FREYJA_WORKSPACE_DIR` | `workspace` | Root of the orchestrator's file tools. `skills/` inside it is committed source; `cases/` is written at runtime and git-ignored. |
 | `FREYJA_MAX_STEPS` | `50` | Maximum orchestrator steps per run. Reaching it ends the run with an `error` event of code `step_limit`; the thread stays usable. A plain reply takes about 7 steps and each tool call about 4 more, so the default allows roughly ten tool calls per turn and values below 11 stop every tool call. |
@@ -238,7 +238,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_BACKGROUND_RUN_ATTEMPTS` | `3` | Attempts for one background run, the first included. |
 | `FREYJA_BACKGROUND_RETRY_SECONDS` | `60` | Wait between background run attempts. |
 | `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one service instance; further ones wait their turn. |
-| `FREYJA_SECRET_KEY` | unset | The secret that protects the API keys of saved LLM profiles: a Fernet key, 44 URL-safe base64 characters. Unset, the service starts and saves no profile; a value that is not a Fernet key stops startup. See [The secret](docs/llm-profiles.md#the-secret). |
+| `FREYJA_SECRET_KEY` | unset | The secret that protects the API keys of saved LLM profiles: a Fernet key, 44 URL-safe base64 characters. Unset, the service starts and saves no profile; a value that is not a Fernet key stops startup. See [The secret](docs/models.md#the-secret). |
 | `FREYJA_LLM_TEST_TIMEOUT_SECONDS` | `60` | The most a test of an LLM profile may take, both requests together. Greater than 0 and at most 60. |
 | `FREYJA_A2A_SERVER` | `false` | Receiving tasks from other agents over A2A. This version serves no route to callers. With it on, the service builds a second orchestrator for the threads callers start: on it every message to a delegate agent waits for a person, whatever the agent's approval choice, a named caller's runs work in a directory of their own, and the model is told an alias in place of its thread's id. A thread a caller started is never run on the other orchestrator, and with the feature off it is not run at all: a message or a decision on it is refused with `409` `a2a_server_off`, and its state is still read. With it off, the three settings below are not used or checked. |
 | `FREYJA_A2A_SERVER_CALLER_TASKS` | `5` | Received tasks in progress at once for one caller, 1 to 100. |
