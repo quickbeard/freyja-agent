@@ -1,0 +1,191 @@
+openapi: 3.1.0
+info:
+  title: Freyja Orchestrator
+  version: 0.9.0
+  description: >
+    Changes made by feature 009 to the service's own API. The A2A operations a caller uses are
+    not part of this API and are in a2a-server.md. No path is added here. Four things change,
+    each only for a thread that a caller started over A2A; no thread that existed before this
+    feature is one, and on a deployment that never had the feature on nothing here applies:
+
+    1. A thread's row gains `caller`. By the compatibility rule of feature 001, a key may be
+    added without notice and a client ignores what it does not recognize.
+
+    2. A message sent to a caller's thread through this API is refused with 409 and the code
+    `caller_thread`: only its caller adds messages to its conversation.
+
+    3. An approval or an edit of a proposal on a caller's thread is refused with 409 and the
+    code `requester_gone` while the conversation has no task that is still working, as after
+    its caller canceled. A rejection is accepted.
+
+    4. With the feature off, a message to a caller's thread and a decision on its proposal
+    are refused with 409 and the code `a2a_server_off`: such a thread is run only while the
+    feature is on. Its row and its state are read as before.
+
+    Everything else of these paths, their other answers, the refusal of other origins, and the
+    refusal of unknown host names, is as features 001, 003, 005, and 007 have it; see
+    ../../007-web-tasks/contracts/openapi.yaml.
+paths:
+  /threads:
+    get:
+      summary: List the threads and say how many need a decision
+      description: >
+        Unchanged from 007 except that each row has `caller`. While the feature is on, the
+        list reads which of its rows are callers' in one more query; when that cannot be
+        read, the list answers 500 as it does when the index cannot be read, and never shows
+        a caller's thread as a person's.
+      responses:
+        "200":
+          description: The list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  threads:
+                    type: array
+                    items: { $ref: "#/components/schemas/ThreadSummary" }
+              example:
+                threads:
+                  - thread_id: 5d2f0c1e9a7b4c33a1f08e6d2b7c9a40
+                    first_message: "Compile the weekly report and tell the team it is ready."
+                    status: needs_decision
+                    error: null
+                    created_at: "2026-11-25T10:00:41.512000+00:00"
+                    changed_at: "2026-11-25T10:00:44.004000+00:00"
+                    stoppable: false
+                    stopping: false
+                    runs: 1
+                    caller: { name: artex, canceled: false, configured: true }
+                needs_decision: 1
+                total: 1
+                more: false
+  /threads/{thread_id}:
+    get:
+      summary: One thread's row
+      description: Unchanged from 007 except that the row has `caller`.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "200":
+          description: The row
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ThreadSummary" }
+  /threads/{thread_id}/runs:
+    post:
+      summary: Start a run with a message and stream it
+      description: Unchanged from 001 except for the refusal below.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "409":
+          $ref: "#/components/responses/CallerThread"
+  /threads/{thread_id}/runs/unattended:
+    post:
+      summary: Start a run that goes on when its reader leaves
+      description: Unchanged from 007 except for the refusal below.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "409":
+          $ref: "#/components/responses/CallerThread"
+  /threads/{thread_id}/resume:
+    post:
+      summary: Decide the pending proposal and stream the continuation
+      description: Unchanged from 001 except for the refusal below.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "409":
+          $ref: "#/components/responses/RequesterGone"
+  /threads/{thread_id}/resume/unattended:
+    post:
+      summary: Decide the pending proposal; the continuation goes on when its reader leaves
+      description: Unchanged from 007 except for the refusal below.
+      parameters:
+        - $ref: "#/components/parameters/ThreadId"
+      responses:
+        "409":
+          $ref: "#/components/responses/RequesterGone"
+components:
+  parameters:
+    ThreadId:
+      name: thread_id
+      in: path
+      required: true
+      schema: { type: string, minLength: 1, maxLength: 128 }
+  responses:
+    CallerThread:
+      description: >
+        Beside the reasons 001 and 007 give for 409. `caller_thread`: a caller started this
+        thread over A2A, and only that caller adds messages to it. Looked at before the
+        thread's lease is taken; nothing changed. When whether a caller started the thread
+        cannot be read, the answer is 500 and nothing starts. With the feature off the code
+        is `a2a_server_off`.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            detail:
+              code: caller_thread
+              message: "This task was started by another agent, and only that agent sends messages on it. Its proposals are decided and its run is stopped here as for any task."
+    RequesterGone:
+      description: >
+        Beside the reasons 001, 005, and 007 give for 409. `requester_gone`: the request
+        approves or edits an action of a proposal on a caller's thread whose conversation has
+        no task that is still working. The proposal is rejected by the service itself
+        shortly, with the reason that the requesting agent canceled. A request that rejects
+        every action is accepted, and so is one that repeats the decisions a person already
+        took for the proposal (005, `already_decided`). Looked at under the thread's lease;
+        nothing changed. With the feature off, every decision on a caller's thread is refused
+        with the code `a2a_server_off`, a rejection included: the thread is not run.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example:
+            detail:
+              code: requester_gone
+              message: "The agent that asked for this canceled its task, so the action is not carried out. The proposal can only be rejected."
+  schemas:
+    ThreadSummary:
+      type: object
+      description: As in 007, with `caller` added.
+      required: [caller]
+      properties:
+        first_message:
+          type: [string, "null"]
+          maxLength: 200
+          description: >
+            As in 007. For a thread a caller started, the beginning of the caller's first
+            message.
+        caller:
+          description: >
+            Null for a thread started in the console or through this API. For a thread a
+            caller started over A2A: who, and whether that caller canceled the last task of
+            the conversation.
+          oneOf:
+            - type: "null"
+            - type: object
+              required: [name, canceled, configured]
+              properties:
+                name:
+                  type: string
+                  maxLength: 32
+                  description: The caller's name as the deployment configured it, or `local` for an agent that called on the service's own address without a token.
+                canceled:
+                  type: boolean
+                  description: True while the last task of the conversation is one its caller canceled, or one the service canceled because the deployment no longer names the caller.
+                configured:
+                  type: boolean
+                  description: Whether the settings name the caller now. Always true for `local`.
+    Error:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: object
+          required: [code, message]
+          properties:
+            code: { type: string }
+            message: { type: string }
