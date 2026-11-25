@@ -514,25 +514,25 @@ that found nothing new.
 
 ## Phase 7: Polish & Cross-Cutting Concerns
 
-- [ ] T040 Walk `specs/008-agent-task-progress/quickstart.md` from the first section to the
+- [X] T040 Walk `specs/008-agent-task-progress/quickstart.md` from the first section to the
       last on a check instance by the standing rules, with a real model that calls tools,
       and correct it where the built feature differs. Time SC-001's two bounds by hand,
       since no test does: a new text in the thread's state within 15 seconds, and on the
       open page within 30
-- [ ] T041 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
+- [X] T041 [P] Read `README.md`, `AGENTS.md`, and `web/README.md` once more against the
       code: they describe only what exists and name every file this feature added, and
       `AGENTS.md`'s convention on agents' addresses still says, as T020 wrote, that an
       agent's own words, its replies, its progress updates, and its kept progress, pass as
       written and are not searched (feature 005, FR-028)
-- [ ] T042 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
+- [X] T042 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
       `pyproject.toml` or a threshold in `web/vitest.config.mts` only with the owner's
       word, since both files are on the list to ask about; say in the request what the
       Postgres tests, which CI does not run, leave out of the service's number
-- [ ] T043 Run every gate once more on the finished branch: the commit hook over all files
+- [X] T043 Run every gate once more on the finished branch: the commit hook over all files
       (`uv run pre-commit run --all-files`), `pnpm test:e2e` in both browsers, the opt-in
       Postgres tests against `freyja_test` on port 5434, Semgrep, and Trivy as `AGENTS.md`
       gives them
-- [ ] T044 [P] Record in plan.md what was built differently from the plan, with the reason,
+- [X] T044 [P] Record in plan.md what was built differently from the plan, with the reason,
       and anything the quickstart walks found that no test covers
 
 ---

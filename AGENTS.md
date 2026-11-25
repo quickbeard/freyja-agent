@@ -425,10 +425,15 @@ startup and exits with an error naming the connection when it is unreachable.
   `mcp_stub.py` the stub MCP server, which
   records every call it
   receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
-  records every message and cancel and behaves by a keyword at the start of the message;
+  records every message and cancel and behaves by a keyword at the start of the message, and
+  which, for feature 008, sends `working_text` with every task's first working status, has a
+  held task send a working status with the text a test reports (`report`, which returns once
+  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`;
   `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams
   its replies as they are sent; `unattended_helpers.py` what the tests of the console's runs
   share (a tool step a test holds open, a stream read in a thread of its own);
+  `test_a2a_progress.py` the tests of feature 008, the progress of pending agent tasks, in
+  eight parts, from what counts as progress to the stream of an agent that does not stream;
   `integration/` holds the Postgres tests, skipped unless
   `FREYJA_TEST_DATABASE_URI` is set.
 - `.specify/`: Spec Kit templates, scripts, installed extensions, and the constitution. Feature
