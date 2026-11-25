@@ -5,6 +5,13 @@ stores, the model manager, the delegation worker, and this instance's id.
 Since feature 005 the orchestrator a piece of work uses is taken as a ``RunContext``: the
 graph, the catalog, the active model, and the agent set, all of one build, held until the
 context is released (005 research R3).
+
+Since feature 009 there are two builds while receiving tasks from other agents is on: the
+ordinary one, and a strict one for the threads callers start over A2A, on which every message
+to a delegate agent waits for a person, a named caller works in a file area of its own, and
+the model is told an alias in place of its thread's id. A context taken for a thread asks the
+received-task store who started it, with the feature on or off, and is the strict build's
+for a caller's thread (research R6).
 """
 
 import logging
@@ -13,14 +20,22 @@ from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
+from pathlib import Path
 from typing import Any
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.store.base import BaseStore
 
+from freyja_agent.agent.caller_files import CallerFiles
 from freyja_agent.agent.catalog import RESERVED_TOOL_NAMES, Catalog
-from freyja_agent.agent.factory import Orchestrator, build_agent, resolve_model
+from freyja_agent.agent.factory import (
+    SKILLS_SOURCE,
+    Orchestrator,
+    build_agent,
+    resolve_model,
+    workspace_backend,
+)
 from freyja_agent.config import Settings
 from freyja_agent.delegates.a2a_agents import AgentLink, AgentTransport, default_transport
 from freyja_agent.delegates.a2a_tools import agent_tools
@@ -62,6 +77,12 @@ from freyja_agent.runtime.agent_tasks import (
 )
 from freyja_agent.runtime.locks import PostgresRunLocks, RunLocks
 from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.received_tasks import (
+    Conversation,
+    InMemoryReceivedTaskStore,
+    PostgresReceivedTaskStore,
+    ReceivedTaskStore,
+)
 from freyja_agent.runtime.saved_agents import (
     InMemorySavedAgentStore,
     PostgresSavedAgentStore,
@@ -114,6 +135,8 @@ def _build(
     server_tools: Sequence[Any],
     task_store: AgentTaskStore,
     saved_store: SavedAgentStore,
+    strict: bool = False,
+    files_dir: str | None = None,
     **options: Any,
 ) -> Orchestrator:
     """The orchestrator around ``model`` with the tool servers' tools and the set's agents'.
@@ -122,8 +145,24 @@ def _build(
     approval choice, and a saved agent's tools are given the store they read their agent
     from before a send (005 research R7). Agent tasks exist only with agents: without any,
     the orchestrator is what it was before feature 003 (003 FR-024).
+
+    ``strict`` builds the orchestrator of callers' threads (feature 009, research R6): every
+    agent tool gated and checked for a person's decision before a send, the files of the
+    caller the run is for (``CallerFiles``, under ``files_dir``), and the thread named by its
+    alias.
     """
     links = agents.links if agents is not None else ()
+    if strict:
+        workspace = options["workspace_dir"]
+        options = {
+            **options,
+            "backend": CallerFiles(
+                workspace_backend(workspace),
+                files_dir or "",
+                Path(workspace) / SKILLS_SOURCE.strip("/"),
+            ),
+            "alias_threads": True,
+        }
     return build_agent(
         model,
         delegate_tools=[
@@ -132,7 +171,11 @@ def _build(
                 tool
                 for link in links
                 for tool in agent_tools(
-                    link, task_store, gated=agents.gated(link), saved=saved_store
+                    link,
+                    task_store,
+                    gated=agents.gated(link),
+                    saved=saved_store,
+                    strict=strict,
                 )
             ),
         ],
@@ -222,6 +265,13 @@ class Runtime:
     unattended: UnattendedRuns | None = None
     # The wrapper of the graph last built, so that every context of one build holds one graph.
     segmented: SegmentedGraph | None = field(default=None, repr=False)
+    # Feature 009: the conversations and received tasks of callers (research R8), and what
+    # this instance last built of the strict orchestrator, kept apart from the other build's
+    # so that neither is ever answered with the other's (research R6).
+    received_tasks: ReceivedTaskStore = field(default_factory=InMemoryReceivedTaskStore)
+    strict_agent: Any = None
+    strict_catalog: Catalog | None = None
+    strict_segmented: SegmentedGraph | None = field(default=None, repr=False)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -252,76 +302,112 @@ class Runtime:
             return ActiveModel(revision=0, profile=ENVIRONMENT_PROFILE)
         return self.models.active
 
-    def last_built(self) -> RunContext:
+    def last_built(self, *, strict: bool = False) -> RunContext:
         """What this instance last built, with its last set of agents, holding nothing.
 
         What a read falls back to when the current set cannot be learned (research R3).
+        ``strict`` asks for the strict build's, when one was built (feature 009).
         """
+        if strict and self.strict_agent is not None and self.strict_catalog is not None:
+            agent, catalog = self.strict_agent, self.strict_catalog
+        else:
+            agent, catalog = self.agent, self.catalog
         return RunContext(
-            agent=self.agent,
-            catalog=self.catalog,
+            agent=agent,
+            catalog=catalog,
             active=self.applied_model(),
             agents=self.built_for,
         )
 
-    async def begin_read(self) -> RunContext:
+    async def begin_read(self, thread_id: str | None = None) -> RunContext:
         """A context for a route that only reads: the current one, or the last one built.
 
         A read is answered from what this instance last had when the agents or the active
-        profile cannot be read just now, as the profile list is (FR-019). Release it.
+        profile cannot be read just now, as the profile list is (FR-019). Release it. A read
+        of one thread is given the build that thread runs on (feature 009).
         """
         try:
-            return await self.begin_run()
+            return await self.begin_run(thread_id)
         except Exception as exc:
             logger.warning(
-                "The agents or the active LLM profile could not be read (%s); answering "
+                "The agents, the active LLM profile, or who started the thread could not be "
+                "read (%s); answering "
                 "from what this instance last built",
                 type(exc).__name__,
             )
-            return self.last_built()
+            strict = False
+            if thread_id is not None:
+                with suppress(Exception):
+                    strict = await self.received_tasks.conversation_of(thread_id) is not None
+            return self.last_built(strict=strict)
 
-    async def begin_run(self) -> RunContext:
+    async def begin_run(self, thread_id: str | None = None) -> RunContext:
         """The orchestrator for the agents and the LLM profile as they are now (research R3).
 
         The set of agents is refreshed, one single-row read, and held; the model manager
         rebuilds when the profile or the set moved. Whoever takes a context releases it.
         ``agent`` and ``catalog`` follow, as what this instance last built.
 
+        Feature 009: given the thread a context is for, it asks the received-task store
+        whether a caller started the thread, one single-row read, with the feature on or off,
+        and gives a caller's thread the strict build. With the feature off there is no strict
+        build, and the ordinary build's wrapper refuses to run such a thread (research R6). A
+        lookup that fails fails the context.
+
         A runtime put together by hand, with no registry, gets a context from what it was
         given.
         """
         if self.models is None:
             return self.last_built()
+        conversation = await self.caller_of(thread_id)
         agents: AgentSet | None = None
         if self.registry is not None:
             agents = await self.registry.refresh()
             # Held before anything else is awaited: a set nothing holds may close its links.
             self.registry.hold(agents)
         try:
-            orchestrator, active = await self.models.current(agents)
+            orchestrator, strict, active = await self.models.builds(agents)
+            chosen = strict if conversation is not None and strict is not None else orchestrator
             # Feature 007: a console run's thread is run in segments, so that a stop is
             # applied between two steps; every other run is passed straight through (R4).
-            graph = self._segmented(orchestrator.agent)
+            graph = self._segmented(chosen.agent, strict=chosen is strict)
         except BaseException:
             if self.registry is not None and agents is not None:
                 await self.registry.release(agents)
             raise
         self.agent, self.catalog, self.built_for = orchestrator.agent, orchestrator.catalog, agents
+        if strict is not None:
+            self.strict_agent, self.strict_catalog = strict.agent, strict.catalog
         return RunContext(
             agent=graph,
-            catalog=orchestrator.catalog,
+            catalog=chosen.catalog,
             active=active,
             agents=agents,
             registry=self.registry,
         )
 
-    def _segmented(self, graph: Any) -> Any:
-        """``graph`` as a console run needs it: one wrapper per build (feature 007, R4)."""
+    async def caller_of(self, thread_id: str | None) -> Conversation | None:
+        """The conversation of a thread a caller started over A2A; None for any other."""
+        if thread_id is None:
+            return None
+        return await self.received_tasks.conversation_of(thread_id)
+
+    def _segmented(self, graph: Any, *, strict: bool = False) -> Any:
+        """``graph`` as a run needs it: one wrapper per build, which runs a console run's
+        thread in segments (feature 007, R4) and holds a caller's thread to the strict build
+        (feature 009, R6)."""
         if self.unattended is None:
             return graph
-        if self.segmented is None or self.segmented.graph is not graph:
-            self.segmented = SegmentedGraph(graph, self.unattended)
-        return self.segmented
+        kept = self.strict_segmented if strict else self.segmented
+        if kept is None or kept.graph is not graph:
+            kept = SegmentedGraph(graph, self.unattended)
+            kept.strict = strict
+            kept.lookup = self.received_tasks.conversation_of
+            if strict:
+                self.strict_segmented = kept
+            else:
+                self.segmented = kept
+        return kept
 
     async def model_for_run(self) -> ActiveModel:
         """Bring the orchestrator in step with the active profile, and say which it is.
@@ -352,6 +438,7 @@ class Runtime:
         model_factory: ModelFactory | None = None,
         saved_agents: SavedAgentStore | None = None,
         thread_index: ThreadIndex | None = None,
+        received_tasks: ReceivedTaskStore | None = None,
     ) -> AsyncIterator["Runtime"]:
         """Connect the tool servers and the agents, build the agent with their tools, and yield.
 
@@ -383,6 +470,10 @@ class Runtime:
         Feature 007 keeps an index of threads: ``thread_index``, or one in memory. The
         lease it is given is wrapped so that every run that takes it and gives it back is
         told to the index, whoever starts the run (007 research R6).
+
+        Feature 009 keeps conversations and received tasks: ``received_tasks``, or a store in
+        memory. While the feature is on, the model manager builds the strict orchestrator for
+        callers' threads beside the other (research R6).
         """
         index = thread_index if thread_index is not None else InMemoryThreadIndex()
         locks = IndexedRunLocks(locks, index)
@@ -437,6 +528,16 @@ class Runtime:
                 # The credentials to take out of an error: the one that is sent, and the
                 # key the client holds or the environment names where that is another.
                 secrets = access.secrets
+                build_options: dict[str, Any] = {
+                    "server_tools": server_tools,
+                    "task_store": task_store,
+                    "saved_store": saved_store,
+                    "checkpointer": checkpointer,
+                    "store": store,
+                    "workspace_dir": settings.workspace_dir,
+                    "max_steps": settings.max_steps,
+                    "openai_responses_api": settings.openai_responses_api,
+                }
                 manager = ModelManager(
                     store=profile_store,
                     secret=settings.secret_key,
@@ -450,16 +551,17 @@ class Runtime:
                         if provider and not key and not isinstance(model, BaseChatModel)
                         else None
                     ),
-                    build=partial(
-                        _build,
-                        server_tools=server_tools,
-                        task_store=task_store,
-                        saved_store=saved_store,
-                        checkpointer=checkpointer,
-                        store=store,
-                        workspace_dir=settings.workspace_dir,
-                        max_steps=settings.max_steps,
-                        openai_responses_api=settings.openai_responses_api,
+                    build=partial(_build, **build_options),
+                    # Feature 009: the strict build exists only while the feature is on.
+                    strict_build=(
+                        partial(
+                            _build,
+                            **build_options,
+                            strict=True,
+                            files_dir=settings.a2a_server_files_dir,
+                        )
+                        if settings.a2a_server
+                        else None
                     ),
                 )
                 orchestrator = await manager.load(agents)
@@ -497,7 +599,15 @@ class Runtime:
                     instance_id=instance_id or uuid.uuid4().hex,
                     settings=settings,
                     threads=index,
+                    received_tasks=(
+                        received_tasks
+                        if received_tasks is not None
+                        else InMemoryReceivedTaskStore()
+                    ),
                 )
+                if manager.strict is not None:
+                    runtime.strict_agent = manager.strict.agent
+                    runtime.strict_catalog = manager.strict.catalog
                 # At startup, each profile that is not usable, with the reason (FR-024).
                 if described.unusable_reason is not None:
                     logger.warning(
@@ -518,6 +628,8 @@ class Runtime:
                 # Feature 007: a graph a console run could not be stopped in stops startup.
                 runtime.unattended = UnattendedRuns(index, runtime.instance_id)
                 SegmentedGraph(orchestrator.agent, runtime.unattended)
+                if manager.strict is not None:
+                    SegmentedGraph(manager.strict.agent, runtime.unattended)
                 runtime.worker = DelegationWorker(runtime)
                 if run_worker:
                     runtime.worker.start()
@@ -563,6 +675,10 @@ class Runtime:
             await saved_agents.setup()
             thread_index = PostgresThreadIndex(persistence.pool)
             await thread_index.setup()
+            # Feature 009: made with the feature off too, so that turning it on needs no step
+            # of its own and a context can always ask who started a thread.
+            received_tasks = PostgresReceivedTaskStore(persistence.pool)
+            await received_tasks.setup()
             logger.info("Persistence ready: checkpointer, store, and run-lock table")
             async with cls.assemble(
                 settings,
@@ -577,6 +693,7 @@ class Runtime:
                 llm_profiles=llm_profiles,
                 saved_agents=saved_agents,
                 thread_index=thread_index,
+                received_tasks=received_tasks,
             ) as runtime:
                 yield runtime
         finally:

@@ -45,6 +45,17 @@ def test_the_service_image_sets_no_configuration():
     assert _last_stage(SERVICE)[-1] == 'CMD ["freyja-api"]'
 
 
+def test_the_service_image_lets_its_user_write_where_the_service_writes():
+    """The workspace's cases and a named caller's files (feature 009, FR-009a): made in the
+    image and given to the user the service runs as, and nothing else of /app."""
+    stage = _last_stage(SERVICE)
+    made = [" ".join(line.split()) for line in stage if line.startswith("RUN mkdir")]
+    assert made == [
+        "RUN mkdir -p /app/workspace/cases /app/caller-files "
+        "&& chown 65532:65532 /app/workspace/cases /app/caller-files"
+    ]
+
+
 def test_the_web_image_listens_on_loopback_unless_told_otherwise():
     env = _env(_last_stage(WEB))
 

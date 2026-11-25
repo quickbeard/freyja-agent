@@ -75,7 +75,11 @@ COPY --from=builder /app/.venv /app/.venv
 # service runs and is the one directory it needs to write to: mount a volume there to keep
 # what it writes.
 COPY workspace/skills /app/workspace/skills
-RUN mkdir -p /app/workspace/cases && chown 65532:65532 /app/workspace/cases
+# A named caller's files (feature 009, FREYJA_A2A_SERVER_FILES_DIR, `caller-files` under the
+# working directory), beside the workspace and never inside it; written while the service
+# runs, like cases/.
+RUN mkdir -p /app/workspace/cases /app/caller-files \
+    && chown 65532:65532 /app/workspace/cases /app/caller-files
 
 # The base's own unprivileged user, by number, so an orchestrator can check it is not root.
 USER 65532:65532

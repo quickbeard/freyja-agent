@@ -688,3 +688,38 @@ async def test_a_thread_the_index_does_not_know_is_opened_from_its_state(
         await open_thread(reader.index, context, reader.tasks, "none", lease_active=False) is None
     )
     assert await reader.index.get("none") is None
+
+
+# Feature 009 (research R9): what follows a release.
+
+
+async def test_the_lease_tells_who_asked_after_every_release_and_never_waits(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    inner = InMemoryRunLocks(60)
+    index = InMemoryThreadIndex()
+    locks = IndexedRunLocks(inner, index)
+    told: list[tuple[str, bool, str | None]] = []
+
+    def released(thread_id: str) -> None:
+        # Called once the lease is back and the index was told.
+        told.append(
+            (thread_id, inner._rows.get(thread_id) is None, index._rows[thread_id].run_owner)
+        )
+
+    locks.on_release = released
+    assert await locks.acquire("t-1", A)
+    assert not await locks.acquire("t-1", B)
+    assert told == []
+    await locks.release("t-1", A)
+    assert told == [("t-1", True, None)]
+
+    def broken(_thread_id: str) -> None:
+        raise RuntimeError("could not start")
+
+    locks.on_release = broken
+    caplog.set_level(logging.ERROR, logger="freyja_agent.runtime.thread_index")
+    assert await locks.acquire("t-2", A)
+    await locks.release("t-2", A)
+    assert await inner.is_active("t-2") is False
+    assert "t-2" in caplog.text

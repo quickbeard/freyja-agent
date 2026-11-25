@@ -1,4 +1,5 @@
 import asyncio
+import functools
 import json
 import os
 import re
@@ -36,9 +37,10 @@ from freyja_agent.llm.providers import ModelFactory
 from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileStore
 from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
 from freyja_agent.runtime.locks import InMemoryRunLocks
+from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore, ReceivedTaskStore
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore, SavedAgentRecord
-from freyja_agent.runtime.thread_index import ThreadIndex
+from freyja_agent.runtime.thread_index import InMemoryThreadIndex, ThreadIndex
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
 from tests.asgi_stream import StreamingASGITransport
@@ -231,6 +233,9 @@ class A2aApp:
     # Stand-ins found by where an address leads: every saved agent's, and any added with
     # ``add_stub``. Shared between apps, like the stores.
     at: dict[str, tuple[StubAgent, StreamingASGITransport]] = field(default_factory=dict)
+    # The checkpointer and the lease of the app, to pass on to a second app (feature 009).
+    saver: InMemorySaver | None = None
+    locks: InMemoryRunLocks | None = None
 
     @property
     def runtime(self) -> Runtime:
@@ -295,6 +300,8 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         saved_agents: InMemorySavedAgentStore | None = None,
         saved: dict[str, dict[str, Any]] | None = None,
         at: dict[str, tuple[StubAgent, StreamingASGITransport]] | None = None,
+        received_tasks: ReceivedTaskStore | None = None,
+        thread_index: ThreadIndex | None = None,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -323,6 +330,8 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
             store=task_store,
             saved_agents=saved_agents or InMemorySavedAgentStore(task_store, clock=clock.now),
             at=at if at is not None else {},
+            saver=checkpointer,
+            locks=lock_store,
         )
         for name, entry in (saved or {}).items():
             stub = entry.get("stub") or make_a2a_stub(name)
@@ -365,6 +374,9 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 llm_profiles=llm_profiles,
                 model_factory=model_factory,
                 saved_agents=made.saved_agents,
+                # Feature 009: given by ``make_a2a_server_app``, and shared with a second app.
+                received_tasks=received_tasks,
+                thread_index=thread_index,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
@@ -372,6 +384,136 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         made.open_runtime = open_runtime
         made.app = create_app(open_runtime=open_runtime)
         return made
+
+    return _make
+
+
+@dataclass
+class ServerApp:
+    """An app with feature 009 on, assembled as ``make_a2a_app`` assembles one (research R21).
+
+    ``a2a`` is that app, with its stand-in agents and stores. ``received`` is the store of
+    conversations and received tasks and ``index`` the index of threads, both shared with
+    an app made by ``again``, which stands for a restart or a second instance on the same
+    database; ``again`` takes the same settings as the fixture, the feature's switch
+    included. The scripted model is ``model``.
+
+    Later requests extend it: T090 adds the outside application.
+    """
+
+    a2a: A2aApp
+    model: BaseChatModel
+    received: InMemoryReceivedTaskStore
+    index: ThreadIndex
+    again: Callable[..., "ServerApp"]
+
+    @property
+    def app(self) -> FastAPI:
+        return self.a2a.app
+
+    @property
+    def runtime(self) -> Runtime:
+        return self.a2a.runtime
+
+    @property
+    def stub(self) -> StubAgent:
+        return next(iter(self.a2a.stubs.values()))
+
+    def service(self) -> Any:
+        """The ``ReceivedTasks`` of the running app."""
+        return self.app.state.received
+
+    def accept(
+        self,
+        client: Any,
+        text: str = "hello",
+        *,
+        caller: str = "local",
+        context: str = "c-1",
+        hops: int = 0,
+    ) -> Any:
+        """Accept a caller's message through the service, as the A2A routes will."""
+        return client.portal.call(
+            functools.partial(self.service().accept, caller, context, text, hops=hops)
+        )
+
+    def finish(self, client: Any, accepted: Any) -> list[tuple[str, Any]]:
+        """Read the run an accepted message started to its end, then wait for the look that
+        its lease's release started; the run's events as ``(kind, data)``."""
+        events = client.portal.call(read_events, accepted.events)
+        client.portal.call(self.service().close)
+        return events
+
+    def task(self, client: Any, task_id: str) -> Any:
+        return client.portal.call(self.received.get, task_id)
+
+
+async def read_events(events: Any) -> list[tuple[str, Any]]:
+    """Every event of a run's stream as ``(kind, data)``."""
+    found = []
+    async for event in events:
+        found.append((event.event, json.loads(event.data) if event.data else None))
+    return found
+
+
+@pytest.fixture
+def make_a2a_server_app(
+    make_a2a_app: Callable[..., A2aApp], clock: FakeClock
+) -> Callable[..., ServerApp]:
+    """Build an app the production way with feature 009 on, one stand-in agent, ``stub``,
+    which runs without approval unless ``read_only=False`` is given, and the scripted model.
+
+    Any setting of the feature, and ``a2a_server`` itself, is given as a keyword. ``agents``
+    replaces the one stand-in agent. Every store is in memory; ``again`` makes an app on
+    the same stores, for a restart or a second instance.
+    """
+
+    def _make(
+        model: BaseChatModel,
+        *,
+        agents: dict[str, dict[str, Any]] | None = None,
+        read_only: bool = True,
+        received: InMemoryReceivedTaskStore | None = None,
+        index: ThreadIndex | None = None,
+        shared: A2aApp | None = None,
+        instance_id: str = "instance-a",
+        **overrides: Any,
+    ) -> ServerApp:
+        overrides.setdefault("a2a_server", True)
+        store = received if received is not None else InMemoryReceivedTaskStore()
+        threads = index if index is not None else InMemoryThreadIndex()
+        sharing: dict[str, Any] = {}
+        if shared is not None:
+            sharing = {
+                "saver": shared.saver,
+                "store": shared.store,
+                "locks": shared.locks,
+                "saved_agents": shared.saved_agents,
+                "at": shared.at,
+            }
+        made = make_a2a_app(
+            model,
+            agents if agents is not None else {"stub": {"read_only": read_only}},
+            received_tasks=store,
+            thread_index=threads,
+            instance_id=instance_id,
+            **sharing,
+            **overrides,
+        )
+
+        def again(other: BaseChatModel | None = None, **changed: Any) -> ServerApp:
+            return _make(
+                other if other is not None else model,
+                agents=agents,
+                read_only=read_only,
+                received=store,
+                index=threads,
+                shared=made,
+                instance_id=changed.pop("instance_id", "instance-b"),
+                **{**overrides, **changed},
+            )
+
+        return ServerApp(made, model, store, threads, again)
 
     return _make
 

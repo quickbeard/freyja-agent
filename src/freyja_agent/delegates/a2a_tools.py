@@ -154,6 +154,9 @@ class _Send:
     # Where a saved agent is read before a send; None for an agent named in the environment,
     # which cannot change while the service runs.
     saved: SavedAgentStore | None
+    # Feature 009: built for the strict orchestrator of callers' threads, where every message
+    # to an agent waits for a person whatever the agent's choice (FR-013a, research R6).
+    strict: bool = False
 
 
 def agent_tools(
@@ -162,6 +165,7 @@ def agent_tools(
     *,
     gated: bool | None = None,
     saved: SavedAgentStore | None = None,
+    strict: bool = False,
 ) -> tuple[DelegateTool, DelegateTool]:
     """The hand-off and cancel tools of one agent, classified by its approval choice (FR-011).
 
@@ -172,6 +176,10 @@ def agent_tools(
 
     ``saved`` is the saved-agent store, which a saved agent's tools read before every send
     (005 FR-022). Tools for a saved agent are not built without it.
+
+    ``strict`` builds them for the strict orchestrator of the threads callers start over A2A
+    (feature 009): gated whatever ``gated`` says, and checked before every send for a
+    person's approval or edit (``_still_allowed``).
     """
     if link.source == "saved" and saved is None:
         raise ValueError(
@@ -179,8 +187,9 @@ def agent_tools(
         )
     if gated is None:
         gated = not link.read_only
+    gated = gated or strict
     classification = Classification.GATED if gated else Classification.READ_ONLY
-    send = _Send(link, store, gated, saved if link.source == "saved" else None)
+    send = _Send(link, store, gated, saved if link.source == "saved" else None, strict)
     handoff = StructuredTool(
         name=handoff_tool_name(link.name),
         description=handoff_description(link),
@@ -463,6 +472,10 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
     """
     link = send.link
     decided = call is not None and call.decided
+    if send.strict and not decided:
+        # Feature 009: on a caller's thread a message to an agent leaves only once a person
+        # approved or edited it, also when no row was kept for the call (FR-013a, R6).
+        raise _failed(link, needs_a_person(link.name))
     if send.saved is None:
         # A call with no row was proposed before the rows existed, and follows the tool.
         if send.gated and call is not None and not decided:
@@ -485,6 +498,14 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
         raise _failed(link, now_requires_approval(link.name))
     if taken:
         raise _failed(link, address_is_another_agent_s(link.name))
+
+
+def needs_a_person(agent: str) -> str:
+    """The result of a message to an agent from a caller's thread that no person decided."""
+    return (
+        f"Nothing was sent to agent '{agent}': on a task another agent started, a message to "
+        "an agent is sent only once a person approved it."
+    )
 
 
 def may_not_have_received(agent: str) -> str:

@@ -7,12 +7,14 @@ from fastapi import FastAPI
 from freyja_agent.api.agents import router as agents_router
 from freyja_agent.api.hosts import AllowedHosts
 from freyja_agent.api.llm import router as llm_router
+from freyja_agent.api.received import ReceivedTasks
 from freyja_agent.api.thread_index import router as thread_index_router
 from freyja_agent.api.threads import router as threads_router
 from freyja_agent.api.tools import router as tools_router
 from freyja_agent.config import Settings, settings
 from freyja_agent.delegates.addresses import install_log_scrubber
 from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.runtime.thread_index import IndexedRunLocks
 
 OpenRuntime = Callable[[Settings], AbstractAsyncContextManager[Runtime]]
 
@@ -26,6 +28,23 @@ def configure_logging() -> None:
     """
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s:     %(name)s: %(message)s")
     logging.getLogger("freyja_agent").setLevel(logging.INFO)
+
+
+def _receive_tasks(runtime: Runtime) -> ReceivedTasks:
+    """The A2A service of this runtime, told of the end of every run on any thread (R9)."""
+    received = ReceivedTasks(runtime)
+    if isinstance(runtime.locks, IndexedRunLocks):
+        runtime.locks.on_release = received.on_release
+    return received
+
+
+async def _stop_receiving(runtime: Runtime, received: ReceivedTasks) -> None:
+    """Stop looking at tasks when runs end, and wait for the looks under way. A task whose
+    run the service stops on its way down is read from its thread when it is next asked
+    for."""
+    if isinstance(runtime.locks, IndexedRunLocks):
+        runtime.locks.on_release = None
+    await received.close()
 
 
 def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
@@ -47,7 +66,15 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
         configure_logging()
         async with open_runtime(settings) as runtime:
             app.state.runtime = runtime
-            yield
+            # Feature 009: the runtime's own settings say whether the feature is on, since
+            # the application is made before its runtime (research R3).
+            received = _receive_tasks(runtime) if runtime.settings.a2a_server else None
+            app.state.received = received
+            try:
+                yield
+            finally:
+                if received is not None:
+                    await _stop_receiving(runtime, received)
 
     app = FastAPI(title="Freyja Orchestrator", lifespan=lifespan)
     # Before any route: a request made for a host name the deployment does not list is
