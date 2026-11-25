@@ -268,6 +268,9 @@ still pauses (FR-017, SC-007).
   two places that exist: the callback of the timer the view already has, and an effect that
   runs when a reading of the task arrives. No timer and no reading is added (FR-011). While
   the page is hidden the timer's callback returns before it does anything, as today.
+  *Since Phase 8 (T045, T046)* it is also read when the view mounts and when a hidden page is
+  shown again (a `visibilitychange` listener), so that a page opened again, or shown while
+  the service cannot be reached, words the age at once; neither is a timer or a reading.
 
 *verified* (Next.js docs, `01-app/03-api-reference/04-functions/io.md`): with Cache
 Components, a Client Component is prerendered on the server, and a read of `Date.now()`

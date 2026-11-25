@@ -38,8 +38,10 @@ export function awaited(task: AgentTask): boolean {
  * neither hides the page nor is cut (FR-012); a word longer than the box, such as a long
  * address, is broken, so that it never widens the page. The box can be reached by keyboard to scroll
  * it, takes its direction from its own text, and is no live region: a text read again every
- * few seconds is not announced each time it changes (research R8). Until the page has a
- * time to compare with, the text is shown without its age.
+ * few seconds is not announced each time it changes (research R8). It is described by the
+ * line that says how long ago its text was learned, so that a keyboard user who reaches it
+ * hears that too (T047). Until the page has a time to compare with, the text is shown
+ * without its age.
  */
 function Progress({
   agent,
@@ -50,9 +52,10 @@ function Progress({
   progress: NonNullable<AgentTask["progress"]>;
   now: number | null;
 }) {
+  const line = useId();
   return (
     <>
-      <p className="text-xs text-muted-foreground">
+      <p id={line} className="text-xs text-muted-foreground">
         Last reported by the agent
         {now !== null && (
           <>
@@ -69,6 +72,7 @@ function Progress({
       </p>
       <section
         aria-label={`Progress reported by ${agent}`}
+        aria-describedby={line}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: a box that scrolls must be reachable by keyboard to be scrolled without a pointer.
         tabIndex={0}
         dir="auto"

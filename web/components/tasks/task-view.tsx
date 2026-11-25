@@ -520,8 +520,9 @@ export function TaskView({ threadId }: { threadId: string }) {
   // time a reading begins or ends, which this view's effects are not written for.
   const reading = useRef({ row: false, state: false });
   // Feature 008: the browser's time, which how long ago an agent reported is worded from. It
-  // is read only in the timer below and when a reading of the task's state is answered,
-  // never while rendering, and is null until then (research R8). SWR hands the view the
+  // is read in the timer below, when a reading of the task's state is answered, when the
+  // view mounts, and when a hidden page is shown again, never while rendering, and is null
+  // until the first of them (research R8). SWR hands the view the
   // same data when a reading equals the one before, so an age worked out from the data
   // alone would stand still: the count of answered readings moves at each one.
   const [now, setNow] = useState<number | null>(null);
@@ -530,6 +531,22 @@ export function TaskView({ threadId }: { threadId: string }) {
       setNow(Date.now());
     }
   }, [stateReads]);
+  // Also when the page is opened: a reading the library takes for one already answered for
+  // another page counts no answered reading here (feature 008, T046).
+  useEffect(() => {
+    setNow(Date.now());
+  }, []);
+  // And when a hidden page is shown again, whether or not the reading made then is answered,
+  // so that its age is never the one it had when it was hidden (T045).
+  useEffect(() => {
+    const shown = () => {
+      if (document.visibilityState !== "hidden") {
+        setNow(Date.now());
+      }
+    };
+    document.addEventListener("visibilitychange", shown);
+    return () => document.removeEventListener("visibilitychange", shown);
+  }, []);
   useEffect(() => {
     if (period === null) {
       return;
