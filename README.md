@@ -560,7 +560,7 @@ To try the stand-in agent by hand, serve it on loopback and list it as an agent:
 uv run python -m tests.a2a_stub --http 9998   # http://127.0.0.1:9998
 ```
 
-It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](#try-it-with-the-stand-in-endpoint).
+It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `steps <n> <seconds>` (a task that reports "Step k of n" every `<seconds>`, then completes), `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](#try-it-with-the-stand-in-endpoint).
 
 The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
 

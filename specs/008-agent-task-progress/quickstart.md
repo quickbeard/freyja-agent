@@ -39,12 +39,18 @@ Add the agent in the console's Agents section as `stub` at `http://127.0.0.1:999
 leave it requiring approval. The commands below call the service on `localhost:8000`.
 
 The stand-in's keyword `steps <n> <seconds>` keeps a task working, reports "Step k of n"
-every `<seconds>`, and then completes.
+every `<seconds>`, and then completes. It acts on the keyword only at the start of the message
+it receives, and a model often words a hand-off its own way ("Please handle the following:
+steps 6 25. ..."). So each hand-off below is approved with its message edited to the keyword
+alone: on the proposal card, **Edit the arguments**, make them `{"message": "steps 6 25"}`
+(or the section's own keyword), and **Approve handoff_to_stub with these arguments**. When
+the model proposed the keyword alone, approve it as proposed.
 
 ## 1. Read how far a pending agent task is (User Story 1)
 
 In the Tasks section, send the task `Hand this to the stub agent: steps 6 25` and approve
-the hand-off. Copy the task's id from the page's address into `T`.
+the hand-off with the message `steps 6 25`, as said above. Copy the task's id from the page's
+address into `T`.
 
 - The run waits thirty seconds for the agent and ends with the note that the agent task is
   pending.
@@ -86,7 +92,8 @@ reported and replaced in that time is not seen.
 
 ## 2. See an agent's progress on the task's page (User Story 2)
 
-Send `Hand this to the stub agent: steps 30 10` and approve. Stay on the task's page.
+Send `Hand this to the stub agent: steps 30 10` and approve the hand-off with the message
+`steps 30 10`. Stay on the task's page.
 
 - Once the run has ended, the agent task is listed as pending, "The agent is working", and
   under it the page shows what the agent last reported, "Step 2 of 30" or a later one, and
@@ -126,13 +133,19 @@ Stop the stand-in and start it without streaming:
 uv run python -m tests.a2a_stub --http 9998 --name stub --no-streaming
 ```
 
-In the Agents section, check the agent `stub` so that its card is read again, and change it
-to run without approval, so that one request shows the whole run. The task's page shows the
-steps of a run and not an agent's updates, so this story is read from the stream itself:
+In the Agents section, check the agent `stub` so that its card is read again. The task's page
+shows the steps of a run and not an agent's updates, so this story is read from the stream
+itself. The run pauses for the hand-off, and the decision, sent with the message edited to
+the keyword, continues the run in the answer to the resume, which carries the hand-off:
 
 ```bash
-curl -sN -X POST localhost:8000/threads/q4-$(date +%s)/runs -H 'content-type: application/json' \
-  -d '{"message": "Hand this to the stub agent: steps 5 4"}' | grep '"node": *"agent"'
+Q=q4-$(date +%s)
+curl -sN -X POST localhost:8000/threads/$Q/runs -H 'content-type: application/json' \
+  -d '{"message": "Hand this to the stub agent: steps 5 4"}' | grep '^event: interrupt'
+I=$(curl -s localhost:8000/threads/$Q/state | jq -r .pending.interrupt_id)
+curl -sN -X POST localhost:8000/threads/$Q/resume -H 'content-type: application/json' \
+  -d '{"interrupt_id": "'"$I"'", "decisions": [{"type": "edit", "args": {"message": "steps 5 4"}}]}' \
+  | grep '"node": *"agent"'
 ```
 
 - After the `update` with `node: "agent"` for the task beginning to work, "Working on it.",
@@ -143,8 +156,6 @@ curl -sN -X POST localhost:8000/threads/q4-$(date +%s)/runs -H 'content-type: ap
   there was only the first, when the task began to work, and nothing until the hand-off
   returned.
 - No two lines in a row hold the same state and the same text.
-
-Set the agent back to requiring approval afterwards.
 
 ## Cleanup
 

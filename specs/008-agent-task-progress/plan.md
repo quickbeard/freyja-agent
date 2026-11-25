@@ -465,3 +465,93 @@ as a changed state. What differs from the tasks, and why:
   the model is told on every call. The progress text is set apart; those two are not. The
   docstring of `task_line` says so. Closing it changes feature 003's lines, and is the
   owner's to decide.
+
+### Request 4: Phase 7, the walk with a real model and the gates (2026-11-25)
+
+**The quickstart, walked from the first section to the last (T040)**, on a check instance by
+the standing rules: a copy of the owner's `.env` without its database, host, and port lines,
+its own database `freyja_check_progress`, the service on 8010, the stand-in on 9998, and the
+console with `pnpm dev` on 127.0.0.1:3010, driven in headless Chromium. The model was the
+owner's, an OpenAI-compatible endpoint through chat completions, which calls tools.
+
+- **A real model words a hand-off its own way.** Asked to "Hand this to the stub agent:
+  steps 6 25", it sent "Please handle the following: steps 6 25. (Relayed verbatim from the
+  user; ...)", and later "Please run steps 30 and 10, in that order, ...". The stand-in acts
+  on a keyword at the start of the message only, so such a task completed at once with no
+  steps. The quickstart now says to approve each hand-off with its message edited to the
+  keyword alone (**Edit the arguments** on the proposal card, or an `edit` decision through
+  the API), and section 4 decides its hand-off through `resume` with an edit, so that the
+  answer to the resume carries the hand-off's stream; it no longer asks to change the
+  agent's approval, which left no chance to correct the message. Every walk with the
+  stand-in model had passed the keyword through, since that model copies the text it is
+  given.
+- **The model uses the workspace's case-notes skill**: its first run listed and read the
+  cases under `workspace/cases/` and wrote notes for the task there. The walk went on with a
+  scratch workspace holding a copy of the skills (`FREYJA_WORKSPACE_DIR`), and the one case
+  folder the walk had written in the repository's workspace was removed.
+- **Every section was as written once the message was the keyword.** Section 1: "Step 1 of
+  6" when the hand-off ended, a check every ten seconds with `learned_at` staying between
+  changes, completion with "Step 5 of 6" kept, the outcome in the conversation recorded by
+  the service's own run and no message for any step, and the stand-in asked once for each
+  hand-off and once for each check. A restart kept the progress as it was. Section 2: "Step
+  3 of 30" and "just now" when the page opened; with the stand-in stopped, the text stayed,
+  the agent task stayed pending, and the age grew to "3 minutes ago", with the exact time on
+  hover; started again, the agent task ended failed and showed no progress, and the
+  conversation held the outcome. Section 3: the check listed "Step 8 of 30" indented, Freyja
+  answered "Still running — it reports being on step 8 of 30. No outcome yet; I'll report it
+  here when it finishes.", and the stand-in received no request because of the question.
+  Section 4: "Working on it.", "Step 1 of 5" to "Step 4 of 5" four seconds apart, each
+  within a second of being reported, and the completion after twenty seconds. The service's
+  log held no progress text.
+- **SC-001, timed by hand**: a new text was in the thread's state 2.4 to 7.2 seconds after
+  the agent sent it (bound: 15), and on the open page 5.0 to 13.1 seconds after (bound: 30).
+  The first step's apparent 24 seconds was when the timing began, not a delay: its
+  `learned_at` was the second it was sent, learned by the hand-off itself.
+
+**What the walks found that no test covers:**
+
+- A model that words a hand-off its own way. The suite's models are scripted and the
+  stand-in model copies its text, so only a walk with a real model shows it; the quickstart
+  now works with either.
+- SC-001's two bounds, which follow from the intervals and were timed only by hand.
+- A page hidden in a real browser: a headless browser cannot hide a tab, so the walks did not
+  see it; the view's unit tests do.
+- After a restart, the checks of a task resume only once the stopped instance's claim has
+  lapsed, up to thirty seconds later, and a step reported and replaced meanwhile is not
+  seen (request 1's walk). That is feature 003's rule for claims.
+
+**Built differently from the plan, over the four requests** (each recorded in its own notes
+above, with its reason):
+
+- `progress_text` cleans the text through `kept_progress`, since a protocol message cannot
+  hold a lone surrogate.
+- The stand-in's `report()` returns once the held tasks' statuses are stored, refuses a
+  report no task would send, and `release()` wakes the stand-in's loop; `StubAgent.task()`
+  reads its store without a request. The stand-in model gained the keyword `check`.
+- The README's startup paragraph names the two progress columns an earlier table gains.
+- The console's progress box is a named `<section>`, with a Biome suppression on its tab
+  stop, breaks a long word (`wrap-anywhere`, not `break-words`), and its age is set at every
+  answered reading of the task.
+- The check splits a text's lines by `splitlines()`. The last step of `steps` is seldom read
+  by a hand-off or a check, since the stand-in completes right after it.
+- No existing test was changed beyond `tests/test_state.py` (request 1); FR-022's allowance
+  for the check's result and a non-streaming hand-off's updates went unused.
+- Left open for the owner: the check's entry line holds the agent's task id and the task's
+  message as they are (feature 003), so a line break in either is not set apart.
+
+**Coverage against the starting point (T042)**: the service's statements 91.48% (91.39% at
+the start, `fail_under = 88`); the web app's statements 97.44%, branches 94.38%, functions
+97.17%, lines 97.95% (97.42 / 94.34 / 97.15 / 97.93 at the start, 90 each). Neither floor is
+raised: both files are the owner's to change. The service's number is measured as CI runs the
+suite, without the opt-in Postgres tests, so what only they run is counted as not run: in
+this feature, the two columns in `CREATE TABLE`, their two `_ADDED_COLUMNS` entries, and the
+progress as `PostgresAgentTaskStore` reads and writes it. The Postgres tests run all of it
+and pass.
+
+**Every gate on the finished branch (T043)**: the commit hook over all files passed (its
+first run was marked failed only because this file was written while its pytest step ran;
+the second, with nothing written meanwhile, passed): 1,962 tests passed and 133 skipped, and
+787 web unit tests passed. `pnpm test:e2e`: 304 passed in Chromium and Firefox. The opt-in
+Postgres tests against `freyja_test` on port 5434: 133 passed. Semgrep: no finding over the
+tree, nor over this feature's test files scanned by name. Trivy: no finding in the lock files
+or the Dockerfiles, nor in the service's image built from this branch.
