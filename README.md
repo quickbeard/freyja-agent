@@ -39,7 +39,7 @@ curl localhost:8000/healthz
 
 Interactive API docs are at <http://localhost:8000/docs>. There is no authentication: anyone who can reach the port acts as a user, which is why the server binds `127.0.0.1` by default.
 
-## Documentation
+## Docs
 
 With the service running, start a run and stream its events:
 
