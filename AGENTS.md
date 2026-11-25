@@ -309,8 +309,9 @@ startup and exits with an error naming the connection when it is unreachable.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
 - `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
-  shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/llm`;
-  `web/app/llm/` lists the LLM profiles as cards and `web/app/agents/` the agents, read from
+  shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/tasks`;
+  the sidebar lists Tasks, Agents, and Models, in that order. `web/app/llm/` is the Models
+  section, which lists the LLM profiles as cards, and `web/app/agents/` the agents, read from
   `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
   agent and changes a saved agent's address and approval choice (`agent-form.tsx`, which
   keeps nothing once it is sent or closed, asks for confirmation before it sends anything
@@ -397,7 +398,7 @@ startup and exits with an error naming the connection when it is unreachable.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
   (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest is
   told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
-  `console.spec.ts` covers the shell, `llm.spec.ts` the LLM section as it is read,
+  `console.spec.ts` covers the shell, `llm.spec.ts` the Models section as it is read,
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;

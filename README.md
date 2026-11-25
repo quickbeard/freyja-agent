@@ -55,7 +55,7 @@ The rest is documented by topic under `docs/`, listed in the order a newcomer ne
 2. [Use the API](docs/api.md): threads, runs and their events, deciding on a proposal, the list of threads, runs that go on without a reader, stopping a run, and the host names the service answers for.
 3. [Tool servers](docs/tool-servers.md): connecting MCP servers, which of their tools run without approval, what happens when one fails, and the catalog.
 4. [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
-5. [Web console](docs/web-console.md): the console under `web/`, with its LLM, Agents, and Tasks sections.
+5. [Web console](docs/web-console.md): the console under `web/`, with its Tasks, Agents, and Models sections.
 
 ## Lint and format
 
@@ -161,7 +161,7 @@ pnpm exec playwright install chromium firefox   # once per machine: downloads th
 pnpm test:e2e                  # playwright test
 ```
 
-Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the LLM section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` for adding an agent, checking one, changing one's approval choice, moving one, and removing one. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
+Playwright builds the app and serves it on port 3100 itself, so nothing needs to be running first, the Freyja service included: each test hands the page what the service would answer (`web/e2e/api.ts`), and the tests about a stopped service let the request through to an address nothing listens on. The tests are `*.spec.ts` files under `web/e2e/`: `console.spec.ts` for the sidebar and the sections, `llm.spec.ts` for the Models section as it is read, `profiles.spec.ts` for adding, activating, testing, changing, and deleting profiles, `agents.spec.ts` for the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` for adding an agent, checking one, changing one's approval choice, moving one, and removing one. Playwright reads nothing outside that directory, and Vitest skips it, so `pnpm test` and `pnpm test:e2e` never run each other's files. After a run, `pnpm exec playwright show-report` opens the report. To test in another browser as well, add a project for it in `web/playwright.config.ts`.
 
 The commit hook does not run them. CI does, when a file under `web/` changes: `.github/workflows/playwright.yml` on GitHub and `.gitlab-ci.yml` on GitLab, each keeping the report as an artifact. The GitLab job runs in Playwright's own image, whose version must equal the `@playwright/test` version in `web/pnpm-lock.yaml`.
 
@@ -194,7 +194,7 @@ docker build --build-arg FREYJA_API_URL=http://freyja-agent:8000 -t freyja-web w
 
 The base image and the image uv is taken from can come from a mirror: `--build-arg BASE_IMAGE=...` for both Dockerfiles and `--build-arg UV_IMAGE=...` for the service's. The service image carries Python and the service alone. A tool server that Freyja launches with a command (`FREYJA_MCP_SERVERS` with `command`) needs that command in the image, and `uvx`, `npx`, and `git` are not there: use a server with a `url`, or build an image of your own on top of this one.
 
-Each image has a health check: the service's asks `/healthz`, the console's its own LLM page, both on loopback.
+Each image has a health check: the service's asks `/healthz`, the console's its own Models page (`/llm`), both on loopback.
 
 ## Security scans
 
