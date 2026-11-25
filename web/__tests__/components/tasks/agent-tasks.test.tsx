@@ -359,6 +359,21 @@ describe("an agent task's progress", () => {
     expect(box.className).toContain("overflow-y-auto");
   });
 
+  it("is described by the line that says how long ago its text was learned", () => {
+    render(
+      <AgentTasks
+        tasks={[agentTask({ progress: progress("Half done") })]}
+        now={Date.parse(LEARNED) + 150_000}
+      />,
+    );
+
+    const described = region().getAttribute("aria-describedby");
+    expect(described).toBeTruthy();
+    expect(document.getElementById(described ?? "")?.textContent).toBe(
+      "Last reported by the agent 2 minutes ago:",
+    );
+  });
+
   it("can be reached by keyboard, is named, takes its direction from its text, and is no live region", () => {
     render(
       <AgentTasks

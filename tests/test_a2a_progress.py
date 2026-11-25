@@ -14,9 +14,14 @@ The parts, in order:
 5. What progress never does: no request more, nothing in the thread, the same on every
    instance (FR-008, FR-015, FR-016, SC-002, SC-003, SC-008).
 6. The log holds no progress text (FR-018a, SC-011).
+7. The orchestrator's check lists progress, set apart (FR-013, FR-014, FR-017, SC-005,
+   SC-007).
+8. The stream of a hand-off to an agent that does not stream reports a changed text, and one
+   that streams is as it was (FR-019, FR-020, SC-010).
 
 Every agent is the stand-in in ``tests/a2a_stub.py``, reached through the streaming in-process
-transport, and every model is the scripted one: no network, and no agent installed.
+transport whether or not its card says it streams, and every model is the scripted one: no
+network, and no agent installed.
 """
 
 import asyncio
@@ -1021,7 +1026,14 @@ def test_no_log_line_holds_a_progress_text(
     assert f"    {MARKER} 3" in checked["content"]
     assert found["status"] == "completed"
     assert found["progress"]["text"] == f"{MARKER} 3"
-    held = [
+    assert held(caplog) == []
+    # The search would find one: the stand-in's own server logs the text at debug level.
+    assert any(MARKER in record.getMessage() for record in caplog.records)
+
+
+def held(caplog: pytest.LogCaptureFixture) -> list[logging.LogRecord]:
+    """The records that hold the marker: of Freyja's loggers at any level, of any at info."""
+    return [
         record
         for record in caplog.records
         if MARKER in record.getMessage()
@@ -1031,8 +1043,49 @@ def test_no_log_line_holds_a_progress_text(
             or record.levelno >= logging.INFO
         )
     ]
-    assert held == []
-    # The search would find one: the stand-in's own server logs the text at debug level.
+
+
+def test_no_log_line_holds_a_progress_text_a_hand_off_reads_or_carries_with_an_answer(
+    make_a2a_app: Callable[..., A2aApp],
+    sse_events: Any,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """SC-011 for the two other ways a hand-off learns progress (T051): by reading the status
+    of an agent that does not stream, and while it carries an answer to a question.
+
+    A test of its own: an app's startup raises Freyja's loggers to info, so the levels are
+    lowered once this app has started.
+    """
+    monkeypatch.setattr(a2a_agents, "POLL_SECONDS", 0.05)
+    agent = not_streaming()
+    agent.working_text = f"{MARKER} read 1"
+    model = ScriptedChatModel(
+        script=[
+            handoff("hold: report"),
+            AIMessage(content="It is done."),
+            handoff("ask: plan the release", call_id="h2"),
+            AIMessage(content="Which date should it be?"),
+            handoff("slow 0.3: Friday", call_id="h3", task_id="task-2"),
+        ]
+    )
+    made = progress_app(make_a2a_app, model, agent, a2a_call_timeout_seconds=30)
+    with (
+        TestClient(made.app) as client,
+        caplog.at_level(logging.DEBUG),
+        caplog.at_level(logging.DEBUG, logger="freyja_agent"),
+    ):
+        assert logging.getLogger("freyja_agent.delegates").isEnabledFor(logging.DEBUG)
+        with reporting(agent, f"{MARKER} read 2"):
+            read = run(client, "pr-31", "Compile the report.", sse_events)
+        run(client, "pr-31", "Plan the release.", sse_events)
+        agent.working_text = f"{MARKER} answer"
+        answered = run(client, "pr-31", "Friday.", sse_events)
+
+    # Both hand-offs learned the texts they were given.
+    assert ("working", f"{MARKER} read 2") in agent_updates(read)
+    assert ("working", f"{MARKER} answer") in agent_updates(answered)
+    assert held(caplog) == []
     assert any(MARKER in record.getMessage() for record in caplog.records)
 
 
@@ -1148,6 +1201,32 @@ def test_the_check_lists_every_other_task_with_its_one_line(
         assert all(line.startswith("- Agent 'stub', task ") for line in lines)
         assert "Progress the agent reported" not in result["content"]
         assert "Half done" not in result["content"]
+
+
+def test_a_progress_text_that_holds_an_agent_address_is_returned_as_written(
+    make_a2a_app: Callable[..., A2aApp], sse_events: Any, clock: FakeClock
+) -> None:
+    """FR-004: the agent's own words are not searched for an address, through the API too."""
+    SCRUBBER.mark_saved(ADDRESS)
+    agent = numbered()
+    model = ScriptedChatModel(
+        script=[handoff("hold: report"), AIMessage(content="It is pending."), CHECK]
+    )
+    made = progress_app(make_a2a_app, model, agent)
+    words = f"Fetching {ADDRESS}/report now"
+    with TestClient(made.app) as client:
+        go_pending(client, "pr-30", sse_events)
+        learn(client, made, agent, words, clock)
+        found = entry(client, "pr-30")
+        (checked,) = tool_results(
+            run(client, "pr-30", "How far is it?", sse_events), "check_agent_tasks"
+        )
+        agent.release()
+
+    # The scrubber knows the address, and leaves the agent's words as they are all the same.
+    assert SCRUBBER.scrub(words) != words
+    assert found["progress"]["text"] == words
+    assert f"    {words}" in checked["content"].splitlines()
 
 
 def test_the_check_with_task_ids_lists_a_working_task_s_progress_too(
