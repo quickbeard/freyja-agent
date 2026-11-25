@@ -10,7 +10,7 @@ import {
   savedProfile,
 } from "./api";
 
-// 004, User Story 1: the LLM section shows which model Freyja runs on.
+// 004, User Story 1: the Models section shows which model Freyja runs on.
 
 const UNREACHABLE = "The Freyja service cannot be reached.";
 

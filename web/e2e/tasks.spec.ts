@@ -105,7 +105,7 @@ test("a new task sent with no usable model says why and offers its text again", 
   await expect(page).toHaveURL(/\/tasks\/[0-9a-f]{32}$/);
   await expect(alerts(page)).toContainText(NO_USABLE_MODEL);
   await expect(
-    page.getByRole("link", { name: "Go to the LLM section" }),
+    page.getByRole("link", { name: "Go to the Models section" }),
   ).toHaveAttribute("href", "/llm");
   await expect(page.getByText("Task not found")).toBeHidden();
   const again = page.getByLabel("Send the message again");
@@ -340,7 +340,7 @@ test("with the service stopped, the list says so and the sidebar says the number
 });
 
 // Edge Cases, "The Tasks section is opened in a narrow window": every control stays
-// reachable, as in the LLM and Agents sections (T094).
+// reachable, as in the Models and Agents sections (T094).
 test.describe("the Tasks section in a narrow window", () => {
   // Under the sidebar's 768-pixel breakpoint, and narrower than a phone held upright.
   test.use({ viewport: { width: 360, height: 740 } });

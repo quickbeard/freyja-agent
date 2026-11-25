@@ -1044,7 +1044,7 @@ export function agentsWarning(page: Page) {
   return page.getByRole("note", { name: "Agents that cannot be used" });
 }
 
-/** Every card on the page: profiles in the LLM section, agents in the Agents section. */
+/** Every card on the page: profiles in the Models section, agents in the Agents section. */
 export function cards(page: Page) {
   return page.locator('[data-slot="card"]');
 }

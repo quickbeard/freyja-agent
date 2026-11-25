@@ -67,9 +67,9 @@ describe("the build the container image is made from", () => {
 });
 
 describe("the web app's address alone", () => {
-  it("leads to the LLM section, and not for good", async () => {
+  it("leads to the Tasks section, and not for good", async () => {
     expect(await nextConfig.redirects?.()).toEqual([
-      { source: "/", destination: "/llm", permanent: false },
+      { source: "/", destination: "/tasks", permanent: false },
     ]);
   });
 });

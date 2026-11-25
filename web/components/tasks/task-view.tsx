@@ -241,7 +241,7 @@ function Failure({ error }: { error: RunError }) {
       {error.code === NO_USABLE_MODEL && (
         <p className="text-sm">
           <Link href="/llm" className="underline underline-offset-4">
-            Go to the LLM section
+            Go to the Models section
           </Link>{" "}
           to activate a usable profile.
         </p>

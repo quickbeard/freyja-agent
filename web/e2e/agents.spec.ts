@@ -276,7 +276,7 @@ const DOWN = {
   reason: "Nothing answered at the address.",
 } as const;
 
-test("an agent that cannot be used shows on the sidebar from the LLM section, before the Agents section is opened", async ({
+test("an agent that cannot be used shows on the sidebar from the Models section, before the Agents section is opened", async ({
   page,
 }) => {
   await answerProfiles(page, { list: profileList(environmentProfile()) });
@@ -292,8 +292,8 @@ test("an agent that cannot be used shows on the sidebar from the LLM section, be
   await expect(section(page, "Agents")).toHaveAccessibleDescription(
     "1 agent cannot be used",
   );
-  await expect(section(page, "LLM")).toHaveAccessibleDescription("");
-  // The LLM section itself says nothing of agents.
+  await expect(section(page, "Models")).toHaveAccessibleDescription("");
+  // The Models section itself says nothing of agents.
   await expect(agentsWarning(page)).toHaveCount(0);
   await expect(alerts(page)).toHaveCount(0);
 
@@ -394,7 +394,7 @@ test("the warnings name every agent that cannot be used, unreachable or not in u
 test("with no answer for the list the sidebar shows no number, and a number shown before is not left as current", async ({
   page,
 }) => {
-  // The LLM section with a service that answers for profiles only: the request for the
+  // The Models section with a service that answers for profiles only: the request for the
   // agents reaches the web app's server, which finds nothing at the service's address.
   await answerProfiles(page, { list: profileList(environmentProfile()) });
   await page.goto("/llm");
@@ -442,7 +442,7 @@ test("opening the Agents section asks for the list once: the sidebar and the lis
   expect(service.changes).toEqual([]);
 });
 
-test("the list read on the LLM section is the one the Agents section starts from", async ({
+test("the list read on the Models section is the one the Agents section starts from", async ({
   page,
 }) => {
   await answerProfiles(page, { list: profileList(environmentProfile()) });
