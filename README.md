@@ -55,7 +55,8 @@ The rest is documented by topic under `docs/`, listed in the order a newcomer ne
 2. [Use the API](docs/api.md): threads, runs and their events, deciding on a proposal, the list of threads, runs that go on without a reader, stopping a run, and the host names the service answers for.
 3. [Tool servers](docs/tool-servers.md): connecting MCP servers, which of their tools run without approval, what happens when one fails, and the catalog.
 4. [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
-5. [Web console](docs/web-console.md): the console under `web/`, with its Tasks, Agents, and Models sections.
+5. [Receive tasks from agents](docs/a2a-server.md): other agents handing Freyja work over A2A, what a caller is told, conversations, and the limits.
+6. [Web console](docs/web-console.md): the console under `web/`, with its Tasks, Agents, and Models sections.
 
 ## Lint and format
 
@@ -240,7 +241,8 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_BACKGROUND_RUN_CONCURRENCY` | `4` | Background runs under way at once on one service instance; further ones wait their turn. |
 | `FREYJA_SECRET_KEY` | unset | The secret that protects the API keys of saved LLM profiles: a Fernet key, 44 URL-safe base64 characters. Unset, the service starts and saves no profile; a value that is not a Fernet key stops startup. See [The secret](docs/models.md#the-secret). |
 | `FREYJA_LLM_TEST_TIMEOUT_SECONDS` | `60` | The most a test of an LLM profile may take, both requests together. Greater than 0 and at most 60. |
-| `FREYJA_A2A_SERVER` | `false` | Receiving tasks from other agents over A2A. This version serves no route to callers. With it on, the service builds a second orchestrator for the threads callers start: on it every message to a delegate agent waits for a person, whatever the agent's approval choice, a named caller's runs work in a directory of their own, and the model is told an alias in place of its thread's id. A thread a caller started is never run on the other orchestrator, and with the feature off it is not run at all: a message or a decision on it is refused with `409` `a2a_server_off`, and its state is still read. With it off, the three settings below are not used or checked. |
+| `FREYJA_A2A_SERVER` | `false` | Receiving tasks from other agents over A2A; see [Receive tasks from agents](docs/a2a-server.md). With it on, the service serves the card at `/.well-known/agent-card.json` and the operations at `POST /a2a`, and builds a second orchestrator for the threads callers start: on it every message to a delegate agent waits for a person, whatever the agent's approval choice, a named caller's runs work in a directory of their own, and the model is told an alias in place of its thread's id. A thread a caller started is never run on the other orchestrator, and with the feature off it is not run at all: a message or a decision on it is refused with `409` `a2a_server_off`, and its state is still read. With it off, the settings below are not used, and their limits are not checked. |
+| `FREYJA_A2A_SERVER_WAIT_SECONDS` | `30` | The most a send without a stream waits for its task to end, 0 to 600. A task that has not ended by then is answered as working, and goes on. |
 | `FREYJA_A2A_SERVER_CALLER_TASKS` | `5` | Received tasks in progress at once for one caller, 1 to 100. |
 | `FREYJA_A2A_SERVER_TASKS` | `20` | Received tasks in progress at once for all callers: at least the caller's limit, at most 1000. |
 | `FREYJA_A2A_SERVER_FILES_DIR` | `caller-files` | Where a named caller's files are kept, one directory per caller, read and written by that caller's runs only; the skills are read from the workspace and cannot be changed there. It must not be the workspace, be inside it, or contain it, and is git-ignored. |

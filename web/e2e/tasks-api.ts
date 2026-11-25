@@ -63,6 +63,8 @@ export function summary(
     stoppable: false,
     runs: 1,
     stopping: false,
+    // Feature 009: who started a task over A2A; null for a task a person started.
+    caller: null,
     ...values,
   };
 }
@@ -84,6 +86,30 @@ export function threadState(
 }
 
 export type Refusal = { status: number; code: string; message: string };
+
+/** The service's refusal of a message to a task another agent started (feature 009). */
+export const CALLER_THREAD: Refusal = {
+  status: 409,
+  code: "caller_thread",
+  message:
+    "This task was started by another agent, and only that agent sends messages on it. Its proposals are decided and its run is stopped here as for any task.",
+};
+
+/** A task another agent started on this machine, that ended with `reply` (feature 009). */
+export function callerTask(
+  service: TaskService,
+  threadId: string,
+  message: string,
+  reply: string,
+): void {
+  service.tasks.set(threadId, {
+    row: summary(threadId, {
+      first_message: message,
+      caller: { name: "local", canceled: false, configured: true },
+    }),
+    state: threadState(threadId, [human(message), ai(reply)]),
+  });
+}
 
 /** What the service does with a run it is sent. */
 export type RunAnswer =
@@ -210,8 +236,10 @@ export class TaskService {
       // Phase 7: as the service, no message is taken by a task whose run is in progress or
       // whose proposal is pending (001 FR-011).
       const held = this.tasks.get(threadId);
-      const busy: Refusal | null =
-        held?.row.status === "running" || held?.state.run_active
+      // Feature 009: as the service, a task another agent started takes no message here.
+      const busy: Refusal | null = held?.row.caller
+        ? CALLER_THREAD
+        : held?.row.status === "running" || held?.state.run_active
           ? {
               status: 409,
               code: "run_active",

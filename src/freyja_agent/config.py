@@ -270,9 +270,12 @@ class Settings(BaseSettings):
     # Background runs under way at once on one instance; further ones wait (003 SC-003).
     background_run_concurrency: Annotated[int, Field(gt=0)] = 4
     # Feature 009: whether Freyja receives work from other agents over A2A. Off by default,
-    # and with it off the three settings below are not used and not checked
+    # and with it off the settings below are not used and not checked
     # (specs/009-a2a-server/contracts/settings.md).
     a2a_server: bool = False
+    # The most a send without a stream waits for its task to end before it is answered with
+    # the task as it stands (FR-011).
+    a2a_server_wait_seconds: float = 30
     # Received tasks in progress at once: for one caller, and for all callers (FR-025).
     a2a_server_caller_tasks: int = 5
     a2a_server_tasks: int = 20
@@ -286,6 +289,8 @@ class Settings(BaseSettings):
         # Named in the message: an error raised here belongs to no one field.
         if not self.a2a_server:
             return self
+        if not 0 <= self.a2a_server_wait_seconds <= 600:
+            raise ValueError("FREYJA_A2A_SERVER_WAIT_SECONDS must be from 0 to 600")
         if not 1 <= self.a2a_server_caller_tasks <= 100:
             raise ValueError("FREYJA_A2A_SERVER_CALLER_TASKS must be from 1 to 100")
         if not self.a2a_server_caller_tasks <= self.a2a_server_tasks <= 1000:

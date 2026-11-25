@@ -201,6 +201,8 @@ class RunContext:
     agents: AgentSet | None = None
     registry: AgentRegistry | None = field(default=None, repr=False)
     released: bool = False
+    # Feature 009: whether the graph is the strict build's, which runs callers' threads.
+    strict: bool = False
 
     @property
     def links(self) -> tuple[AgentLink, ...]:
@@ -384,6 +386,7 @@ class Runtime:
             active=active,
             agents=agents,
             registry=self.registry,
+            strict=chosen is strict,
         )
 
     async def caller_of(self, thread_id: str | None) -> Conversation | None:

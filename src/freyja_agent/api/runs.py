@@ -50,6 +50,8 @@ Events = AsyncIterator[ServerSentEvent]
 OnStarted = Callable[[Any], Awaitable[None]]
 
 A2A_SERVER_OFF = "a2a_server_off"
+# A message to a caller's thread through the service's own routes (contracts/openapi.yaml).
+CALLER_THREAD = "caller_thread"
 # The code a caller's message is refused with when its thread is not at rest under the lease;
 # ``ReceivedTasks`` turns it into the protocol's "not now".
 AGENT_AWAITED = "agent_awaited"
@@ -94,6 +96,35 @@ async def refuse_while_off(runtime: Runtime, thread_id: str) -> None:
             A2A_SERVER_OFF,
             "This task was started by another agent, and is continued only while receiving "
             "tasks from agents is on. Its state can still be read.",
+        )
+
+
+async def refuse_caller_thread(runtime: Runtime, thread_id: str) -> None:
+    """Refuse a message to a thread a caller started, through the service's own routes.
+
+    Only its caller adds messages to its conversation (FR-024, research R20); a person still
+    decides its proposals and stops its run. Asked before the lease, so the answer is the same
+    while a run holds it. With the feature off the run's own refusal, ``a2a_server_off``,
+    answers instead, and nothing more is looked up here. Not asked by the function the A2A
+    service starts a caller's run with.
+    """
+    if not runtime.settings.a2a_server:
+        return
+    try:
+        conversation = await runtime.caller_of(thread_id)
+    except Exception as exc:
+        logger.warning(
+            "Thread %s: whether another agent started it could not be read (%s); nothing ran",
+            thread_id,
+            type(exc).__name__,
+        )
+        raise error(500, "internal", "This thread could not be read; nothing ran.") from None
+    if conversation is not None:
+        raise error(
+            409,
+            CALLER_THREAD,
+            "This task was started by another agent, and only that agent sends messages on "
+            "it. Its proposals are decided and its run is stopped here as for any task.",
         )
 
 

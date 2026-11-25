@@ -193,4 +193,4 @@ During a run, a hand-off to an agent that cannot be reached, does not acknowledg
 
 A proposal for an agent's tool names its agent: each entry of `action_requests` has `agent` set, and `null` for every other tool.
 
-**Next:** [Web console](web-console.md): the same features through the console.
+**Next:** [Receive tasks from agents](a2a-server.md): other agents handing work to Freyja.

@@ -11,7 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
 from sse_starlette import EventSourceResponse
 
 from freyja_agent.api.guards import refuse_other_origins
-from freyja_agent.api.runs import start_message, start_resume, state_of
+from freyja_agent.api.runs import refuse_caller_thread, start_message, start_resume, state_of
 from freyja_agent.api.schemas import (
     THREAD_ID_MAX_LENGTH,
     THREAD_ID_PATTERN,
@@ -55,10 +55,13 @@ async def start_run(
     request: Request,
     debug: DebugQuery = False,
 ) -> EventSourceResponse:
-    """Start a run with the user's message and stream it (``runs.start_message``)."""
-    return EventSourceResponse(
-        await start_message(_runtime(request), thread_id, body.message, debug=debug)
-    )
+    """Start a run with the user's message and stream it (``runs.start_message``).
+
+    A thread another agent started takes no message here (feature 009, ``caller_thread``).
+    """
+    runtime = _runtime(request)
+    await refuse_caller_thread(runtime, thread_id)
+    return EventSourceResponse(await start_message(runtime, thread_id, body.message, debug=debug))
 
 
 @router.post("/{thread_id}/resume")
