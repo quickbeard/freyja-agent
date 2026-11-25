@@ -769,7 +769,7 @@ completes; reject, and the agent receives nothing; the caller cannot decide.
 
 ### Tests for User Story 2
 
-- [ ] T056 [US2] Add part 3 to `tests/test_a2a_server_approval.py`, through A2A (FR-013,
+- [X] T056 [US2] Add part 3 to `tests/test_a2a_server_approval.py`, through A2A (FR-013,
       FR-013a, FR-014, FR-015, SC-003): a message that leads to `send_notification` with a
       recognizable argument ends the stream's first part with `Waiting for a person's
       approval of: send_notification.`, the task working, and the argument in no event;
@@ -787,25 +787,25 @@ completes; reject, and the agent receives nothing; the caller cannot decide.
       during a run gives the caller `The run was stopped before it finished.`; a hand-off to
       the stand-in agent set to run without approval pauses through A2A and the agent
       receives nothing until a person approves
-- [ ] T057 [P] [US2] In `web/__tests__/components/tasks/proposal-card.test.tsx`: the card of a
+- [X] T057 [P] [US2] In `web/__tests__/components/tasks/proposal-card.test.tsx`: the card of a
       caller's task says who started the run and that no person asked for the action
 
 ### Implementation for User Story 2
 
-- [ ] T058 [US2] In `src/freyja_agent/api/received.py`, a follower whose task waits for a
+- [X] T058 [US2] In `src/freyja_agent/api/received.py`, a follower whose task waits for a
       person joins the continuation a person's decision starts on this instance, and sends
       its steps, its pieces, and its end; the waiting status itself is T044's
-- [ ] T059 [P] [US2] In `web/components/tasks/proposal-card.tsx`, say who started the run with
+- [X] T059 [P] [US2] In `web/components/tasks/proposal-card.tsx`, say who started the run with
       `started-by.tsx`
-- [ ] T060 [US2] Add User Story 2's part to `web/e2e/tasks-callers.spec.ts`: a caller's task
+- [X] T060 [US2] Add User Story 2's part to `web/e2e/tasks-callers.spec.ts`: a caller's task
       that needs a decision is counted, its card says who started the run, approving and
       rejecting work as for any task, and Stop is offered for a run in progress;
       `web/e2e/tasks-api.ts` answers the paused caller's task
-- [ ] T061 [US2] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+- [X] T061 [US2] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
       `docs/a2a-server.md`, how an approval looks to a caller, where a person decides it,
       that every message to a delegate agent from a caller's thread waits for a person; in
       `docs/web-console.md`, Tasks: what the proposal's card says of a caller's task
-- [ ] T062 [US2] Walk quickstart.md section 2 on a check instance by the standing rules, and
+- [X] T062 [US2] Walk quickstart.md section 2 on a check instance by the standing rules, and
       correct it where the built feature differs
 
 **Checkpoint**: request 3. A caller's task that proposes an action waits for a person, and

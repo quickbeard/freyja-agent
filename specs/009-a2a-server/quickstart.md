@@ -104,9 +104,13 @@ caller stream "Hand this to the stub agent: say hello"
   the task is still working. The stand-in agent's terminal shows that it received nothing,
   although the agent is set to run without approval.
 - The console counts one task that needs a decision. Its page and the proposal's card say
-  that an agent on this machine started the run. Approve it.
-- `caller get <task id>` then prints the task as completed, with Freyja's reply; the
-  stand-in agent received the message once.
+  that an agent on this machine started the run, and the card that no person asked for the
+  action. Approve it.
+- The stream, still open, prints `Completed: agent stub.`, Freyja's reply, and the task as
+  completed. `caller get <task id>` prints the same task with its reply; the stand-in agent
+  received the message once.
+
+With the stand-in model, send `handoff stub say hello`.
 
 Repeat and reject in the console: the agent receives nothing, and the task completes with
 Freyja's reply to the rejection.
