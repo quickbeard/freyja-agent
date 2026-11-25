@@ -84,7 +84,9 @@ listener where a deployment sets one; a current desktop browser for the console.
 sees a step named within two seconds of the step completing (SC-009); through another
 instance, or for a run the service started by itself, within one reading interval of four
 seconds. A send without a stream is answered within the wait limit, 30 seconds by default.
-With the feature off, no request does more work than today. With it on, taking a run's
+With the feature off, no request does more work than today, unless the deployment had it
+on before and callers' threads exist, in which case taking a context costs the same one
+read. With it on, taking a run's
 context costs one more single-row read, and the list of threads one more query.
 
 **Constraints**: the approval gate, its three decisions, and a resume are not changed, and
@@ -161,8 +163,39 @@ through its methods. Its findings are in the documents now:
 | Medium: a token sent in a query would be in the web server's access log. | R15: tokens out of every log record; R4: the outside listener's access log off |
 | Medium: the whole body was read before the length rule. | R5: 256 KiB |
 | Medium: a canceled task with a pending proposal counted against the limits, which FR-025 does not say. | Data model: `released_at` is for the limits only |
-| Medium: the outside listener and named callers came two phases before the limits and the proofs. | Phases 2 and 4 |
+| Medium: the outside listener and named callers came two phases before the limits and the proofs. | The limits in phase 2; the listener, named callers, and their proofs together, now phase 5 |
 | Low: the check at send time read the agent's record, not the build's gate; what was last built was kept once for two builds; no files key meant the shared workspace; a run's end did not wake a follower; a lifespan entered twice kept the first routes; a files directory that contains the workspace; `ReceivedTasks` in `runtime/` would have imported a route module. | R6, R16, R9, R3, settings, and the structure above |
+
+### Checklist review (2026-11-25)
+
+`/speckit-checklist` wrote [checklists/security.md](checklists/security.md): 46 items on who
+may call, what a caller can cause without a person, what a caller is given, what bounds a
+caller, and the state a task is read from. Every item was reviewed against the spec and the
+documents of this plan. Twenty-six were satisfied as written. Twenty were not, and the
+documents were changed until they were:
+
+| Item | What was missing | Where it went |
+|---|---|---|
+| CHK002, CHK022 | With the feature off, a thread a caller started while it was on would have been run on the ordinary build: its hand-offs ungated by FR-013a, a named caller's task in the shared workspace. | Such a thread is not run while the feature is off: spec FR-001 and a new edge case; research R6; `a2a_server_off` in the contract. A deployment that never had the feature on makes no lookup. |
+| CHK003, CHK046 | A caller the deployment removes kept its tasks, and a person could still approve what it had asked for. | Its tasks are canceled at the next start, as its own cancel would: spec FR-021 and Edge Cases; research R9. The console says the agent is no longer configured. An instance that is given other callers than the rest does the same, which the spec now says. |
+| CHK001, CHK043 | That the console's forwarding reaches the A2A operations at the service's own address was in the research and not in the spec. | Spec, Assumptions: whoever reaches the console can call as the local caller, as it can already start a run. |
+| CHK006 | Each refused credential was a warning, with no bound on what an unauthenticated party can make the service log. | One warning, then at most one in ten seconds for each address, with a count: spec FR-028; research R5. |
+| CHK011 | The order of the checks in front of an operation was stated in pieces. | One list: research R5, and the contract. |
+| CHK021 | The size of a request was bounded in the research and absent from the spec's refusals. | Spec FR-008 and FR-026a. |
+| CHK005 | Where a caller's conversation id may appear was not said. | Data model: returned to its caller and nowhere else. |
+| CHK008 | The protocol's `tenant` field and a history length were not mentioned. | Contract: both ignored; who calls comes from the credential alone. |
+| CHK009, CHK032 | The file area was specified for the file tools and the skills, and not for a subagent, the shell, and the graph's store. | Research R6 and R16: the subagent has the same gate and the same backend; the shell answers with an error on every thread; nothing reads the store today, and a test holds the strict build's tools to a list. |
+| CHK016 | The alias was "a hash". | Research R6: SHA-256, first 16 hexadecimal characters, and why it cannot be turned back. |
+| CHK017 | Which clock a task's start and a run's note are written by, and what a difference between instances does. | Research R7 and the data model: one clock for the message's own run; a difference can turn a continuation's reason into "interrupted", and cannot complete a task or leave one working. |
+| CHK035 | Reusing a removed caller's name gives its conversations; the files were not mentioned, nor the deployment told. | Spec, Edge Cases; the settings' contract. |
+| CHK040 | The limits bound what is in progress; what a caller does over time was not said to be in or out. | Spec, Assumptions: out of scope, named: tasks one after another, and how much a file area holds. |
+| CHK041 | The time an answer takes, for a task that is another caller's. | Research R12: not made equal, and why there is no id to try it on. |
+| CHK004 | The list of what a caller causes with no person left out the subagent and the model's own work. | Spec, Assumptions. |
+| CHK037 | A token sent somewhere other than the header, at the service's own address. | Contract: not a credential; the request is one without. |
+
+Two of these change what is built and when. The first adds a rule for the off state to
+phase 1. The second needs cancel to exist before a caller can be named, so cancel (User
+Story 4) is now phase 4 and named callers with the outside listener (User Story 3) phase 5.
 
 ## Project Structure
 
@@ -180,7 +213,8 @@ specs/009-a2a-server/
 │   ├── openapi.yaml     # the service's own API: `caller` on a row, two new refusals
 │   └── sse-events.md    # `metadata.reply` on a caller's thread
 ├── checklists/
-│   └── requirements.md  # the spec quality checklist, from /speckit-specify
+│   ├── requirements.md  # the spec quality checklist, from /speckit-specify
+│   └── security.md      # from /speckit-checklist, all 46 items reviewed
 └── tasks.md             # Phase 2 output (/speckit-tasks; not created by /speckit-plan)
 ```
 
@@ -262,7 +296,8 @@ tests/
 web/
 ├── lib/tasks.ts               # ThreadSummary.caller
 ├── components/tasks/
-│   ├── started-by.tsx         # new: who started a task, in words
+│   ├── started-by.tsx         # new: who started a task, in words, and whether that agent
+│   │                          # is still configured
 │   ├── task-list.tsx          # a row says who started it
 │   ├── task-view.tsx          # the page says who started it and whether the agent canceled;
 │   │                          # no follow-up box for a caller's task, and why
@@ -301,7 +336,8 @@ Files of other features that this one changes, and whose owners should know:
 - `agent/context.py` and `agent/factory.py` are features 001's and 002's. The model of every
   thread but a caller's is told what it is told today.
 - `llm/active.py` and `runtime/runtime.py` are features 004's and 005's. With the feature
-  off, one orchestrator is built and no lookup is made, as today.
+  off, one orchestrator is built, as today, and no lookup is made unless a conversation
+  exists from a time the feature was on (research R6).
 - `delegates/a2a_tools.py` and `delegates/delegation_worker.py` are features 003's and 005's,
   and feature 008 is being built in them now. This feature's changes there are two lines of
   metadata and the thread's id in two calls; they go in last (phase 6 and phase 1), on the
@@ -315,11 +351,11 @@ gets what that phase's row says and nothing less safe.
 
 | Phase | What it builds | Stories | Shown working by |
 |---|---|---|---|
-| 1 | The foundations, with nothing served yet: the settings and what stops startup; `Callers`; the two tables and both stores, with accepting a message and the two limits; `api/runs.py`; `ReceivedTasks` with where a thread stands and ending a task; `UnattendedRuns.join`; the release passed on; the strict build, with its file backend and the alias; the thread's id in `begin_run`; the refusal to run a caller's thread on the other build; the stand-in caller. | none alone | `tests/test_received_tasks.py`, the settings' tests, and the tests of the strict build on a thread marked by hand |
-| 2 | The card and the two routes at the service's own address, for the local caller: send, with and without a stream; reading a task; a message's form and the limits, each refused before a model is asked; the size of a request; the feature off answering as an unknown path; `caller` on a thread's row, and the console saying who started a task. A request with an `Authorization` header is refused; cancel and subscribe answer as operations that are not offered. | 1, and the limits of 5 | Section 1 of the quickstart and the limits of section 5; `tests/test_a2a_server_send.py`, `tests/test_a2a_server_limits.py`; the web's tests of the list and the page |
+| 1 | The foundations, with nothing served yet: the settings and what stops startup; a caller's thread not run while the feature is off, and `a2a_server_off`; `Callers`; the two tables and both stores, with accepting a message and the two limits; `api/runs.py`; `ReceivedTasks` with where a thread stands and ending a task; `UnattendedRuns.join`; the release passed on; the strict build, with its file backend and the alias; the thread's id in `begin_run`; the refusal to run a caller's thread on the other build; the stand-in caller. | none alone | `tests/test_received_tasks.py`, the settings' tests, and the tests of the strict build on a thread marked by hand |
+| 2 | The card and the two routes at the service's own address, for the local caller: send, with and without a stream; reading a task; a message's form and the limits, each refused before a model is asked; the size of a request; the feature off answering as an unknown path; `caller` on a thread's row, and the console saying who started a task. A request with an `Authorization` header is refused until phase 5; cancel and subscribe answer as operations that are not offered until phase 4. | 1, and the limits of 5 | Section 1 of the quickstart and the limits of section 5; `tests/test_a2a_server_send.py`, `tests/test_a2a_server_limits.py`; the web's tests of the list and the page |
 | 3 | Waiting for a person as a caller sees it; every operation against a proposal; that a status and a reason hold no argument, result, or agent's words; the proposal's card saying who started the run; no box on a caller's task, and `caller_thread`. | 2 | Section 2; `tests/test_a2a_server_approval.py`; `web/e2e/tasks-callers.spec.ts` |
-| 4 | Named callers and their tokens, at both addresses; the outside listener; the card at each address; tokens out of messages and log records. With it, in the same phase, the proofs of what it opens: no token anywhere, one named caller against another's tasks, and a named caller's files. | 3, and the isolation of 5 | Section 3; `tests/test_a2a_server_callers.py`, `tests/test_a2a_server_nowhere.py`, and the files' and the callers' tests in `tests/test_a2a_server_limits.py` |
-| 5 | Another message in a conversation; subscribing; a task read after a restart and through another instance; cancel; rejecting by rule and `requester_gone`; the sweep. | 4 | Section 4; `tests/test_a2a_server_tasks.py` |
+| 4 | Another message in a conversation; subscribing; a task read after a restart and through another instance; cancel; rejecting by rule and `requester_gone`; the sweep. | 4 | Section 4; `tests/test_a2a_server_tasks.py` |
+| 5 | Named callers and their tokens, at both addresses; the outside listener; the card at each address; tokens out of messages and log records; the tasks of a caller that is no longer named, canceled at startup. With it, in the same phase, the proofs of what it opens: no token anywhere, one named caller against another's tasks, and a named caller's files. | 3, and the isolation of 5 | Section 3; `tests/test_a2a_server_callers.py`, `tests/test_a2a_server_nowhere.py`, and the files' and the callers' tests in `tests/test_a2a_server_limits.py` |
 | 6 | The hand-over count, on messages in and out; the proof of what a caller is never given, over every operation and every kind of task the phases before made possible. | the rest of 5 | Section 5; `tests/test_a2a_server_limits.py`, `tests/test_a2a_server_nowhere.py` |
 | 7 | The quickstart walked by hand and corrected; `README.md`, `AGENTS.md`, and `web/README.md` read against the code. | all | Every section of the quickstart |
 
@@ -330,12 +366,15 @@ Why this order:
   gives a caller the shared files.
 - What bounds a caller, the form of a message, the two limits, and the size of a request,
   comes with the first phase that accepts a message.
-- A named caller can call from phase 4 and not before: until then a request that carries a
+- Cancel comes before named callers, although the spec gives the story of named callers
+  the higher priority: taking a caller away cancels its tasks, and that needs cancel and the
+  rejection by rule to exist. Until phase 4, cancel and subscribe are answered as operations
+  that are not offered, and the card is true all the same: it promises streaming, which a
+  send has from phase 2.
+- A named caller can call from phase 5 and not before: until then a request that carries a
   credential is refused, so every caller is the local one. The proofs about named callers,
   tokens, and the listener are in that same phase, not a later one.
-- Until phase 5, cancel and subscribe are answered as operations that are not offered, and
-  the card is true all the same: it promises streaming, which a send has from phase 2.
-- Phases 5 and 6 do not depend on each other.
+- Phase 6 depends on phase 5 only for the proof's two named callers.
 
 What phase 1 must not leave half done: a conversation's row, the lookup in `begin_run`, and
 the refusal in `SegmentedGraph` go in together, since a caller's thread that is run on the
@@ -345,15 +384,16 @@ other build is the one failure the design exists to prevent.
 
 | Requirement | Test |
 |---|---|
-| FR-001, SC-002 (off by default; nothing changes) | `test_a2a_server_send.py`: the two paths against an unknown path, byte for byte, for each method; no row made. The whole existing suite, unchanged |
-| FR-002, FR-005 (two addresses; the credential) | `test_a2a_server_callers.py`: no header, a wrong token, another scheme, a token in the body or a query, each at both addresses; one answer for all; nothing made; the body not read |
+| FR-001, SC-002 (off by default; nothing changes) | `test_a2a_server_send.py`: the two paths against an unknown path, byte for byte, for each method; no row made; no lookup made with an empty table. The whole existing suite, unchanged |
+| FR-001, Edge Cases (off, with callers' threads) | `test_a2a_server_tasks.py`: a second application with the feature off on the same stores: a message and every kind of decision refused with `a2a_server_off`, the worker leaving the thread alone, the state still read, nothing run |
+| FR-002, FR-005 (two addresses; the credential) | `test_a2a_server_callers.py`: no header, a wrong token, another scheme, a token in the body or a query, a `tenant` that names another caller, each at both addresses; one answer for all; nothing made; the body not read; the order of the checks, one test per neighbouring pair |
 | FR-003, SC-005 (the outside listener serves A2A alone) | `test_a2a_server_callers.py`: every route of the main application asked at the outside application; the bind failure; the listener with the service's shutdown |
 | FR-004 (callers' rules; what stops startup) | the settings' tests in `test_a2a_server_callers.py`, one per row of [contracts/settings.md](contracts/settings.md); no value in any error |
 | FR-006 (the card) | `test_a2a_server_send.py`, `test_a2a_server_callers.py`: the card at each address, read by the SDK's client; nothing of the deployment in it |
 | FR-007 (five operations; six refuse) | `test_a2a_server_send.py`: each refusal of [contracts/a2a-server.md](contracts/a2a-server.md); a request above the size limit |
 | FR-008 (a message's form) | `test_a2a_server_limits.py`: each row of "the message itself", with the model's call count at zero |
 | FR-009, FR-010 (a conversation; continuing it) | `test_a2a_server_tasks.py`: a new thread, never the caller's id; a follow-up with the earlier messages in mind; refused while anything is in progress; two at once |
-| FR-009a, SC-007 (a named caller's files) | `test_a2a_server_limits.py`: two named callers and a console task, each writing a file; listing, reading, writing, and deleting across them; the skills read and not changed |
+| FR-009a, SC-007 (a named caller's files) | `test_a2a_server_limits.py`: two named callers and a console task, each writing a file; listing, reading, writing, and deleting across them, by Freyja and by its subagent; the skills read and not changed; the shell answering with an error; the strict build's tools, held to a list |
 | FR-011 (a send without a stream) | `test_a2a_server_send.py`: ended within the limit; not ended, with the limit at zero and with `returnImmediately`; the run goes on |
 | FR-012, SC-010 (kept across restarts and instances) | `test_a2a_server_tasks.py`: a second application on the same stores; the mark that cannot be written refuses the message |
 | FR-013, FR-015, SC-003 (the gate; only a person decides) | `test_a2a_server_approval.py`: every operation and every field a message has against a pending proposal; approve, edit, and reject by a person |
@@ -363,13 +403,13 @@ other build is the one failure the design exists to prevent.
 | FR-017, SC-009 (what a follower is sent) | `test_a2a_server_send.py`: the order of events; pieces before the reply is complete; a subagent's pieces, a tool's messages, and a call's arguments not sent; the fifth stream refused |
 | FR-018, FR-019, SC-008 (what a caller is never given) | `test_a2a_server_nowhere.py`: everything two callers received, searched for a key, an address, a thread's id, also after asking Freyja for it; every status and reason searched for an argument, a result, and an agent's words; a model's own error not in a reason |
 | FR-020, SC-007 (a caller's own) | `test_a2a_server_limits.py`: every operation of one caller against the other's task, each answer equal to that for an unused id |
-| FR-021, FR-022, FR-022a, SC-011 (cancel) | `test_a2a_server_tasks.py`: during a model call, a tool step, and an approved action; on a pending proposal, the orchestrator's and a subagent's; while an agent task is awaited; a cancel with a decision, before and after the run is marked; a decision already taken, and the same decisions sent again; `requester_gone`; a rejection by rule that fails, tried again later and no more than five times; a cancel whose function was lost, found by the sweep. `tests/test_unattended_stop.py` unchanged |
+| FR-021, FR-022, FR-022a, SC-011 (cancel) | `test_a2a_server_tasks.py`: during a model call, a tool step, and an approved action; on a pending proposal, the orchestrator's and a subagent's; while an agent task is awaited; a cancel with a decision, before and after the run is marked; a decision already taken, and the same decisions sent again; `requester_gone`; a rejection by rule that fails, tried again later and no more than five times; a cancel whose function was lost, found by the sweep; the tasks of a caller the settings no longer name, canceled at startup, with a waiting proposal rejected. `tests/test_unattended_stop.py` unchanged |
 | FR-023, FR-024, SC-004 (the console) | the web's unit tests and `web/e2e/tasks-callers.spec.ts`; `caller_thread` in `test_a2a_server_approval.py` |
 | FR-025, FR-026, SC-012 (the limits; rules before a model) | `test_a2a_server_limits.py`: each limit, with waiting tasks counted; one reason for both; the model's call count |
 | FR-026a (each refusal one named way) | one test per row of the two tables in [contracts/a2a-server.md](contracts/a2a-server.md) |
 | FR-027 (the hand-over count) | `test_a2a_server_limits.py`: no count, each bad form, the limit; the stand-in agent's record of the count it was sent |
 | FR-028, SC-006 (no token anywhere) | `test_a2a_server_nowhere.py`: two recognizable tokens, every operation and refusal, a token pasted into a message; answers, streams, threads, and the log at every level |
-| FR-028 (what is logged) | `test_a2a_server_nowhere.py`: a line for a task accepted, a cancel, a refused credential, and a refused limit, each naming the caller; the web server's own access line for a request with a token in its query |
+| FR-028 (what is logged) | `test_a2a_server_nowhere.py`: a line for a task accepted, a cancel, a refused credential, and a refused limit, each naming the caller; a hundred refused credentials giving one warning and then one more with their count; the web server's own access line for a request with a token in its query |
 | FR-029 (the warning) | `test_a2a_server_callers.py` |
 | FR-030 (documentation) | read against the code in phase 7 |
 | FR-031 (how it is tested) | this map; `web/e2e/tasks-callers.spec.ts` for the console's part of each story |

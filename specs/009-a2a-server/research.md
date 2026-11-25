@@ -123,6 +123,16 @@ caller's name. It compares the presented token with every named caller's by
 body, which it reads whole: a `Content-Length` above 256 KiB, or a body that grows past it,
 is answered `413`. A message of 32,000 characters fits several times over.
 
+**The order of the checks**, the same at both addresses: the origin (`403`); the credential
+(`401`); the size (`413`); then the protocol, in the SDK's dispatcher: the version, the
+operation; then, in Freyja's handler: the message's form, the conversation and the task
+named, the limits. Each is decided before the next is looked at, and all of them before a
+thread is made or a model is asked.
+
+**Refused credentials are logged sparingly.** Anyone who reaches the outside listener can
+send requests without a token. One warning is written for the first refusal, and after that
+at most one in ten seconds for each address, saying how many were refused since (FR-028).
+
 The refusal of other origins runs first on both addresses, by the rule the thread routes
 use (`refuse_other_origins`). `AllowedHosts` covers the own address as it covers every route
 there, and is not put in front of the outside application (spec, Assumptions).
@@ -162,9 +172,10 @@ graph and catalog for one that a caller did.
 
 **The thread's id is not given to a model on a caller's thread.** `ThreadContextMiddleware`
 tells the model its thread's id on every call, and a caller could ask Freyja to repeat it.
-On the strict build the middleware tells an alias, `c-` and 16 hexadecimal characters of a
-hash of the thread's id: stable for the conversation, and not an id of anything in Freyja's
-API (FR-018).
+On the strict build the middleware tells an alias, `c-` and the first 16 hexadecimal
+characters of the SHA-256 of the thread's id: stable for the conversation, the same from
+every instance, and not an id of anything in Freyja's API (FR-018). A thread's id is 32
+random hexadecimal characters, so the alias cannot be turned back into it by trying ids.
 
 **Rationale**: FR-013a asks for a pause, which only the gate in the graph gives. A separate
 build keeps the catalog, the wording of a proposal, and the tools truthful with no knowledge
@@ -176,8 +187,25 @@ catalog, the allowed decisions, and the check at send time would each have to le
 thread's kind as well, and a condition that answers differently at a resume makes the resume
 fail. A refusal at send time in place of a pause (not what FR-013a says).
 
+**The subagent is covered by the same two rules.** The gate that is generated from the
+classification goes to Freyja's subagent as well as to Freyja (`build_agent`), and the
+subagent is given the same file backend object (R16). So on a caller's thread a subagent's
+message to a delegate agent pauses too, and a subagent of a named caller's task works in
+that caller's area.
+
+**With the feature off, a caller's thread is not run.** The strict build and the file
+backend exist only while the feature is on, so a thread a caller started must not be run
+without them. When the service starts with the feature off, it asks once whether any
+conversation exists. Where none does, nothing is looked up afterwards, and the service is
+what it was before this feature. Where one does, a context is still taken with the thread's
+id and one read; for a caller's thread the thread routes answer `409` with `a2a_server_off`
+to a message or a decision, the worker leaves the thread alone as it leaves a paused one,
+and `SegmentedGraph` refuses it as it refuses any caller's thread on the other build. No
+conversation can be made while the feature is off, so the answer to the question at startup
+stays true.
+
 **Cost**: a second graph is compiled at each rebuild, only while the feature is on. With it
-off, nothing is built or looked up.
+off and no conversation in the table, nothing is built or looked up.
 
 ## R7. A received task's state is read from its thread, and kept once it has ended
 
@@ -217,6 +245,16 @@ the thread again (FR-016, FR-012).
   routes do. So a note is this task's only when it is not older than the task's start and
   not older than the state's last checkpoint. An earlier run's failure, or a note that a
   later run has since recorded a step past, is not read.
+
+**Which clock.** A note's time is written by the instance that ran the run, from its own
+clock, as the checkpoints of that run are (007). `started_at` is written from the clock of
+the instance that started the task's run, which is the instance that then runs it, so the
+first comparison is between two times of one clock for the message's own run. A
+continuation that a person's decision starts may run on another instance. The instances'
+clocks are assumed to agree to within a few seconds, as the lease's time limits already
+assume; where they do not, a note of such a continuation can be taken for an earlier run's,
+and its task then ends as failed and interrupted where it would have been failed with its
+reason or canceled. No task ends as completed by that mistake, and none stays working.
 
 "The thread recorded nothing since the task started" is the same checkpoint as
 `base_checkpoint` with no note of the task's: a run that died before its first step. Without
@@ -286,7 +324,10 @@ failures are logged.
 Behind it, each instance looks every 30 seconds at the received tasks that are not released
 (`released_at` null): at most as many as the total limit, a few reads each. The sweep does
 what the function does, and is what makes the rest true when the function did not run:
-the process stopped or died with the task under way, or the look failed.
+the process stopped or died with the task under way, or the look failed. Its first round,
+when the service starts, also cancels every working task of a named caller that the
+settings no longer name, as that caller's cancel would (R11): a deployment that takes a
+caller away takes away what it asked for.
 
 **Rationale**: every run gives its lease back through this one method, whoever started it:
 the console, a decision, the worker, a client of the API. It is the one place that sees a
@@ -410,6 +451,11 @@ tell a message that will never be taken from one to send again later (spec chang
 The protocol has no error for "not now"; -32004 is the nearest it has, and the reason code
 travels in the error's data, where the SDK puts it in an `ErrorInfo`.
 
+**What an answer's time may say.** A task that is another caller's and one that does not
+exist are answered with the same bytes; the time each takes is not made equal. A task's id
+is 32 random hexadecimal characters that only its caller was ever given, so there is no id
+to try the difference on.
+
 **Alternatives**: a task in the protocol's rejected state (a task that was never made and
 cannot be read back); an error of Freyja's own (the SDK maps an unknown subclass to the
 internal error).
@@ -507,6 +553,14 @@ workspace and not inside it: a thread on the shared workspace, the local caller'
 does not see a named caller's files through Freyja either. A caller's name is already a safe
 directory name (FR-004). Startup stops when the files directory is the workspace, is inside
 it, or contains it.
+
+**What else could reach outside a thread, and does not.** The file tools include `execute`,
+a shell; it works only with a backend that offers one, and neither the workspace's backend
+nor `CallerFiles` does, so it answers with an error on every thread. The graph is given
+LangGraph's store, and no tool or middleware of the orchestrator reads or writes it today:
+`build_agent` configures no memory, and the file backend is not a store backend. A tool that
+came to use the store would have to be scoped by caller on the strict build; a test of the
+strict build's tool list makes sure such a tool is noticed.
 
 **Verified**: deepagents 0.7.32 takes a backend instance only; factories were removed. Every
 file tool and the skills middleware use the one backend object. `FilesystemBackend` in

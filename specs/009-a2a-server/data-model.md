@@ -28,7 +28,7 @@ One row per conversation id of one caller.
 | Column | Type | Rule |
 |---|---|---|
 | `caller` | text, not null | The caller's name. |
-| `context_id` | text, not null | The caller's conversation id, at most 128 characters, or one the service made. |
+| `context_id` | text, not null | The caller's conversation id, at most 128 characters, or one the service made. It is returned to its caller and appears nowhere else: not in a log line, not in the console, not in a thread, and not in what a model is told. |
 | `thread_id` | text, not null, unique | The thread, made by the service: 32 hexadecimal characters. Never chosen by a caller and never returned to one. |
 | `created_at` | timestamptz, not null | |
 
@@ -55,7 +55,7 @@ One row per message that was accepted.
 | `reason` | text, null | A code of the fixed set below, for `failed` and `canceled`. |
 | `result` | text, null | Freyja's last reply, cleaned, for `completed`. |
 | `created_at` | timestamptz, not null | When the message was accepted. |
-| `started_at` | timestamptz, null | When the task's run had taken the thread's lease. Null in the moment between acceptance and that, during which the task is working whatever the thread says. |
+| `started_at` | timestamptz, null | When the task's run had taken the thread's lease, by the clock of the instance that started it, which is the clock that run's note in the index is written by (research R7). Null in the moment between acceptance and that, during which the task is working whatever the thread says. |
 | `base_checkpoint` | text, null | The id of the thread's last checkpoint when the run took the lease; null for a thread that had none. A thread still at this checkpoint has recorded nothing of the task. |
 | `ended_at` | timestamptz, null | Set with every state other than `working`. |
 | `released_at` | timestamptz, null | When the task stopped counting against the limits. |
@@ -113,6 +113,9 @@ decided when the message's run takes the thread's lease, from the thread itself 
 | `stopped` | canceled | The run was stopped before it finished. |
 | `canceled` | canceled | The caller canceled the task. |
 
+A task the service cancels because the settings no longer name its caller has the code
+`canceled` as well: nobody is left to read it, and the log says why.
+
 A code the index notes for a failed run and that is not in this table is `internal`. The
 note's own message is never sent to a caller (FR-019).
 
@@ -148,7 +151,8 @@ has no state. When it has the lease, `started_at` and `base_checkpoint` are writ
 | `Runtime.begin_run`, `begin_read`, `SegmentedGraph` | Which caller started this thread, if any; the hand-over count of the conversation's last task. |
 | The thread routes | Whether a thread is a caller's, to refuse a message; whether its conversation has a working task, to refuse an approval when it has none. |
 | `UnattendedRuns.should_stop` | Whether the last task of a caller's thread was canceled by its caller, at each boundary of a console run on it. |
-| The sweep, every 30 seconds | Every row with `released_at` null. |
+| The sweep, every 30 seconds | Every row with `released_at` null; in its first round, the working rows of callers the settings no longer name. |
+| Startup, with the feature off | Whether any conversation exists; while one does, which caller started a thread, to refuse to run it. |
 | `GET /threads`, `GET /threads/{id}` | For the listed threads: the caller's name, and whether its last task was canceled by the caller. |
 | The lease's release | The conversation of a thread, to look at its task. |
 

@@ -62,11 +62,19 @@ Content-Type: application/json
 The answer is the same in the three cases. At the service's own address, a request with no
 `Authorization` header is the local caller's; one with a header is held to the rule above.
 
+A token sent anywhere else, in the body, a query, or another header, is not a credential:
+the request is treated as one without. Who the caller is comes from the credential alone;
+the protocol's `tenant` field is ignored in every request.
+
 A request that a browser marks as made by a page of another origin is answered `403` with
 the code `other_origin`, at both addresses, before the credential is looked at.
 
 A request larger than 256 KiB is answered `413`, at both addresses, before its body is read
 whole.
+
+The checks are made in this order, each before the next is looked at: the origin, the
+credential, the size, the protocol's version and operation, the message's form, the
+conversation and the task it names, the limits.
 
 ## Operations
 
@@ -74,7 +82,7 @@ whole.
 |---|---|---|
 | `SendMessage` | yes | Below. |
 | `SendStreamingMessage` | yes | Below. |
-| `GetTask` | yes | The caller's own task, as it stands. No history is returned. |
+| `GetTask` | yes | The caller's own task, as it stands. No history is returned, whatever `historyLength` asks. |
 | `SubscribeToTask` | yes | A task that has not ended. |
 | `CancelTask` | yes | A task that has not ended. |
 | `ListTasks` | no | `UnsupportedOperationError`. |

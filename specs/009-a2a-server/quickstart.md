@@ -12,9 +12,9 @@ which does nothing outside its own process. Do not follow these steps with an ag
 would not hand work to: a hand-off that is approved here is really sent.
 
 Nothing of this exists before the phase that builds it; each section says which phase it
-needs ([plan.md](plan.md), "Phases"). Until phase 4 a request with an `Authorization` header
-is refused, and until phase 5 `cancel` and `follow` are answered as operations that are not
-offered.
+needs ([plan.md](plan.md), "Phases"). Until phase 5 a request with an `Authorization` header
+is refused, and until phase 4 `cancel` and `follow` are answered as operations that are not
+offered. The sections follow the user stories' order, not the phases'.
 
 ## Prerequisites
 
@@ -103,8 +103,8 @@ caller stream "Hand this to the stub agent: say hello"
   although the agent is set to run without approval.
 - The console counts one task that needs a decision. Its page and the proposal's card say
   that an agent on this machine started the run. Approve it.
-- `caller follow <task id>` then prints the task going on and completing with Freyja's
-  reply; the stand-in agent received the message once.
+- `caller get <task id>` then prints the task as completed, with Freyja's reply; the
+  stand-in agent received the message once.
 
 Repeat and reject in the console: the agent receives nothing, and the task completes with
 Freyja's reply to the rejection.
@@ -120,7 +120,7 @@ curl -s -X POST localhost:8000/threads/<thread id from the page's address>/runs/
 
 `"caller_thread"`.
 
-## 3. An agent on another host calls with its token (User Story 3, phase 4)
+## 3. An agent on another host calls with its token (User Story 3, phase 5)
 
 Add to `.env`, and start the service again:
 
@@ -149,7 +149,7 @@ out --token sk-recognizable-other-0002 get <artex's task id>             # task 
 - The console lists the task as started by agent `artex`.
 - `grep -c recognizable` over the service's log gives 0.
 
-A named caller's files (phase 4):
+A named caller's files:
 
 ```bash
 out --token sk-recognizable-key-0001 send "Write the word mine into /notes.txt, then list every file you can see."
@@ -161,10 +161,22 @@ out --token sk-recognizable-key-0001 send "Add a line to any file under /skills/
 The second caller sees no `notes.txt`. The third reply says the skills cannot be changed,
 and `git status workspace/skills` is clean.
 
-Start the service with `FREYJA_A2A_SERVER_CALLERS` removed: it does not start, and the error
-names `FREYJA_A2A_SERVER_CALLERS` and no token.
+Take a caller away: send `out --token sk-recognizable-other-0002 send "Hand this to the stub
+agent: say hello"`, leave its proposal undecided, remove `heimdall` from
+`FREYJA_A2A_SERVER_CALLERS`, and start the service again. The console no longer counts the
+task among those that need a decision, shows its proposal rejected, and says that the agent
+is no longer configured.
 
-## 4. Continue, come back, cancel (User Story 4, phase 5)
+Start the service with `FREYJA_A2A_SERVER_CALLERS` removed altogether: it does not start, and
+the error names `FREYJA_A2A_SERVER_CALLERS` and no token.
+
+Turn the feature off with a caller's task waiting for a person: send one as in section 2,
+leave it undecided, remove every `FREYJA_A2A_SERVER` line from `.env`, and start the service
+again. The task is still listed and can be read; approving or rejecting its proposal in the
+console is refused, and the page says that the task is continued only while receiving tasks
+from agents is on. Put the settings back.
+
+## 4. Continue, come back, cancel (User Story 4, phase 4)
 
 ```bash
 caller send "Remember the number 41."          # note the contextId, C, and the task id

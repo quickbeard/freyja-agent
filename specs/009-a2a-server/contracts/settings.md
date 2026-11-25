@@ -32,6 +32,12 @@ FREYJA_A2A_SERVER_URL=https://freyja.example.com
 - `token`: 16 to 4,096 characters, each a visible ASCII character (no space, no control
   character); different from every other caller's.
 
+A name is what a caller's conversations and file area are kept under. A caller that is
+removed has its tasks canceled at the next start; one that is named again under the same
+name has its conversations and its files again. Do not give a removed caller's name to
+another party. Every instance that shares the database is given the same callers: an
+instance that lacks one cancels that caller's tasks.
+
 ## What stops startup
 
 Each with an error that names the variable, and the caller where there is one, and never a
@@ -45,6 +51,12 @@ token or a value:
 - a limit outside its range, or a total limit below the caller's;
 - `FREYJA_A2A_SERVER_FILES_DIR` that is the workspace, is inside it, or contains it;
 - the outside listener's address that cannot be bound, when the service starts.
+
+## With the feature off
+
+Nothing here is used, and the service is what it was before the feature. On a deployment
+that had the feature on, the threads callers started are still there: they can be read, and
+are not run until the feature is on again ([openapi.yaml](openapi.yaml), `a2a_server_off`).
 
 ## What warns and starts
 

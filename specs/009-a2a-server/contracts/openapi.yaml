@@ -4,9 +4,9 @@ info:
   version: 0.9.0
   description: >
     Changes made by feature 009 to the service's own API. The A2A operations a caller uses are
-    not part of this API and are in a2a-server.md. No path is added here. Three things change,
+    not part of this API and are in a2a-server.md. No path is added here. Four things change,
     each only for a thread that a caller started over A2A; no thread that existed before this
-    feature is one, and with the feature off nothing here applies:
+    feature is one, and on a deployment that never had the feature on nothing here applies:
 
     1. A thread's row gains `caller`. By the compatibility rule of feature 001, a key may be
     added without notice and a client ignores what it does not recognize.
@@ -17,6 +17,10 @@ info:
     3. An approval or an edit of a proposal on a caller's thread is refused with 409 and the
     code `requester_gone` while the conversation has no task that is still working, as after
     its caller canceled. A rejection is accepted.
+
+    4. With the feature off, a message to a caller's thread and a decision on its proposal
+    are refused with 409 and the code `a2a_server_off`: such a thread is run only while the
+    feature is on. Its row and its state are read as before.
 
     Everything else of these paths, their other answers, the refusal of other origins, and the
     refusal of unknown host names, is as features 001, 003, 005, and 007 have it; see
@@ -52,7 +56,7 @@ paths:
                     stoppable: false
                     stopping: false
                     runs: 1
-                    caller: { name: artex, canceled: false }
+                    caller: { name: artex, canceled: false, configured: true }
                 needs_decision: 1
                 total: 1
                 more: false
@@ -117,7 +121,8 @@ components:
         Beside the reasons 001 and 007 give for 409. `caller_thread`: a caller started this
         thread over A2A, and only that caller adds messages to it. Looked at before the
         thread's lease is taken; nothing changed. When whether a caller started the thread
-        cannot be read, the answer is 500 and nothing starts.
+        cannot be read, the answer is 500 and nothing starts. With the feature off the code
+        is `a2a_server_off`.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -133,7 +138,8 @@ components:
         shortly, with the reason that the requesting agent canceled. A request that rejects
         every action is accepted, and so is one that repeats the decisions a person already
         took for the proposal (005, `already_decided`). Looked at under the thread's lease;
-        nothing changed.
+        nothing changed. With the feature off, every decision on a caller's thread is refused
+        with the code `a2a_server_off`, a rejection included: the thread is not run.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
@@ -161,7 +167,7 @@ components:
           oneOf:
             - type: "null"
             - type: object
-              required: [name, canceled]
+              required: [name, canceled, configured]
               properties:
                 name:
                   type: string
@@ -169,7 +175,10 @@ components:
                   description: The caller's name as the deployment configured it, or `local` for an agent that called on the service's own address without a token.
                 canceled:
                   type: boolean
-                  description: True while the last task of the conversation is one its caller canceled.
+                  description: True while the last task of the conversation is one its caller canceled, or one the service canceled because the deployment no longer names the caller.
+                configured:
+                  type: boolean
+                  description: Whether the settings name the caller now. Always true for `local`.
     Error:
       type: object
       required: [detail]
