@@ -35,9 +35,9 @@ import time
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, LiteralString, Protocol
+from typing import Any, Literal, Protocol
 
-from psycopg import errors, sql
+from psycopg import sql
 from psycopg.abc import QueryNoTemplate
 
 from freyja_agent.runtime.persistence import Pool
@@ -73,10 +73,6 @@ GIVEN_UP_MOVED = (
 def given_up_text(template: str, agent: str, task_id: str) -> str:
     """``template`` with the task's id and the agent's name filled in."""
     return template.replace("{task_id}", task_id).replace("{agent}", agent)
-
-
-class AgentTaskSetupError(RuntimeError):
-    """The task tables could not be brought up to date at startup. The service does not start."""
 
 
 @dataclass(frozen=True)
@@ -205,8 +201,6 @@ UPDATABLE = frozenset(
 
 
 class AgentTaskStore(Protocol):
-    async def setup(self) -> None: ...
-
     async def now(self) -> datetime: ...
 
     async def get_context(self, thread_id: str, agent: str) -> str | None: ...
@@ -300,9 +294,6 @@ class InMemoryAgentTaskStore:
         self._sends: dict[tuple[str, str, str], AgentSend] = {}
         self._tasks: dict[tuple[str, str], AgentTaskRecord] = {}
         self._calls: dict[tuple[str, str, str], ProposedCall] = {}
-
-    async def setup(self) -> None:
-        return None
 
     async def now(self) -> datetime:
         return datetime.fromtimestamp(self._clock(), UTC)
@@ -519,112 +510,6 @@ class InMemoryAgentTaskStore:
 
 
 # Every statement is one parameterized command; identifiers come from a fixed set.
-_CREATE = (
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agent_conversations (
-        thread_id  text NOT NULL,
-        agent      text NOT NULL,
-        context_id text NOT NULL,
-        created_at timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (thread_id, agent)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agent_sends (
-        thread_id    text NOT NULL,
-        step         text NOT NULL,
-        tool_call_id text NOT NULL,
-        agent        text NOT NULL,
-        kind         text NOT NULL,
-        message_id   text NOT NULL,
-        request      text NOT NULL,
-        task_id      text,
-        sent_at      timestamptz NOT NULL,
-        result       text,
-        PRIMARY KEY (thread_id, step, tool_call_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agent_tasks (
-        agent             text NOT NULL,
-        task_id           text NOT NULL,
-        thread_id         text NOT NULL,
-        context_id        text NOT NULL,
-        message           text NOT NULL,
-        state             text NOT NULL,
-        started_at        timestamptz NOT NULL,
-        last_checked_at   timestamptz NOT NULL,
-        ended_at          timestamptz,
-        outcome           text,
-        outcome_ready     boolean NOT NULL DEFAULT false,
-        delivered_at      timestamptz,
-        watcher           text,
-        watch_until       timestamptz,
-        followup_attempts integer NOT NULL DEFAULT 0,
-        followup_next_at  timestamptz,
-        followup_error    text,
-        agent_ref         text,
-        progress          text,
-        progress_at       timestamptz,
-        PRIMARY KEY (agent, task_id)
-    )
-    """,
-    "CREATE INDEX IF NOT EXISTS freyja_agent_tasks_thread ON freyja_agent_tasks (thread_id)",
-    # Feature 005, created with its first user (research R8). Every read and every delete is
-    # by the thread, or by the thread and the namespace, which the primary key serves.
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agent_calls (
-        thread_id    text NOT NULL,
-        namespace    text NOT NULL,
-        tool_call_id text NOT NULL,
-        agent        text NOT NULL,
-        agent_id     text,
-        gated        boolean NOT NULL,
-        decided      boolean NOT NULL DEFAULT false,
-        proposed_at  timestamptz NOT NULL DEFAULT now(),
-        PRIMARY KEY (thread_id, namespace, tool_call_id)
-    )
-    """,
-)
-
-# Feature 005 is the first to add a column to a table that exists in deployments. Adding a
-# nullable column rewrites nothing, but it takes a lock that waits behind any long reader of
-# the table, and every query on the table then waits behind it. So the column is looked for
-# first, and added only when it is missing, under a lock timeout (005 research R2).
-_HAS_COLUMN = (
-    "SELECT 1 FROM information_schema.columns WHERE table_schema = current_schema()"
-    " AND table_name = %(table)s AND column_name = %(column)s"
-)
-# The columns added to tables that exist in deployments, with the statement that adds each:
-# a task's ``agent_ref`` (005 research R2), a proposed call's ``decided``, which the table
-# created by 005's fifth phase lacks, and a task's kept progress and its time (008 research
-# R2). A boolean with a constant default, and a nullable column with none, are added without
-# rewriting the table.
-_ADDED_COLUMNS: tuple[tuple[str, str, LiteralString], ...] = (
-    (
-        "freyja_agent_tasks",
-        "agent_ref",
-        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS agent_ref text",
-    ),
-    (
-        "freyja_agent_calls",
-        "decided",
-        "ALTER TABLE freyja_agent_calls ADD COLUMN IF NOT EXISTS decided boolean NOT NULL"
-        " DEFAULT false",
-    ),
-    (
-        "freyja_agent_tasks",
-        "progress",
-        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS progress text",
-    ),
-    (
-        "freyja_agent_tasks",
-        "progress_at",
-        "ALTER TABLE freyja_agent_tasks ADD COLUMN IF NOT EXISTS progress_at timestamptz",
-    ),
-)
-LOCK_TIMEOUT = "5s"
-
 _TASK_COLUMNS = [f.name for f in fields(AgentTaskRecord)]
 _SEND_COLUMNS = [f.name for f in fields(AgentSend)]
 _CALL_COLUMNS = [f.name for f in fields(ProposedCall)]
@@ -678,28 +563,6 @@ class PostgresAgentTaskStore:
 
     def __init__(self, pool: Pool) -> None:
         self._pool = pool
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            for statement in _CREATE:
-                await conn.execute(statement)
-            for table, column, add in _ADDED_COLUMNS:
-                cursor = await conn.execute(_HAS_COLUMN, {"table": table, "column": column})
-                if await cursor.fetchone() is not None:
-                    continue
-                try:
-                    async with conn.transaction():
-                        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
-                        await conn.execute(
-                            sql.SQL("SET LOCAL lock_timeout = {}").format(sql.Literal(LOCK_TIMEOUT))
-                        )
-                        await conn.execute(add)
-                except errors.LockNotAvailable:
-                    raise AgentTaskSetupError(
-                        f"The table {table} needs a new column, {column}, and could not be "
-                        f"changed within {LOCK_TIMEOUT}: another session is holding the table. "
-                        "Start the service again once that session has ended."
-                    ) from None
 
     async def _rows(self, query: QueryNoTemplate, params: dict[str, Any]) -> list[Any]:
         async with self._pool.connection() as conn:

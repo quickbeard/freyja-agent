@@ -196,14 +196,22 @@ startup and exits with an error naming the connection when it is unreachable.
   second carrying earlier turns and a tool call) and the count of tests in progress
   (`CheckSlots`).
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
-  and store, and holds what every Postgres store takes from it: `Pool`, the pool's type, whose
-  connections return a row as a dict, and `one_row`, the row of a statement that always
-  returns one; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
+  and store, brings Freyja's tables to the build's schema version before any store is
+  given the pool, and holds what every Postgres store takes from it: `Pool`, the pool's
+  type, whose connections return a row as a dict, and `one_row`, the row of a statement
+  that always returns one; `migrations.py` is the schema: `MIGRATIONS`, the ordered list
+  every table and column of Freyja's comes from, and `migrate`, which applies what a
+  database lacks at startup, one transaction each under one advisory lock and a lock
+  timeout, records it in `freyja_schema_migrations`, and stops startup for a database a
+  newer build migrated, one whose applied migration differs from the build's (`pending`, by
+  checksum), or a table it cannot get in time; no store makes or changes a table;
+  `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, agent
   tasks, and the calls of agents' tools that a model proposed (`PostgresAgentTaskStore` with
   its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); a task keeps the progress
   its agent last reported and when it was learned (`progress`, `progress_at`, feature 008),
-  added to a deployment's table at startup as `agent_ref` was; `saved_agents.py` is the `SavedAgentStore` for the agents an operator
+  columns that migration 1 adds to a table of an earlier deployment, as it adds `agent_ref`;
+  `saved_agents.py` is the `SavedAgentStore` for the agents an operator
   saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
   `InMemorySavedAgentStore`); `received_tasks.py` is the `ReceivedTaskStore` of feature 009,
   the conversations and received tasks of other agents (`PostgresReceivedTaskStore` with
@@ -555,6 +563,15 @@ startup and exits with an error naming the connection when it is unreachable.
   is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
   so the hook and both CI systems report the same; a new version is taken in a change of its
   own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
+- A change to the schema is a new migration at the end of `MIGRATIONS` in
+  `runtime/migrations.py`, with its checksum added to `RELEASED` in
+  `tests/test_migrations.py`. A migration that was merged is never edited: a database keeps
+  its checksum and a start refuses another. Migrations only go forward, and one adds and
+  does not take away (a new column is nullable or has a default), so that an older build
+  works on the newer schema while a release is rolled out. No other module makes or
+  changes a table, which `tests/test_migrations.py` checks, and
+  `tests/integration/test_migrations_postgres.py` applies the list to a real Postgres; run
+  it for every new migration, since CI does not.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before

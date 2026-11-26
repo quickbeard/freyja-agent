@@ -29,12 +29,6 @@ async def started(store: ReceivedTaskStore, task_id: str) -> None:
     assert await store.mark_started(task_id, datetime.now(UTC), None)
 
 
-async def setup_twice_changes_nothing(store: ReceivedTaskStore) -> None:
-    accepted = await accept(store)
-    await store.setup()
-    assert await store.get(accepted.task.task_id) == accepted.task
-
-
 async def a_new_conversation_gets_a_thread_and_a_working_task(store: ReceivedTaskStore) -> None:
     accepted = await accept(store, hops=2)
     task = accepted.task
@@ -177,7 +171,6 @@ async def a_context_id_is_kept_without_a_nul(store: ReceivedTaskStore) -> None:
 
 
 CASES: list[Case] = [
-    setup_twice_changes_nothing,
     a_new_conversation_gets_a_thread_and_a_working_task,
     two_callers_with_one_conversation_id_have_two_threads,
     a_busy_conversation_takes_no_message,

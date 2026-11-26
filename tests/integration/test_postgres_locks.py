@@ -24,7 +24,6 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 @pytest.fixture
 async def locks(pool: AsyncConnectionPool) -> PostgresRunLocks:
     locks = PostgresRunLocks(pool, ttl_seconds=60)
-    await locks.setup()
     return locks
 
 

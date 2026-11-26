@@ -670,21 +670,17 @@ class Runtime:
         """
         persistence = await open_persistence(settings)
         try:
+            # Every table is there: ``open_persistence`` brought the schema to this build's
+            # version, the tables of feature 009 included, with the feature on or off, so
+            # that turning it on needs no step of its own and a context can always ask who
+            # started a thread.
             locks = PostgresRunLocks(persistence.pool, settings.run_lock_ttl_seconds)
-            await locks.setup()
             agent_tasks = PostgresAgentTaskStore(persistence.pool)
-            await agent_tasks.setup()
             llm_profiles = PostgresLlmProfileStore(persistence.pool)
-            await llm_profiles.setup()
             saved_agents = PostgresSavedAgentStore(persistence.pool)
-            await saved_agents.setup()
             thread_index = PostgresThreadIndex(persistence.pool)
-            await thread_index.setup()
-            # Feature 009: made with the feature off too, so that turning it on needs no step
-            # of its own and a context can always ask who started a thread.
             received_tasks = PostgresReceivedTaskStore(persistence.pool)
-            await received_tasks.setup()
-            logger.info("Persistence ready: checkpointer, store, and run-lock table")
+            logger.info("Persistence ready: checkpointer, store, and Freyja's tables")
             async with cls.assemble(
                 settings,
                 checkpointer=persistence.saver,

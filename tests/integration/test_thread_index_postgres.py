@@ -71,28 +71,16 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 @pytest.fixture
 async def index(pool: AsyncConnectionPool) -> ThreadIndex:
     made = PostgresThreadIndex(pool)
-    await made.setup()
     return made
-
-
-async def test_setting_up_twice_keeps_what_is_there(pool: AsyncConnectionPool) -> None:
-    first = PostgresThreadIndex(pool)
-    await first.setup()
-    await first.run_started("t-1", A)
-    second = PostgresThreadIndex(pool)
-    await second.setup()
-    assert (await row(second, "t-1")).run_owner == A
 
 
 async def test_two_instances_on_one_database_see_each_others_writes(
     pool: AsyncConnectionPool, settings: Settings
 ) -> None:
     here = PostgresThreadIndex(pool)
-    await here.setup()
     other = await open_persistence(settings)
     try:
         there = PostgresThreadIndex(other.pool)
-        await there.setup()
 
         # A run on one instance; the other marks it to be stopped and reads the mark back.
         await here.run_started("t-1", A)

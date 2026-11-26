@@ -19,8 +19,6 @@ from freyja_agent.runtime.persistence import Pool
 class RunLocks(Protocol):
     """Lease operations. ``owner`` identifies one run on one instance."""
 
-    async def setup(self) -> None: ...
-
     async def acquire(self, thread_id: str, owner: str) -> bool: ...
 
     async def renew(self, thread_id: str, owner: str) -> None: ...
@@ -37,9 +35,6 @@ class InMemoryRunLocks:
         self.ttl_seconds = float(ttl_seconds)
         self._clock = clock
         self._rows: dict[str, tuple[str, float]] = {}
-
-    async def setup(self) -> None:
-        return None
 
     async def acquire(self, thread_id: str, owner: str) -> bool:
         now = self._clock()
@@ -66,15 +61,6 @@ class InMemoryRunLocks:
 
 # Every statement is a single atomic command, so concurrent instances cannot interleave inside
 # one operation. Parameters are bound by psycopg; no values are formatted into the SQL.
-_CREATE_TABLE = """
-CREATE TABLE IF NOT EXISTS freyja_run_locks (
-    thread_id   text PRIMARY KEY,
-    owner       text NOT NULL,
-    acquired_at timestamptz NOT NULL,
-    expires_at  timestamptz NOT NULL
-)
-"""
-
 _ACQUIRE = """
 INSERT INTO freyja_run_locks (thread_id, owner, acquired_at, expires_at)
 VALUES (%(thread_id)s, %(owner)s, now(), now() + %(ttl)s * interval '1 second')
@@ -111,10 +97,6 @@ class PostgresRunLocks:
     def __init__(self, pool: Pool, ttl_seconds: float) -> None:
         self._pool = pool
         self.ttl_seconds = float(ttl_seconds)
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            await conn.execute(_CREATE_TABLE)
 
     async def acquire(self, thread_id: str, owner: str) -> bool:
         params = {"thread_id": thread_id, "owner": owner, "ttl": self.ttl_seconds}

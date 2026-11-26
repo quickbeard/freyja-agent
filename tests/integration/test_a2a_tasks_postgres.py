@@ -86,8 +86,6 @@ async def store(settings: Settings) -> AsyncIterator[AgentTaskStore]:
     persistence = await open_persistence(settings)
     try:
         store = PostgresAgentTaskStore(persistence.pool)
-        await store.setup()
-        await store.setup()  # idempotent
         yield store
     finally:
         await persistence.close()
@@ -123,10 +121,9 @@ TABLES = {
 }
 
 
-async def test_the_tables_are_created_once_and_again_without_harm(
+async def test_the_tables_and_the_index_of_tasks_by_thread_are_there(
     store: AgentTaskStore, settings: Settings
 ) -> None:
-    await store.setup()
     async with await psycopg.AsyncConnection.connect(settings.database_uri) as conn:
         cursor = await conn.execute(
             "SELECT tablename FROM pg_tables WHERE schemaname = 'public'"
@@ -137,7 +134,8 @@ async def test_the_tables_are_created_once_and_again_without_harm(
             "SELECT indexname FROM pg_indexes WHERE tablename = 'freyja_agent_tasks'"
         )
         indexes = {row[0] for row in await cursor.fetchall()}
-    assert names == TABLES
+    # Every table of the service is there by now; these four are this store's.
+    assert names >= TABLES
     assert "freyja_agent_tasks_thread" in indexes
 
 
@@ -208,90 +206,6 @@ async def test_a_replacement_that_fails_leaves_the_earlier_calls_in_place(
     with pytest.raises(psycopg.Error):
         await store.replace_calls("th-1", "", [a_call("call-2"), a_call("bad", agent="a\x00b")])
     assert [call.tool_call_id for call in await store.list_calls("th-1")] == ["call-1"]
-
-
-# Feature 008, T004: the two columns of kept progress, on a table that exists in deployments
-# (008 research R2).
-
-# ``freyja_agent_tasks`` as feature 005 left it: with ``agent_ref``, without the progress.
-BEFORE_008 = """
-    CREATE TABLE freyja_agent_tasks (
-        agent             text NOT NULL,
-        task_id           text NOT NULL,
-        thread_id         text NOT NULL,
-        context_id        text NOT NULL,
-        message           text NOT NULL,
-        state             text NOT NULL,
-        started_at        timestamptz NOT NULL,
-        last_checked_at   timestamptz NOT NULL,
-        ended_at          timestamptz,
-        outcome           text,
-        outcome_ready     boolean NOT NULL DEFAULT false,
-        delivered_at      timestamptz,
-        watcher           text,
-        watch_until       timestamptz,
-        followup_attempts integer NOT NULL DEFAULT 0,
-        followup_next_at  timestamptz,
-        followup_error    text,
-        agent_ref         text,
-        PRIMARY KEY (agent, task_id)
-    )
-"""
-AN_EARLIER_WORKING_ROW = (
-    "INSERT INTO freyja_agent_tasks (agent, task_id, thread_id, context_id, message, state,"
-    " started_at, last_checked_at, agent_ref) VALUES ('stub', 'old', 'th-1', 'ctx-1', 'm',"
-    " 'working', now(), now(), '0af3:1')"
-)
-PROGRESS_COLUMNS = (
-    "SELECT column_name, data_type, is_nullable FROM information_schema.columns"
-    " WHERE table_name = 'freyja_agent_tasks' AND column_name IN ('progress', 'progress_at')"
-    " ORDER BY column_name"
-)
-
-
-@pytest.fixture
-async def before_008(settings: Settings) -> AsyncIterator[psycopg.AsyncConnection]:
-    """A database as a deployment of feature 005, 006, or 007 left it, and a connection."""
-    async with await psycopg.AsyncConnection.connect(
-        settings.database_uri, autocommit=True
-    ) as conn:
-        await conn.execute(BEFORE_008)
-        await conn.execute(AN_EARLIER_WORKING_ROW)
-        yield conn
-
-
-async def test_the_progress_columns_are_added_and_an_earlier_row_has_no_progress(
-    settings: Settings, before_008: psycopg.AsyncConnection
-) -> None:
-    """FR-021: a task recorded before this feature reads as one with no kept progress."""
-    cursor = await before_008.execute(PROGRESS_COLUMNS)
-    assert await cursor.fetchall() == []
-    persistence = await open_persistence(settings)
-    try:
-        store = PostgresAgentTaskStore(persistence.pool)
-        await store.setup()
-        cursor = await before_008.execute(PROGRESS_COLUMNS)
-        assert await cursor.fetchall() == [
-            ("progress", "text", "YES"),
-            ("progress_at", "timestamp with time zone", "YES"),
-        ]
-        old = await store.get_task("stub", "old")
-        assert old is not None and (old.progress, old.progress_at) == (None, None)
-        assert (old.state, old.agent_ref) == ("working", "0af3:1")
-        # A second start changes nothing, and the store works on the table from here on.
-        await store.setup()
-        cursor = await before_008.execute(PROGRESS_COLUMNS)
-        assert len(await cursor.fetchall()) == 2
-        learned = await store.now()
-        assert await store.update_task(
-            "stub", "old", when_state=("working",), progress="Half done", progress_at=learned
-        )
-        assert await store.give_up_pending(["0af3:1"], "Stopped waiting for {task_id}.") == 1
-        given_up = await store.get_task("stub", "old")
-    finally:
-        await persistence.close()
-    assert given_up is not None and given_up.state == "given_up"
-    assert (given_up.progress, given_up.progress_at) == ("Half done", learned)
 
 
 async def test_progress_round_trips_through_every_reading_of_a_task(

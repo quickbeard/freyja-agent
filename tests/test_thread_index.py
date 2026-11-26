@@ -424,7 +424,6 @@ async def test_the_wrapper_passes_every_call_on_and_keeps_the_index() -> None:
     inner = InMemoryRunLocks(60, clock=clock.now)
     index = InMemoryThreadIndex()
     locks = IndexedRunLocks(inner, index)
-    await locks.setup()
 
     assert await locks.acquire("t-1", A) is True
     assert await locks.is_active("t-1") is True

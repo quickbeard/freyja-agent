@@ -28,7 +28,7 @@ Or through the console script, which reads the bind address from settings:
 uv run --env-file .env freyja-api
 ```
 
-Startup opens one Postgres connection pool and creates the LangGraph checkpointer and store tables, the `freyja_run_locks` table, the four agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`, `freyja_agent_calls`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`), the table of the thread index (`freyja_threads`), and the two tables of tasks received from other agents (`freyja_a2a_conversations`, `freyja_a2a_tasks`, made with `FREYJA_A2A_SERVER` off too, so that turning it on needs no step of its own) if they are missing. A task table created by an earlier version gains the columns added since: `agent_ref`, `progress`, and `progress_at`. If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](docs/models.md#no-usable-model)).
+Startup opens one Postgres connection pool, creates the LangGraph checkpointer and store tables if they are missing, and brings Freyja's own tables to this build's schema version (see [The database schema](#the-database-schema)): the `freyja_run_locks` table, the four agent tables (`freyja_agent_conversations`, `freyja_agent_sends`, `freyja_agent_tasks`, `freyja_agent_calls`), the two tables of saved agents (`freyja_agents`, `freyja_agents_state`), the two LLM profile tables (`freyja_llm_profiles`, `freyja_llm_state`), the table of the thread index (`freyja_threads`), and the two tables of tasks received from other agents (`freyja_a2a_conversations`, `freyja_a2a_tasks`, made with `FREYJA_A2A_SERVER` off too, so that turning it on needs no step of its own). If the database cannot be reached, startup fails with an error that names the connection (password redacted) and the process exits instead of serving. A model that cannot be used does not stop startup: the service starts, logs which LLM profile is not usable and why, and ends every run with `no_usable_model` until a usable profile is active (see [No usable model](docs/models.md#no-usable-model)).
 
 Check it is up:
 
@@ -38,6 +38,24 @@ curl localhost:8000/healthz
 ```
 
 Interactive API docs are at <http://localhost:8000/docs>. There is no authentication: anyone who can reach the port acts as a user, which is why the server binds `127.0.0.1` by default.
+
+
+### The database schema
+
+Freyja's tables are made and changed by migrations: an ordered list in `src/freyja_agent/runtime/migrations.py`, applied when the service starts. The table `freyja_schema_migrations` keeps one row for each migration a database has had, so a start that finds nothing to apply changes nothing and waits for no table.
+
+- **A new database** gets every migration in order.
+- **A database from before there were migrations** is taken through the first one, which makes only what is missing: a task table created by an earlier version gains `agent_ref`, `progress`, and `progress_at`, and its rows are kept.
+- **Two instances that start together** take turns, so a migration is applied once.
+- **Each migration is one transaction.** It is applied whole or not at all.
+
+Startup stops with an error, and changes nothing, when:
+
+- **the database was migrated by a newer build.** A build is never run against a schema it does not know. Run the newer build, or point this one at another database. This also happens on a development database after a branch with a newer migration was run on it.
+- **a migration the database had is not the one this build has**, or the database skipped one.
+- **a migration cannot get a table within five seconds** because another session holds it, such as a long report or a backup. Start the service again once that session has ended.
+
+Migrations only go forward. To undo a schema change, add another migration or restore a backup taken before it. So that an older build keeps working while a newer one is rolled out, a migration adds and does not take away: a new column is nullable or has a default, and a column is dropped only by a later release than the one that stopped using it.
 
 ## Docs
 

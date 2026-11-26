@@ -101,8 +101,6 @@ class LlmState:
 
 
 class LlmProfileStore(Protocol):
-    async def setup(self) -> None: ...
-
     async def list_profiles(self) -> list[LlmProfileRecord]: ...
 
     async def get_profile(self, profile_id: str) -> LlmProfileRecord | None: ...
@@ -209,9 +207,6 @@ class InMemoryLlmProfileStore:
             for profile in self._profiles.values()
         )
 
-    async def setup(self) -> None:
-        return None
-
     async def list_profiles(self) -> list[LlmProfileRecord]:
         return sorted(self._profiles.values(), key=lambda profile: profile.name.lower())
 
@@ -317,39 +312,6 @@ class InMemoryLlmProfileStore:
 
 
 # Every statement is one parameterized command; identifiers come from a fixed set.
-_CREATE = (
-    """
-    CREATE TABLE IF NOT EXISTS freyja_llm_profiles (
-        id                text PRIMARY KEY,
-        name              text NOT NULL,
-        provider          text NOT NULL,
-        model             text NOT NULL,
-        base_url          text,
-        api_key_encrypted text NOT NULL,
-        key_hint          text NOT NULL,
-        responses_api     boolean NOT NULL DEFAULT true,
-        config_version    integer NOT NULL DEFAULT 1,
-        last_test_ok      boolean,
-        last_test_at      timestamptz,
-        last_test_step    text,
-        last_test_reason  text,
-        created_at        timestamptz NOT NULL DEFAULT now(),
-        updated_at        timestamptz NOT NULL DEFAULT now()
-    )
-    """,
-    "CREATE UNIQUE INDEX IF NOT EXISTS freyja_llm_profiles_name"
-    " ON freyja_llm_profiles (lower(name))",
-    """
-    CREATE TABLE IF NOT EXISTS freyja_llm_state (
-        id                smallint PRIMARY KEY CHECK (id = 1),
-        active_profile_id text REFERENCES freyja_llm_profiles (id) ON DELETE RESTRICT,
-        revision          bigint NOT NULL DEFAULT 0,
-        updated_at        timestamptz NOT NULL DEFAULT now()
-    )
-    """,
-    "INSERT INTO freyja_llm_state (id) VALUES (1) ON CONFLICT DO NOTHING",
-)
-
 _COLUMNS = [f.name for f in fields(LlmProfileRecord)]
 _SELECT = sql.SQL("SELECT {} FROM freyja_llm_profiles").format(
     sql.SQL(", ").join(sql.Identifier(name) for name in _COLUMNS)
@@ -371,11 +333,6 @@ class PostgresLlmProfileStore:
 
     def __init__(self, pool: Pool) -> None:
         self._pool = pool
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            for statement in _CREATE:
-                await conn.execute(statement)
 
     async def list_profiles(self) -> list[LlmProfileRecord]:
         async with self._pool.connection() as conn:
