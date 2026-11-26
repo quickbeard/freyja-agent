@@ -12,7 +12,7 @@ export type Blocked = "run" | "proposal" | null;
 const WHY: Record<Exclude<Blocked, null>, string> = {
   run: "A run is in progress on this task. A message can be sent once it has ended.",
   proposal:
-    "This task waits for a decision on the proposal above. A message can be sent once it is decided.",
+    "This task waits for a decision on a proposal. A message can be sent once it is decided.",
 };
 
 // After these the task is read again: the service's refusals that say the task has moved

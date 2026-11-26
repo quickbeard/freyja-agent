@@ -115,7 +115,7 @@ describe("the follow-up box", () => {
     expect((send() as HTMLButtonElement).disabled).toBe(true);
     expect(
       screen.getByText(
-        "This task waits for a decision on the proposal above. A message can be sent once it is decided.",
+        "This task waits for a decision on a proposal. A message can be sent once it is decided.",
       ),
     ).toBeTruthy();
     fireEvent.submit(box().closest("form") as HTMLFormElement);

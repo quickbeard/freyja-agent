@@ -23,8 +23,6 @@ import {
 const ID = "0123456789abcdef0123456789abcdef";
 const RUN_BLOCKS =
   "A run is in progress on this task. A message can be sent once it has ended.";
-const PROPOSAL_BLOCKS =
-  "This task waits for a decision on the proposal above. A message can be sent once it is decided.";
 const IN_PROGRESS =
   "A run is in progress. This page reads the task again until it ends.";
 
@@ -112,26 +110,36 @@ test("a follow-up the service refuses keeps its text", async ({ page }) => {
   await expect(messages(page)).toHaveCount(2);
 });
 
-test("the follow-up box cannot be sent on a task that waits for a decision, and says why", async ({
+test("on a task that waits for a decision, the proposal's card takes the follow-up box's place at the end of the page, in view", async ({
   page,
 }) => {
   const service = new TaskService();
-  service.tasks.set(
-    ID,
-    pausedTask(ID, "Tell #ops.", proposal("int-1", notify())),
-  );
+  // A conversation longer than the window, so that a card placed under it starts out of view.
+  const earlier = Array.from({ length: 12 }, (_, index) => [
+    human(`Question ${index + 1}.`, `h-${index}`),
+    ai(`Answer ${index + 1}.`, `ai-${index}`),
+  ]).flat();
+  const paused = pausedTask(ID, "Tell #ops.", proposal("int-1", notify()));
+  paused.state.messages = [...earlier, ...paused.state.messages];
+  service.tasks.set(ID, paused);
   await service.serve(page);
   await page.goto(`/tasks/${ID}`);
-  await expect(
-    page.getByRole("button", { name: "Approve send_notification" }),
-  ).toBeVisible();
 
-  await followUp(page).fill("Do it anyway.");
-  await expect(sendMessage(page)).toBeDisabled();
-  await expect(page.getByText(PROPOSAL_BLOCKS)).toBeVisible();
-  await expect(followUp(page)).toHaveAccessibleDescription(PROPOSAL_BLOCKS);
-  // Enter in the box sends neither a message nor a decision.
-  await followUp(page).press("Enter");
+  const approve = page.getByRole("button", {
+    name: "Approve send_notification",
+  });
+  await expect(approve).toBeInViewport();
+  // The box gives way to the card while the proposal is pending: no message is sent to a
+  // task whose proposal waits (FR-017, FR-020), and nothing below the card hides it.
+  await expect(followUp(page)).toBeHidden();
+  await expect(sendMessage(page)).toBeHidden();
+  const card = page.getByRole("region", {
+    name: "Freyja proposes an action that needs your decision",
+  });
+  // Nothing of the task's page comes after the card.
+  expect(
+    await card.evaluate((element) => element.parentElement?.nextElementSibling),
+  ).toBeNull();
   expect(service.sent).toEqual([]);
   expect(service.decided).toEqual([]);
 });

@@ -37,7 +37,7 @@ A message the service refuses stays in the box with the service's reason. When n
 
 ### Deciding a proposal
 
-When the run pauses on an action that needs approval, the task's page shows a card for the proposal: each action's name, the tool server or agent it goes to, its description, and its arguments in full. Each action offers the decisions the service allows for it:
+When the run pauses on an action that needs approval, the task's page shows a card for the proposal: each action's name, the tool server or agent it goes to, its description, and its arguments in full. The card is the last part of the page, after the conversation and the task's agent tasks, and the page scrolls to it when it appears, once for each proposal. Each action offers the decisions the service allows for it:
 
 - **Approve**.
 - **Edit the arguments**, which opens them as JSON to change before approving. Text that is not a JSON object is not sent, and an edit the service refuses keeps its text with the service's reason beside it.
@@ -59,7 +59,7 @@ A task that another agent handed Freyja over A2A (see [Receive tasks from agents
 
 Under the conversation, a box sends **another message** on the same task. Freyja answers with the whole conversation in mind, and the reply streams below the conversation as it was. It is how a task that failed or stopped is continued.
 
-The box cannot be sent while a run is in progress or a proposal is pending, and says which; what was typed stays in it. A follow-up the service refuses keeps its text with the reason, said in the console's words when a run is in progress or a proposal is pending. One whose run failed before the message was recorded, as when no usable model is active, has its text put back in the box.
+While a proposal is pending, its card takes the box's place at the end of the page, and the box comes back once the proposal is decided. The box cannot be sent while a run is in progress, or while the page knows of a proposal it cannot show, and says which; what was typed stays in it in every case. A follow-up the service refuses keeps its text with the reason, said in the console's words when a run is in progress or a proposal is pending. One whose run failed before the message was recorded, as when no usable model is active, has its text put back in the box.
 
 ### Agent tasks
 

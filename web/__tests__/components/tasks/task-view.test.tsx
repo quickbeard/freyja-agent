@@ -451,33 +451,66 @@ const ASKED = {
 };
 
 describe("a task's page with a proposal", () => {
-  it("shows the proposal's card, and a box for a new message that cannot be sent", async () => {
+  it("shows the proposal's card as the last part of the page, in place of the box for a new message", async () => {
     service({
       row: () => ({ json: summary({ status: "needs_decision" }) }),
       state: () => ({
         json: state([human("Tell #ops."), ASKED], {
           pending: PROPOSAL("int-1"),
+          agent_tasks: [agentTask()],
         }),
       }),
     });
     renderView();
-    expect(
-      await screen.findByRole("button", { name: "Approve send_notification" }),
-    ).toBeTruthy();
+    const approve = await screen.findByRole("button", {
+      name: "Approve send_notification",
+    });
     expect(screen.getByText("Needs your decision")).toBeTruthy();
-    // No message is sent to a task whose proposal is pending (FR-017, FR-020).
+    // After the conversation and the agent tasks: nothing of the page comes after the card.
+    const card = screen.getByRole("region", {
+      name: "Freyja proposes an action that needs your decision",
+    });
+    expect(card.parentElement?.nextElementSibling).toBeNull();
+    const agentTasks = screen.getByRole("region", { name: /Agent tasks/ });
     expect(
-      (
-        screen.getByRole("button", {
-          name: "Send message",
-        }) as HTMLButtonElement
-      ).disabled,
-    ).toBe(true);
-    expect(
-      screen.getByText(
-        "This task waits for a decision on the proposal above. A message can be sent once it is decided.",
-      ),
+      agentTasks.compareDocumentPosition(card) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+    expect(approve).toBeTruthy();
+    // No message is sent to a task whose proposal is pending (FR-017, FR-020): the box
+    // gives way to the card until the proposal is decided.
+    expect(screen.queryByRole("button", { name: "Send message" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: FOLLOW_UP })).toBeNull();
+  });
+
+  it("brings the proposal's card into view once, when it appears", async () => {
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+    try {
+      service({
+        row: () => ({ json: summary({ status: "needs_decision" }) }),
+        state: () => ({
+          json: state([human("Tell #ops."), ASKED], {
+            pending: PROPOSAL("int-1"),
+          }),
+        }),
+      });
+      renderView();
+      await screen.findByRole("button", { name: "Approve send_notification" });
+      expect(scrolled).toHaveBeenCalledTimes(1);
+      expect(scrolled).toHaveBeenCalledWith({ block: "start" });
+      expect(scrolled.mock.contexts[0]).toBe(
+        screen.getByRole("region", {
+          name: "Freyja proposes an action that needs your decision",
+        }).parentElement,
+      );
+      // A later reading of the same proposal leaves the page where the person scrolled it.
+      fireEvent.focus(window);
+      await waitFor(() => expect(scrolled).toHaveBeenCalledTimes(1));
+    } finally {
+      // jsdom has no scrolling of its own.
+      delete (Element.prototype as Partial<Element>).scrollIntoView;
+    }
   });
 
   it("shows the continuation of a decision as a run, also when it pauses again", async () => {
@@ -1165,7 +1198,7 @@ describe("a task's page and another message", () => {
     renderView();
     await screen.findByRole("alert");
     await waitFor(() => expect(conversation()).toContain("Here it is."));
-    expect(screen.queryByLabelText(FOLLOW_UP)).toBeNull();
+    expect(screen.queryByRole("textbox", { name: FOLLOW_UP })).toBeNull();
   });
 });
 
@@ -1986,7 +2019,7 @@ describe("a task's page and two readings that disagree", () => {
     expect(sendMessage().disabled).toBe(true);
     expect(
       screen.getByText(
-        "This task waits for a decision on the proposal above. A message can be sent once it is decided.",
+        "This task waits for a decision on a proposal. A message can be sent once it is decided.",
       ),
     ).toBeTruthy();
   });
