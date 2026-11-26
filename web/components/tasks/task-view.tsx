@@ -347,6 +347,9 @@ export function TaskView({ threadId }: { threadId: string }) {
   // a follow-up's run failed before its message was recorded, so that the text is offered
   // again (FR-008's rule for a new task, kept for a follow-up).
   const [draft, setDraft] = useState({ box: 0, text: "" });
+  // The proposal the page last brought into view: each one is brought into view once, when
+  // its card appears, and not again on a later reading while the person reads above it.
+  const broughtIntoView = useRef<string | null>(null);
 
   // When a run this page shows ends, in whichever way, the task is read again once, and once
   // more `AGAIN_SECONDS` later when that reading still says a run is in progress (FR-010,
@@ -883,6 +886,20 @@ export function TaskView({ threadId }: { threadId: string }) {
   // Another agent started this task (feature 009): only it sends messages on it, so the
   // page offers no box for one (FR-024). Its proposals are decided here as any.
   const caller = row.data?.caller ?? null;
+  // A proposal's card is the last part of the page; when one appears, the page scrolls to
+  // it, so that a person who reads the conversation sees that the task waits for them.
+  const proposalRef = (element: HTMLDivElement | null) => {
+    if (
+      element === null ||
+      pending === null ||
+      broughtIntoView.current === pending.interrupt_id
+    ) {
+      return;
+    }
+    broughtIntoView.current = pending.interrupt_id;
+    // jsdom, where the unit tests run, has no scrolling.
+    element.scrollIntoView?.({ block: "start" });
+  };
 
   return (
     <section className="flex flex-col gap-4">
@@ -955,20 +972,6 @@ export function TaskView({ threadId }: { threadId: string }) {
           <Skeleton className="h-24" />
         </output>
       )}
-      {pending !== null && (
-        <ProposalCard
-          // Another proposal is another card: nothing of a decision on the earlier one stays.
-          key={pending.interrupt_id}
-          pending={pending}
-          caller={caller}
-          send={(decisions) => decideNow(pending.interrupt_id, decisions)}
-          onStale={stale}
-          onRefused={() => {
-            void readRowAgain();
-            void readStateAgain();
-          }}
-        />
-      )}
       <AgentTasks tasks={agentTasks} now={now} />
       {conversed && caller !== null && (
         <p className="text-sm text-muted-foreground">
@@ -978,22 +981,44 @@ export function TaskView({ threadId }: { threadId: string }) {
         </p>
       )}
       {conversed && caller === null && (
-        <FollowUp
-          key={draft.box}
-          threadId={threadId}
-          before={state.data?.messages ?? []}
-          blocked={blocked}
-          initial={draft.text}
-          onSent={() => {
-            setNotice(null);
-            setStopAsked(null);
-            setFocusStatus(true);
-          }}
-          onMoved={() => {
-            void readRowAgain();
-            void readStateAgain();
-          }}
-        />
+        // While a proposal's card is shown, it takes the box's place at the end of the page.
+        // The box is hidden, not removed, so that what was typed in it stays.
+        <div hidden={pending !== null}>
+          <FollowUp
+            key={draft.box}
+            threadId={threadId}
+            before={state.data?.messages ?? []}
+            blocked={blocked}
+            initial={draft.text}
+            onSent={() => {
+              setNotice(null);
+              setStopAsked(null);
+              setFocusStatus(true);
+            }}
+            onMoved={() => {
+              void readRowAgain();
+              void readStateAgain();
+            }}
+          />
+        </div>
+      )}
+      {pending !== null && (
+        // The last part of the page, where a person looks for what the task waits for, and
+        // brought into view when it appears (FR-014).
+        <div ref={proposalRef}>
+          <ProposalCard
+            // Another proposal is another card: nothing of a decision on the earlier one stays.
+            key={pending.interrupt_id}
+            pending={pending}
+            caller={caller}
+            send={(decisions) => decideNow(pending.interrupt_id, decisions)}
+            onStale={stale}
+            onRefused={() => {
+              void readRowAgain();
+              void readStateAgain();
+            }}
+          />
+        </div>
       )}
     </section>
   );

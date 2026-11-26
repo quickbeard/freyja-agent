@@ -384,8 +384,9 @@ startup and exits with an error naming the connection when it is unreachable.
   and not for a subagent's, and the service's conversation once it ended,
   a message
   (`message.tsx`), the status in words (`status.tsx`), and the proposal card
-  (`proposal-card.tsx`), which offers each proposed action only the decisions the service
-  lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
+  (`proposal-card.tsx`), which the view puts last on the page, in the follow-up box's
+  place, and scrolls to once per proposal, which offers each proposed action only the
+  decisions the service lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
   no more than that edited arguments are a JSON object that it can send as they were
   entered (`parseArguments`) and that a reason is within the service's length, and has its
   buttons outside any form, so that Enter in a field sends no decision. It also holds the
