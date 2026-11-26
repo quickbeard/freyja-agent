@@ -16,13 +16,13 @@ from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Annotated, Any
 
-from deepagents.middleware._utils import append_to_system_message
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langchain_core.messages import AIMessage, ToolMessage
 from langchain_core.tools import StructuredTool, ToolException
 from langgraph.config import get_config
 from pydantic import BaseModel, ConfigDict, Field
 
+from freyja_agent.agent.prompts import append_to_system_message
 from freyja_agent.runtime.agent_tasks import (
     AgentTaskRecord,
     AgentTaskStore,

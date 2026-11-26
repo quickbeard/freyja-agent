@@ -1,4 +1,6 @@
-"""System prompt for the orchestrator."""
+"""System prompt for the orchestrator, and how a middleware adds to it for one model call."""
+
+from langchain_core.messages import ContentBlock, SystemMessage
 
 DEFAULT_PROMPT = """\
 You are Freyja, a general-purpose orchestrator that helps people get work done across the
@@ -29,3 +31,18 @@ How you work:
   given-up task only when the person asks you to, with that agent's cancel tool and the task's
   id; never cancel one on your own, also not when a task was given up.
 """
+
+
+def append_to_system_message(system_message: SystemMessage | None, text: str) -> SystemMessage:
+    """A new system message: the blocks of ``system_message``, then ``text`` as one more.
+
+    The text is set off by a blank line when something comes before it. The blocks that were
+    there are kept as they are, a cache marker included, and the message handed in is not
+    changed, so a middleware can add to a request's system message without changing the
+    request another middleware holds. Deep Agents has the same function in a private module
+    (``deepagents.middleware._utils``); it is kept here so that the service imports no name
+    the library does not export.
+    """
+    blocks: list[ContentBlock] = list(system_message.content_blocks) if system_message else []
+    blocks.append({"type": "text", "text": f"\n\n{text}" if blocks else text})
+    return SystemMessage(content_blocks=blocks)
