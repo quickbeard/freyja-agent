@@ -2,7 +2,7 @@
 
 Freyja hands work to other agents over A2A (see [Agents](agents.md)); with `FREYJA_A2A_SERVER` on, another agent can hand work to Freyja the same way. The caller's message starts the run the console starts, on a thread of the service's own, so every action with an effect outside the workspace waits for a person in the console, as any other does. What the caller is told is read from that thread. The full contract is in `specs/009-a2a-server/contracts/a2a-server.md`.
 
-This version serves callers on the service's own address and needs no credential there. A request that carries an `Authorization` header is refused with `401`.
+Callers on this machine call the service's own address and need no credential there. Agents on other hosts are named by the deployment, each with a token, and call an outside listener that serves A2A and nothing else (see [Named callers](#named-callers) and [The outside listener](#the-outside-listener)).
 
 ## Turn it on
 
@@ -27,9 +27,45 @@ With it off, which is the default, neither address below exists: each is answere
 | The card | `GET /.well-known/agent-card.json` |
 | The operations | `POST /a2a`, A2A 1.0 over JSON-RPC; every request carries `A2A-Version: 1.0` |
 
-The card names Freyja, gives the address it was asked under followed by `/a2a`, says that streaming is offered and push notifications are not, takes and gives `text/plain`, and declares no security. It names no agent, tool server, tool, model, profile, or caller, and is the same for every caller.
+The card names Freyja, gives the address it was asked under followed by `/a2a`, says that streaming is offered and push notifications are not, takes and gives `text/plain`, and declares no security. It names no agent, tool server, tool, model, profile, or caller, and is the same for every caller. It is given without a token.
 
 The address is held to the same rules as the rest of the API: a page of another origin is refused with `403` `other_origin`, and a host name the service does not answer for with `403` `unknown_host`. A request larger than 256 KiB is refused with `413` before its body is read whole. At this address A2A is exactly as reachable as the thread routes, the console's forwarding included: whoever can open the console can call Freyja as an agent on this machine.
+
+At this address a request with no `Authorization` header is the local caller's, every agent that calls without a token being one caller, `local`. A request with a named caller's token, `Authorization: Bearer <token>`, is that caller's. One with any other `Authorization` header, another scheme or a token no caller has, is refused with `401`, `WWW-Authenticate: Bearer`, and `{"detail": {"code": "unauthorized", ...}}`, before its body is read.
+
+## Named callers
+
+A deployment names the agents that may call it with a token of their own, in `FREYJA_A2A_SERVER_CALLERS`:
+
+```text
+FREYJA_A2A_SERVER_CALLERS='{"artex": {"token": "<16 to 4096 visible ASCII characters>"}}'
+```
+
+A name is lowercase letters, digits, hyphens, and underscores, starting with a letter, at most 32 characters, and not `local`; a token is 16 to 4,096 visible ASCII characters, no space and no control character, and each caller's is its own; at most 20 callers. An entry that breaks a rule stops startup with an error that names the setting, and the caller by its name or its place, never a token; a value that is no JSON object of that shape, or that names a caller twice, is refused naming the setting only, since a name may be a token put in the wrong place. A caller may share a name with a delegate agent: the two are unrelated.
+
+A caller sends its token as `Authorization: Bearer <token>`, and only there: a token in the body, a query, or another header is not a credential. The token is compared with every caller's in a time that says nothing of how much of it was right. Who the caller is comes from the token alone; the protocol's `tenant` field is ignored. A caller's tasks and conversations are its own: an operation on a task id that is another caller's, or a console thread's, is answered exactly as one on an id never used, and a conversation id another caller uses starts a conversation of the sender's.
+
+A token appears in no answer, stream, thread, or log line. A caller that pastes its token into a message has it taken out before the message is used, and every log record of the process, the web server's access log included, is cleaned of every named caller's token. Refused credentials are logged as a warning once, and then at most once in ten seconds for each of the two addresses, with how many were refused since. A token is cleaned however a path, a query, or a log line writes it: percent-encoded in any of the usual ways, or escaped.
+
+**A named caller's files.** A named caller's runs, Freyja's and its subagent's, work in a directory of their own, `<FREYJA_A2A_SERVER_FILES_DIR>/<name>` (`caller-files` by default, beside the workspace and never inside it): they list, read, write, and delete there and nowhere else, read the skills from the workspace, and cannot change them. The directory is shared by the caller's conversations and kept across restarts. The local caller's runs work in the workspace, as every thread of the service's own API does.
+
+**Removing or renaming a caller.** A caller the settings no longer name is refused from then on, and when the service starts its working tasks are canceled as the caller's own cancel would (below), with a warning that names the caller; the console says the caller is no longer configured. Named again under the same name, with the same token or a new one, it has its conversations and its files again; an old token is refused. A new name is a new caller with nothing of the old one's, so do not give a removed caller's name to another party. Every instance that shares the database is given the same callers: one that lacks a caller cancels that caller's tasks.
+
+## The outside listener
+
+Agents on other hosts call an address and a port of the deployment's own, which serves the card and the operations and nothing else: every other route of the service, `/healthz` and the console's forwarding included, answers there as a path the service does not have. It is off unless both are set:
+
+```text
+FREYJA_A2A_SERVER_HOST=10.0.0.5
+FREYJA_A2A_SERVER_PORT=8443
+FREYJA_A2A_SERVER_URL=https://freyja.example.com
+```
+
+It needs the feature on, a named caller, and `FREYJA_A2A_SERVER_URL`, the address callers reach it under (`http` or `https`, a host, and at most a port), which its card gives followed by `/a2a`, with one HTTP `bearer` security scheme that it requires. Every operation there needs a named caller's token; without one, with another scheme, or with a token no caller has, it is refused with the same `401` as above, before its body is read, and nothing is made. The card is given without a token. A page of another origin is refused there as at the service's own address; the host names of `FREYJA_ALLOWED_HOSTS` are not checked there. The port must not be the service's own on the same address, and one that cannot be bound stops startup with an error that names the setting.
+
+The listener starts and stops with the service, in the same process, however the service is started; an open stream there is closed when the service stops. It writes no access log line, and leaves the service's own as it is. Startup logs that it is on and where, and a page of another origin refused there is warned of sparingly, as a refused credential is.
+
+**The service does not encrypt the connection.** A deployment that opens the listener to other hosts puts what encrypts in front of it, such as a reverse proxy with TLS, and gives that address as `FREYJA_A2A_SERVER_URL`. With an `http` address the service starts and warns that tokens sent there can be read on the network path.
 
 ## Try it with the stand-in caller
 
@@ -45,7 +81,7 @@ caller follow <task id>
 caller cancel <task id>
 ```
 
-Each task or event is printed as one JSON object, and a refusal as the JSON-RPC error it was. `--context <id>` continues a conversation, and `--return-immediately` asks a send not to wait.
+Each task or event is printed as one JSON object, and a refusal as the JSON-RPC error it was. `--context <id>` continues a conversation, `--return-immediately` asks a send not to wait, and `--token <token>` calls as a named caller; give the outside listener's address as `--url` to call it there.
 
 ## What a caller can do
 
