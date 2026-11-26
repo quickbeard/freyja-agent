@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useId, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,14 +10,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
+import { Switch } from "@/components/ui/switch";
 import {
   type Agent,
   type AgentCheck,
   type AgentCard as AgentClaim,
+  type AgentsMode,
+  agentMode,
   checkAgent,
 } from "@/lib/agents";
 import { ApiError, isGone } from "@/lib/api";
 import { CheckResult } from "./check-result";
+import { ModeDialog } from "./mode-dialog";
 
 // The time is the service's own, only put in the reader's words: no clock is read here.
 const WHEN = new Intl.DateTimeFormat(undefined, {
@@ -157,15 +161,22 @@ function Claim({ card }: { card: AgentClaim }) {
  * form, and every saved agent has Remove, which hands it to whoever asks to confirm the
  * removal. An environment agent can be neither changed nor removed, and a saved agent that
  * is not in use can only be removed (FR-017).
+ *
+ * Feature 010: the card shows the agent's own mode, Manual or Auto, and a saved agent in use
+ * has a switch for it, behind a confirmation. `mode` is the agents' approval mode as the
+ * list has it: while it is Manual, an Auto agent is held to Manual, and the card says so.
  */
 export function AgentCard({
   agent,
+  mode,
   onChecked,
   onGone,
   onEdit,
   onRemove,
 }: {
   agent: Agent;
+  /** The agents' approval mode, the sidebar's switch; not said while not known. */
+  mode?: AgentsMode;
   /** Told after any result of a check, and when a check got no answer. */
   onChecked?: () => void;
   /** Told when the service says this agent no longer exists. */
@@ -187,6 +198,14 @@ export function AgentCard({
   const [checking, setChecking] = useState(false);
   // A second press arriving before the first one shows as checking still sends nothing.
   const inFlight = useRef(false);
+  // The mode the switch asks to set, with the agent as the card showed it then; null while
+  // nothing is asked.
+  const [switching, setSwitching] = useState<{
+    to: AgentsMode;
+    agent: Agent;
+  } | null>(null);
+  const own = agentMode(agent.approval);
+  const switchId = useId();
   // Reading a card can take a while, and the card can go meanwhile: the list was read again
   // without its agent, or the section was left. What the answer sets here is then set on
   // nothing; whoever holds the list is told all the same.
@@ -230,14 +249,29 @@ export function AgentCard({
         <CardTitle>
           <h3>{agent.name}</h3>
         </CardTitle>
-        <div className="flex flex-wrap gap-1.5">
-          <Badge
-            variant={agent.approval === "required" ? "default" : "outline"}
-          >
-            {agent.approval === "required"
-              ? "Requires approval"
-              : "Runs without approval"}
-          </Badge>
+        <div className="flex flex-wrap items-center gap-1.5">
+          {editable ? (
+            // The agent's own mode (feature 010, FR-009): the switch only asks; the dialog
+            // that opens sends nothing until it is confirmed.
+            <span className="inline-flex items-center gap-2 rounded-md border px-2 py-0.5 text-xs font-medium">
+              <Switch
+                id={switchId}
+                size="sm"
+                checked={own === "auto"}
+                onCheckedChange={(checked) =>
+                  setSwitching({ to: checked ? "auto" : "manual", agent })
+                }
+                aria-label={`Auto mode for ${agent.name}`}
+              />
+              <label htmlFor={switchId}>
+                {own === "auto" ? "Auto" : "Manual"}
+              </label>
+            </span>
+          ) : (
+            <Badge variant={own === "manual" ? "default" : "outline"}>
+              {own === "auto" ? "Auto" : "Manual"}
+            </Badge>
+          )}
           {agent.source === "environment" && (
             <Badge variant="secondary">From the environment</Badge>
           )}
@@ -249,6 +283,12 @@ export function AgentCard({
         </div>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
+        {own === "auto" && mode === "manual" && (
+          <p className="text-sm text-muted-foreground">
+            Held to Manual: agent approvals are Manual in the Tasks section, so
+            every message to {agent.name} waits for a person.
+          </p>
+        )}
         {(agent.url !== null || (saved && agent.pending_tasks > 0)) && (
           <dl className="grid gap-3">
             {agent.url !== null && <Value label="Address">{agent.url}</Value>}
@@ -311,6 +351,15 @@ export function AgentCard({
             </Button>
           )}
         </CardFooter>
+      )}
+      {editable && (
+        <ModeDialog
+          agent={switching?.agent ?? agent}
+          to={switching?.to ?? null}
+          live={agent}
+          onClose={() => setSwitching(null)}
+          onChanged={() => onChecked?.()}
+        />
       )}
     </Card>
   );

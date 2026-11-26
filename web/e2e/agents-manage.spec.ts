@@ -69,9 +69,7 @@ test("Add saves an agent, which shows as a new card with its address as the serv
   await expect(form(page)).toContainText(
     "Messages to this agent will require approval",
   );
-  await expect(
-    form(page).getByRole("radio", { name: "Requires approval" }),
-  ).toBeChecked();
+  await expect(form(page).getByRole("radio", { name: "Manual" })).toBeChecked();
   await expect(form(page).getByRole("textbox")).toHaveCount(2);
   await expect(
     form(page).getByRole("switch").or(form(page).getByRole("combobox")),
@@ -89,7 +87,7 @@ test("Add saves an agent, which shows as a new card with its address as the serv
   const added = card(page, "stub");
   await expect(added.getByText("Address")).toBeVisible();
   await expect(added.getByText(KEPT, { exact: true })).toBeVisible();
-  await expect(added.getByText("Requires approval")).toBeVisible();
+  await expect(added.getByText("Manual", { exact: true })).toBeVisible();
   await expect(added.getByText("From the environment")).toHaveCount(0);
   await expect(added.getByText(/^Reachable/)).toBeVisible();
   // The address is shown as the service keeps it, and nowhere as it was typed.
@@ -415,7 +413,9 @@ test("Check on a saved card and on an environment card says the agent can be use
   // And the list was read once on opening and once after each check.
   expect(service.reads).toBe(7);
   // A check changes nothing else of an agent.
-  await expect(card(page, "stub").getByText("Requires approval")).toBeVisible();
+  await expect(
+    card(page, "stub").getByText("Manual", { exact: true }),
+  ).toBeVisible();
   await expect(
     card(page, "stub").getByText("http://127.0.0.1:9998", { exact: true }),
   ).toBeVisible();
@@ -526,8 +526,8 @@ test("checking an agent that was removed meanwhile has the list read again, and 
 
 // 005, User Story 4: the approval choice, when adding and on a saved agent.
 
-const FREE = "Runs without approval";
-const REQUIRED = "Requires approval";
+const FREE = "Auto";
+const REQUIRED = "Manual";
 const STUB_ID = "0123456789abcdef0123456789abcdef";
 const editForm = (page: Page, name = "stub") =>
   page.getByRole("dialog", { name: `Edit ${name}` });
@@ -561,7 +561,7 @@ test("adding an agent to run without approval asks first, sends nothing before C
   await page.goto("/agents");
   await openForm(page);
   await fill(page, "stub", TYPED);
-  await form(page).getByRole("radio", { name: FREE }).check();
+  await form(page).getByRole("radio", { name: FREE, exact: true }).check();
   await expect(form(page)).toContainText(
     "Messages to this agent will be sent without approval",
   );
@@ -585,14 +585,18 @@ test("adding an agent to run without approval asks first, sends nothing before C
 
   // Asked again and confirmed, the agent is saved with the choice, in one request.
   await openForm(page);
-  await expect(form(page).getByRole("radio", { name: REQUIRED })).toBeChecked();
+  await expect(
+    form(page).getByRole("radio", { name: REQUIRED, exact: true }),
+  ).toBeChecked();
   await fill(page, "stub", TYPED);
-  await form(page).getByRole("radio", { name: FREE }).check();
+  await form(page).getByRole("radio", { name: FREE, exact: true }).check();
   await save(page);
   await form(page).getByRole("button", { name: "Confirm" }).dblclick();
 
   await expect(form(page)).toBeHidden();
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
   await expect(card(page, "stub").getByText(KEPT)).toBeVisible();
   expect(service.changes).toEqual([
     {
@@ -621,14 +625,16 @@ test("switching an agent to run without approval asks first and says what is giv
   await expect(dialog.getByLabel("Address", { exact: true })).toHaveValue(
     "http://127.0.0.1:9998",
   );
-  await expect(dialog.getByRole("radio", { name: REQUIRED })).toBeChecked();
+  await expect(
+    dialog.getByRole("radio", { name: REQUIRED, exact: true }),
+  ).toBeChecked();
 
   // Saved as it is, nothing is asked and nothing is sent.
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(dialog.getByRole("status")).toContainText("Nothing is changed");
   await expect(asks(page)).toHaveCount(0);
 
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(asks(page)).toContainText("Let stub run without approval?");
   await expect(asks(page)).toContainText(
@@ -648,19 +654,27 @@ test("switching an agent to run without approval asks first and says what is giv
   await expect(dialog).toBeHidden();
   await page.waitForLoadState("networkidle");
   expect(service.changes).toEqual([]);
-  await expect(card(page, "stub").getByText(REQUIRED)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(REQUIRED, { exact: true }),
+  ).toBeVisible();
 
   // Asked again and confirmed: one request, with the version the form opened with and
   // only the choice, and the card follows the list.
   await openEdit(page);
-  await expect(dialog.getByRole("radio", { name: REQUIRED })).toBeChecked();
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await expect(
+    dialog.getByRole("radio", { name: REQUIRED, exact: true }),
+  ).toBeChecked();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await dialog.getByRole("button", { name: "Confirm" }).click();
 
   await expect(dialog).toBeHidden();
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
-  await expect(card(page, "stub").getByText(REQUIRED)).toHaveCount(0);
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(REQUIRED, { exact: true }),
+  ).toHaveCount(0);
   expect(service.changes).toEqual([
     {
       method: "PATCH",
@@ -680,12 +694,16 @@ test("switching an agent back to requiring approval asks and says that it holds 
     savedAgent("stub", { approval: "none", version: 4 }),
   ).serve(page);
   await page.goto("/agents");
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
   await openEdit(page);
   const dialog = editForm(page);
-  await expect(dialog.getByRole("radio", { name: FREE })).toBeChecked();
+  await expect(
+    dialog.getByRole("radio", { name: FREE, exact: true }),
+  ).toBeChecked();
 
-  await dialog.getByRole("radio", { name: REQUIRED }).check();
+  await dialog.getByRole("radio", { name: REQUIRED, exact: true }).check();
   // A double press on Save asks, and confirms nothing.
   await dialog.getByRole("button", { name: "Save" }).dblclick();
   await expect(asks(page)).toContainText("Require approval for stub?");
@@ -700,7 +718,9 @@ test("switching an agent back to requiring approval asks and says that it holds 
 
   await dialog.getByRole("button", { name: "Confirm" }).click();
   await expect(dialog).toBeHidden();
-  await expect(card(page, "stub").getByText(REQUIRED)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(REQUIRED, { exact: true }),
+  ).toBeVisible();
   expect(service.changes).toEqual([
     {
       method: "PATCH",
@@ -720,7 +740,7 @@ test("a change made elsewhere while the form is open takes the confirmation back
   await page.goto("/agents");
   await openEdit(page);
   const dialog = editForm(page);
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(asks(page)).toBeVisible();
 
@@ -745,11 +765,13 @@ test("a change made elsewhere while the form is open takes the confirmation back
     "http://127.0.0.1:9997",
   );
   await expect(dialog.getByRole("alert")).toHaveCount(0);
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await dialog.getByRole("button", { name: "Confirm" }).click();
   await expect(dialog).toBeHidden();
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
   expect(service.changes).toEqual([
     {
       method: "PATCH",
@@ -769,7 +791,7 @@ test("a change refused because the agent was changed since shows the agent as it
   await page.goto("/agents");
   await openEdit(page);
   const dialog = editForm(page);
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   await expect(asks(page)).toBeVisible();
 
@@ -798,8 +820,8 @@ test("a change refused because the agent was changed since shows the agent as it
   await expect(
     shown.getByText("http://127.0.0.1:9997", { exact: true }),
   ).toBeVisible();
-  await expect(shown.getByText(REQUIRED)).toBeVisible();
-  await expect(shown.getByText(FREE)).toHaveCount(0);
+  await expect(shown.getByText(REQUIRED, { exact: true })).toBeVisible();
+  await expect(shown.getByText(FREE, { exact: true })).toHaveCount(0);
 });
 
 test("a change of an agent that was removed meanwhile has the list read again, and its card goes", async ({
@@ -812,7 +834,7 @@ test("a change of an agent that was removed meanwhile has the list read again, a
   await page.goto("/agents");
   await openEdit(page);
   const dialog = editForm(page);
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
 
   service.removeElsewhere("stub");
@@ -833,7 +855,7 @@ test("a change that gets no answer says the outcome is not known, and the list i
   await page.goto("/agents");
   await openEdit(page);
   const dialog = editForm(page);
-  await dialog.getByRole("radio", { name: FREE }).check();
+  await dialog.getByRole("radio", { name: FREE, exact: true }).check();
   await dialog.getByRole("button", { name: "Save" }).click();
   const readBefore = service.reads;
 
@@ -849,7 +871,9 @@ test("a change that gets no answer says the outcome is not known, and the list i
   expect(service.changes).toHaveLength(1);
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
 });
 
 test("an environment agent's card offers no way to change its approval choice, and neither does a saved agent's that is not in use", async ({
@@ -877,10 +901,14 @@ test("an environment agent's card offers no way to change its approval choice, a
     "Edit",
     "Remove",
   ]);
-  // Nothing on a card is a choice by itself: no radio, switch, or field.
-  for (const role of ["radio", "switch", "textbox", "combobox"] as const) {
+  // Nothing on a card is a choice by itself: no radio or field. The one switch is a saved
+  // agent's own mode (feature 010), on the card of a saved agent in use only, and it asks
+  // before anything is sent.
+  for (const role of ["radio", "textbox", "combobox"] as const) {
     await expect(page.getByRole("main").getByRole(role)).toHaveCount(0);
   }
+  await expect(page.getByRole("main").getByRole("switch")).toHaveCount(1);
+  await expect(card(page, "stub").getByRole("switch")).toHaveCount(1);
   expect(service.changes).toEqual([]);
 });
 
@@ -1136,7 +1164,9 @@ test("a removal, and a move, from values that are no longer current is refused, 
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   // Nothing was removed, and the card is the agent as it is now.
-  await expect(card(page, "stub").getByText(FREE)).toBeVisible();
+  await expect(
+    card(page, "stub").getByText(FREE, { exact: true }),
+  ).toBeVisible();
   expect(service.agents.some(({ name }) => name === "stub")).toBe(true);
 
   // A move asked of the agent as it was.
@@ -1159,7 +1189,7 @@ test("a removal, and a move, from values that are no longer current is refused, 
   await expect(
     shown.getByText("http://127.0.0.1:9998", { exact: true }),
   ).toBeVisible();
-  await expect(shown.getByText(REQUIRED)).toBeVisible();
+  await expect(shown.getByText(REQUIRED, { exact: true })).toBeVisible();
   await expect(page.getByRole("status")).toHaveCount(0);
 });
 

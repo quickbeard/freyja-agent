@@ -12,6 +12,11 @@ an agent contact no agent at all. A move and a removal give up the agent's pendi
 the same transaction, and no cancel is sent (FR-024).
 An agent requires approval unless a request says otherwise; the console asks an operator to
 confirm before it sends such a request (FR-011).
+
+The agents' approval mode (feature 010) is returned with the list and changed with
+``PUT /agents/mode``: ``manual`` has every message to every agent wait for a person, and
+``auto`` lets an agent whose approval choice is ``none`` run without one. It contacts no
+agent.
 """
 
 import logging
@@ -33,6 +38,7 @@ from freyja_agent.api.schemas import (
     AgentList,
     AgentRemoved,
     AgentSkillClaim,
+    AgentsMode,
     AgentUpdate,
 )
 from freyja_agent.config import destination
@@ -211,6 +217,7 @@ async def agent_list(runtime: Runtime) -> AgentList:
     try:
         try:
             records = await runtime.saved_agents.list_agents()
+            mode = await runtime.saved_agents.mode()
             counts = await runtime.agent_tasks.pending_counts()
             # A saved agent's, at every address it has had: what a move or a removal
             # gives up, which is what the confirmations show (FR-024, research R10).
@@ -231,6 +238,7 @@ async def agent_list(runtime: Runtime) -> AgentList:
         await context.release()
     return AgentList(
         agents=listed,
+        mode=mode,
         limit=AGENT_LIMIT,
         unusable=sum(1 for agent in listed if agent.state in UNUSABLE),
     )
@@ -240,6 +248,38 @@ async def agent_list(runtime: Runtime) -> AgentList:
 async def list_agents(request: Request) -> AgentList:
     """List every agent Freyja may hand work to, with this instance's view of each."""
     return await agent_list(_runtime(request))
+
+
+@router.put("/mode", response_model=AgentsMode)
+async def set_agents_mode(body: AgentsMode, request: Request) -> AgentsMode:
+    """Set the agents' approval mode (feature 010, FR-001, FR-004, FR-005).
+
+    ``manual`` holds at once, on every instance, also for runs in progress: every agent tool
+    reads the mode before it sends a message no person decided. ``auto`` holds from the next
+    run. A request that changes nothing answers with the mode. This instance takes a change
+    up at once, and every other at its next context.
+    """
+    runtime = _runtime(request)
+    try:
+        before = await runtime.saved_agents.mode()
+        kept = await runtime.saved_agents.set_mode(body.mode)
+    except Exception as exc:
+        logger.warning("The agents' mode was not changed: %s", type(exc).__name__)
+        raise _error(500, "internal", "The agents' mode could not be changed.") from None
+    if kept != before:
+        logger.info("Agents' approval mode changed: %s, was %s", kept, before)
+        if runtime.registry is not None:
+            try:
+                await runtime.registry.refresh()
+            except Exception as exc:
+                # The change stands: this instance, like every other, takes it up at its
+                # next context.
+                logger.warning(
+                    "The agents' mode was changed, and this instance could not take it up "
+                    "at once: %s",
+                    type(exc).__name__,
+                )
+    return AgentsMode(mode=kept)
 
 
 def _taken(reason: str) -> HTTPException:

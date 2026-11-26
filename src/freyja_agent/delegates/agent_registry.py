@@ -1,8 +1,8 @@
 """The agents one service instance has tools for (feature 005, research R3, R4).
 
 The registry owns the links of one instance and holds its current ``AgentSet``: the links in
-use, each agent's approval choice, and the saved agents that are not in use with the reason
-for each. Agents come from two places. Those named in ``FREYJA_A2A_AGENTS`` are fixed for the
+use, each agent's approval choice, the agents' approval mode (feature 010), and the saved
+agents that are not in use with the reason for each. Agents come from two places. Those named in ``FREYJA_A2A_AGENTS`` are fixed for the
 life of the process. Those an operator saved are read from the store, whose one-row revision
 says whether the set this instance built for is still current.
 
@@ -70,8 +70,11 @@ class AgentSet:
     # The links in use: environment agents first, then saved agents by name.
     links: tuple[AgentLink, ...] = ()
     # Each agent's approval choice by name, as the environment's entry names it: True runs
-    # without approval.
+    # without approval, while ``auto`` allows it.
     read_only: Mapping[str, bool] = field(default_factory=dict)
+    # The agents' approval mode when the set was read (feature 010): False is ``manual``, where
+    # every message to every agent waits for a person whatever its own choice.
+    auto: bool = True
     # The saved agents that have no link and no tools, with the reason for each.
     not_in_use: tuple[NotInUse, ...] = ()
     # The saved agents in use, by the name of their link.
@@ -82,8 +85,10 @@ class AgentSet:
         return next((link for link in self.links if link.name == name), None)
 
     def gated(self, link: AgentLink) -> bool:
-        """Whether a message to the link's agent requires a person's approval."""
-        return not self.read_only.get(link.name, False)
+        """Whether a message to the link's agent requires a person's approval: always, unless
+        the mode is ``auto`` and the agent's own choice is to run without approval (010
+        FR-003)."""
+        return not (self.auto and self.read_only.get(link.name, False))
 
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
@@ -183,7 +188,7 @@ class AgentRegistry:
             for name, config in self._configs.items()
         )
         revision = await self._saved.revision()
-        made = self._make(revision, await self._saved.list_agents(), AgentSet())
+        made = self._make(revision, await self._saved.list_agents(), AgentSet(), await self._auto())
         # All at once, each within the startup limit, so any number of agents that are down
         # delay startup by one limit (SC-006).
         outcomes = await asyncio.gather(
@@ -244,10 +249,19 @@ class AgentRegistry:
         """
         return await read_card_at(name, url, transport=self._transport, limit=limit)
 
+    async def _auto(self) -> bool:
+        """Whether the agents' approval mode is ``auto``, read with the saved agents."""
+        return await self._saved.mode() == "auto"
+
     def _make(
-        self, revision: int, records: Collection[SavedAgentRecord], earlier: AgentSet
+        self,
+        revision: int,
+        records: Collection[SavedAgentRecord],
+        earlier: AgentSet,
+        auto: bool,
     ) -> AgentSet:
-        """The set for ``records``, keeping every link of ``earlier`` whose ref is unchanged."""
+        """The set for ``records`` and the mode, keeping every link of ``earlier`` whose ref
+        is unchanged."""
         kept = {link.ref: link for link in earlier.links if link.ref is not None}
         links = list(self._environment)
         read_only = {name: config.read_only for name, config in self._configs.items()}
@@ -293,6 +307,7 @@ class AgentRegistry:
             revision=revision,
             links=tuple(links),
             read_only=read_only,
+            auto=auto,
             not_in_use=tuple(not_in_use),
             records=in_use,
         )
@@ -306,7 +321,9 @@ class AgentRegistry:
             revision = await self._saved.revision()
             if revision != self.current.revision:
                 earlier = self.current
-                made = self._make(revision, await self._saved.list_agents(), earlier)
+                made = self._make(
+                    revision, await self._saved.list_agents(), earlier, await self._auto()
+                )
                 known = {(unused.record.id, unused.reason) for unused in earlier.not_in_use}
                 for unused in made.not_in_use:
                     if (unused.record.id, unused.reason) not in known:
@@ -340,6 +357,7 @@ class AgentRegistry:
             revision=earlier.revision,
             links=earlier.links,
             read_only=earlier.read_only,
+            auto=earlier.auto,
             not_in_use=earlier.not_in_use,
             records=earlier.records,
         )

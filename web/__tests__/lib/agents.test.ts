@@ -7,11 +7,14 @@ import {
   type AgentList,
   addAgent,
   agentInWords,
+  agentMode,
+  approvalOf,
   changeAgent,
   checkAgent,
   downAgents,
   listAgents,
   removeAgent,
+  setAgentsMode,
 } from "@/lib/agents";
 import { ApiError, isGone } from "@/lib/api";
 
@@ -41,7 +44,12 @@ function agent(changes: Partial<Agent>): Agent {
   return { ...HELLO, ...changes };
 }
 
-const LIST: AgentList = { agents: [HELLO], limit: 20, unusable: 0 };
+const LIST: AgentList = {
+  agents: [HELLO],
+  mode: "auto",
+  limit: 20,
+  unusable: 0,
+};
 
 describe("listAgents", () => {
   it("asks for the agents and returns the list", async () => {
@@ -88,6 +96,7 @@ describe("downAgents", () => {
         agent({ id: "c", name: "c", state: "not_tried" }),
         notInUse,
       ],
+      mode: "auto",
       limit: 20,
       unusable: 2,
     };
@@ -97,11 +106,14 @@ describe("downAgents", () => {
   it("gives none when every agent is reachable or not tried yet", () => {
     const list: AgentList = {
       agents: [HELLO, agent({ id: "c", name: "c", state: "not_tried" })],
+      mode: "auto",
       limit: 20,
       unusable: 0,
     };
     expect(downAgents(list)).toEqual([]);
-    expect(downAgents({ agents: [], limit: 20, unusable: 0 })).toEqual([]);
+    expect(
+      downAgents({ agents: [], mode: "auto", limit: 20, unusable: 0 }),
+    ).toEqual([]);
   });
 });
 
@@ -547,5 +559,39 @@ describe("removeAgent", () => {
     stubFetch({ fails: "Failed to fetch" });
     const failed = await removeAgent(SAVED, 4).catch((error: unknown) => error);
     expect((failed as ApiError).code).toBe("unreachable");
+  });
+});
+
+// Feature 010: the agents' approval mode, and an agent's own mode in the console's words.
+
+describe("setAgentsMode", () => {
+  it.each([
+    "manual",
+    "auto",
+  ] as const)("sends a PUT with the mode alone and returns the mode kept: %s", async (mode) => {
+    const fetchStub = stubFetch({ json: { mode } });
+    expect(await setAgentsMode(mode)).toBe(mode);
+    expect(fetchStub).toHaveBeenCalledTimes(1);
+    const [path, init] = fetchStub.mock.calls[0];
+    expect(path).toBe("/api/agents/mode");
+    expect(init?.method).toBe("PUT");
+    expect(JSON.parse(String(init?.body))).toEqual({ mode });
+  });
+
+  it("throws the service's refusal", async () => {
+    stubFetch({
+      status: 403,
+      json: { detail: { code: "other_origin", message: "Refused." } },
+    });
+    await expect(setAgentsMode("auto")).rejects.toBeInstanceOf(ApiError);
+  });
+});
+
+describe("agentMode and approvalOf", () => {
+  it("name the approval choice Manual or Auto, and back", () => {
+    expect(agentMode("required")).toBe("manual");
+    expect(agentMode("none")).toBe("auto");
+    expect(approvalOf("manual")).toBe("required");
+    expect(approvalOf("auto")).toBe("none");
   });
 });

@@ -39,7 +39,7 @@ test("two agents from the environment show as two cards, with nothing to change 
 
   const hello = card(page, "hello");
   await expect(hello.getByText("From the environment")).toBeVisible();
-  await expect(hello.getByText("Runs without approval")).toBeVisible();
+  await expect(hello.getByText("Auto", { exact: true })).toBeVisible();
   await expect(hello.getByText(/^Reachable/)).toBeVisible();
   // What its card says, as the agent's own claim.
   const said = hello.getByRole("group", {
@@ -54,7 +54,7 @@ test("two agents from the environment show as two cards, with nothing to change 
 
   const stub = card(page, "stub");
   await expect(stub.getByText("From the environment")).toBeVisible();
-  await expect(stub.getByText("Requires approval")).toBeVisible();
+  await expect(stub.getByText("Manual", { exact: true })).toBeVisible();
 
   // Nothing on a card changes or removes an agent, and no address is on the page. A card's
   // one control has the service read the agent's card again.

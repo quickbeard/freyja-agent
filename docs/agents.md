@@ -40,7 +40,7 @@ Remove the line from `.env` to go back to a service with no agents.
 `FREYJA_A2A_AGENTS` is one JSON object on one line, in single quotes, mapping an agent name (lowercase letters, digits, hyphen, underscore; starting with a letter; at most 32 characters) to an entry with two fields:
 
 - `url`: where the agent serves its card, `http` or `https`, on `localhost` or a loopback address; any other host is refused without a lookup. Every request goes to that host and port: from the card the service keeps only the path of the agent's JSON-RPC interface, and it follows no redirect.
-- `read_only`: `true` lets every message to the agent run without approval. Without it, every hand-off, answer, and cancel to that agent pauses for a decision, on the orchestrator and on its subagent. **Silence means gated**, and nothing the agent's card says about itself changes that.
+- `read_only`: `true` sets the agent to Auto: every message to it runs without approval while the agents' approval mode is Auto (see [Auto mode](#auto-mode)). Without it the agent is Manual: every hand-off, answer, and cancel to that agent pauses for a decision, on the orchestrator and on its subagent. **Silence means gated**, and nothing the agent's card says about itself changes that.
 
 ```bash
 FREYJA_A2A_AGENTS='{"hello": {"url": "http://127.0.0.1:9999", "read_only": true}, "planner": {"url": "http://localhost:9998"}}'
@@ -107,9 +107,22 @@ Every route of the Agents section answers 500 `internal` when the saved agents c
 
 A message is only ever sent to the agent it was proposed for. The service keeps each call of an agent's tool that a model proposes in `freyja_agent_calls`, from the model's reply until the message was sent, and records there when a person approved or edited it in a resume. A tool that waits for a person sends a call only when that record says a person decided it. A proposal that waits for a decision while its agent leaves the configuration, and another agent is added or configured under the same name, is not sent to that other agent whatever is decided: the call's result says that the agent the message was proposed for was removed.
 
+## Auto mode
+
+Every agent has its own mode, **Manual** or **Auto**: a saved agent's `approval` (`required` is Manual, `none` is Auto) and an environment entry's `read_only` (`true` is Auto). Beside them the instance has one switch, the **agents' approval mode**, also Manual or Auto, shown as the dropdown under Tasks in the [web console](web-console.md)'s sidebar. A message to an agent, whether a hand-off, a follow-up, an answer, or a cancel, runs without approval only when the switch is Auto and the agent is Auto; otherwise it pauses for a decision. That holds on every thread, a task another agent started over A2A included (see [Receive tasks from agents](a2a-server.md)), on the orchestrator and its subagent, and in the runs the service starts by itself. A tool server's tool and `send_notification` are not affected.
+
+The switch is kept in the database, beside the saved agents, and is the same for every instance. Where nobody set it, it is Auto, so a deployment behaves as it did before the switch existed: only agents someone set to Auto run without approval. `GET /agents` answers with it as `mode`, and it is set with:
+
+```bash
+curl -s -X PUT localhost:8000/agents/mode -H 'content-type: application/json' \
+  -d '{"mode": "manual"}'                       # or "auto"
+```
+
+The answer is the mode as kept. No agent is contacted. Setting the mode the switch already has changes nothing. The two directions take effect as an agent's own choice does (next section): **Manual holds at once**, on every instance, also for a run in progress, whose message to an Auto agent that no person decided gets the error result "Agent '<name>' now requires approval, so this message was not sent."; a paused step that holds a message proposed while the switch was Auto ends its resume with `approval_now_required` until the switch is set back. **Auto holds from the next run**, and a proposal for an Auto agent that already waits for a decision can then only be approved. A request is refused with 403 `other_origin` when a browser marks it as made by a page of another origin, and with 422 for a body with any field but `mode`, or a mode that is neither `manual` nor `auto`. Each change is logged as `Agents' approval mode changed: <mode>, was <mode>`.
+
 ## Change whether an agent needs approval
 
-A saved agent's approval choice is changed from its card in the Agents section of the [web console](web-console.md), behind a confirmation, or with:
+A saved agent's approval choice, its own mode, is changed from its card in the Agents section of the [web console](web-console.md), with its Manual/Auto switch or **Edit**, behind a confirmation, or with:
 
 ```bash
 curl -s -X PATCH localhost:8000/agents/<id> -H 'content-type: application/json' \
@@ -159,7 +172,7 @@ An instance has two kinds of agent, and `GET /agents` lists both: the ones named
 - **The environment comes first.** A saved agent cannot take the name or the address of an agent named in the environment, nor the name of a tool server, and neither of its two tool names may be another tool's. When a restart gives the environment one of those, the environment's is the one in use: the saved agent is listed as `not_in_use` with the reason, its pending tasks are given up, a proposal that waited for it is never sent to the environment's agent, and it can only be removed. When a later restart takes the conflict away, it is in use again as it was saved.
 - **A change reaches every instance sharing the database** at its next run, its next reading of the list or the catalog, and its next round of watching. A run in progress keeps the tools it started with.
 
-**What anyone who can reach the service's port can now do.** The service has no authentication. Beside starting runs and deciding proposals, such a client can add an agent, on this machine only, since an address must be `localhost` or a loopback address; switch a saved agent to run without approval, so that no person sees what is sent to it; move a saved agent to another address on this machine; remove one; and have any agent's card read again. It can read every saved agent's address. A web page of another origin can do none of this through a browser: the Agents routes refuse it, and give it no permission to read an answer. Keep the service bound to an address only its operators reach.
+**What anyone who can reach the service's port can now do.** The service has no authentication. Beside starting runs and deciding proposals, such a client can add an agent, on this machine only, since an address must be `localhost` or a loopback address; switch a saved agent to run without approval, and set the agents' approval mode to Auto, so that no person sees what is sent to an Auto agent; move a saved agent to another address on this machine; remove one; and have any agent's card read again. It can read every saved agent's address. A web page of another origin can do none of this through a browser: the Agents routes refuse it, and give it no permission to read an answer. Keep the service bound to an address only its operators reach.
 
 ## Check an agent
 

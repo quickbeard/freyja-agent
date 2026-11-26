@@ -86,7 +86,8 @@ def test_environment_agents_come_first_in_their_order_then_saved_agents_by_name(
     ]
     assert listed["limit"] == 20
     assert listed["unusable"] == 0
-    assert set(listed) == {"agents", "limit", "unusable"}
+    assert set(listed) == {"agents", "mode", "limit", "unusable"}
+    assert listed["mode"] == "auto"
 
 
 def test_an_environment_agent_is_listed_without_an_address_or_anything_to_change_it_by(
@@ -2228,6 +2229,8 @@ AGENT_ROUTES = [
     ("PATCH", "/agents/{id}"),
     ("DELETE", "/agents/{id}"),
     ("POST", "/agents/{id}/check"),
+    # Feature 010: the agents' approval mode.
+    ("PUT", "/agents/mode"),
 ]
 CHANGING = AGENT_ROUTES[1:]
 ELSEWHERE = "http://elsewhere.example"
@@ -2290,6 +2293,8 @@ def asked(
         return client.patch(url, json=body, headers=headers)
     if method == "DELETE":
         return client.delete(url, params={"version": 1} if valid else {}, headers=headers)
+    if method == "PUT":
+        return client.put(url, json={"mode": "manual" if valid else "x"}, headers=headers)
     return client.request(method, url, headers=headers)
 
 
@@ -2299,6 +2304,7 @@ def everything(client: TestClient, made: A2aApp) -> tuple[Any, ...]:
     return (
         client.portal.call(made.saved_agents.list_agents),
         client.portal.call(made.saved_agents.revision),
+        client.portal.call(made.saved_agents.mode),
         agents(client),
         client.get("/tools").json(),
         client.portal.call(made.store.get_task, "helper", "task-1"),
@@ -2361,6 +2367,7 @@ def test_every_route_serves_the_console_and_a_client_that_is_no_page(
 ACCEPTED = {
     ("POST", "/agents"): {"name": "other", "url": SWEPT_NEW_URL},
     ("PATCH", "/agents/{id}"): {"version": 1, "approval": "none"},
+    ("PUT", "/agents/mode"): {"mode": "manual"},
 }
 AS_A_PAGE_CAN_SEND = [
     "text/plain",

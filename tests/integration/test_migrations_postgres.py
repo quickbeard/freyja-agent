@@ -162,9 +162,20 @@ async def test_the_lock_timeout_is_set_for_a_migration_and_not_for_the_connectio
 # A deployment older than the migrations: it has the tables and no row of any migration.
 
 
+# Every version the build's list holds, in order.
+VERSIONS = [migration.version for migration in MIGRATIONS]
+
+
+async def the_first_migration(settings: Settings) -> None:
+    """Apply the first migration alone: the schema a deployment had before migrations."""
+    async with AsyncConnectionPool(settings.database_uri, open=False) as pool:
+        await migrate(pool, MIGRATIONS[:1])
+
+
 async def a_deployment_before_migrations(settings: Settings, db: psycopg.AsyncConnection) -> None:
-    """The schema as the stores made it at every start, with a row in a table or two."""
-    await start(settings)
+    """The schema as the stores made it at every start, which is the first migration's,
+    with a row in a table or two, and no row of any migration."""
+    await the_first_migration(settings)
     await db.execute("DROP TABLE freyja_schema_migrations")
     await db.execute(
         "INSERT INTO freyja_threads (thread_id, created_at, changed_at, run_owner, runs)"
@@ -179,7 +190,7 @@ async def test_a_deployment_before_migrations_is_taken_through_the_first_one_wit
     await a_deployment_before_migrations(settings, db)
     persistence = await open_persistence(settings)
     try:
-        assert [row[0] for row in await rows(db)] == [1]
+        assert [row[0] for row in await rows(db)] == VERSIONS
         old = await PostgresThreadIndex(persistence.pool).get("t-old")
         assert old is not None and (old.run_owner, old.runs) == ("run-old", 1)
         # The row every state table is seeded with was there, and was not made again.
@@ -194,16 +205,37 @@ async def test_a_deployment_that_has_every_column_does_not_wait_behind_a_reader(
     settings: Settings, db: psycopg.AsyncConnection
 ) -> None:
     """A long reader, such as a backup, holds the tables. The first migration finds every
-    table, index, and column there and asks for nothing a reader keeps it from."""
+    table, index, and column there and asks for nothing a reader keeps it from. (A later
+    migration that adds a column needs its table to itself, and waits behind such a reader as
+    the last test of this part shows.)"""
     await a_deployment_before_migrations(settings, db)
     async with await psycopg.AsyncConnection.connect(settings.database_uri) as reader:
         for table in sorted(TABLES - {"freyja_schema_migrations"}):
             # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
             await reader.execute(sql.SQL("SELECT count(*) FROM {}").format(sql.Identifier(table)))
         # The reader's transaction is open and holds its lock on every table.
-        await asyncio.wait_for(start(settings), timeout=5)
+        await asyncio.wait_for(the_first_migration(settings), timeout=5)
         await reader.rollback()
     assert [row[0] for row in await rows(db)] == [1]
+
+
+async def test_the_agents_mode_is_added_as_auto_and_takes_no_other_value(
+    settings: Settings, db: psycopg.AsyncConnection
+) -> None:
+    """Migration 2 (feature 010): a database at the first migration gains the agents' mode,
+    ``auto``, so a deployment behaves as it did; the revision it had is kept."""
+    await the_first_migration(settings)
+    await db.execute("UPDATE freyja_agents_state SET revision = 7 WHERE id = 1")
+    assert not await has_column(db, "freyja_agents_state", "mode")
+    persistence = await open_persistence(settings)
+    try:
+        agents = PostgresSavedAgentStore(persistence.pool)
+        assert (await agents.mode(), await agents.revision()) == ("auto", 7)
+    finally:
+        await persistence.close()
+    assert [row[0] for row in await rows(db)] == VERSIONS
+    with pytest.raises(psycopg.errors.CheckViolation):
+        await db.execute("UPDATE freyja_agents_state SET mode = 'sometimes' WHERE id = 1")
 
 
 # ``freyja_agent_tasks`` as feature 003 created it: without ``agent_ref`` (005 research R2)
@@ -306,7 +338,7 @@ async def test_the_columns_later_features_added_are_added_and_earlier_rows_read_
         await persistence.close()
     # A second start changes nothing.
     await start(settings)
-    assert [row[0] for row in await rows(db)] == [1]
+    assert [row[0] for row in await rows(db)] == VERSIONS
 
 
 async def test_a_column_that_cannot_be_added_within_the_lock_timeout_stops_the_start(

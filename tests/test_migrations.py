@@ -29,6 +29,7 @@ from freyja_agent.runtime.migrations import (
 # was, and make the change a new migration. A new migration adds its line.
 RELEASED = {
     1: "d4c4cdd32f339730fd430ba4833f602ac3085f372b937a7049ee919bda017dae",
+    2: "6c8c6d15aa318c1f98c7d2be258f1728c0c1bb8ad107f9f3fedbfb84e0b855bf",
 }
 
 ONE = Migration(1, "one", ("CREATE TABLE a (id integer)",))

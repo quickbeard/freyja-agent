@@ -507,6 +507,22 @@ _BASELINE = Migration(
     ),
 )
 
+# The switch of feature 010: whether an agent whose own mode is Auto runs without approval
+# (``auto``) or every message to every agent waits for a person (``manual``). It sits beside
+# the saved agents' revision, which a change of it moves. ``auto`` where nobody set it, so a
+# deployment behaves as it did before the switch existed.
+_AGENTS_MODE = Migration(
+    version=2,
+    name="the agents' approval mode",
+    statements=(
+        """
+        ALTER TABLE freyja_agents_state
+            ADD COLUMN mode text NOT NULL DEFAULT 'auto'
+            CONSTRAINT freyja_agents_state_mode CHECK (mode IN ('manual', 'auto'))
+        """,
+    ),
+)
+
 # Every migration, in the order it is applied. A new one goes at the end with the next
 # number, and its checksum is added to ``RELEASED`` in ``tests/test_migrations.py``.
-MIGRATIONS: tuple[Migration, ...] = checked((_BASELINE,))
+MIGRATIONS: tuple[Migration, ...] = checked((_BASELINE, _AGENTS_MODE))

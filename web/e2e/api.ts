@@ -3,7 +3,13 @@
 // service itself.
 
 import type { Page, Route } from "@playwright/test";
-import type { Agent, AgentCard, AgentCheck, AgentList } from "../lib/agents";
+import type {
+  Agent,
+  AgentCard,
+  AgentCheck,
+  AgentList,
+  AgentsMode,
+} from "../lib/agents";
 import type { LlmLastTest, LlmProfile, LlmProfileList } from "../lib/models";
 
 /** The environment's profile, as a service configured only through its environment lists it. */
@@ -145,6 +151,7 @@ export function savedAgent(name: string, values: Partial<Agent> = {}): Agent {
 export function agentList(...agents: Agent[]): AgentList {
   return {
     agents,
+    mode: "auto",
     limit: 20,
     unusable: agents.filter(
       (agent) => agent.state === "unreachable" || agent.state === "not_in_use",
@@ -574,6 +581,8 @@ function destination(kept: string): string {
  */
 export class AgentService {
   agents: Agent[];
+  /** The agents' approval mode (feature 010), as `PUT /agents/mode` last set it. */
+  mode: AgentsMode = "auto";
   /** Every request the page made to the Agents routes, in order. */
   readonly asked: Asked[] = [];
   /** The ports at which no agent answers: adding one there is refused. */
@@ -613,7 +622,7 @@ export class AgentService {
     const saved = this.agents
       .filter((a) => a.source === "saved")
       .sort((a, b) => a.name.localeCompare(b.name));
-    return agentList(...environment, ...saved);
+    return { ...agentList(...environment, ...saved), mode: this.mode };
   }
 
   /** Whether an agent answers at this port: none does where a test said so. */
@@ -991,6 +1000,11 @@ export class AgentService {
         }
         if (method === "POST" && path === "/agents") {
           return this.add(route, body as Record<string, unknown>);
+        }
+        if (method === "PUT" && path === "/agents/mode") {
+          const { mode } = body as { mode: AgentsMode };
+          this.mode = mode;
+          return route.fulfill({ json: { mode } });
         }
         const checked = path.match(/^\/agents\/([^/]+)\/check$/);
         if (method === "POST" && checked) {

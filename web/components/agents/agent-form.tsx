@@ -55,15 +55,16 @@ const OUTCOME_NOT_KNOWN = {
     "The request got no answer, so it is not known whether the agent was changed. The list is being read again: look at the agent there before saving again.",
 };
 
-// The two choices, in the words the cards use, and what each means for a message.
+// The two choices, in the words the cards use (feature 010: Manual and Auto), and what each
+// means for a message.
 const CHOICES: { value: Approval; label: string }[] = [
-  { value: "required", label: "Requires approval" },
-  { value: "none", label: "Runs without approval" },
+  { value: "required", label: "Manual" },
+  { value: "none", label: "Auto" },
 ];
 const MEANS: Record<Approval, string> = {
   required:
     "Messages to this agent will require approval: Freyja sends it nothing until a person has approved the message.",
-  none: "Messages to this agent will be sent without approval: no person sees them first.",
+  none: "Messages to this agent will be sent without approval while agent approvals are Auto in the Tasks section: no person sees them first.",
 };
 
 /**

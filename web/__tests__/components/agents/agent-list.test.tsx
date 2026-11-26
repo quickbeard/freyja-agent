@@ -46,7 +46,7 @@ const STUB: Agent = {
 };
 
 function list(agents: Agent[] = [HELLO, STUB]): Reply {
-  const json: Agents = { agents, limit: 20, unusable: 0 };
+  const json: Agents = { agents, mode: "auto", limit: 20, unusable: 0 };
   return { json };
 }
 
@@ -157,10 +157,15 @@ describe("AgentList", () => {
     expect(
       screen.getAllByRole("button").map((button) => button.textContent),
     ).toEqual(["Refresh", "Add", "Check", "Check", "Edit", "Remove"]);
+    // The saved agent's own mode has a switch (feature 010), which only asks.
+    expect(
+      screen
+        .getAllByRole("switch")
+        .map((found) => found.getAttribute("aria-label")),
+    ).toEqual(["Auto mode for stub"]);
     for (const role of [
       "link",
       "textbox",
-      "switch",
       "combobox",
       "dialog",
       "alertdialog",
@@ -464,9 +469,7 @@ describe("AgentList, changing an agent", () => {
   async function askToFree() {
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await form();
-    fireEvent.click(
-      screen.getByRole("radio", { name: "Runs without approval" }),
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     expect(confirmation()).not.toBeNull();
   }
@@ -489,9 +492,7 @@ describe("AgentList, changing an agent", () => {
     expect((screen.getByLabelText("Address") as HTMLInputElement).value).toBe(
       STUB.url,
     );
-    fireEvent.click(
-      screen.getByRole("radio", { name: "Runs without approval" }),
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     // Nothing was sent yet: the form asks first.
     expect(asked(fetchStub)).toEqual([["GET", "/api/agents"]]);
@@ -501,9 +502,7 @@ describe("AgentList, changing an agent", () => {
     // The card is the list's own, read again.
     const heading = await screen.findByRole("heading", { name: "stub" });
     const shown = heading.closest('[data-slot="card"]') as HTMLElement;
-    await waitFor(() =>
-      expect(within(shown).getByText("Runs without approval")).toBeTruthy(),
-    );
+    await waitFor(() => expect(within(shown).getByText("Auto")).toBeTruthy());
     expect(asked(fetchStub)).toEqual([
       ["GET", "/api/agents"],
       ["PATCH", `/api/agents/${STUB.id}`],
@@ -608,7 +607,7 @@ describe("AgentList, changing an agent", () => {
     fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     expect(screen.getByText("http://127.0.0.1:9997")).toBeTruthy();
-    expect(screen.getByText("Requires approval")).toBeTruthy();
+    expect(screen.getByText("Manual")).toBeTruthy();
   });
 
   it("reads the list again when the service says the agent is gone, and its card goes", async () => {
@@ -684,7 +683,7 @@ describe("AgentList, changing an agent", () => {
     expect(
       (
         screen.getByRole("radio", {
-          name: "Runs without approval",
+          name: "Auto",
         }) as HTMLInputElement
       ).checked,
     ).toBe(true);
@@ -699,7 +698,7 @@ describe("AgentList, changing an agent", () => {
     expect(
       (
         screen.getByRole("radio", {
-          name: "Requires approval",
+          name: "Manual",
         }) as HTMLInputElement
       ).checked,
     ).toBe(true);
@@ -1042,18 +1041,14 @@ describe("AgentList, moving and removing an agent", () => {
     await screen.findByRole("heading", { name: "stub" });
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     await screen.findByRole("dialog", { name: "Edit stub" });
-    fireEvent.click(
-      screen.getByRole("radio", { name: "Runs without approval" }),
-    );
+    fireEvent.click(screen.getByRole("radio", { name: "Auto" }));
     fireEvent.click(screen.getByRole("button", { name: "Save" }));
     fireEvent.click(screen.getByRole("button", { name: "Confirm" }));
 
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     const heading = await screen.findByRole("heading", { name: "stub" });
     const shown = heading.closest('[data-slot="card"]') as HTMLElement;
-    await waitFor(() =>
-      expect(within(shown).getByText("Runs without approval")).toBeTruthy(),
-    );
+    await waitFor(() => expect(within(shown).getByText("Auto")).toBeTruthy());
     expect(said()).toBeNull();
   });
 

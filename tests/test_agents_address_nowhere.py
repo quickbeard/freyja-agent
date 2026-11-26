@@ -94,6 +94,8 @@ def _route(path: str) -> str:
     rest = path.partition("?")[0].removeprefix("/agents")
     if rest == "":
         return "/agents"
+    if rest == "/mode":
+        return "/agents/mode"
     return "/agents/{agent_id}/check" if rest.endswith("/check") else "/agents/{agent_id}"
 
 
@@ -617,6 +619,22 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
         )
         seen.state("n-6")
 
+        # Feature 010: the agents' approval mode, set, refused, and set back. It names no
+        # agent, and a failing store's text, which holds an address, is not repeated.
+        assert agents_route("PUT", "/mode", json={"mode": "manual"}).json() == {"mode": "manual"}
+        assert [
+            agents_route("PUT", "/mode", json=body).status_code
+            for body in ({"mode": FREE_URL}, {"mode": "auto", "url": FREE_URL})
+        ] == [422, 422]
+        elsewhere = agents_route(
+            "PUT", "/mode", json={"mode": "auto"}, headers={"Sec-Fetch-Site": "cross-site"}
+        )
+        assert elsewhere.json()["detail"]["code"] == "other_origin"
+        monkeypatch.setattr(made.saved_agents, "set_mode", failing)
+        assert agents_route("PUT", "/mode", json={"mode": "auto"}).status_code == 500
+        monkeypatch.undo()
+        assert agents_route("PUT", "/mode", json={"mode": "auto"}).json() == {"mode": "auto"}
+
         seen.call("GET", "/tools")
         listed = agents_route("GET").json()
         in_threads = kept(made.runtime.agent.checkpointer)
@@ -632,7 +650,8 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     # Neither saved agent was sent anything but the request for its card.
     for transport in (free_transport, gate_transport):
         assert [request.method for request in transport.requests] == ["GET"]
-    assert len(refusals) == 9 and len(answers) == 8
+    assert len(refusals) == 13 and len(answers) == 10
+    assert listed["mode"] == "auto"
 
     # Outside the Agents routes: every response, every stream with its debug events, and
     # every thread as the checkpointer keeps it.
@@ -664,6 +683,8 @@ def test_an_address_is_in_nothing_a_change_of_the_approval_choice_returns_or_cau
     assert any("Agent free was not changed: RuntimeError" in line for line in logged)
     assert any(f"Agent free: {NOW_REQUIRES.format(agent='free')}" in line for line in logged)
     assert any("refused" in line and line.endswith("agents: free") for line in logged)
+    assert any("Agents' approval mode changed: manual, was auto" in line for line in logged)
+    assert any("The agents' mode was not changed: RuntimeError" in line for line in logged)
     no_address(logged, *CHOICE_PORTS)
 
 
@@ -1229,6 +1250,8 @@ CONTRACT = {
         "other_origin",
         "internal",
     },
+    # Feature 010: the agents' approval mode.
+    ("PUT", "/agents/mode"): {"invalid", "other_origin", "internal"},
 }
 CONTRACT_FILE = (
     Path(__file__).parent.parent / "specs/005-web-delegate-agents/contracts/openapi.yaml"
@@ -1254,7 +1277,7 @@ def test_the_table_of_refusals_is_the_contract_s() -> None:
         (method.upper(), path)
         for path, operations in contract["paths"].items()
         for method in operations
-        if method in ("get", "post", "patch", "delete")
+        if method in ("get", "post", "put", "patch", "delete")
     }
     assert paths == set(CONTRACT)
     # Route by route: what the contract's own answers for the route name.

@@ -237,6 +237,24 @@ async def test_the_revision_moves_once_for_every_change(store: SavedAgentStore) 
     assert await store.revision() == 4
 
 
+async def test_the_agents_mode_is_auto_until_set_and_moves_the_revision_when_it_changes(
+    store: SavedAgentStore,
+) -> None:
+    """Feature 010 (FR-001): the mode sits beside the revision, which a change of it moves."""
+    assert await store.mode() == "auto"
+    revision = await store.revision()
+    assert await store.set_mode("auto") == "auto"
+    assert await store.revision() == revision
+    assert await store.set_mode("manual") == "manual"
+    assert await store.revision() == revision + 1
+    assert await store.mode() == "manual"
+    with pytest.raises(SavedAgentError):
+        await store.set_mode("off")  # type: ignore[arg-type]
+    assert await store.mode() == "manual"
+    assert await store.set_mode("auto") == "auto"
+    assert await store.revision() == revision + 2
+
+
 async def test_a_change_of_the_approval_choice_moves_the_version_and_not_the_address(
     store: SavedAgentStore, advance: Advance
 ) -> None:

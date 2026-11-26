@@ -46,6 +46,19 @@ A change made while the tasks were reviewed; the plan's "Review of the tasks" gi
 - FR-030 names the user documentation, the README and the pages under `docs/`, where it named the README, since the reference moved out of the README into `docs/`.
 - FR-017 and FR-028 say what they count per: the four streams of one task on one instance, and the warnings for refused credentials at each of the service's two addresses, not each client's (found by `/speckit-analyze`).
 
+### Amended by feature 010, 2026-11-26
+
+At the owner's request (`specs/010-agent-auto-mode/spec.md`, Clarifications), a caller's
+thread follows the agents' approval mode like any other thread.
+
+- FR-013a no longer gates every message to a delegate agent from a caller's thread: such a
+  message runs without a person's decision when the agents' approval mode is Auto and the
+  agent is set to Auto, and waits for one otherwise (010 FR-003, FR-007). With the mode on
+  Manual, FR-013a's former rule holds for every agent.
+- The edge case of a loop between Freyja and an agent that hands work back says what follows:
+  while both are Auto the loop can turn without a person, bounded by the limits on tasks in
+  progress until the hand-over count (User Story 5) is built; the mode set to Manual stops it.
+
 ## User Scenarios & Testing *(mandatory)*
 
 Earlier features use these terms, and they keep their meaning here: a **thread** is one conversation the service keeps; the console calls it a **task** (feature 007); what a delegate agent works on for Freyja is an **agent task** (features 003 and 007); a **proposal** is an action that waits for a person's decision. Six terms are new. A **caller** is an agent that hands Freyja work over A2A. A **named caller** is one the deployment named, with a token. The **local caller** stands for every agent that calls on the service's own address without a token. A **conversation** is what the protocol calls a context: the messages one caller sends under one conversation id, kept in one thread. A **received task** is what the protocol calls a task: one message of a caller's and everything Freyja does about it, until it has ended. The **outside listener** is the second address the service can listen on, for callers on other hosts. A named caller's **file area** is the part of Freyja's workspace its runs work in. In the console, a conversation is one task, like any thread, and each received task is one more message on it.
@@ -193,7 +206,7 @@ A caller learns the state of its own tasks, the names of the steps Freyja took, 
 - **A caller asks for the result in a form Freyja does not produce.** The result is text. A message that accepts only other forms is refused with the protocol's own error.
 - **A caller asks for push notifications, or for the extended card.** Refused with the protocol's own error for an operation that is not offered. The card says that neither is.
 - **A caller sends a message that asks Freyja to approve its own proposal, or says that a person approved.** It is text, like any message. Nothing in a message, a status, or a metadata field is ever read as a decision.
-- **Freyja hands work to an agent that hands work back to Freyja.** The hand-over count stops such a loop when both sides carry it on. An agent that drops it starts from nothing. On Freyja's side every hand-off from a caller's thread waits for a person (FR-013a), so a loop cannot turn without one; what the other agent does by itself is bounded by the limits on tasks in progress. This is a known limit.
+- **Freyja hands work to an agent that hands work back to Freyja.** The hand-over count stops such a loop when both sides carry it on. An agent that drops it starts from nothing. On Freyja's side a hand-off from a caller's thread waits for a person unless the agents' approval mode and the agent are both Auto (FR-013a, as amended by feature 010): while they are, a loop can turn without a person, bounded by the limits on tasks in progress until the hand-over count is built, and setting the mode to Manual stops it. What the other agent does by itself is bounded by the same limits. This is a known limit.
 - **A caller sends the same message twice because it did not see the answer.** Two received tasks are made, unless the second meets the refusal of a conversation with a task that has not ended. Freyja does not recognize a repeated message.
 - **The outside listener's address is taken, or cannot be listened on.** The service does not start, and the error names the setting.
 - **A caller subscribes to, or reads, a task while the answer to its own message has not arrived yet.** The task exists from the moment the message is accepted, and is answered as it stands.
@@ -225,7 +238,7 @@ A caller learns the state of its own tasks, the names of the steps Freyja took, 
 **The approval gate**
 
 - **FR-013**: A run on a caller's thread MUST pause on every action that needs approval exactly as any run does, with the proposal kept in the thread and offered in the console (features 001 and 007). No operation a caller has, and nothing a message, a status, or a metadata field holds, MAY approve, edit, or reject a proposal, or cause an action to run that a person has not decided where a decision is required. The one thing a caller can do to a pending proposal is to have it rejected by canceling the task (FR-021).
-- **FR-013a**: On a caller's thread, every message to a delegate agent, whether a hand-off, a follow-up, an answer, or a cancel, MUST pause for a person's decision, whatever the agent's approval choice is. An agent's choice to run without approval was made for requests a person makes (feature 005, FR-022); on a caller's thread no person made the request. A tool server's tool that is marked read-only runs without approval as today.
+- **FR-013a** (amended by feature 010): On a caller's thread, a message to a delegate agent, whether a hand-off, a follow-up, an answer, or a cancel, MUST pause for a person's decision unless the agents' approval mode is Auto and the agent is set to Auto, as on every other thread (010 FR-003, FR-007). Before feature 010 it paused whatever the agent's approval choice was. An agent's choice to run without approval was made for requests a person makes (feature 005, FR-022); on a caller's thread no person made the request. A tool server's tool that is marked read-only runs without approval as today.
 - **FR-014**: While a received task waits for a person's decision, its caller MUST see it as working, with a status message in the service's own words that says it waits for a person's approval and names each action that waits. The message MUST hold no argument of any action. The task MUST stay so for as long as the proposal is pending, with no time limit of this feature's.
 - **FR-015**: Only a person MUST be able to decide a proposal of a caller's task, in the console or through the routes the console uses, with every rule a decision has today. A caller MUST NOT be told who decided or why, beyond the task going on, the steps that follow, and what Freyja's reply says.
 

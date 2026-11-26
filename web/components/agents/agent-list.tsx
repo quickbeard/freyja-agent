@@ -136,6 +136,7 @@ export function AgentList() {
               <AgentCard
                 key={agent.id}
                 agent={agent}
+                mode={data.mode}
                 onChecked={() => mutate()}
                 onGone={() => mutate()}
                 onEdit={(chosen) => {

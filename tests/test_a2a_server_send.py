@@ -357,7 +357,8 @@ def test_a_hand_off_is_named_by_its_agent(make_a2a_server_app: Callable[..., Ser
             }
         ],
     )
-    made = make_a2a_server_app(ScriptedChatModel(script=[handoff, handoff]))
+    # An agent that requires approval: the hand-off waits for a person (010 FR-007).
+    made = make_a2a_server_app(ScriptedChatModel(script=[handoff, handoff]), read_only=False)
     with TestClient(made.app) as client:
         accepted = made.accept(client, "Hand it on.")
         made.finish(client, accepted)
