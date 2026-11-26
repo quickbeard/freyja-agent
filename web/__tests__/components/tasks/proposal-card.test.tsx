@@ -372,6 +372,22 @@ describe("the proposal card", () => {
     expect((await screen.findByRole("alert")).textContent).toBe(said);
   });
 
+  it("says that the deployment no longer names the agent, on the card of a removed caller's task", () => {
+    render(
+      <ProposalCard
+        pending={proposal(NOTIFY)}
+        caller={{ name: "artex", canceled: true, configured: false }}
+        send={vi.fn(async () => {})}
+        onStale={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "The deployment no longer names the agent that started this task, so this action can no longer be approved. Reject it to close the proposal; nothing of it runs.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("says before any press that the requesting agent canceled, on the card of a canceled caller's task", () => {
     render(
       <ProposalCard

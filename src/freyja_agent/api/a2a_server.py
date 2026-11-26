@@ -2,18 +2,21 @@
 
 Another agent hands Freyja a task over A2A 1.0, through the JSON-RPC binding the protocol's
 SDK serves. Two routes, added by the application's lifespan while the feature is on and
-taken out again when it ends (research R3):
+taken out again when it ends (research R3), and served by the outside listener's application
+as well (``api/a2a_listener.py``, research R4):
 
-- ``GET /.well-known/agent-card.json``, the card, built for each request from the address
-  it was asked under;
+- ``GET /.well-known/agent-card.json``, the card: at the service's own address built for
+  each request from the address it was asked under, and at the outside listener from
+  ``FREYJA_A2A_SERVER_URL``, with its bearer scheme;
 - ``POST /a2a``, the SDK's JSON-RPC dispatcher behind Freyja's own checks.
 
 The checks run in the contract's order, each before the next is looked at: the origin
-(403, as the thread routes refuse a page of another origin), the credential (401: a request
-with an ``Authorization`` header is refused until named callers exist), the size (413,
+(403, as the thread routes refuse a page of another origin), the credential (401, by
+``Callers``: at the service's own address no header is the local caller), the size (413,
 before the body is read whole); then the SDK's dispatcher checks the protocol's version and
 the operation; then ``FreyjaRequestHandler`` checks the message's form, and
-``ReceivedTasks`` the conversation and the limits (research R5).
+``ReceivedTasks`` the conversation and the limits (research R5). Which address a request
+arrived at is the application that serves it, never anything the request says (FR-002).
 
 This module is the one that imports the SDK's server modules and the protocol's types
 (plan, Structure Decision): ``ReceivedTasks`` keeps the tasks, starts their runs, and says
@@ -49,6 +52,7 @@ from a2a.types.a2a_pb2 import (
     GetExtendedAgentCardRequest,
     GetTaskPushNotificationConfigRequest,
     GetTaskRequest,
+    HTTPAuthSecurityScheme,
     ListTaskPushNotificationConfigsRequest,
     ListTaskPushNotificationConfigsResponse,
     ListTasksRequest,
@@ -56,7 +60,10 @@ from a2a.types.a2a_pb2 import (
     Message,
     Part,
     Role,
+    SecurityRequirement,
+    SecurityScheme,
     SendMessageRequest,
+    StringList,
     SubscribeToTaskRequest,
     Task,
     TaskArtifactUpdateEvent,
@@ -95,7 +102,8 @@ from freyja_agent.api.received import (
     Status,
     View,
 )
-from freyja_agent.runtime.received_tasks import LOCAL, ReceivedTask, new_id
+from freyja_agent.runtime.callers import Callers
+from freyja_agent.runtime.received_tasks import ReceivedTask, new_id
 
 logger = logging.getLogger(__name__)
 
@@ -112,6 +120,8 @@ TEXT_MODES = frozenset({"text/plain", "text/*", "*/*"})
 CALLER_KEY = "freyja.a2a.caller"
 # The one artifact a completed task has: Freyja's reply.
 REPLY = "reply"
+# The security scheme the outside listener's card declares and requires.
+BEARER = "bearer"
 # A task's id, as the service makes it.
 TASK_ID = re.compile(r"[0-9a-f]{32}")
 
@@ -157,13 +167,14 @@ def _version() -> str:
         return "0.0.0"
 
 
-def card(address: str) -> AgentCard:
+def card(address: str, *, bearer: bool = False) -> AgentCard:
     """The card, for callers that reach Freyja at ``address`` (contracts/a2a-server.md).
 
     It names no delegate agent, tool server, tool, model, profile, or caller, and is the
-    same for every caller. At the service's own address it declares no security.
+    same for every caller. At the service's own address it declares no security; at the
+    outside listener (``bearer``) it declares one HTTP bearer scheme and requires it.
     """
-    return AgentCard(
+    found = AgentCard(
         name="Freyja",
         description=DESCRIPTION,
         version=_version(),
@@ -188,11 +199,24 @@ def card(address: str) -> AgentCard:
             )
         ],
     )
+    if bearer:
+        found.security_schemes[BEARER].CopyFrom(
+            SecurityScheme(http_auth_security_scheme=HTTPAuthSecurityScheme(scheme=BEARER))
+        )
+        found.security_requirements.append(SecurityRequirement(schemes={BEARER: StringList()}))
+    return found
 
 
-async def _card(request: Request) -> Response:
-    """The card, with the scheme and host it was asked under."""
-    return JSONResponse(MessageToDict(card(str(request.base_url))))
+def _card(url: str | None) -> Callable[[Request], Awaitable[Response]]:
+    """The card's route: at the outside listener for ``url``, the address callers reach it
+    under; at the service's own address, with the scheme and host it was asked under."""
+
+    async def endpoint(request: Request) -> Response:
+        if url is not None:
+            return JSONResponse(MessageToDict(card(url, bearer=True)))
+        return JSONResponse(MessageToDict(card(str(request.base_url))))
+
+    return endpoint
 
 
 def _refusal(
@@ -218,18 +242,26 @@ async def _bounded_body(request: Request) -> bytes | None:
     return b"".join(chunks)
 
 
-def _guarded(dispatch: Callable[[Request], Awaitable[Response]]) -> Callable[..., Any]:
-    """``POST /a2a``: the checks in front of the SDK's dispatcher, in the contract's order."""
-    other_origin = refuse_other_origins("Tasks")
+def _guarded(
+    dispatch: Callable[[Request], Awaitable[Response]], callers: Callers, *, outside: bool
+) -> Callable[..., Any]:
+    """``POST /a2a``: the checks in front of the SDK's dispatcher, in the contract's order.
+
+    At the outside listener, which anyone on the network reaches, a page of another origin is
+    warned of sparingly, as a refused credential is, rather than once a request."""
+    other_origin = refuse_other_origins("Tasks", quiet=outside)
 
     async def endpoint(request: Request) -> Response:
         try:
             other_origin(request)
         except HTTPException as exc:
+            if outside:
+                callers.refused(outside=True, why="origin")
             return JSONResponse({"detail": exc.detail}, status_code=exc.status_code)
-        # Named callers and their tokens come later (FR-005); until then any credential is
-        # refused, before the body is read.
-        if "authorization" in request.headers:
+        # Who is calling, by the credential alone and before the body is read (FR-005).
+        caller = callers.who(request.headers.get("authorization"), outside=outside)
+        if caller is None:
+            callers.refused(outside=outside)
             return _refusal(401, "unauthorized", UNAUTHORIZED, {"WWW-Authenticate": "Bearer"})
         body = await _bounded_body(request)
         if body is None:
@@ -244,7 +276,7 @@ def _guarded(dispatch: Callable[[Request], Awaitable[Response]]) -> Callable[...
             # After the body, what the client does next, such as leaving a stream.
             return await request.receive()
 
-        scope = {**request.scope, CALLER_KEY: LOCAL}
+        scope = {**request.scope, CALLER_KEY: caller}
         return await dispatch(Request(scope, receive))
 
     return endpoint
@@ -397,8 +429,9 @@ class FreyjaRequestHandler(RequestHandler):
     task counts against its streams on this instance (``stream_limit``, research R13).
     """
 
-    def __init__(self, received: ReceivedTasks) -> None:
+    def __init__(self, received: ReceivedTasks, callers: Callers) -> None:
         self.received = received
+        self.callers = callers
 
     def _internal(self, what: str, exc: BaseException) -> NoReturn:
         logger.error(
@@ -408,6 +441,8 @@ class FreyjaRequestHandler(RequestHandler):
 
     async def _accept(self, params: SendMessageRequest, context: ServerCallContext) -> Any:
         text, context_id = _message_of(params)
+        # A caller that pastes its token into a message does not put it into a thread (R15).
+        text = self.callers.scrub(text)
         try:
             return await self.received.accept(context.user.user_name, context_id or new_id(), text)
         except RefusedError as exc:
@@ -553,12 +588,15 @@ class FreyjaRequestHandler(RequestHandler):
         raise ExtendedAgentCardNotConfiguredError
 
 
-def routes(received: ReceivedTasks) -> list[Route]:
-    """The card's route and the operations' route at the service's own address."""
+def routes(
+    received: ReceivedTasks, callers: Callers, *, outside: bool = False, url: str | None = None
+) -> list[Route]:
+    """The card's route and the operations' route: at the service's own address, or at the
+    outside listener (``outside``), whose card gives ``url``."""
     dispatcher = create_jsonrpc_routes(
-        FreyjaRequestHandler(received), RPC_PATH, context_builder=_CallerContext()
+        FreyjaRequestHandler(received, callers), RPC_PATH, context_builder=_CallerContext()
     )[0]
     return [
-        Route(CARD_PATH, _card, methods=["GET"]),
-        Route(RPC_PATH, _guarded(dispatcher.endpoint), methods=["POST"]),
+        Route(CARD_PATH, _card(url if outside else None), methods=["GET"]),
+        Route(RPC_PATH, _guarded(dispatcher.endpoint, callers, outside=outside), methods=["POST"]),
     ]

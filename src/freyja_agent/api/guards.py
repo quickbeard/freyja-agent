@@ -49,7 +49,7 @@ READS = frozenset({"GET", "HEAD", "OPTIONS"})
 OWN_SITE = frozenset({"same-origin", "none"})
 
 
-def refuse_other_origins(what: str) -> Callable[[Request], None]:
+def refuse_other_origins(what: str, *, quiet: bool = False) -> Callable[[Request], None]:
     """The dependency that turns away a changing request made by a page of another origin.
 
     ``what`` names, in the plural and with a capital, what the router's routes change, such as
@@ -61,6 +61,9 @@ def refuse_other_origins(what: str) -> Callable[[Request], None]:
     sends it, and ``Origin`` against the host the browser asked for, which the web app's
     server passes on as ``X-Forwarded-Host``. A page of another origin can set none of the
     three. A client that is no page, such as curl, sends none of them and is served.
+
+    ``quiet`` leaves the warning to the caller: the outside listener of feature 009, which
+    anyone on the network can reach, says it sparingly instead.
     """
 
     def refuse(request: Request) -> None:
@@ -75,12 +78,13 @@ def refuse_other_origins(what: str) -> Callable[[Request], None]:
         other_origin = origin is not None and (
             not asked or urlsplit(origin).netloc.lower() != asked
         )
-        if other_site or other_origin:
+        if (other_site or other_origin) and not quiet:
             logger.warning(
                 "Refused %s %s: the request was made by a page of another origin",
                 request.method,
                 request.url.path,
             )
+        if other_site or other_origin:
             raise HTTPException(
                 status_code=403,
                 detail={

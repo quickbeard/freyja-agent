@@ -82,24 +82,24 @@ def _unreadable(what: str, exc: Exception) -> HTTPException:
     return _error(500, "internal", "The list of threads could not be read.")
 
 
-def _caller(mark: CallerMark | None) -> CallerSummary | None:
-    """Who started a thread over A2A, as its row says it (feature 009). Only the local
-    caller can call until named callers exist, and it is always configured."""
-    if mark is None:
-        return None
-    return CallerSummary(name=mark.name, canceled=mark.canceled, configured=mark.name == LOCAL)
+def _caller(mark: CallerMark, runtime: Runtime) -> CallerSummary:
+    """Who started a thread over A2A, as its row says it (feature 009): whether the settings
+    name the caller now, which the local caller always is (T093)."""
+    configured = mark.name == LOCAL or mark.name in runtime.settings.a2a_server_callers
+    return CallerSummary(name=mark.name, canceled=mark.canceled, configured=configured)
 
 
-async def _callers(runtime: Runtime, records: list[ThreadRecord]) -> dict[str, CallerMark]:
+async def _callers(runtime: Runtime, records: list[ThreadRecord]) -> dict[str, CallerSummary]:
     """Which of ``records`` a caller started, in one read, with the feature on or off: a
     caller's thread is never shown as a person's. A read that fails fails the answer."""
     if not records:
         return {}
-    return await runtime.received_tasks.callers_of([record.thread_id for record in records])
+    marks = await runtime.received_tasks.callers_of([record.thread_id for record in records])
+    return {thread: _caller(mark, runtime) for thread, mark in marks.items()}
 
 
 def _summary(
-    record: ThreadRecord, lease_active: bool, caller: CallerMark | None = None
+    record: ThreadRecord, lease_active: bool, caller: CallerSummary | None = None
 ) -> ThreadSummary:
     status = status_of(record, lease_active)
     return ThreadSummary(
@@ -122,7 +122,7 @@ def _summary(
         stoppable=stoppable(record, lease_active),
         stopping=stopping(record, lease_active),
         runs=record.runs,
-        caller=_caller(caller),
+        caller=caller,
     )
 
 

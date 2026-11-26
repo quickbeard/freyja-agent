@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import re
 from pathlib import Path
 from typing import Annotated, Self
@@ -12,10 +13,13 @@ from pydantic import (
     SecretStr,
     StrictBool,
     StringConstraints,
+    ValidationError,
+    ValidationInfo,
+    ValidatorFunctionWrapHandler,
     field_validator,
     model_validator,
 )
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 # Shown in proposals, logs, and the catalog, so it is kept short and plain (FR-001).
 SERVER_NAME_PATTERN = r"^[a-z][a-z0-9_-]{0,31}$"
@@ -209,6 +213,96 @@ class A2aAgentConfig(BaseModel):
         return self
 
 
+# A caller's name and token (feature 009, contracts/settings.md "A caller"). A name is in the
+# form agents' names have; a token is what feature 006 calls a token.
+CALLER_NAME = re.compile(SERVER_NAME_PATTERN)
+CALLER_TOKEN = re.compile(r"[!-~]{16,4096}")
+LOCAL_CALLER = "local"
+MAX_CALLERS = 20
+
+
+class A2aCallerConfig(BaseModel):
+    """One caller in ``FREYJA_A2A_SERVER_CALLERS`` (feature 009): its token, and nothing else.
+
+    The token is a secret value from the moment it is read: it neither prints nor
+    serializes, and no error raised for it repeats it.
+    """
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    token: SecretStr
+
+
+def _caller_errors(callers: dict[str, A2aCallerConfig]) -> str | None:
+    """What is wrong with the named callers, naming the setting and the caller, never a
+    token; None when nothing is. A name that breaks its rule is named by its place."""
+    if len(callers) > MAX_CALLERS:
+        return f"FREYJA_A2A_SERVER_CALLERS names more than {MAX_CALLERS} callers"
+    seen: dict[str, str] = {}
+    for place, (name, caller) in enumerate(callers.items(), start=1):
+        if not CALLER_NAME.fullmatch(name) or name == LOCAL_CALLER:
+            return (
+                f"FREYJA_A2A_SERVER_CALLERS: the name of caller {place} must be lowercase "
+                "letters, digits, hyphens, and underscores, start with a letter, be at most 32 "
+                "characters, and not be 'local'"
+            )
+        token = caller.token.get_secret_value()
+        if not CALLER_TOKEN.fullmatch(token):
+            return (
+                f"FREYJA_A2A_SERVER_CALLERS: the token of caller {name!r} must be 16 to 4,096 "
+                "visible ASCII characters, with no space and no control character"
+            )
+        if token in seen:
+            return (
+                f"FREYJA_A2A_SERVER_CALLERS: caller {name!r} has the token of caller "
+                f"{seen[token]!r}; each caller's token must be its own"
+            )
+        seen[token] = name
+    return None
+
+
+class _NamedTwiceError(ValueError):
+    """A JSON object that names one caller twice."""
+
+
+def _once_each(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    names = [name for name, _ in pairs]
+    if len(set(names)) != len(names):
+        raise _NamedTwiceError
+    return dict(pairs)
+
+
+def _caller_address_error(url: str) -> str | None:
+    """What is wrong with ``FREYJA_A2A_SERVER_URL``, without repeating it; None when it is
+    the address callers reach the outside listener under: a scheme, a host, a port at most."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        return "FREYJA_A2A_SERVER_URL must be http or https, a host, and at most a port"
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.path not in ("", "/")
+        or parts.query
+        or parts.fragment
+        or url.endswith(("?", "#"))
+        or port == 0
+    ):
+        return (
+            "FREYJA_A2A_SERVER_URL must be http or https, a host, and at most a port: no "
+            "path, query, fragment, user name, or password"
+        )
+    return None
+
+
+# What listens on every interface, and so also on the service's own address: compared with,
+# never bound.
+_EVERY_ADDRESS = frozenset({"", ".".join("0000"), "::"})
+
+
 class Settings(BaseSettings):
     """Runtime configuration, read from FREYJA_* environment variables."""
 
@@ -283,12 +377,92 @@ class Settings(BaseSettings):
     # is beside the workspace and never inside it, so that no thread that works in the
     # workspace reaches a caller's files.
     a2a_server_files_dir: str = "caller-files"
+    # Named callers, each with its token (FR-004): a JSON object of name to ``{"token":
+    # ...}``. None by default: only the local caller, on the service's own address.
+    a2a_server_callers: Annotated[dict[str, A2aCallerConfig], NoDecode] = Field(
+        default_factory=dict
+    )
+    # The outside listener (FR-003): the address and port it binds, which have no default,
+    # and the address callers reach it under, as its card gives it.
+    a2a_server_host: str | None = None
+    a2a_server_port: int | None = None
+    a2a_server_url: str | None = None
+
+    @field_validator("a2a_server_callers", mode="wrap")
+    @classmethod
+    def _callers_read(
+        cls, value: object, handler: ValidatorFunctionWrapHandler, info: ValidationInfo
+    ) -> dict[str, A2aCallerConfig]:
+        """The callers, read by the service itself: a name given twice is refused rather
+        than the last kept, and no error repeats a name, a token, or any other part of the
+        value. With the feature off they are not used, and nothing of them is checked."""
+        try:
+            if isinstance(value, str):
+                value = json.loads(value, object_pairs_hook=_once_each) if value.strip() else {}
+            return handler(value)
+        except (ValueError, ValidationError) as exc:
+            if not info.data.get("a2a_server"):
+                return {}
+            if isinstance(exc, _NamedTwiceError):
+                raise ValueError("FREYJA_A2A_SERVER_CALLERS names a caller twice") from None
+            raise ValueError(
+                "FREYJA_A2A_SERVER_CALLERS must be a JSON object of callers' names, each with "
+                'an object that holds its "token" and nothing else'
+            ) from None
+
+    @property
+    def a2a_server_listener(self) -> bool:
+        """Whether the outside listener is set: its address and its port."""
+        return self.a2a_server_host is not None and self.a2a_server_port is not None
 
     @model_validator(mode="after")
     def _a2a_server_rules(self) -> Self:
         # Named in the message: an error raised here belongs to no one field.
+        if (self.a2a_server_host is None) != (self.a2a_server_port is None):
+            raise ValueError(
+                "FREYJA_A2A_SERVER_HOST and FREYJA_A2A_SERVER_PORT are set together or not at all"
+            )
         if not self.a2a_server:
+            if self.a2a_server_listener:
+                raise ValueError(
+                    "FREYJA_A2A_SERVER_HOST and FREYJA_A2A_SERVER_PORT open the outside "
+                    "listener, which needs FREYJA_A2A_SERVER, and it is off"
+                )
             return self
+        problem = _caller_errors(self.a2a_server_callers)
+        if problem is not None:
+            raise ValueError(problem)
+        if self.a2a_server_url is not None:
+            problem = _caller_address_error(self.a2a_server_url)
+            if problem is not None:
+                raise ValueError(problem)
+        if self.a2a_server_listener:
+            if not (self.a2a_server_host or "").strip():
+                raise ValueError("FREYJA_A2A_SERVER_HOST must name an address, not be blank")
+            if not self.a2a_server_callers:
+                raise ValueError(
+                    "The outside listener (FREYJA_A2A_SERVER_HOST) takes only named callers, "
+                    "and FREYJA_A2A_SERVER_CALLERS names none"
+                )
+            if self.a2a_server_url is None:
+                raise ValueError(
+                    "The outside listener (FREYJA_A2A_SERVER_HOST) needs FREYJA_A2A_SERVER_URL, "
+                    "the address callers reach it under"
+                )
+            port = self.a2a_server_port
+            host = self.a2a_server_host or ""
+            same = (
+                host == self.host
+                or host in _EVERY_ADDRESS
+                or self.host in _EVERY_ADDRESS
+                # localhost, 127.0.0.1, and ::1 are one machine's loopback.
+                or (is_local_host(host.strip("[]")) and is_local_host(self.host.strip("[]")))
+            )
+            if port is None or not 1 <= port <= 65535 or (same and port == self.port):
+                raise ValueError(
+                    "FREYJA_A2A_SERVER_PORT must be from 1 to 65535 and not the service's own "
+                    "port on the same address (FREYJA_PORT)"
+                )
         if not 0 <= self.a2a_server_wait_seconds <= 600:
             raise ValueError("FREYJA_A2A_SERVER_WAIT_SECONDS must be from 0 to 600")
         if not 1 <= self.a2a_server_caller_tasks <= 100:

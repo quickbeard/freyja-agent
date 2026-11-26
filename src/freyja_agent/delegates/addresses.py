@@ -16,12 +16,13 @@ same whether one address is known or two hundred, which matters because it runs 
 record and on text an agent controls.
 """
 
+import json
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from typing import Any
-from urllib.parse import unquote, urlsplit
+from urllib.parse import quote, quote_plus, unquote, urlsplit
 
 from freyja_agent.config import is_local_host
 
@@ -291,6 +292,54 @@ class AddressScrubber:
 # The scrubber of the process. Links register their addresses with it (research R12).
 SCRUBBER = AddressScrubber()
 
+# What a caller's token is replaced with (feature 009, research R15).
+WITHHELD = "[caller token]"
+
+
+class TokenScrubber:
+    """Exact texts taken out of every log record and of what a caller sends: the tokens of
+    the callers a deployment names (feature 009, research R15). A token is matched as it is
+    written, and as a query or a path writes it encoded; the longest first."""
+
+    def __init__(self) -> None:
+        self._texts: tuple[str, ...] = ()
+
+    @property
+    def empty(self) -> bool:
+        return not self._texts
+
+    def set(self, tokens: Iterable[str]) -> None:
+        """Clean ``tokens`` from now on, and no other: the callers of the service that runs.
+
+        Each in every form it is written in: as it is, percent-encoded as a query, a path
+        (``/`` kept), or a browser's ``encodeURIComponent`` (``!'()*`` kept) writes it, with
+        upper or lower hexadecimal digits, and escaped as a ``repr`` or JSON writes it."""
+        found: set[str] = set()
+        for token in tokens:
+            encoded = {quote(token, safe=safe) for safe in ("", "/", "!'()*", "/!'()*")} | {
+                quote_plus(token)
+            }
+            found.update(encoded, {_lower_hex(text) for text in encoded})
+            found.update({token, token.replace("\\", "\\\\"), json.dumps(token)[1:-1]})
+            found.add(repr(token)[1:-1])
+        self._texts = tuple(sorted(found - {""}, key=len, reverse=True))
+
+    def scrub(self, text: str) -> str:
+        for token in self._texts:
+            if token in text:
+                text = text.replace(token, WITHHELD)
+        return text
+
+
+def _lower_hex(text: str) -> str:
+    return _PERCENT.sub(lambda found: found.group(0).lower(), text)
+
+
+_PERCENT = re.compile(r"%[0-9A-F]{2}")
+
+# The callers' tokens of the process, added by ``runtime/callers.py``.
+TOKENS = TokenScrubber()
+
 _INSTALLED = "_freyja_address_scrubber"
 _formatter = logging.Formatter()
 
@@ -323,7 +372,9 @@ def _clean_record(record: logging.LogRecord, scrubber: AddressScrubber) -> None:
     changed = False
 
     def clean(text: str) -> str:
-        text = scrubber.scrub(text)
+        # A caller's token goes too (feature 009): the access log writes a request's path
+        # with its query, where a caller may wrongly put it.
+        text = TOKENS.scrub(scrubber.scrub(text))
         return scrubber.scrub_ports(text) if library else text
 
     def clean_argument(value: Any) -> Any:
@@ -378,7 +429,7 @@ def install_log_scrubber(scrubber: AddressScrubber = SCRUBBER) -> None:
 
     def factory(*args: Any, **kwargs: Any) -> logging.LogRecord:
         record = current(*args, **kwargs)
-        if scrubber.empty:
+        if scrubber.empty and TOKENS.empty:
             return record
         message, arguments = record.msg, record.args
         try:

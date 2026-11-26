@@ -199,6 +199,11 @@ class ReceivedTaskStore(Protocol):
         than ``attempts`` times, at most ``limit`` of them, the earliest first."""
         ...
 
+    async def working_of_others(self, callers: Iterable[str], limit: int) -> list[ReceivedTask]:
+        """Working tasks of callers other than ``callers``, at most ``limit``, the earliest
+        first: those of a caller the deployment no longer names (FR-021)."""
+        ...
+
 
 def _checked_end(state: str, reason: str | None, result: str | None) -> None:
     if state not in ENDED:
@@ -364,6 +369,14 @@ class InMemoryReceivedTaskStore:
     async def unreleased(self, limit: int) -> list[ReceivedTask]:
         return [task for task in self._tasks.values() if task.released_at is None][:limit]
 
+    async def working_of_others(self, callers: Iterable[str], limit: int) -> list[ReceivedTask]:
+        named = set(callers)
+        return [
+            task
+            for task in self._tasks.values()
+            if task.state == "working" and task.caller not in named
+        ][:limit]
+
     async def to_reject(self, attempts: int, limit: int) -> list[ReceivedTask]:
         found = [
             task
@@ -451,6 +464,11 @@ _TO_REJECT = """
 SELECT * FROM freyja_a2a_tasks
  WHERE state <> 'working' AND reject_after IS NOT NULL AND reject_attempts < %(attempts)s
  ORDER BY reject_after LIMIT %(limit)s
+"""
+_WORKING_OF_OTHERS = """
+SELECT * FROM freyja_a2a_tasks
+ WHERE state = 'working' AND NOT (caller = ANY(%(callers)s))
+ ORDER BY created_at LIMIT %(limit)s
 """
 _NOW = "SELECT now() AS now"
 
@@ -585,3 +603,7 @@ class PostgresReceivedTaskStore:
     async def to_reject(self, attempts: int, limit: int) -> list[ReceivedTask]:
         params = {"attempts": attempts, "limit": limit}
         return [_task(row) for row in await self._rows(_TO_REJECT, params)]
+
+    async def working_of_others(self, callers: Iterable[str], limit: int) -> list[ReceivedTask]:
+        params = {"callers": list(callers), "limit": limit}
+        return [_task(row) for row in await self._rows(_WORKING_OF_OTHERS, params)]

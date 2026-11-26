@@ -223,6 +223,27 @@ async def the_last_task_that_started_is_the_one_a_proposal_can_be_of(
     assert await store.last_started_task_of_thread("no-such-thread") is None
 
 
+async def the_working_tasks_of_callers_no_longer_named_are_listed(
+    store: ReceivedTaskStore,
+) -> None:
+    """Request 5 (FR-021): what the sweep's first round cancels."""
+    alpha = (await accept(store, "alpha", "a")).task
+    beta = (await accept(store, "beta", "b")).task
+    local = (await accept(store, "local", "l")).task
+    gone = (await accept(store, "gamma", "g")).task
+    ended = (await accept(store, "gamma", "h")).task
+    assert await store.end(ended.task_id, "completed", result="Hi.", released=True)
+    found = await store.working_of_others({"local", "alpha", "beta"}, 10)
+    assert [task.task_id for task in found] == [gone.task_id]
+    assert {task.task_id for task in await store.working_of_others({"local"}, 10)} == {
+        alpha.task_id,
+        beta.task_id,
+        gone.task_id,
+    }
+    assert len(await store.working_of_others({"local"}, 2)) == 2
+    assert local.caller == "local"
+
+
 CASES: list[Case] = [
     a_new_conversation_gets_a_thread_and_a_working_task,
     two_callers_with_one_conversation_id_have_two_threads,
@@ -240,6 +261,7 @@ CASES: list[Case] = [
     a_rejection_to_try_again_is_listed_until_it_is_done_or_spent,
     an_attempt_is_counted_once_for_the_count_it_was_read_at,
     the_last_task_that_started_is_the_one_a_proposal_can_be_of,
+    the_working_tasks_of_callers_no_longer_named_are_listed,
 ]
 
 

@@ -5,7 +5,7 @@ from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from fastapi import FastAPI
 from starlette.routing import BaseRoute
 
-from freyja_agent.api import a2a_server
+from freyja_agent.api import a2a_listener, a2a_server
 from freyja_agent.api.agents import router as agents_router
 from freyja_agent.api.hosts import AllowedHosts
 from freyja_agent.api.llm import router as llm_router
@@ -15,6 +15,7 @@ from freyja_agent.api.threads import router as threads_router
 from freyja_agent.api.tools import router as tools_router
 from freyja_agent.config import Settings, settings
 from freyja_agent.delegates.addresses import install_log_scrubber
+from freyja_agent.runtime.callers import Callers
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import IndexedRunLocks
 
@@ -61,7 +62,31 @@ async def _stop_receiving(runtime: Runtime, received: ReceivedTasks) -> None:
     await received.close()
 
 
-def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
+def _listener_lines(runtime: Runtime, callers: Callers) -> None:
+    """The startup lines of feature 009: that it is on, how many callers are named, and
+    whether the outside listener is, and where; and a warning for an address callers reach
+    without encryption (FR-028, FR-029). No token."""
+    settings = runtime.settings
+    where = (
+        f"on at {settings.a2a_server_host}:{settings.a2a_server_port}"
+        if settings.a2a_server_listener
+        else "off"
+    )
+    logger.info(
+        "Receiving tasks from other agents over A2A is on: the card and the operations are "
+        "served at this address; %d callers are named; the outside listener is %s",
+        len(callers.names),
+        where,
+    )
+    url = settings.a2a_server_url or ""
+    if settings.a2a_server_listener and url.lower().startswith("http:"):
+        logger.warning(
+            "FREYJA_A2A_SERVER_URL is an http address: the tokens callers send to the outside "
+            "listener can be read on the network path. Put what encrypts in front of it."
+        )
+
+
+def create_app(open_runtime: OpenRuntime = Runtime.open, *, listen: bool = True) -> FastAPI:
     """Build the FastAPI app.
 
     ``open_runtime`` is the one seam for tests: the lifespan enters it with the process
@@ -71,7 +96,10 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
 
     Before any runtime opens, every log record of the process is set to be cleaned of agent
     addresses as it is made: the HTTP and agent libraries log the addresses they request
-    (feature 005, FR-028, research R12).
+    (feature 005, FR-028, research R12). Feature 009 adds callers' tokens to what is cleaned.
+
+    ``listen`` says whether the outside listener of feature 009 binds its address when it is
+    set; the suite drives its application in-process instead (``app.state.a2a_outside``).
     """
     install_log_scrubber()
 
@@ -82,27 +110,44 @@ def create_app(open_runtime: OpenRuntime = Runtime.open) -> FastAPI:
             app.state.runtime = runtime
             # Feature 009: the runtime's own settings say whether the feature is on, since
             # the application is made before its runtime (research R3).
-            received = _receive_tasks(runtime) if runtime.settings.a2a_server else None
+            settings_now = runtime.settings
+            received = _receive_tasks(runtime) if settings_now.a2a_server else None
+            callers = Callers(settings_now.a2a_server_callers) if received is not None else None
             app.state.received = received
+            app.state.callers = callers
+            app.state.a2a_outside = None
             # The card and the operations, served while the feature is on and only while this
             # lifespan runs: a lifespan entered again never serves a closed runtime's (R3).
             added: list[BaseRoute] = []
-            if received is not None:
-                added = list(a2a_server.routes(received))
-                app.router.routes.extend(added)
-                logger.info(
-                    "Receiving tasks from other agents over A2A is on: the card and the "
-                    "operations are served at this address; %d callers are named; the "
-                    "outside listener is off",
-                    0,
-                )
+            listener: a2a_listener.Listener | None = None
             try:
+                if received is not None and callers is not None:
+                    added = list(a2a_server.routes(received, callers))
+                    app.router.routes.extend(added)
+                    if settings_now.a2a_server_listener:
+                        outside = a2a_listener.application(
+                            received, callers, settings_now.a2a_server_url or ""
+                        )
+                        app.state.a2a_outside = outside
+                        if listen:
+                            listener = a2a_listener.Listener(
+                                outside,
+                                settings_now.a2a_server_host or "",
+                                settings_now.a2a_server_port or 0,
+                            )
+                            await listener.start()
+                    _listener_lines(runtime, callers)
                 yield
             finally:
+                # The outside listener stops before the runtime is closed (R4).
+                if listener is not None:
+                    await listener.stop()
                 for route in added:
                     app.router.routes.remove(route)
                 if received is not None:
                     await _stop_receiving(runtime, received)
+                if callers is not None:
+                    callers.forget()
 
     app = FastAPI(title="Freyja Orchestrator", lifespan=lifespan)
     # Before any route: a request made for a host name the deployment does not list is
