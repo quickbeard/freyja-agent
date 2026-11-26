@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { AgentsModeSelect } from "@/components/agents-mode";
 import { ApiError } from "@/lib/api";
 import { begin } from "@/lib/task-runs";
 import { type Message, startRun } from "@/lib/tasks";
@@ -88,6 +89,8 @@ export function FollowUp({
       send={send}
       sendLabel="Send message"
       blocked={blocked === null ? null : WHY[blocked]}
+      // Feature 010: the agents' approval mode, beside the button that sends (FR-008).
+      beside={<AgentsModeSelect />}
     />
   );
 }

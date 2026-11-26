@@ -80,7 +80,7 @@ export function listAgents(): Promise<AgentList> {
 /** Whether a message to an agent waits for a person: `none` runs without approval. */
 export type Approval = "required" | "none";
 
-/** The agents' approval mode, the switch of the sidebar's Tasks section (feature 010). */
+/** The agents' approval mode, the switch beside the Tasks section's Send buttons (feature 010). */
 export type AgentsMode = "manual" | "auto";
 
 /** An agent's own mode as the console names it: Auto is the approval choice `none`. */

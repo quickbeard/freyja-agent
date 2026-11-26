@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useState } from "react";
+import { AgentsModeSelect } from "@/components/agents-mode";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -53,7 +54,13 @@ export function NewTask() {
               workspace waits for a person's approval.
             </DialogDescription>
           </DialogHeader>
-          <SendBox key={session} label="What should Freyja do?" send={send} />
+          <SendBox
+            key={session}
+            label="What should Freyja do?"
+            send={send}
+            // Feature 010: the agents' approval mode, beside the button that sends (FR-008).
+            beside={<AgentsModeSelect />}
+          />
         </DialogContent>
       </Dialog>
     </>

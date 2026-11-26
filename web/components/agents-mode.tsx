@@ -33,10 +33,13 @@ const MODES: { value: AgentsMode; label: string }[] = [
   { value: "auto", label: "Auto" },
 ];
 
-/** What the mode means, said under the dropdown. */
+/**
+ * What the mode means, said under the dropdown. It stands beside a Send button, so each
+ * sentence says first that the mode is every task's, not that message's.
+ */
 const MEANS: Record<AgentsMode, string> = {
-  manual: "Every message to an agent waits for your approval.",
-  auto: "Agents set to Auto run without approval; the others ask.",
+  manual: "For every task: every message to an agent waits for your approval.",
+  auto: "For every task: agents set to Auto run without approval; the others ask.",
 };
 
 /**
@@ -62,11 +65,13 @@ function lettingRun(count: number): string {
 }
 
 /**
- * The agents' approval mode, under Tasks in the sidebar (feature 010, FR-008). It is read
- * with the list of agents, under the key every page reads that list under, so it costs no
- * reading of its own. Manual applies at once. Auto lets every agent set to Auto run without
- * approval, so it is confirmed first, with how many agents that is. While the list cannot be
- * read the mode is not known, and cannot be changed.
+ * The agents' approval mode, beside the Send button of New task and of a task's follow-up box
+ * (feature 010, FR-008, as the owner placed it on 2026-11-26). It is read with the list of
+ * agents, under the key every page reads that list under, so it costs no reading of its own.
+ * Manual applies at once. Auto lets every agent set to Auto run without approval, so it is
+ * confirmed first, with how many agents that is. While the list cannot be read the mode is
+ * not known, and cannot be changed. It sits inside the box's form: the select's trigger is a
+ * plain button (`type="button"`), so choosing a mode sends no message.
  */
 export function AgentsModeSelect() {
   const { data, error, mutate } = useSWR<AgentList, unknown>(
@@ -117,8 +122,8 @@ export function AgentsModeSelect() {
 
   const mode = known ? data.mode : null;
   return (
-    <div className="flex flex-col gap-1 px-2 pb-1 group-data-[collapsible=icon]:hidden">
-      <span id={`${id}-label`} className="text-xs text-sidebar-foreground/70">
+    <div className="flex flex-col gap-1">
+      <span id={`${id}-label`} className="sr-only">
         Agent approvals
       </span>
       <Select
@@ -135,11 +140,13 @@ export function AgentsModeSelect() {
         }}
       >
         <SelectTrigger
-          size="sm"
-          className="w-full"
           aria-labelledby={`${id}-label`}
           aria-describedby={`${id}-means`}
         >
+          {/* The name says it in full; the eye reads the short form beside the value. */}
+          <span aria-hidden="true" className="text-muted-foreground">
+            Approvals:
+          </span>
           <SelectValue placeholder="Not known" />
         </SelectTrigger>
         <SelectContent>
@@ -150,7 +157,7 @@ export function AgentsModeSelect() {
           ))}
         </SelectContent>
       </Select>
-      <p id={`${id}-means`} className="text-xs text-sidebar-foreground/70">
+      <p id={`${id}-means`} className="text-xs text-muted-foreground">
         {mode === null
           ? "Not known: the list of agents could not be read."
           : MEANS[mode]}
@@ -171,7 +178,8 @@ export function AgentsModeSelect() {
           <AlertDialogHeader>
             <AlertDialogTitle>Set agent approvals to Auto?</AlertDialogTitle>
             <AlertDialogDescription>
-              Agents set to Auto will run without approval, from the next run.{" "}
+              In every task, agents set to Auto will run without approval, from
+              the next run.{" "}
               {data !== undefined ? lettingRun(autoAgents(data)) : ""}
             </AlertDialogDescription>
           </AlertDialogHeader>

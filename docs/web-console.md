@@ -25,8 +25,6 @@ When more tasks exist than are listed, the section says so. Every task that need
 
 On every section, the sidebar's Tasks entry shows how many tasks need a decision, in words as well as in a number, and none when no task does.
 
-Under the Tasks entry, the **Agent approvals** dropdown shows the agents' approval mode (see [Auto mode](agents.md#auto-mode)) and changes it. **Manual** applies at once: every message to every agent waits for a person. **Auto** lets the agents set to Auto run without approval, so it asks for confirmation first, saying how many agents are set to Auto and that a proposal already waiting for one of them can then only be approved. The dropdown is read with the list of agents; while that list cannot be read it says that the mode is not known and cannot be changed.
-
 The list and the number are one reading of `GET /threads`, read again every ten seconds, so that a change made elsewhere is followed within fifteen, and at once when a hidden page is shown or a run the page shows ends. When the service cannot be reached, the section says so, offers to try again, and shows no row, and the sidebar says that the number is not known. A request the service takes and does not answer ends the same way: the console's server gives up forwarding it after 30 seconds, and the page gives up by itself after 35.
 
 ### A new task
@@ -36,6 +34,12 @@ The list and the number are one reading of `GET /threads`, read again every ten 
 When the run ends, the page shows the conversation as the service holds it, with the task's status, and a reload or another browser shows the same. The run goes on if the page is closed.
 
 A message the service refuses stays in the box with the service's reason. When no usable model is active, the page says so, points to the Models section, and offers the text again.
+
+### Agent approvals
+
+Left of the Send button, in New task and in a task's box for another message, the **Approvals** dropdown shows the agents' approval mode (see [Auto mode](agents.md#auto-mode)) and changes it. It is one setting for every task, not for the message beside it, and says so under it. **Manual** applies at once: every message to every agent waits for a person, also in runs in progress, so it can be chosen while a run goes on and the box cannot be sent. **Auto** lets the agents set to Auto run without approval, so it asks for confirmation first, saying how many agents are set to Auto and that a proposal already waiting for one of them can then only be approved. Choosing a mode sends no message, and what was typed in the box stays. The dropdown is read with the list of agents; while that list cannot be read it says that the mode is not known and cannot be changed.
+
+It is not offered where no box is: on the list of tasks, on a task another agent started, and while a proposal's card takes the box's place. There, and from the Agents section, an agent's card switches that agent to Manual.
 
 ### Deciding a proposal
 

@@ -50,3 +50,13 @@ implementation (spec, Clarifications). Every task below is in it.
 
 - [x] T018 [P] `docs/agents.md` (Auto mode), `docs/a2a-server.md`, `docs/web-console.md`, and `AGENTS.md`.
 - [x] T019 Run every gate: the commit hook over the changed files, `pnpm test:e2e`, and the opt-in Postgres tests.
+
+## Phase 6: Owner's change, 2026-11-26 - the dropdown beside the Send buttons
+
+The owner moved the dropdown after the feature was merged (spec, Owner's change). One pull
+request holds this phase.
+
+- [x] T020 `web/components/tasks/send-box.tsx` takes what stands left of its Send button (`beside`); `follow-up.tsx` and `new-task.tsx` give it `AgentsModeSelect`, restyled for that row and saying that the mode is every task's; `app-sidebar.tsx` no longer shows it (FR-008).
+- [x] T021 [P] `web/__tests__/components/tasks/follow-up.test.tsx` and `new-task.test.tsx`: the dropdown on the button's row, choosing a mode sends no message and keeps the text, Manual can be chosen while a run is in progress, and Auto is confirmed inside New task without closing it; `tasks-testing.ts`'s `serve` answers the list of agents apart from what a test keeps; `agents-mode.test.tsx` in the new words; `task-view.test.tsx` keeps every end of a run it waits for, which the page forgets once it read the task again.
+- [x] T022 [P] `web/e2e/agents-mode.spec.ts`: the dropdown in New task and on a task's page, by mouse and with the keyboard, hidden while a proposal waits, absent from the sidebar and the list of tasks; an Auto agent's card held to Manual once Manual is chosen beside Send.
+- [x] T023 `docs/web-console.md` (Agent approvals), `docs/agents.md`, and `AGENTS.md`.
