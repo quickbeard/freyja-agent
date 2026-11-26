@@ -11,7 +11,7 @@ import { type Reply, stubFetch } from "@/__tests__/testing";
 import { AgentsModeSelect, autoAgents } from "@/components/agents-mode";
 import type { Agent, AgentList, AgentsMode } from "@/lib/agents";
 
-// Feature 010: the agents' approval mode, under Tasks in the sidebar (FR-008).
+// Feature 010: the agents' approval mode, beside the Tasks section's Send buttons (FR-008).
 
 const HELLO: Agent = {
   id: "env.hello",
@@ -77,7 +77,7 @@ describe("AgentsModeSelect", () => {
     await waitFor(() => expect(trigger().textContent).toContain("Auto"));
     expect(
       screen.getByText(
-        "Agents set to Auto run without approval; the others ask.",
+        "For every task: agents set to Auto run without approval; the others ask.",
       ),
     ).toBeTruthy();
   });
@@ -99,7 +99,9 @@ describe("AgentsModeSelect", () => {
       ["/api/agents", "GET", undefined],
     ]);
     expect(
-      screen.getByText("Every message to an agent waits for your approval."),
+      screen.getByText(
+        "For every task: every message to an agent waits for your approval.",
+      ),
     ).toBeTruthy();
   });
 

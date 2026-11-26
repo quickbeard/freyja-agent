@@ -3,7 +3,7 @@
 import { BotIcon, CpuIcon, ListTodoIcon } from "lucide-react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Fragment, Suspense, useId } from "react";
+import { Suspense, useId } from "react";
 import useSWR from "swr";
 import {
   Sidebar,
@@ -31,7 +31,6 @@ import {
   THREADS_KEY,
   type ThreadList,
 } from "@/lib/tasks";
-import { AgentsModeSelect } from "./agents-mode";
 
 // The console's sections, in the order the sidebar lists them.
 // Tasks first, where a person hands Freyja work (feature 007) and the console opens; then the
@@ -135,83 +134,74 @@ function SectionLinks({ pathname }: { pathname: string | null }) {
         const unknown = href === TASKS && waiting === null;
         const counted = href === TASKS && waiting !== null && waiting > 0;
         return (
-          <Fragment key={href}>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={active}
-                render={
-                  <Link
-                    href={href}
-                    aria-current={active ? "page" : undefined}
-                    // The entry keeps its name; what the number means is said
-                    // beside it, for whoever does not see where the number stands.
-                    aria-describedby={
-                      warned
-                        ? warning
-                        : counted || unknown
-                          ? waitingSaid
-                          : undefined
-                    }
-                    // In a narrow window the sidebar is a sheet over the page:
-                    // choosing a section closes it, or it would hide the page.
-                    onClick={() => setOpenMobile(false)}
-                  />
-                }
-              >
-                <Icon aria-hidden="true" />
-                <span>{label}</span>
-              </SidebarMenuButton>
-              {warned && (
-                <SidebarMenuBadge className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive">
-                  {/* What the number is about is said in words to the eye as well: the
+          <SidebarMenuItem key={href}>
+            <SidebarMenuButton
+              isActive={active}
+              render={
+                <Link
+                  href={href}
+                  aria-current={active ? "page" : undefined}
+                  // The entry keeps its name; what the number means is said
+                  // beside it, for whoever does not see where the number stands.
+                  aria-describedby={
+                    warned
+                      ? warning
+                      : counted || unknown
+                        ? waitingSaid
+                        : undefined
+                  }
+                  // In a narrow window the sidebar is a sheet over the page:
+                  // choosing a section closes it, or it would hide the page.
+                  onClick={() => setOpenMobile(false)}
+                />
+              }
+            >
+              <Icon aria-hidden="true" />
+              <span>{label}</span>
+            </SidebarMenuButton>
+            {warned && (
+              <SidebarMenuBadge className="bg-destructive/10 text-destructive peer-hover/menu-button:text-destructive peer-data-active/menu-button:text-destructive">
+                {/* What the number is about is said in words to the eye as well: the
                     badge's colour alone says nothing (005 FR-001a). */}
-                  <span aria-hidden="true">{down} cannot be used</span>
-                  <span id={warning} className="sr-only">
-                    {down === 1
-                      ? "1 agent cannot be used"
-                      : `${down} agents cannot be used`}
-                  </span>
-                </SidebarMenuBadge>
-              )}
-              {counted && (
-                <SidebarMenuBadge>
-                  {/* In words to the eye and to assistive technology, never by the badge
+                <span aria-hidden="true">{down} cannot be used</span>
+                <span id={warning} className="sr-only">
+                  {down === 1
+                    ? "1 agent cannot be used"
+                    : `${down} agents cannot be used`}
+                </span>
+              </SidebarMenuBadge>
+            )}
+            {counted && (
+              <SidebarMenuBadge>
+                {/* In words to the eye and to assistive technology, never by the badge
                     alone (FR-001, FR-012a). */}
-                  <span aria-hidden="true">{waiting} to decide</span>
-                  <span id={waitingSaid} className="sr-only">
-                    {waiting === 1
-                      ? "1 task needs a decision"
-                      : `${waiting} tasks need a decision`}
-                  </span>
-                </SidebarMenuBadge>
-              )}
-              {unknown && (
-                <SidebarMenuBadge>
-                  {/* A list that could not be read is not "none": the entry says so, in
+                <span aria-hidden="true">{waiting} to decide</span>
+                <span id={waitingSaid} className="sr-only">
+                  {waiting === 1
+                    ? "1 task needs a decision"
+                    : `${waiting} tasks need a decision`}
+                </span>
+              </SidebarMenuBadge>
+            )}
+            {unknown && (
+              <SidebarMenuBadge>
+                {/* A list that could not be read is not "none": the entry says so, in
                     words (FR-006; Edge Cases, "The list cannot be kept or read"). The
                     eye reads the two words, and assistive technology the sentence they
                     stand in; no part is hidden from either, since nothing here is a
                     number that needs its meaning said beside it. */}
-                  <span id={waitingSaid}>
-                    <span className="sr-only">
-                      How many tasks need a decision is{" "}
-                    </span>
-                    not known
-                    <span className="sr-only">
-                      : the list of tasks could not be read.
-                    </span>
+                <span id={waitingSaid}>
+                  <span className="sr-only">
+                    How many tasks need a decision is{" "}
                   </span>
-                </SidebarMenuBadge>
-              )}
-            </SidebarMenuItem>
-            {/* Feature 010: the agents' approval mode, in the Tasks section, where a person
-              decides what Freyja proposes (FR-008). */}
-            {href === TASKS && (
-              <SidebarMenuItem>
-                <AgentsModeSelect />
-              </SidebarMenuItem>
+                  not known
+                  <span className="sr-only">
+                    : the list of tasks could not be read.
+                  </span>
+                </span>
+              </SidebarMenuBadge>
             )}
-          </Fragment>
+          </SidebarMenuItem>
         );
       })}
     </SidebarMenu>

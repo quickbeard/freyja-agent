@@ -364,9 +364,10 @@ startup and exits with an error naming the connection when it is unreachable.
   a saved agent's card switches it behind a confirmation (`mode-dialog.tsx`), and an Auto
   agent's card says when the agents' approval mode holds it to Manual. The sidebar reads the
   same list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used,
-  and the agents' approval mode, under the Tasks entry, as the dropdown that changes it
-  (`web/components/agents-mode.tsx`, which asks before Auto), so every page asks for
-  `/api/agents` once.
+  so every page asks for `/api/agents` once. The agents' approval mode is read from that list
+  too, as the dropdown that changes it (`web/components/agents-mode.tsx`, which asks before
+  Auto), which stands left of the Send button of New task and of a task's follow-up box
+  (`send-box.tsx`'s `beside`), and nowhere else.
   `web/app/tasks/` is the Tasks section (feature 007), with the list of tasks under the notice
   that the console has no users (`task-list.tsx`), and `web/app/tasks/[id]/` one task, whose
   id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
@@ -442,7 +443,8 @@ startup and exits with an error naming the connection when it is unreachable.
   tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of
   the code it covers (`web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`), run by Vitest with
   jsdom; `web/__tests__/testing.ts` stubs `fetch` for them, and `web/__tests__/tasks-testing.ts`
-  for the Tasks section's tests, with runs' streams built from events. No test file sits beside the code.
+  for the Tasks section's tests, with runs' streams built from events and the list of agents the
+  approval mode beside Send reads answered apart (`serve`). No test file sits beside the code.
   `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
   there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
@@ -452,8 +454,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
-  `agents-mode.spec.ts` the agents' approval mode under Tasks and an agent's own mode on its
-  card (feature 010);
+  `agents-mode.spec.ts` the agents' approval mode beside the Tasks section's Send buttons and
+  an agent's own mode on its card (feature 010);
   `tasks.spec.ts` the Tasks section, and that a page of another origin cannot show it in a
   frame, `tasks-decide.spec.ts` deciding a proposal, and
   `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed

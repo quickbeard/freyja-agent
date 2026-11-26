@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, useRef, useState } from "react";
+import { type ReactNode, useId, useRef, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { ApiError } from "@/lib/api";
@@ -21,7 +21,9 @@ function reason(error: unknown): string {
  * a refusal is said with the service's reason beside the box, which keeps the text, and so
  * does a request that got no answer (FR-007, FR-008). With `blocked`, the reason the text
  * cannot be sent for now, nothing is sent and the reason stands beside the box, which still
- * takes text, to be sent once the reason is gone (FR-020).
+ * takes text, to be sent once the reason is gone (FR-020). What it is given `beside` stands
+ * left of the Send button, on its row, and is not part of what is sent; it is not blocked with
+ * the button.
  */
 export function SendBox({
   label,
@@ -29,6 +31,7 @@ export function SendBox({
   send,
   sendLabel = "Send",
   blocked = null,
+  beside,
 }: {
   label: string;
   initial?: string;
@@ -37,6 +40,8 @@ export function SendBox({
   sendLabel?: string;
   /** Why the text cannot be sent for now, in words; null when it can. */
   blocked?: string | null;
+  /** What stands beside the Send button, such as the agents' approval mode (feature 010). */
+  beside?: ReactNode;
 }) {
   const [text, setText] = useState(initial);
   const [error, setError] = useState<string | null>(null);
@@ -101,7 +106,11 @@ export function SendBox({
           {error}
         </p>
       )}
-      <div className="flex justify-end">
+      {/* On a narrow screen the button goes under what stands beside it, never off the box. */}
+      <div className="flex flex-wrap items-start justify-end gap-2">
+        {beside !== undefined && (
+          <div className="min-w-0 grow basis-48">{beside}</div>
+        )}
         <Button
           type="submit"
           disabled={sending || blocked !== null || text.trim() === ""}

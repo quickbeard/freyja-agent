@@ -1,8 +1,12 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  AGENTS,
   ai,
+  approvals,
   body,
+  chooseApprovals,
   END,
   human,
   openBody,
@@ -11,6 +15,7 @@ import {
   serve,
 } from "@/__tests__/tasks-testing";
 import { FollowUp } from "@/components/tasks/follow-up";
+import type { AgentsMode } from "@/lib/agents";
 import { clear, get } from "@/lib/task-runs";
 
 // 007, User Story 4: another message on the same task (FR-020).
@@ -266,5 +271,69 @@ describe("the follow-up box", () => {
       />,
     );
     expect(box().value).toBe("Sent before, and not recorded.");
+  });
+});
+
+// Feature 010, FR-008 as the owner placed it on 2026-11-26: the agents' approval mode stands
+// beside the button that sends.
+describe("the agents' approval mode beside Send message", () => {
+  /** The box, with a list of agents read for it alone. */
+  function renderBox(blocked: "run" | null) {
+    return render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <FollowUp threadId="t-1" before={BEFORE} blocked={blocked} />
+      </SWRConfig>,
+    );
+  }
+
+  it("stands on the button's row, and changes the mode without sending the message", async () => {
+    let mode: AgentsMode = "auto";
+    const asked = serve(
+      (method, path) => {
+        if (method === "PUT" && path === "/agents/mode") {
+          mode = "manual";
+          return { json: { mode } };
+        }
+        return { stream: body(START, END) };
+      },
+      () => ({ ...AGENTS, mode }),
+    );
+    renderBox(null);
+    await waitFor(() => expect(approvals().textContent).toContain("Auto"));
+    expect(send().parentElement?.contains(approvals())).toBe(true);
+    expect(
+      screen.getByText(
+        "For every task: agents set to Auto run without approval; the others ask.",
+      ),
+    ).toBeTruthy();
+
+    type("And the week before?");
+    await chooseApprovals("Manual");
+    await waitFor(() => expect(approvals().textContent).toContain("Manual"));
+    expect(asked).toEqual([
+      { method: "PUT", path: "/agents/mode", body: { mode: "manual" } },
+    ]);
+    // The message is the button's to send: it stays in the box, and no run started.
+    expect(box().value).toBe("And the week before?");
+    expect(get("t-1")).toBeUndefined();
+  });
+
+  it("can be set to Manual while a run is in progress, when no message can be sent", async () => {
+    const asked = serve((method, path) =>
+      method === "PUT" && path === "/agents/mode"
+        ? { json: { mode: "manual" } }
+        : { stream: body(START, END) },
+    );
+    renderBox("run");
+    await waitFor(() => expect(approvals().textContent).toContain("Auto"));
+    expect((send() as HTMLButtonElement).disabled).toBe(true);
+    expect(approvals().getAttribute("data-disabled")).toBeNull();
+
+    await chooseApprovals("Manual");
+    await waitFor(() =>
+      expect(asked).toEqual([
+        { method: "PUT", path: "/agents/mode", body: { mode: "manual" } },
+      ]),
+    );
   });
 });

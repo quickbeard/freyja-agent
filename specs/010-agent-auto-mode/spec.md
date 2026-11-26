@@ -17,13 +17,26 @@
 - Q: Which steps of Spec Kit does this feature run, and in how many pull requests? → A: The owner asked for one pull request holding the spec, the plan with its Constitution Check, the tasks, and the implementation. The project's rule of one pull request per step, each reviewed before the next, is set aside for this feature at the owner's request; the clarifications above stand in for `speckit-clarify`.
 - Q (decided in the plan, the owner's to overturn): What does the switch hold where nobody set it? → A: Auto. Every agent's own mode defaults to Manual (a saved agent requires approval unless saved otherwise, an environment agent unless its entry says `read_only: true`), so with the switch on Auto nothing runs without asking that an operator did not set to run so, and a deployment configured before this feature behaves as it did, apart from the tasks other agents start (FR-007).
 
+### Owner's change, 2026-11-26
+
+Made after the feature was merged, at the owner's request: the dropdown moves from under the
+Tasks entry of the sidebar to the left of the Send button, in New task and in a task's box for
+another message, and the sidebar no longer shows it. It stays the one switch for every task,
+and says so beside the button; a mode chosen per task was offered again and not adopted. Where
+no such box is shown (the list of tasks, a task another agent started, a task whose proposal's
+card takes the box's place, and the other sections), the switch is not offered, which the
+owner chose over keeping it in the sidebar as well; there an agent's card still switches that
+agent to Manual (FR-009).
+
+- The Terms, User Story 1, its fifth scenario, and FR-008 name the new place.
+
 ## User Scenarios & Testing *(mandatory)*
 
-Terms. An agent's **own mode** is the approval choice features 003 and 005 gave it, now named Manual or Auto: a saved agent's `approval` (`required` is Manual, `none` is Auto) and an environment agent's `read_only` (`true` is Auto). The **switch** is the one Manual/Auto value of the whole instance, shown in the sidebar's Tasks section. A message **runs without asking** when it is sent with no person's decision.
+Terms. An agent's **own mode** is the approval choice features 003 and 005 gave it, now named Manual or Auto: a saved agent's `approval` (`required` is Manual, `none` is Auto) and an environment agent's `read_only` (`true` is Auto). The **switch** is the one Manual/Auto value of the whole instance, shown beside the Send buttons of the Tasks section. A message **runs without asking** when it is sent with no person's decision.
 
 ### User Story 1 - Stop every agent from running without asking (Priority: P1)
 
-An operator sees something they do not like, or hands the console to someone new, and wants every message to every agent to wait for a person for a while, without changing any agent. They open the dropdown under Tasks in the sidebar and choose Manual. From then on, on every instance, every message to every agent waits for a decision, also in runs already in progress. Choosing Auto again brings back each agent's own mode.
+An operator sees something they do not like, or hands the console to someone new, and wants every message to every agent to wait for a person for a while, without changing any agent. They open the dropdown beside a Send button in the Tasks section, in New task or on a task's page, and choose Manual. From then on, on every instance, every message to every agent waits for a decision, also in runs already in progress. Choosing Auto again brings back each agent's own mode.
 
 **Why this priority**: It is the one control that makes the agents safe at once, and it is what makes an Auto mode acceptable: a person can always take it back in one step.
 
@@ -35,7 +48,7 @@ An operator sees something they do not like, or hands the console to someone new
 2. **Given** a run in progress whose orchestrator was built while the switch was Auto, **When** the switch is set to Manual and the run then proposes a message to an Auto agent, **Then** nothing is sent, the call's result says that the agent now requires approval, and the run continues.
 3. **Given** a paused step that holds, beside a call that waits for a decision, a message to an Auto agent proposed while the switch was Auto, **When** the switch is set to Manual and the proposal is decided, **Then** the resume ends with `approval_now_required` naming the agent, nothing of the step runs, and the proposal stays.
 4. **Given** the switch on Manual, **When** it is set to Auto, **Then** the console asks for confirmation first, saying how many agents are set to Auto, and agents whose own mode is Auto run without asking from the next run.
-5. **Given** the switch on Manual, **When** the console is opened on any page, **Then** the sidebar shows Manual under Tasks.
+5. **Given** the switch on Manual, **When** New task or a task's box for another message is shown, **Then** the dropdown left of its Send button shows Manual and says that it applies to every task, and choosing a mode there sends no message.
 
 ---
 
@@ -89,7 +102,7 @@ Another agent hands Freyja a task over A2A (feature 009), and Freyja's work on i
 - **FR-005**: The service MUST return the switch with the list of agents (`GET /agents`, `mode`) and change it with `PUT /agents/mode`, whose body holds `mode` alone, `manual` or `auto`. The route contacts no agent, refuses a request a browser marks as another origin's, answers with the switch as kept, and logs each change.
 - **FR-006**: A tool server's tool and `send_notification` MUST keep their classification whatever the switch says.
 - **FR-007**: A caller's thread (feature 009) MUST follow FR-003 like any other. 009's FR-013a is amended to say so.
-- **FR-008**: The sidebar's Tasks section MUST show the switch as a dropdown with Manual and Auto. Choosing Auto MUST ask for confirmation, saying how many agents are set to Auto and that each of them will be sent messages with no person seeing them first; choosing Manual MUST apply at once. While the list of agents cannot be read, the dropdown MUST say that the switch is not known and MUST NOT be changeable.
+- **FR-008** (owner's change, 2026-11-26): The Tasks section MUST show the switch as a dropdown with Manual and Auto left of the Send button of New task and of a task's box for another message, and nowhere else. It MUST say that it applies to every task, MUST stay changeable while the box cannot be sent, and choosing a mode MUST NOT send what is in the box. Choosing Auto MUST ask for confirmation, saying how many agents are set to Auto and that each of them will be sent messages with no person seeing them first; choosing Manual MUST apply at once. While the list of agents cannot be read, the dropdown MUST say that the switch is not known and MUST NOT be changeable.
 - **FR-009**: Each agent's card MUST show its own mode as Manual or Auto. A saved agent in use MUST offer a control that switches it, behind a confirmation that says what the new mode means, sent at the version the card read. An environment agent, and a saved agent not in use, MUST show the mode without a control. When the switch is Manual, an Auto agent's card MUST say that the switch holds it to Manual.
 - **FR-010**: 007's FR-017 is amended: the console's one way to stop being asked is the operator's choice of FR-008 and FR-009, made apart from any proposal. Nothing in a proposal's card approves later proposals or stops the asking.
 
