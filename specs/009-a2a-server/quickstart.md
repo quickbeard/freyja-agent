@@ -13,8 +13,8 @@ would not hand work to: a hand-off that is approved here is really sent.
 
 Nothing of this exists before the phase that builds it; each section says which phase it
 needs ([plan.md](plan.md), "Phases"). Until phase 5 a request with an `Authorization` header
-is refused, and until phase 4 `cancel` and `follow` are answered as operations that are not
-offered. The sections follow the user stories' order, not the phases'.
+is refused; `cancel` and `follow` are offered from phase 4. The sections follow the user
+stories' order, not the phases'.
 
 ## Prerequisites
 
@@ -189,17 +189,26 @@ caller send "Remember the number 41."          # note the contextId, C, and the 
 caller send --context C "Which number did I ask you to remember?"
 ```
 
-The second reply names 41, and the console shows one task with both messages.
+The second reply names 41, and the console shows one task with both messages. With the
+stand-in model both replies are `ready`; the console still shows one task with both
+messages, and `caller send` prints the same `contextId` twice.
 
 Come back after a restart:
 
 ```bash
-caller send "Hand this to the stub agent: steps 6 20"        # approve it in the console
+caller send --return-immediately "Hand this to the stub agent: steps 6 20"
+caller get <task id>                           # again, until it says Waiting for agent stub.
 ```
 
-Stop terminal 1 while the task is `Waiting for agent stub.`, start it again, then
-`caller follow <task id>`: the task is found, and completes with Freyja's reply to the
-agent's outcome.
+With the stand-in model, send `handoff stub steps 6 20`. With the agents' approval mode on
+Auto, the default since feature 010, and the agent set to run without approval, the hand-off
+is sent at once; with either on Manual, approve it in the console first. The stand-in agent
+then works for six steps of 20 seconds each. The hand-off's step waits for the agent's
+answer for up to `FREYJA_A2A_CALL_TIMEOUT_SECONDS`: wait until `caller get` says
+`Waiting for agent stub.`, then stop terminal 1 with Ctrl-C and start it again. (A process
+killed during that step cuts the step off, and the task ends as failed, `The run was
+interrupted.`) Then `caller follow <task id>`: the task is found, still waiting for the
+agent, and completes with Freyja's reply to the agent's outcome once the agent is done.
 
 Cancel a run in progress, with the stand-in model's `steps` keyword (its profile active):
 
@@ -207,19 +216,29 @@ Cancel a run in progress, with the stand-in model's `steps` keyword (its profile
 caller stream "steps 8"                         # in another terminal: caller cancel <task id>
 ```
 
-The cancel answers with the task as canceled. The stream ends with the task as canceled,
-and the console shows the task as stopped, with the steps taken until then.
+Cancel after the stream printed `Completed: ls.` once. The cancel answers with the task as
+canceled, `The caller canceled the task.` The stream ends with the task as canceled, after
+the step that was under way, and the console shows the task as stopped, with the steps taken
+until then.
 
-Cancel a task that waits for approval:
+Cancel a task that waits for approval. A hand-off waits for a person only while the agents'
+approval mode, or the agent, is Manual (feature 010), so set the mode to Manual first, in the
+sidebar under Tasks or with
+`curl -s -X PUT localhost:8000/agents/mode -H 'content-type: application/json' -d '{"mode": "manual"}'`;
+or send `notify hello` with the stand-in model, which always waits for a person.
 
 ```bash
-caller send "Hand this to the stub agent: say hello"         # do not decide it
+caller send --return-immediately "Hand this to the stub agent: say hello"   # do not decide it
+caller get <task id>                            # Waiting for a person's approval of: agent stub.
 caller cancel <task id>
 ```
 
-The console no longer counts the task among those that need a decision; its page shows the
-proposal rejected with "The requesting agent canceled the task.", and says that the
-requesting agent canceled. The stand-in agent received nothing.
+The console no longer counts the task among those that need a decision. Its page says that
+the agent that started the task canceled it and that what the task still proposed was
+rejected by that cancel, not by a person; the conversation shows the hand-off's result as
+"User rejected the tool call for `handoff_to_stub` with reason: The requesting agent
+canceled the task.", the library's words for any rejection. The stand-in agent received
+nothing. Set the mode back to Auto if it was Auto before.
 
 ## 5. Only its own, and within limits (User Story 5, phases 2 and 6)
 

@@ -648,3 +648,114 @@ nothing; the console counted one task to decide and its card said who started th
 that no person asked for it; approved there, the open stream received `Completed: agent
 stub.`, the reply, and the task completed, and the agent received the message once; a second
 one rejected there completed with Freyja's reply and the agent received nothing more.
+
+### Request 4 (2026-11-26): continue, come back to, or cancel a task
+
+**Starting point**, on the branch as made from `main` with feature 010: the service suite
+passed 2262 tests and skipped 156, with 91.37% of lines covered; the web app's 821 unit tests
+passed, with 97.55% of statements, 94.38% of branches, 97.37% of functions, and 98.08% of
+lines.
+
+**Built otherwise than the tasks say, and why:**
+
+- A rejection by rule that could not run is tried again by the sweep also after its task was
+  released. A pending proposal does not keep a canceled task counting (data-model.md), so a
+  sweep over the rows not released would never see such a task again. The store has one
+  more read and one more write on the existing columns, and no migration: `to_reject`, the
+  rows that ended with `reject_after` set and fewer than five attempts, the earliest first,
+  and `rejection_done`, which clears `reject_after` once a look finds no proposal. The sweep
+  reads each list up to the total limit, so a round looks at up to twice that many rows; the
+  second read has no index and reads the whole table, which is small today; an index would
+  be migration 3.
+- The console's resume through `api/runs.py` is built (`start_console_resume`), for the
+  rejection by rule. The console's route still goes through `threads.resume_run` and
+  `_go_on`, which existing tests patch.
+- `UnattendedRuns.canceled` is a function the application sets while the feature is on, as
+  it sets `on_start`: with the feature off a boundary reads nothing more (FR-001).
+- A cancel looks at its task first, so a task whose run has ended and whose end is not
+  written yet is answered `-32002` and keeps its own end; the write names `working` as the
+  state it replaces. It also marks the index's stop where the run is marked, so the console
+  says the run is stopping; the run stops at its next boundary by the cancel either way.
+- `requester_gone` is asked only while the feature is on: with it off, `a2a_server_off`
+  already refuses every decision on a caller's thread.
+- The rejection's reason reaches the thread in the gate's own words: "User rejected the tool
+  call for `<tool>` with reason: The requesting agent canceled the task." The console's note
+  on a canceled caller's task says that the cancel rejected it and not a person.
+- A send's stream is the first of its task's four streams. A send without a stream that
+  waits for its task is not a stream.
+- A follower whose reader the console's runs disconnect for falling behind ends without the
+  task's end, and its caller subscribes again. It tells by its reader ending without a run's
+  last event while the run is still in progress on the instance.
+- Request 3's open finding is fixed: a follower whose task has ended is not handed a later
+  run of the thread, such as the caller's next message's; it reads its task's end. A
+  subscription's follower starts from the status it was sent with the task, so the walk's
+  repeated `Waiting for agent stub.` is gone.
+- `SubscribeToTask` and `CancelTask` on a task that has ended answer with the SDK's own
+  message for `-32004` and `-32002`: the contract gives no sentence for either.
+- The sweep's first round does not cancel the tasks of callers the settings no longer name:
+  named callers come with request 5.
+- Three tests that earlier requests of this feature wrote changed with what they describe;
+  no test of another feature changed (FR-001): cancel and subscribe of the id `t` are now
+  `-32001` in `test_what_is_not_offered_is_refused_as_the_contract_says`;
+  `test_nothing_a_caller_sends_decides_a_pending_proposal` tries a subscription, which
+  leaves the proposal, and no longer a cancel, which rejects it by rule (part 7); and
+  `test_a_message_is_refused_while_a_proposal_is_pending_and_while_a_decision_runs` holds
+  the rule off for its proposal on a conversation at rest, which the rule would reject.
+- The 28 service tests of this request (25 new, 3 changed) were written first and each
+  failed before the code. The web's unit tests were written before the components changed,
+  the end-to-end part after.
+
+**Cases of T066 not written end to end, with what covers them:** a decision a person already
+took, which needs a subagent whose run fails after its gate: the test replaces
+`decisions_taken` so that the proposal reads as decided, and 005's tests
+(`tests/test_subagent.py`) cover the real case. A cancel and a decision at once is shown in
+each order: the decision first in both cases of
+`test_a_cancel_around_a_person_s_continuation_stops_it_at_its_first_boundary`, and the
+rejection first in `test_a_cancel_rejects_a_pending_proposal_by_rule_and_nothing_of_it_runs`,
+whose late approval is refused.
+
+**Feature 010's change to FR-013a in this feature's documents.** Corrected in this request:
+quickstart section 4, and the README's row of `FREYJA_A2A_SERVER`. Left for request 7's
+reading of the documents against the code: the quickstart's setup and sections 2 and 5,
+which rely on a hand-off to an agent that runs without approval waiting all the same (with
+the mode on Auto it is sent at once); this plan's Constitution Check row for principle I and
+its requirement map's row of FR-013a; research R6 ("every agent tool is gated in the strict
+build"); and tasks.md's term "the strict build" and its line that every hand-off from a
+caller's thread waits for a person.
+
+**Review of request 4.** An independent reviewer read the change before its first commit.
+It found no field or operation of a caller that approves or edits, no rejection by rule that
+approves, edits, or runs on a thread no caller started or while another run holds the lease,
+no leaked stream slot, nothing different with the feature off, and SQL only as fixed
+strings with bound parameters. What it found:
+
+| Finding | What was done |
+|---|---|
+| Medium: a caller's next message writes its task before its run is refused; in between, `requester_gone` and the boundary's question read that task as working, so a person's approval of the canceled task's proposal went through and ran. | Both ask the last task whose run started, the only one a proposal can be of (`last_started_task_of_thread`; `test_a_caller_s_next_message_does_not_let_a_person_approve_the_canceled_task_s_proposal`) |
+| Medium: an action that no longer needs approval, as after the mode turned Auto, takes approve only, so the rule's reject is refused, a person's approve is `requester_gone`, and the conversation stays busy; the console and the docs said the proposal could be rejected. | Nothing of it runs, as before. The log says to set the mode to Manual, and the card, the console's answer to an approval, and the docs say it can be rejected only then (`test_a_proposal_whose_action_no_longer_needs_approval_is_not_run_by_a_cancel`, the card's test) |
+| Medium: a task that ended was tidied without a guard when read, so `GetTask`, a subscription, or a send's wait answered an internal error when its thread could not be read. | It is answered from its row; the tidy's failure is logged (`test_a_task_that_ended_is_answered_from_its_row_when_its_thread_cannot_be_read`) |
+| Medium: the console said that none of what a canceled task proposed ran, also after an approved action ran before the cancel, and while a rejection still waited. | It says nothing can be approved any more, that Freyja rejects it by itself, and that what ran before the cancel is in the conversation (the view's test) |
+| Low: two instances that read one row each counted an attempt and tried it. | An attempt is counted only at the count it was read at (`count_rejection` names it; `test_two_instances_sweeping_at_once_make_one_attempt`, and the store case on Postgres) |
+| Low: the rule's own rejection, taken by a subagent's gate whose run then failed, was taken for a person's decision, so the proposal stayed for good. | Rejections a gate already took are repeated, the only decisions that continue the thread; an approval or an edit still stops the rule (`test_the_rule_repeats_its_own_rejection_that_a_gate_already_took`) |
+| Low: a failed write of the index's stop skipped the rejection until the next sweep. | Each is tried by itself (`test_a_cancel_whose_index_cannot_be_written_still_rejects_the_proposal_at_once`) |
+| Low: the sweep reads up to twice the total limit. | Kept, and the test checks both lists' limit: the second list keeps the retries of released tasks from waiting on a full first list |
+| Low: a release reads the lease first and writes last, so a run that starts between can find the task already released. | Left: the limit's count is loose by that one task for that moment |
+| Low: tests that do not show what they name: the "after the run is marked" case passes without the boundary's question, since the cancel also marks the index; the shutdown test shows behavior request 2 built; the decided-proposal test asserted nothing of actions; the "at once" order where the rejection holds the lease was missing; a cancel's metadata was no longer tried. | The "before" case fails without the question; the shutdown test stays as the restart's proof; the other three are added to the tests (`at_once`, `actions`, the cancel with approving metadata) |
+| Low: the docs left out that a run the service starts by itself is not stopped, and the spacing of a subagent's second rejection. | Both said |
+
+Each test above failed without its fix, apart from the three added assertions, which pass
+against both.
+
+**Checked by hand (T079)**, on a check instance from `.env.example` on port 8020 (database
+`freyja_check_009`, not `freyja_check_a2a`, which tasks.md's standing rules name and which
+is not this feature's; dropped afterwards), with the stand-in model active, the stand-in
+agent added to run without approval, and the console on 3020: a conversation of two messages
+made one task with both (the stand-in model answers `ready`); a hand-off sent at once in
+Auto mode reached `Waiting for agent stub.`, the service was stopped with Ctrl-C and started
+again, and `caller follow` found the task and followed it to Freyja's reply to the agent's
+outcome (a first try killed the process during the hand-off's step, and the task ended as
+failed and interrupted, which is right; the quickstart now says to wait for the status);
+`steps 8` canceled after its first step ended canceled after the step under way, and the
+console showed it stopped; with the mode on Manual, a hand-off canceled while it waited was
+rejected by rule, the count to decide went from 1 to 0, the page said the agent canceled, and
+the stand-in agent received nothing.
