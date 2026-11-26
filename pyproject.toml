@@ -35,6 +35,10 @@ build-backend = "uv_build"
 dev = [
     "httpx>=0.28.1",
     "pre-commit>=4.7.0",
+    # One exact version: a newer pyright reports more, and the gate has to say the same
+    # thing in the commit hook and in both CI systems. The nodejs extra brings Node from
+    # PyPI, so nothing but uv is needed to run it.
+    "pyright[nodejs]==1.1.414",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.1",
     "pytest-cov>=7.1.0",
@@ -63,6 +67,19 @@ fail_under = 88
 precision = 2
 show_missing = true
 skip_covered = true
+
+# The type checker, run as `uv run pyright`: by the commit hook and in CI. It checks the
+# service's code against the packages in .venv. The tests are not checked yet: they are
+# written against fakes and stand-ins whose types are looser than the service's.
+[tool.pyright]
+include = ["src"]
+pythonVersion = "3.12"
+typeCheckingMode = "standard"
+# Only `# pyright: ignore[rule]` silences a line, so every suppression names its rule. A
+# bare `# type: ignore` silences nothing.
+enableTypeIgnoreComments = false
+venvPath = "."
+venv = ".venv"
 
 [tool.ruff]
 line-length = 100

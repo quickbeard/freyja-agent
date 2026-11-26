@@ -13,7 +13,7 @@ import time
 from collections.abc import Callable
 from typing import Protocol
 
-from psycopg_pool import AsyncConnectionPool
+from freyja_agent.runtime.persistence import Pool
 
 
 class RunLocks(Protocol):
@@ -108,7 +108,7 @@ SELECT EXISTS (
 class PostgresRunLocks:
     """Lease store backed by the ``freyja_run_locks`` table through the shared pool."""
 
-    def __init__(self, pool: AsyncConnectionPool, ttl_seconds: float) -> None:
+    def __init__(self, pool: Pool, ttl_seconds: float) -> None:
         self._pool = pool
         self.ttl_seconds = float(ttl_seconds)
 

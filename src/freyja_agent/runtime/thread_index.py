@@ -24,16 +24,15 @@ import logging
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Literal, Protocol
+from typing import TYPE_CHECKING, Any, Literal, LiteralString, Protocol
 
 import anyio
 
 from freyja_agent.runtime.locks import RunLocks
 
 if TYPE_CHECKING:
-    from psycopg_pool import AsyncConnectionPool
-
     from freyja_agent.runtime.agent_tasks import AgentTaskStore
+    from freyja_agent.runtime.persistence import Pool
 
 logger = logging.getLogger(__name__)
 
@@ -116,6 +115,7 @@ class ThreadIndex(Protocol):
         """The run of ``owner`` goes on without a reader; False when the row has moved on to
         another run. ``first_message`` fills a row that has none, and only at the thread's
         first run: a follow-up's text is not the thread's first message."""
+        ...
 
     async def note(
         self,
@@ -131,6 +131,7 @@ class ThreadIndex(Protocol):
 
         ``at`` is when, by this instance's clock, which is the clock the run's checkpoints
         were written by; now when it is not given."""
+        ...
 
     async def run_ended(self, thread_id: str, owner: str) -> None:
         """The run of ``owner`` gave its lease back."""
@@ -149,6 +150,7 @@ class ThreadIndex(Protocol):
         read before the state was: the write is refused, with False, when a run has started
         since, also one that has ended again. A note older than ``changed_at`` is dropped: a
         later run has recorded a step since."""
+        ...
 
     async def open(
         self,
@@ -161,9 +163,11 @@ class ThreadIndex(Protocol):
         agents_pending: bool,
     ) -> ThreadRecord:
         """Make the row of a thread the index does not know; the row as it is otherwise."""
+        ...
 
     async def remove(self, thread_id: str, seen_runs: int) -> bool:
         """Forget a thread that has no state, unless a run has started meanwhile."""
+        ...
 
     async def request_stop(self, thread_id: str, owner: str) -> ThreadRecord | None:
         """Mark the console run of ``owner`` to be stopped. None when the row has moved on
@@ -174,13 +178,16 @@ class ThreadIndex(Protocol):
 
     async def unsettled(self) -> list[ThreadRecord]:
         """Every row nobody looked at since its run started: in progress, or ended."""
+        ...
 
     async def list(self, limit: int = LIST_LIMIT) -> list[ThreadRecord]:
         """Every paused row, then the others up to ``limit`` rows in all, each group with the
         most recently changed first."""
+        ...
 
     async def counts(self) -> tuple[int, int]:
         """How many rows are paused, and how many rows there are."""
+        ...
 
 
 class InMemoryThreadIndex:
@@ -483,7 +490,7 @@ def _record(row: dict[str, Any]) -> ThreadRecord:
 class PostgresThreadIndex:
     """The service's index: the table ``freyja_threads`` in the shared pool."""
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: Pool) -> None:
         self._pool = pool
 
     async def setup(self) -> None:
@@ -491,12 +498,12 @@ class PostgresThreadIndex:
             for statement in _CREATE:
                 await conn.execute(statement)
 
-    async def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[Any]:
+    async def _rows(self, query: LiteralString, params: dict[str, Any] | None = None) -> list[Any]:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params or {})
             return await cursor.fetchall()
 
-    async def _execute(self, query: str, params: dict[str, Any]) -> int:
+    async def _execute(self, query: LiteralString, params: dict[str, Any]) -> int:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params)
             return cursor.rowcount

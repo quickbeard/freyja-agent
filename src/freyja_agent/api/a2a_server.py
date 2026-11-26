@@ -28,7 +28,7 @@ import functools
 import logging
 import re
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from datetime import UTC, datetime
 from importlib.metadata import PackageNotFoundError, version
 from typing import Any, NoReturn, override
@@ -354,7 +354,9 @@ def _guard[F: Callable[..., Awaitable[Any]]](method: F) -> F:
         except Exception as exc:
             self._internal(method.__name__, exc)
 
-    return guarded  # type: ignore[return-value]
+    # functools.wraps gives the wrapper the method's name and signature, and its own type
+    # says a wrapper, not the method's type.
+    return guarded  # pyright: ignore[reportReturnType]
 
 
 class FreyjaRequestHandler(RequestHandler):
@@ -400,7 +402,7 @@ class FreyjaRequestHandler(RequestHandler):
     @override
     async def on_message_send_stream(
         self, params: SendMessageRequest, context: ServerCallContext
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncGenerator[Any, None]:
         try:
             accepted = await self._accept(params, context)
         except A2AError:
@@ -458,7 +460,7 @@ class FreyjaRequestHandler(RequestHandler):
     @override
     async def on_subscribe_to_task(
         self, params: SubscribeToTaskRequest, context: ServerCallContext
-    ) -> AsyncIterator[Any]:
+    ) -> AsyncGenerator[Any, None]:
         raise UnsupportedOperationError
         yield  # an async generator, as the interface has it
 

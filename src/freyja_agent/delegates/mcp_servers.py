@@ -398,8 +398,9 @@ class ToolServer:
         arguments.
         """
         limit = self._call_timeout
+        deadline = asyncio.timeout(limit)
         try:
-            async with asyncio.timeout(limit) as deadline:
+            async with deadline:
                 if self.connection == "command":
                     result = await self._connected().call_tool(tool, arguments)
                 else:

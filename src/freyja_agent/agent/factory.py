@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from deepagents import create_deep_agent
+from deepagents import CompiledSubAgent, SubAgent, create_deep_agent
 from deepagents.backends import FilesystemBackend
 from deepagents.backends.protocol import BackendProtocol
 from deepagents.middleware._prompt_caching import append_prompt_caching_middleware
@@ -125,7 +125,7 @@ def build_agent(
     if agent_tasks is not None:
         own_tools.append(check_agent_tasks(agent_tasks))
         task_middleware.append(AgentTasksMiddleware(agent_tasks, agent_tools))
-    tools: list[BaseTool] = [*own_tools, *(entry.tool for entry in delegate_entries)]
+    tools: list[BaseTool] = [*own_tools, *(tool.tool for tool in delegate_tools)]
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
@@ -258,7 +258,7 @@ def _general_purpose_subagent(
     agent_tasks: AgentTaskStore | None,
     agent_tools: dict[str, AgentTool],
     alias_threads: bool = False,
-) -> tuple[Any, dict[str, Any]]:
+) -> tuple[Any, CompiledSubAgent]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
     Returns the compiled graph, so the factory can check its tools, and the subagent entry
@@ -280,7 +280,7 @@ def _general_purpose_subagent(
         *([AgentTasksMiddleware(agent_tasks, agent_tools)] if agent_tasks is not None else []),
     ]
     append_prompt_caching_middleware(middleware)
-    spec: dict[str, Any] = {
+    spec: SubAgent = {
         **GENERAL_PURPOSE_SUBAGENT,
         "model": model,
         "tools": tools,

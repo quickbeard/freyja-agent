@@ -34,7 +34,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections.abc import AsyncIterator, Callable, Iterable
+from collections.abc import AsyncGenerator, Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -42,7 +42,7 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 
-from freyja_agent.api.runs import Events, awaited, start_console_run, state_of
+from freyja_agent.api.runs import Reader, awaited, start_console_run, state_of
 from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.llm.secrets import redact
@@ -133,7 +133,7 @@ class Accepted:
     """An accepted message: its task, and the first reader of the run it started."""
 
     task: ReceivedTask
-    events: Events
+    events: Reader
 
 
 def _checkpoint(snapshot: Any) -> str | None:
@@ -265,7 +265,7 @@ class ReceivedTasks:
         self._wakers: dict[str, set[asyncio.Event]] = {}
         # Readers of the runs that started on a follower's thread, joined for the follower
         # before each run's first event, in the order the runs started, by its wake.
-        self._joined: dict[asyncio.Event, list[Events]] = {}
+        self._joined: dict[asyncio.Event, list[Reader]] = {}
 
     async def accept(self, caller: str, context_id: str, text: str, *, hops: int = 0) -> Accepted:
         """Accept a message of ``caller`` in its conversation ``context_id`` and start its run.
@@ -540,13 +540,13 @@ class ReceivedTasks:
             return Status(waiting_for_person(names)) if names else None
         return None
 
-    def _join(self, thread_id: str) -> Events | None:
+    def _join(self, thread_id: str) -> Reader | None:
         runs = self.runtime.unattended
         return runs.join(thread_id) if runs is not None else None
 
     async def follow(
-        self, task: ReceivedTask, events: Events | None = None
-    ) -> AsyncIterator[Change]:
+        self, task: ReceivedTask, events: Reader | None = None
+    ) -> AsyncGenerator[Change, None]:
         """What changes for ``task``, as it changes, until it has ended (research R13).
 
         While a console run of its thread is in progress on this instance, the run's events
@@ -626,14 +626,14 @@ class ReceivedTasks:
         found = await self.store.get(accepted.task.task_id) or accepted.task
         return await self.view(found)
 
-    def leave(self, events: Events) -> None:
+    def leave(self, events: Reader) -> None:
         """Read a run's events nobody follows to their end, so the run never waits on them."""
         drain = asyncio.create_task(self._drain(events), name="freyja-a2a-drain")
         self._drains.add(drain)
         drain.add_done_callback(self._drains.discard)
 
     @staticmethod
-    async def _drain(events: Events) -> None:
+    async def _drain(events: Reader) -> None:
         async with contextlib.aclosing(events) as run:
             async for _ in run:
                 pass

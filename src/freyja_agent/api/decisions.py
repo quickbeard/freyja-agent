@@ -16,7 +16,7 @@ gate receives.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from fastapi import HTTPException
@@ -271,6 +271,7 @@ def _validated_by_model(
 ) -> dict[str, Any]:
     """Freyja's own tool or an agent's: its arguments are described by a pydantic model."""
     errors: list[dict[str, Any]] = []
+    validated: BaseModel | None = None
     try:
         validated = schema.model_validate(args)
     except ValidationError as exc:
@@ -278,6 +279,8 @@ def _validated_by_model(
             {**error, "loc": ["body", "decisions", index, "args", *error["loc"]]}
             for error in exc.errors(include_url=False, include_context=False)
         ]
+    # What the model refused, kept whole: the entries below may leave some of it out.
+    refused = errors
     # The model ignores keys it does not define, which would drop part of the approver's
     # instruction without a word. An edit is refused instead (FR-013). A model that forbids
     # them, such as an agent's hand-off, reports them too; its entry says less than the one
@@ -291,8 +294,10 @@ def _validated_by_model(
     errors += [
         _unknown_argument(name, key, index) for key in args if key not in schema.model_fields
     ]
-    if errors:
-        raise _invalid(errors)
+    if errors or validated is None:
+        # The arguments are never let through when the model refused them, also when every
+        # entry of its refusal was left out above and none took its place.
+        raise _invalid(errors or refused)
     return validated.model_dump()
 
 
@@ -329,9 +334,10 @@ def _validated_by_json_schema(
             if error.validator == "additionalProperties" and not path and not accepts_more:
                 continue  # already reported above, one entry per argument
             if error.validator == "required":
+                required = error.validator_value
                 missing = [
                     key
-                    for key in error.validator_value
+                    for key in (required if isinstance(required, Iterable) else ())
                     if isinstance(error.instance, Mapping)
                     and key not in error.instance
                     and repr(key) in error.message

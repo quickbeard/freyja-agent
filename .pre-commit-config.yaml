@@ -28,6 +28,16 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
+      # The type checker over the service's code, at the version uv.lock names, which is the
+      # one CI runs. It reads the whole of src/ whatever was staged, since a change to one
+      # file can break another's types, and runs when the code or what it is checked
+      # against changes. It changes no file. Its settings are in pyproject.toml.
+      - id: pyright
+        name: pyright
+        entry: uv run pyright
+        language: system
+        files: ^(src/|pyproject\.toml$|uv\.lock$)
+        pass_filenames: false
       - id: pytest
         name: pytest
         # --cov: with coverage, held to fail_under in pyproject.toml.

@@ -282,7 +282,9 @@ def _agent_name(value: str) -> str:
     except InvalidAgentError as exc:
         refused = str(exc)
     # Raised outside the handler: the error carries the sentence and nothing behind it.
-    raise PydanticCustomError("agent_name", refused)  # type: ignore[arg-type]
+    # pydantic types the message as a literal; this one is the store's own fixed sentence,
+    # which never repeats what was entered, handed on as it is.
+    raise PydanticCustomError("agent_name", refused)  # pyright: ignore[reportArgumentType]
 
 
 def _agent_address(value: str) -> str:
@@ -296,7 +298,8 @@ def _agent_address(value: str) -> str:
         return canonical_address(value)
     except AddressError as exc:
         refused = str(exc)
-    raise PydanticCustomError("agent_address", refused)  # type: ignore[arg-type]
+    # pydantic types the message as a literal; this one is the rule's own fixed sentence.
+    raise PydanticCustomError("agent_address", refused)  # pyright: ignore[reportArgumentType]
 
 
 class AgentCreate(BaseModel):

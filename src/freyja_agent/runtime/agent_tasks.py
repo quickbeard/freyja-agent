@@ -35,10 +35,12 @@ import time
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, LiteralString, Protocol
 
 from psycopg import errors, sql
-from psycopg_pool import AsyncConnectionPool
+from psycopg.abc import QueryNoTemplate
+
+from freyja_agent.runtime.persistence import Pool
 
 TaskState = Literal[
     "working", "input_required", "completed", "failed", "rejected", "canceled", "given_up"
@@ -598,7 +600,7 @@ _HAS_COLUMN = (
 # created by 005's fifth phase lacks, and a task's kept progress and its time (008 research
 # R2). A boolean with a constant default, and a nullable column with none, are added without
 # rewriting the table.
-_ADDED_COLUMNS = (
+_ADDED_COLUMNS: tuple[tuple[str, str, LiteralString], ...] = (
     (
         "freyja_agent_tasks",
         "agent_ref",
@@ -674,7 +676,7 @@ def _call(row: dict[str, Any]) -> ProposedCall:
 class PostgresAgentTaskStore:
     """The service's store: four tables in the shared pool (003 research R8, 005 research R8)."""
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: Pool) -> None:
         self._pool = pool
 
     async def setup(self) -> None:
@@ -699,12 +701,12 @@ class PostgresAgentTaskStore:
                         "Start the service again once that session has ended."
                     ) from None
 
-    async def _rows(self, query: sql.Composable | str, params: dict[str, Any]) -> list[Any]:
+    async def _rows(self, query: QueryNoTemplate, params: dict[str, Any]) -> list[Any]:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params)
             return await cursor.fetchall()
 
-    async def _execute(self, query: sql.Composable | str, params: dict[str, Any]) -> int:
+    async def _execute(self, query: QueryNoTemplate, params: dict[str, Any]) -> int:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params)
             return cursor.rowcount

@@ -163,22 +163,24 @@ def _build(
             ),
             "alias_threads": True,
         }
+    tools_of_agents = (
+        []
+        if agents is None
+        else [
+            tool
+            for link in agents.links
+            for tool in agent_tools(
+                link,
+                task_store,
+                gated=agents.gated(link),
+                saved=saved_store,
+                strict=strict,
+            )
+        ]
+    )
     return build_agent(
         model,
-        delegate_tools=[
-            *server_tools,
-            *(
-                tool
-                for link in links
-                for tool in agent_tools(
-                    link,
-                    task_store,
-                    gated=agents.gated(link),
-                    saved=saved_store,
-                    strict=strict,
-                )
-            ),
-        ],
+        delegate_tools=[*server_tools, *tools_of_agents],
         agent_tasks=task_store if links else None,
         **options,
     )

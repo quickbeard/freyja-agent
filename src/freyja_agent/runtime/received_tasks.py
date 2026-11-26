@@ -28,9 +28,9 @@ import secrets
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
-from typing import Any, Literal, Protocol
+from typing import Any, Literal, LiteralString, Protocol
 
-from psycopg_pool import AsyncConnectionPool
+from freyja_agent.runtime.persistence import Pool
 
 TaskState = Literal["working", "completed", "failed", "canceled"]
 Refusal = Literal["busy", "caller_limit", "total_limit"]
@@ -463,7 +463,7 @@ def _conversation(row: dict[str, Any]) -> Conversation:
 class PostgresReceivedTaskStore:
     """The service's store: the two tables in the shared pool."""
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: Pool) -> None:
         self._pool = pool
 
     async def setup(self) -> None:
@@ -471,12 +471,12 @@ class PostgresReceivedTaskStore:
             for statement in _CREATE:
                 await conn.execute(statement)
 
-    async def _rows(self, query: str, params: dict[str, Any] | None = None) -> list[Any]:
+    async def _rows(self, query: LiteralString, params: dict[str, Any] | None = None) -> list[Any]:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params or {})
             return await cursor.fetchall()
 
-    async def _execute(self, query: str, params: dict[str, Any]) -> int:
+    async def _execute(self, query: LiteralString, params: dict[str, Any]) -> int:
         async with self._pool.connection() as conn:
             cursor = await conn.execute(query, params)
             return cursor.rowcount
