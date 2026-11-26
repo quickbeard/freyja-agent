@@ -15,9 +15,10 @@ characters, so the alias cannot be turned back into it by trying ids.
 import hashlib
 from collections.abc import Awaitable, Callable
 
-from deepagents.middleware._utils import append_to_system_message
 from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, ModelResponse
 from langgraph.config import get_config
+
+from freyja_agent.agent.prompts import append_to_system_message
 
 THREAD_LINE = (
     "You are working on thread `{thread_id}`. Working files for this conversation belong "

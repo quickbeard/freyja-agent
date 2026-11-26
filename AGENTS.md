@@ -109,7 +109,9 @@ startup and exits with an error naming the connection when it is unreachable.
   `.agent` and the `Catalog` of exactly the tools it was given as `.catalog`. `catalog.py`
   holds the three classifications, the fixed table of Freyja's own tools (`OWN_TOOLS`), the
   catalog, and the interrupt config generated from it; a tool with no classification raises
-  `UnclassifiedToolError` and stops startup. `prompts.py` is the system prompt, `tools.py` the
+  `UnclassifiedToolError` and stops startup. `prompts.py` is the system prompt and
+  `append_to_system_message`, with which a middleware adds text to it for one model call,
+  `tools.py` the
   gated placeholder tool `send_notification`. `agent_tasks.py` is `AgentTasksMiddleware`, which
   lists the thread's pending agent tasks in the prompt and, after every reply of the model,
   records which agent each call of an agent's tool was proposed for, and, in a resume, right
@@ -534,6 +536,10 @@ startup and exits with an error naming the connection when it is unreachable.
   alike. A change that needs no test, such as documentation or a dependency bump, says so in
   that section and gives the reason.
 - A Ruff suppression carries a reason in its comment and is removed once the cause is fixed.
+- The service imports no name from a private module of Deep Agents, one whose path has a
+  part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
+  `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
+  that is a few lines over public types is written here instead.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before
