@@ -107,8 +107,6 @@ class CardRecorded:
 
 
 class SavedAgentStore(Protocol):
-    async def setup(self) -> None: ...
-
     async def revision(self) -> int: ...
 
     async def list_agents(self) -> list[SavedAgentRecord]: ...
@@ -196,9 +194,6 @@ class InMemorySavedAgentStore:
 
     def _now(self) -> datetime:
         return datetime.fromtimestamp(self._clock(), UTC)
-
-    async def setup(self) -> None:
-        return None
 
     async def revision(self) -> int:
         return self._revision
@@ -323,34 +318,6 @@ class InMemorySavedAgentStore:
 
 
 # Every statement is one parameterized command; identifiers come from a fixed set.
-_CREATE = (
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agents (
-        id              text PRIMARY KEY,
-        name            text NOT NULL,
-        url             text NOT NULL,
-        destination     text NOT NULL,
-        read_only       boolean NOT NULL DEFAULT false,
-        address_version integer NOT NULL DEFAULT 1,
-        version         integer NOT NULL DEFAULT 1,
-        card            jsonb NOT NULL,
-        card_read_at    timestamptz NOT NULL DEFAULT now(),
-        created_at      timestamptz NOT NULL DEFAULT now(),
-        updated_at      timestamptz NOT NULL DEFAULT now(),
-        CONSTRAINT freyja_agents_name UNIQUE (name),
-        CONSTRAINT freyja_agents_destination UNIQUE (destination)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS freyja_agents_state (
-        id         smallint PRIMARY KEY CHECK (id = 1),
-        revision   bigint NOT NULL DEFAULT 0,
-        updated_at timestamptz NOT NULL DEFAULT now()
-    )
-    """,
-    "INSERT INTO freyja_agents_state (id) VALUES (1) ON CONFLICT DO NOTHING",
-)
-
 _COLUMNS = [f.name for f in fields(SavedAgentRecord)]
 _NAMES = sql.SQL(", ").join(sql.Identifier(name) for name in _COLUMNS)
 _SELECT = sql.SQL("SELECT {} FROM freyja_agents").format(_NAMES)
@@ -380,17 +347,12 @@ def _taken(exc: errors.UniqueViolation) -> SavedAgentError:
 class PostgresSavedAgentStore:
     """The service's store: two tables in the shared pool (research R1).
 
-    It needs ``freyja_agent_tasks`` with its ``agent_ref`` column, which
-    ``PostgresAgentTaskStore.setup`` provides: set that store up first.
+    It reads ``freyja_agent_tasks`` by its ``agent_ref`` column. Every table is made by
+    ``runtime/migrations.py`` before a store is given the pool.
     """
 
     def __init__(self, pool: Pool) -> None:
         self._pool = pool
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            for statement in _CREATE:
-                await conn.execute(statement)
 
     async def revision(self) -> int:
         async with self._pool.connection() as conn:

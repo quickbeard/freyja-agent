@@ -129,8 +129,6 @@ class Acceptance:
 
 
 class ReceivedTaskStore(Protocol):
-    async def setup(self) -> None: ...
-
     async def now(self) -> datetime: ...
 
     async def accept(
@@ -205,9 +203,6 @@ class InMemoryReceivedTaskStore:
         # In the order they were accepted, which breaks ties between equal times.
         self._tasks: dict[str, ReceivedTask] = {}
         self._lock = asyncio.Lock()
-
-    async def setup(self) -> None:
-        return None
 
     async def now(self) -> datetime:
         return self._clock()
@@ -345,46 +340,6 @@ class InMemoryReceivedTaskStore:
 
 
 # Fixed statements with bound parameters only.
-_CREATE = (
-    """
-    CREATE TABLE IF NOT EXISTS freyja_a2a_conversations (
-        caller text NOT NULL,
-        context_id text NOT NULL,
-        thread_id text NOT NULL UNIQUE,
-        created_at timestamptz NOT NULL,
-        PRIMARY KEY (caller, context_id)
-    )
-    """,
-    """
-    CREATE TABLE IF NOT EXISTS freyja_a2a_tasks (
-        task_id text PRIMARY KEY,
-        caller text NOT NULL,
-        context_id text NOT NULL,
-        thread_id text NOT NULL,
-        hops integer NOT NULL,
-        state text NOT NULL,
-        reason text,
-        result text,
-        created_at timestamptz NOT NULL,
-        started_at timestamptz,
-        base_checkpoint text,
-        ended_at timestamptz,
-        released_at timestamptz,
-        reject_attempts integer NOT NULL DEFAULT 0,
-        reject_after timestamptz
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS freyja_a2a_tasks_conversation
-        ON freyja_a2a_tasks (caller, context_id, created_at)
-    """,
-    "CREATE INDEX IF NOT EXISTS freyja_a2a_tasks_thread ON freyja_a2a_tasks (thread_id)",
-    """
-    CREATE INDEX IF NOT EXISTS freyja_a2a_tasks_unreleased
-        ON freyja_a2a_tasks (released_at) WHERE released_at IS NULL
-    """,
-)
-
 _LOCK = "SELECT pg_advisory_xact_lock(%(key)s)"
 _CONVERSATION = """
 SELECT * FROM freyja_a2a_conversations WHERE caller = %(caller)s AND context_id = %(context_id)s
@@ -465,11 +420,6 @@ class PostgresReceivedTaskStore:
 
     def __init__(self, pool: Pool) -> None:
         self._pool = pool
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            for statement in _CREATE:
-                await conn.execute(statement)
 
     async def _rows(self, query: LiteralString, params: dict[str, Any] | None = None) -> list[Any]:
         async with self._pool.connection() as conn:

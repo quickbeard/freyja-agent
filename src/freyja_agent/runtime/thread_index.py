@@ -104,8 +104,6 @@ def _cut(text: str | None, limit: int) -> str | None:
 
 
 class ThreadIndex(Protocol):
-    async def setup(self) -> None: ...
-
     async def get(self, thread_id: str) -> ThreadRecord | None: ...
 
     async def run_started(self, thread_id: str, owner: str) -> None:
@@ -196,9 +194,6 @@ class InMemoryThreadIndex:
     def __init__(self, clock: Callable[[], datetime] | None = None) -> None:
         self._rows: dict[str, ThreadRecord] = {}
         self._clock = clock or (lambda: datetime.now(UTC))
-
-    async def setup(self) -> None:
-        return None
 
     async def get(self, thread_id: str) -> ThreadRecord | None:
         return self._rows.get(thread_id)
@@ -343,31 +338,6 @@ class InMemoryThreadIndex:
 # Every statement is one atomic command, so two instances cannot interleave inside an
 # operation, and every value is a bound parameter. The condition that ties a write to one
 # run is in the statement's WHERE, where the database checks it with the write.
-_CREATE = (
-    """
-    CREATE TABLE IF NOT EXISTS freyja_threads (
-        thread_id      text PRIMARY KEY,
-        first_message  text,
-        created_at     timestamptz NOT NULL,
-        changed_at     timestamptz NOT NULL,
-        run_owner      text,
-        runs           bigint NOT NULL DEFAULT 0,
-        run_unattended boolean NOT NULL DEFAULT false,
-        stop_owner     text,
-        noted          text,
-        error_code     text,
-        error_message  text,
-        noted_at       timestamptz,
-        settled        text,
-        agents_pending boolean NOT NULL DEFAULT false
-    )
-    """,
-    """
-    CREATE INDEX IF NOT EXISTS freyja_threads_settled_changed
-        ON freyja_threads (settled, changed_at DESC)
-    """,
-)
-
 _GET = "SELECT * FROM freyja_threads WHERE thread_id = %(thread_id)s"
 
 _RUN_STARTED = """
@@ -492,11 +462,6 @@ class PostgresThreadIndex:
 
     def __init__(self, pool: Pool) -> None:
         self._pool = pool
-
-    async def setup(self) -> None:
-        async with self._pool.connection() as conn:
-            for statement in _CREATE:
-                await conn.execute(statement)
 
     async def _rows(self, query: LiteralString, params: dict[str, Any] | None = None) -> list[Any]:
         async with self._pool.connection() as conn:
@@ -632,9 +597,6 @@ class IndexedRunLocks:
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.inner, name)
-
-    async def setup(self) -> None:
-        await self.inner.setup()
 
     async def acquire(self, thread_id: str, owner: str) -> bool:
         taken = await self.inner.acquire(thread_id, owner)

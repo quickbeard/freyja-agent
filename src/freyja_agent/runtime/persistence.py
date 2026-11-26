@@ -1,9 +1,10 @@
 """Postgres persistence for the service process.
 
-One connection pool is shared by the LangGraph checkpointer, the store, and the run-lock
-table. It is opened in the FastAPI lifespan and closed on shutdown (FR-008). A database that
+One connection pool is shared by the LangGraph checkpointer, the store, and Freyja's own
+stores. It is opened in the FastAPI lifespan and closed on shutdown (FR-008). A database that
 cannot be reached at startup raises an error naming the connection, so the process exits
-instead of serving requests that would fail.
+instead of serving requests that would fail. So does a database whose schema cannot be
+brought to this build's version (``runtime/migrations.py``).
 """
 
 from dataclasses import dataclass
@@ -16,6 +17,7 @@ from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.config import Settings
+from freyja_agent.runtime.migrations import migrate
 
 # How long startup waits for the first connection before giving up with a clear error.
 CONNECT_TIMEOUT_SECONDS = 10.0
@@ -63,7 +65,12 @@ def redact_uri(uri: str) -> str:
 
 
 async def open_persistence(settings: Settings) -> Persistence:
-    """Open the pool, run the LangGraph table setup, and return the ready components."""
+    """Open the pool, make the tables, and return the ready components.
+
+    The LangGraph checkpointer and store set up their own tables; Freyja's are brought to
+    this build's schema version by ``migrate``. Every store is given the pool after that, so
+    none of them makes or changes a table.
+    """
     pool: Pool = AsyncConnectionPool(
         settings.database_uri,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
@@ -83,6 +90,7 @@ async def open_persistence(settings: Settings) -> Persistence:
         await saver.setup()
         store = AsyncPostgresStore(pool)
         await store.setup()
+        await migrate(pool)
     except Exception:
         await pool.close()
         raise

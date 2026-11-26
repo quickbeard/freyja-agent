@@ -55,7 +55,6 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 @pytest.fixture
 async def store(pool: AsyncConnectionPool) -> PostgresReceivedTaskStore:
     made = PostgresReceivedTaskStore(pool)
-    await made.setup()
     return made
 
 
@@ -102,8 +101,6 @@ async def test_two_instances_accept_under_one_lock(settings: Settings) -> None:
     try:
         one = PostgresReceivedTaskStore(first.pool)
         two = PostgresReceivedTaskStore(second.pool)
-        await one.setup()
-        await two.setup()
         both = await asyncio.gather(accept(one, context="new"), accept(two, context="new"))
         assert sorted(str(found.refused) for found in both) == ["None", "busy"]
         limited = await asyncio.gather(

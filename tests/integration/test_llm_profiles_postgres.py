@@ -70,7 +70,6 @@ async def store(settings: Settings) -> AsyncIterator[LlmProfileStore]:
     persistence = await open_persistence(settings)
     try:
         store = PostgresLlmProfileStore(persistence.pool)
-        await store.setup()
         yield store
     finally:
         await persistence.close()
@@ -95,15 +94,6 @@ async def other_store(settings: Settings) -> AsyncIterator[LlmProfileStore]:
         yield PostgresLlmProfileStore(persistence.pool)
     finally:
         await persistence.close()
-
-
-async def test_setup_twice_changes_nothing(store: LlmProfileStore) -> None:
-    profile = await a_profile(store)
-    await store.activate(profile.id)
-    before = await store.state()
-    await store.setup()
-    assert await store.state() == before
-    assert await store.list_profiles() == [profile]
 
 
 async def test_the_state_is_one_row_and_refuses_a_second(
