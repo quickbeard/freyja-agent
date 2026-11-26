@@ -137,8 +137,10 @@ FREYJA_A2A_SERVER_PORT=8443
 FREYJA_A2A_SERVER_URL=http://localhost:8443
 ```
 
-The service logs that the outside listener is on, and warns that the address for callers
-does not encrypt.
+Keep the single quotes around the JSON: `uv run --env-file` does not take the line without
+them, and drops it and the lines after it without a word, so the service starts with no
+caller and the listener off. The service logs that 2 callers are named and that the outside
+listener is on at 127.0.0.1:8443, and warns that the address for callers does not encrypt.
 
 ```bash
 out() { uv run python -m tests.a2a_caller --url http://localhost:8443 "$@"; }
@@ -152,6 +154,9 @@ out --token sk-recognizable-other-0002 get <artex's task id>             # task 
 ```
 
 - The card gives `http://localhost:8443/a2a` and asks for a bearer token.
+- The stand-in caller prints a refused credential as its client's error, `HTTP Error 401`;
+  `curl -s -X POST http://localhost:8443/a2a -H 'A2A-Version: 1.0' -d '{}'` shows the body,
+  the same for no token and a wrong one, with `WWW-Authenticate: Bearer`.
 - The console lists the task as started by agent `artex`.
 - `grep -c recognizable` over the service's log gives 0.
 
@@ -165,13 +170,19 @@ out --token sk-recognizable-key-0001 send "Add a line to any file under /skills/
 ```
 
 The second caller sees no `notes.txt`. The third reply says the skills cannot be changed,
-and `git status workspace/skills` is clean.
+and `git status workspace/skills` is clean. These three need a model that writes files; the
+stand-in model does not, and the suite covers them instead
+(`tests/test_a2a_server_limits.py`, parts 1 and 3).
 
-Take a caller away: send `out --token sk-recognizable-other-0002 send "Hand this to the stub
-agent: say hello"`, leave its proposal undecided, remove `heimdall` from
-`FREYJA_A2A_SERVER_CALLERS`, and start the service again. The console no longer counts the
-task among those that need a decision, shows its proposal rejected, and says that the agent
-is no longer configured.
+Take a caller away: send `out --token sk-recognizable-other-0002 send --return-immediately
+"notify hello"` with the stand-in model, which always waits for a person (a hand-off to an
+agent that runs without approval is sent at once while the agents' approval mode is Auto,
+feature 010), leave its proposal undecided, remove `heimdall` from
+`FREYJA_A2A_SERVER_CALLERS`, and start the service again. The log warns that heimdall is no
+longer named and that its task is canceled. The console no longer counts the task among
+those that need a decision, shows its proposal rejected ("... with reason: The requesting
+agent canceled the task."), and says that the task was started by agent heimdall, which is
+no longer configured; heimdall's token is refused.
 
 Start the service with `FREYJA_A2A_SERVER_CALLERS` removed altogether: it does not start, and
 the error names `FREYJA_A2A_SERVER_CALLERS` and no token.
@@ -179,8 +190,10 @@ the error names `FREYJA_A2A_SERVER_CALLERS` and no token.
 Turn the feature off with a caller's task waiting for a person: send one as in section 2,
 leave it undecided, remove every `FREYJA_A2A_SERVER` line from `.env`, and start the service
 again. The task is still listed and can be read; approving or rejecting its proposal in the
-console is refused, and the page says that the task is continued only while receiving tasks
-from agents is on. Put the settings back.
+console is refused (`a2a_server_off`), and the page says that the task is continued only
+while receiving tasks from agents is on. Its row says the caller is no longer configured,
+since nothing names callers while the feature is off. Put the settings back: the task waits
+again, its caller configured.
 
 ## 4. Continue, come back, cancel (User Story 4, phase 4)
 

@@ -759,3 +759,86 @@ failed and interrupted, which is right; the quickstart now says to wait for the 
 console showed it stopped; with the mode on Manual, a hand-off canceled while it waited was
 rejected by rule, the count to decide went from 1 to 0, the page said the agent canceled, and
 the stand-in agent received nothing.
+
+### Request 5 (2026-11-26): an agent on another host calls with its token
+
+**Starting point**, on the branch as made from `main` with request 4: the service suite passed
+2297 tests and skipped 159; the web app's 826 unit tests passed.
+
+**Built otherwise than the tasks say, and why:**
+
+- The callers' tokens are cleaned by the one record factory of `install_log_scrubber`, as
+  R15 asks: `delegates/addresses.py` keeps a second, exact-text list, `TOKENS`, beside the
+  addresses, which `Callers` sets to the running service's callers (each token as written,
+  and as a query or a path writes it encoded) and clears when the service stops. It is set,
+  not added to, so that a test process that runs many services keeps no token of one that
+  has stopped; the suite reuses `sk-recognizable-key-0001` as a profile's key. What a caller
+  is sent is cleaned of tokens too (`ReceivedTasks.clean`).
+- The rules of named callers are checked in the settings' model rule, not on the field, so
+  that with the feature off nothing of them is applied (contracts/settings.md). An error names
+  a caller whose name breaks its rule by its place, "caller 2", and every other by its name;
+  none repeats a token or a value. The two errors of the listener that hold with the feature
+  off are checked first.
+- `create_app` takes `listen`. The suite gives `False` and drives the outside application
+  in-process as `app.state.a2a_outside` (`ServerApp.outside`); one test binds a free loopback
+  port. The application is built whenever the listener is set, and the socket is bound only
+  with `listen`.
+- The outside listener is a FastAPI application with no documentation routes, so that an
+  unknown path there answers `{"detail": "Not Found"}` as at the service's own address. A
+  stream open when the service stops is closed after five seconds (`GRACE_SECONDS`).
+- The sweep's first round cancels the working tasks of callers the settings no longer name,
+  through the cancel a caller makes, logged as a warning that names the caller and says why;
+  the store has one more read, `working_of_others`, and no migration.
+- `caller.configured` is read from the settings of the instance that answers: with the
+  feature off no caller is named, so a caller's row then says it is no longer configured.
+- With the stand-in model the quickstart's file steps cannot be walked; the suite covers them
+  through A2A (`tests/test_a2a_server_limits.py`, part 3).
+- The tests of the settings, the credential, the listener, and the proofs were written before
+  the code and failed against it for want of the settings, the module, or the routes; the
+  web's test of `configured` failed before its change.
+- A shape error of `FREYJA_A2A_SERVER_CALLERS`, a name given twice, or a value that is no
+  JSON object, names the setting only: the callers are read by the service itself
+  (`NoDecode`, a wrapping rule), since a key may be a token put in the wrong place and a
+  token can have a name's form. With the feature off such a value is not used and not
+  checked; a value of the wrong type in another setting of the feature still stops startup,
+  as request 1's limits do.
+
+**Review of request 5.** An independent reviewer read the change before its first commit. It
+found no request at the outside listener that does anything without a named caller's token,
+no token honored anywhere but the `Authorization` header, a comparison with every caller's
+token without an early end, no address or caller taken from anything a request says of
+itself, the order of the checks kept at both addresses, and no operation of one caller that
+reaches another's task, conversation, files, or a console thread. What it found:
+
+| Finding | What was done |
+|---|---|
+| Medium: building the listener's `uvicorn.Config` with `access_log=False` emptied the `uvicorn.access` logger the main server shares, so opening the listener silenced the service's own access log. | The listener serves with a protocol of its own that writes no access line, and leaves the logger as it is (`test_the_outside_listener_binds_its_port_serves_and_stops_with_the_service` checks the logger's handler and propagation, and now its no-access-line check means something) |
+| Medium: a token written as uvicorn writes a path (`/` kept), as `encodeURIComponent` writes it, with lowercase hex, or escaped by a `repr` was not cleaned from log lines. | Every such form is cleaned (`test_a_token_is_cleaned_in_every_way_a_path_a_query_or_a_log_line_writes_it`) |
+| Low: the cancel of a removed caller's tasks ran once and was not tried again when the store failed, and read no more than the total limit as set now. | The first round is done only once it has run through, and reads up to the total limit's own bound (`test_a_removed_caller_s_tasks_are_canceled_once_the_store_answers`) |
+| Low: the origin check at the outside listener warned once a request, without a token. | Warned of sparingly there, as a refused credential is (`refuse_other_origins(quiet=True)`; `test_pages_of_another_origin_at_the_outside_listener_are_warned_of_sparingly`) |
+| Low: a removed caller's task was said, in the console, to be canceled by the agent. | The page and the proposal's card say that the deployment no longer names the agent (the view's and the card's tests). The thread and the caller's view keep the caller's cancel's words: nobody is left to read the second, as data-model.md has it |
+| Low: settings: a shape error repeated a key, a name given twice was kept as the last, `localhost` beside `127.0.0.1` was not the same address, a blank host bound every interface, and the bind error repeated the address. | All five fixed (`test_callers_in_the_wrong_shape_are_refused_without_their_keys_and_ignored_when_off`, `test_the_listener_on_the_service_s_own_loopback_port_is_refused`, `test_a_blank_listener_host_is_refused`) |
+| Low: the listener's lifecycle: a server that stops by itself is not noticed; the bind looks a host name up on the event loop; the docs promised five seconds to an open stream, where the streams' own shutdown ends it sooner; during a SIGTERM the listener accepts until the lifespan ends. | Logged when it stops by itself; bound in a thread; the docs say a stream is closed when the service stops. The last is left: the window is the main server's own drain |
+| Low: `TOKENS` is the process's: the last service set it and any that stops clears it, which only the suite can see; a removed caller's old token is no longer cleaned. | Left, recorded: one service runs in a process, and a token the deployment no longer names is no longer known |
+| Low: tests: part 5 did not show that the local caller's and a still named caller's tasks stay; the bound test did not show the stream open at the stop and could go through a proxy; the e2e row check matched the other row too; the Postgres store's new read had no test. | Each added (`others`, `reader.is_alive()`, `trust_env=False`, an exact text, the store case on Postgres) |
+
+Each test above failed without its fix, apart from the store case and the e2e check, which
+show what was untested.
+
+**Checked by hand (T097)**, on a check instance from `.env.example` on port 8020 with
+`freyja_check_009` (dropped afterwards), the stand-in model active, the stand-in agent added,
+the console on 3020, and the outside listener on 127.0.0.1:8443 with `artex` and `heimdall`:
+startup logged 2 callers and the listener on, with the `http` warning; there, the card asked
+for a bearer token, artex's send completed, no token and a wrong one got the same 401 with
+`WWW-Authenticate: Bearer`, `/threads` and `/healthz` answered 404, and heimdall's `GetTask`
+of artex's task answered as not found; the console listed the task as started by agent artex.
+heimdall's `notify hello` waited for a person; with heimdall removed and the service started
+again, its task was canceled with a warning naming it, its proposal rejected by rule, the
+count to decide went from 1 to 0, the console said heimdall is no longer configured, and its
+token was refused. With the callers removed and the listener set, startup stopped naming
+`FREYJA_A2A_SERVER_CALLERS`. With every `FREYJA_A2A_SERVER` line removed, a caller's waiting
+task was listed and read, and both decisions were refused with `a2a_server_off`; with the
+settings back it waited again. No token appeared in any log. The quickstart's file steps need
+a model that writes files and were not walked; with an unquoted JSON value `uv run
+--env-file` dropped the callers and every line after them without a word, which the
+quickstart now says.
