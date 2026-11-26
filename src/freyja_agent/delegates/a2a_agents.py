@@ -236,6 +236,23 @@ class AgentLink:
         self.checked_at = datetime.now(UTC)
         self.error = None if reachable else self.describe(error or "")
 
+    async def _card_and_client(
+        self, card: AgentCard | None, left: float
+    ) -> tuple[AgentCard, Client] | CardProblem:
+        """The card, read within ``left`` seconds unless one is handed over, and a client
+        built from it; or why the agent cannot be used. The problem is returned, not raised,
+        so that ``connect`` raises its own error outside the handling of this one."""
+        try:
+            if card is None:
+                card = await read_card(self._http, self.config.url, limit=left)
+            config = ClientConfig(httpx_client=self._http, streaming=card.capabilities.streaming)
+            return card, ClientFactory(config).create(pinned_card(card, self.config.url))
+        except CardError as error:
+            return error.problem
+        except Exception:
+            # A card the SDK cannot build a client from; its error may name the address.
+            return CardProblem.of("unreadable")
+
     async def connect(self, card: AgentCard | None = None, *, limit: float) -> None:
         """Hold a usable card from the agent's address and a client built from it.
 
@@ -269,26 +286,15 @@ class AgentLink:
                 if self._problem is not None:
                     raise CardError.of(self._problem)
                 return
-            failed: CardProblem | None = None
-            try:
-                if card is None:
-                    left = max(deadline - clock(), 0.0)
-                    card = await read_card(self._http, self.config.url, limit=left)
-                config = ClientConfig(
-                    httpx_client=self._http, streaming=card.capabilities.streaming
-                )
-                client = ClientFactory(config).create(pinned_card(card, self.config.url))
-            except CardError as error:
-                failed = error.problem
-            except Exception:
-                # A card the SDK cannot build a client from; its error may name the address.
-                failed = CardProblem.of("unreadable")
-            if failed is not None:
+            read = await self._card_and_client(card, max(deadline - clock(), 0.0))
+            if isinstance(read, CardProblem):
+                failed = read
                 if failed.code == "timeout":
                     # In the caller's limit, whatever part of it the read itself was given.
                     failed = CardProblem.of("timeout", seconds=limit)
                 self._failed(failed)
                 raise CardError.of(failed)
+            card, client = read
             self._readings += 1
             self._problem = None
             self.client = client
@@ -356,7 +362,7 @@ def log_connected(link: AgentLink, *, read_only: bool) -> None:
 POLL_SECONDS = 1.0
 
 # The protocol's task states as the store and the API name them (data-model.md).
-_STATES = {
+_STATES: dict[int, str] = {
     TaskState.TASK_STATE_SUBMITTED: "working",
     TaskState.TASK_STATE_WORKING: "working",
     TaskState.TASK_STATE_COMPLETED: "completed",
@@ -521,14 +527,14 @@ async def _send(
                     _text(event.task.status.message),
                 )
         elif kind == "status_update":
-            _acknowledged(outcome, event.status_update)
-            outcome.task.status.CopyFrom(event.status_update.status)
+            task = _acknowledged(outcome, event.status_update)
+            task.status.CopyFrom(event.status_update.status)
             update = event.status_update.status
             _note_progress(outcome, update)
-            on_progress(outcome.task.id, state_name(update.state), _text(update.message))
+            on_progress(task.id, state_name(update.state), _text(update.message))
         elif kind == "artifact_update":
-            _acknowledged(outcome, event.artifact_update)
-            _merge_artifact(outcome.task, event.artifact_update)
+            task = _acknowledged(outcome, event.artifact_update)
+            _merge_artifact(task, event.artifact_update)
         await _note_acknowledgment(outcome, clock)
         if outcome.state in _STOP:
             return
@@ -538,8 +544,8 @@ async def _send(
 
 def _acknowledged(
     outcome: SendOutcome, update: TaskStatusUpdateEvent | TaskArtifactUpdateEvent
-) -> None:
-    """Start the task from an update when the agent sent no task first.
+) -> Task:
+    """Start the task from an update when the agent sent no task first, and return the task.
 
     A message that continues a task, such as an answer, gets no new task: the agent streams
     updates for the task it already has, each naming that task and its conversation. The first
@@ -547,6 +553,7 @@ def _acknowledged(
     """
     if outcome.task is None:
         outcome.task = Task(id=update.task_id, context_id=update.context_id)
+    return outcome.task
 
 
 def _merge_artifact(task: Task, update: TaskArtifactUpdateEvent) -> None:

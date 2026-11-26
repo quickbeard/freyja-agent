@@ -17,6 +17,8 @@ from freyja_agent.api.schemas import (
     THREAD_ID_PATTERN,
     AgentTask,
     AgentTaskProgress,
+    Message,
+    PendingDecision,
     ResumeRequest,
     RunRequest,
     ThreadState,
@@ -106,9 +108,14 @@ async def _read_state(runtime: Runtime, context: RunContext, thread_id: str) -> 
     return ThreadState(
         thread_id=thread_id,
         run_active=await runtime.locks.is_active(thread_id),
-        messages=[message_to_dict(message) for message in snapshot.values.get("messages", [])],
+        messages=[
+            Message.model_validate(message_to_dict(message))
+            for message in snapshot.values.get("messages", [])
+        ],
         pending=(
-            interrupt_to_pending(snapshot.interrupts[0], context.catalog)
+            PendingDecision.model_validate(
+                interrupt_to_pending(snapshot.interrupts[0], context.catalog)
+            )
             if snapshot.interrupts
             else None
         ),

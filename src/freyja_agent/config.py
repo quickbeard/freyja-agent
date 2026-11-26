@@ -148,7 +148,7 @@ def canonical_address(url: str) -> str:
         raise AddressError("The address must not carry a query.")
     if "#" in url:
         raise AddressError("The address must not carry a fragment.")
-    if not is_local_host(host):
+    if host is None or not is_local_host(host):
         raise AddressError(
             "The address must be on this machine: localhost or a loopback IP address."
         )
@@ -345,4 +345,7 @@ class Settings(BaseSettings):
         return value
 
 
-settings = Settings()
+# pydantic-settings fills a field that has no default, such as the database's address, from
+# the environment; its types describe the class and not that, so the call looks short of an
+# argument.
+settings = Settings()  # pyright: ignore[reportCallIssue]

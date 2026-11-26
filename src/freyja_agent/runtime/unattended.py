@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -293,9 +293,9 @@ class UnattendedRuns:
     def start(
         self,
         thread_id: str,
-        events: AsyncIterator[ServerSentEvent],
+        events: AsyncIterable[ServerSentEvent],
         first_message: str | None = None,
-    ) -> AsyncIterator[ServerSentEvent]:
+    ) -> AsyncGenerator[ServerSentEvent, None]:
         """Arm the thread, drive ``events`` in a task, and give the first reader its events.
 
         The caller holds the thread's lease, taken by the handler that made ``events``, so
@@ -317,7 +317,7 @@ class UnattendedRuns:
         run.task.add_done_callback(self._tasks.discard)
         return self._read(run, reader)
 
-    def join(self, thread_id: str) -> AsyncIterator[ServerSentEvent] | None:
+    def join(self, thread_id: str) -> AsyncGenerator[ServerSentEvent, None] | None:
         """One more reader of the console run in progress on ``thread_id`` on this instance,
         from the events that follow; None when no such run is in progress here (feature 009,
         research R10). A reader that falls behind is disconnected as any other is."""
@@ -328,7 +328,7 @@ class UnattendedRuns:
         run.readers.append(reader)
         return self._read(run, reader)
 
-    async def _read(self, run: _Run, reader: _Reader) -> AsyncIterator[ServerSentEvent]:
+    async def _read(self, run: _Run, reader: _Reader) -> AsyncGenerator[ServerSentEvent, None]:
         try:
             while True:
                 event = await reader.queue.get()
@@ -357,7 +357,7 @@ class UnattendedRuns:
                 continue
             reader.queue.put_nowait(event)
 
-    async def _drive(self, run: _Run, events: AsyncIterator[ServerSentEvent]) -> None:
+    async def _drive(self, run: _Run, events: AsyncIterable[ServerSentEvent]) -> None:
         try:
             async for given in events:
                 event = _scrubbed(given)

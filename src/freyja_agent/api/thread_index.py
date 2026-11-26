@@ -18,9 +18,11 @@ stop, is in ``api/runs.py``, where the A2A service starts its console runs too.
 """
 
 import logging
+from collections.abc import AsyncIterable
+from typing import cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from sse_starlette import EventSourceResponse
+from sse_starlette import EventSourceResponse, ServerSentEvent
 
 from freyja_agent.api import threads
 from freyja_agent.api.guards import refuse_other_origins
@@ -286,7 +288,10 @@ async def _go_on(
     started. It is handed over at once, with nothing awaited before, so that nothing can
     leave the lease taken (``runs.go_on``).
     """
-    reader = go_on(runs, thread_id, response.body_iterator, first_message)
+    # The response's body is the run's events, as the handler made them. The response's own
+    # type says less of it: a body may be text or bytes as well.
+    events = cast("AsyncIterable[ServerSentEvent]", response.body_iterator)
+    reader = go_on(runs, thread_id, events, first_message)
     return EventSourceResponse(reader, ping=PING_SECONDS, headers={"Cache-Control": NO_TRANSFORM})
 
 

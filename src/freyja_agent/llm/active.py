@@ -31,6 +31,7 @@ from freyja_agent.llm.providers import (
     ModelFactory,
     ModelSpec,
     UnusableChatModel,
+    UnusableReason,
 )
 from freyja_agent.llm.secrets import KeyUnreadableError, SecretNotConfiguredError, decrypt
 from freyja_agent.llm.store import LlmProfileRecord, LlmProfileStore, LlmState
@@ -61,7 +62,7 @@ UNUSABLE = {
 }
 
 
-def unusable_reason(record: LlmProfileRecord, secret: SecretStr | None) -> str | None:
+def unusable_reason(record: LlmProfileRecord, secret: SecretStr | None) -> UnusableReason | None:
     """Why a saved profile cannot be used on this instance, as a code, or None (FR-011a)."""
     try:
         decrypt(record.api_key_encrypted, secret)

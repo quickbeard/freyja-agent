@@ -15,7 +15,7 @@ from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager, suppress
 from dataclasses import dataclass, field
 from functools import cached_property
-from typing import Any
+from typing import Any, Literal
 
 from deepagents.profiles.provider.provider_profiles import apply_provider_profile
 from langchain.chat_models import init_chat_model
@@ -129,6 +129,10 @@ class ModelSpec:
 
 # The seam the tests swap: what turns a spec into a chat model (research R18).
 ModelFactory = Callable[[ModelSpec], BaseChatModel]
+# Why a profile cannot be used on this instance, as the code the list shows (FR-011a).
+UnusableReason = Literal[
+    "key_unreadable", "secret_not_configured", "not_configured", "cannot_build"
+]
 
 
 def model_arguments(spec: ModelSpec) -> dict[str, Any]:
@@ -244,7 +248,7 @@ class EnvironmentProfile:
     usable: bool
     # ``not_configured``: the provider's key is not set. ``cannot_build``: no model can be
     # built from the values. None when usable.
-    unusable_reason: str | None
+    unusable_reason: UnusableReason | None
     id: str = ENVIRONMENT_ID
     name: str = ENVIRONMENT_NAME
 
@@ -343,7 +347,7 @@ def environment_profile(
     settings: Settings,
     *,
     environ: Mapping[str, str] | None = None,
-    factory: ModelFactory = build_model,
+    factory: Callable[[ModelSpec], BaseChatModel | None] = build_model,
     model: str | None = None,
     access: EnvironmentAccess | None = None,
 ) -> EnvironmentProfile:
@@ -357,7 +361,7 @@ def environment_profile(
     """
     spec = environment_spec(settings, model)
     provider = PROVIDERS.get(spec.provider)
-    reason = None
+    reason: UnusableReason | None = None
     if access is None:
         built = None
         try:

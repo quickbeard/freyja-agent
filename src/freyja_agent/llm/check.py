@@ -15,15 +15,12 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from freyja_agent.llm.secrets import redact
-from freyja_agent.llm.store import REASON_LIMIT
-
-Step = Literal["first_message", "conversation"]
+from freyja_agent.llm.store import REASON_LIMIT, Step
 
 FIRST_MESSAGE = "This is a connection test. Reply with the single word: ready."
 SECOND_MESSAGE = "Thank you. Reply with the single word: done."

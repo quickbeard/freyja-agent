@@ -8,7 +8,9 @@ import pytest
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
+from langchain_core.tools import StructuredTool
 from langgraph.types import Interrupt
+from pydantic import BaseModel, ConfigDict, Field
 
 from freyja_agent.agent.catalog import Catalog, CatalogTool, Classification
 from freyja_agent.api.decisions import build_resume_command
@@ -394,6 +396,54 @@ def gated_tool(name: str, decisions: tuple[str, ...]) -> CatalogTool:
         classification=Classification.GATED,
         allowed_decisions=decisions,
     )
+
+
+class _Renamed(BaseModel):
+    """Arguments whose model takes one of them under another name, and nothing it does not
+    define: given under its own name, ``recipient`` is refused as an argument the model does
+    not know, though it is one of the model's fields."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    recipient: str = Field(default="nobody", alias="to")
+
+
+def test_an_edit_the_model_refuses_is_refused_also_when_no_entry_of_its_refusal_is_kept() -> None:
+    """An edit is checked by the tool's model, and the model's "unknown argument" entries
+    are replaced by the service's own, one per key the model does not define. Here the
+    refused key is one the model defines, so every entry is left out and none takes its
+    place. The edit must be refused all the same, with what the model said: it used to end
+    in an error of the service's own, since nothing had been validated."""
+    renamed = StructuredTool.from_function(
+        lambda **_: "sent", name="send_renamed", description="send", args_schema=_Renamed
+    )
+    catalog = Catalog(
+        tools=(
+            CatalogTool(
+                name="send_renamed",
+                server=None,
+                description="send",
+                input_schema={"type": "object", "properties": {"to": {"type": "string"}}},
+                classification=Classification.GATED,
+                allowed_decisions=("approve", "edit", "reject"),
+                tool=renamed,
+            ),
+        )
+    )
+    interrupt = Interrupt(
+        value={"action_requests": [{"name": "send_renamed", "args": {"to": "ada"}}]}, id="int-3"
+    )
+    pending = interrupt_to_pending(interrupt, catalog)
+
+    with pytest.raises(HTTPException) as refused:
+        build_resume_command(
+            pending, [EditDecision(type="edit", args={"recipient": "ada"})], catalog
+        )
+
+    assert refused.value.status_code == 422
+    assert [(entry["type"], entry["loc"]) for entry in refused.value.detail] == [
+        ("extra_forbidden", ["body", "decisions", 0, "args", "recipient"])
+    ]
 
 
 def two_actions_pending(catalog: Catalog) -> dict:

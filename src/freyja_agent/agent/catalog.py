@@ -16,8 +16,9 @@ and the set the catalog reports as gated cannot differ.
 from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any
+from typing import Any, Final, Literal
 
+from langchain.agents.middleware import InterruptOnConfig
 from langchain_core.tools import BaseTool
 
 
@@ -31,7 +32,11 @@ class Classification(StrEnum):
     GATED = "gated"
 
 
-APPROVE, EDIT, REJECT = "approve", "edit", "reject"
+# A decision a person can take on a proposed action.
+Decision = Literal["approve", "edit", "reject"]
+APPROVE: Final = "approve"
+EDIT: Final = "edit"
+REJECT: Final = "reject"
 
 # Freyja's own tools, in the order the catalog lists them (research R8). A Deep Agents upgrade
 # that adds a tool fails startup until someone adds a row here: silence means "not classified",
@@ -83,7 +88,7 @@ def allowed_decisions(
     classification: Classification,
     input_schema: Mapping[str, Any] | None,
     pinned_args: Iterable[str] = (),
-) -> tuple[str, ...]:
+) -> tuple[Decision, ...]:
     """The decisions a tool's proposal accepts; empty unless the tool is gated.
 
     A gated tool with no declared input offers approve and reject: there is nothing an edit
@@ -108,7 +113,7 @@ class CatalogTool:
     description: str
     input_schema: dict[str, Any]
     classification: Classification
-    allowed_decisions: tuple[str, ...]
+    allowed_decisions: tuple[Decision, ...]
     # What the server says about its own tool. Shown, never used (FR-006, FR-014).
     server_hints: dict[str, Any] | None = None
     # The agent a hand-off or cancel tool sends to; None for every other tool (feature 003).
@@ -147,7 +152,7 @@ class Catalog:
     def gated(self) -> tuple[CatalogTool, ...]:
         return tuple(tool for tool in self.tools if tool.gated)
 
-    def decisions_for(self, name: str) -> tuple[str, ...]:
+    def decisions_for(self, name: str) -> tuple[Decision, ...]:
         """The decisions a pending proposal for ``name`` accepts under this catalog (FR-019).
 
         A proposal can outlive a restart with another configuration, so the answer comes from
@@ -186,7 +191,7 @@ def gate_description(tool: CatalogTool) -> str:
     return f"{tool.server}: {first_line(tool.description) or tool.name}"
 
 
-def interrupt_config(tools: Iterable[CatalogTool]) -> dict[str, dict[str, Any]]:
+def interrupt_config(tools: Iterable[CatalogTool]) -> dict[str, bool | InterruptOnConfig]:
     """The approval gate's configuration: one entry per gated tool, and no other (FR-007).
 
     The same mapping goes to the orchestrator and to its subagent.

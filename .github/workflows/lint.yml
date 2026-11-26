@@ -1,6 +1,7 @@
 name: Lint
-# Ruff for the service and Biome for the web app, each checking lint and formatting. They
-# report and change nothing; the commit hook is where files get fixed.
+# Ruff for the service and Biome for the web app, each checking lint and formatting, and
+# pyright checking the service's types. They report and change nothing; the commit hook is
+# where files get fixed.
 on:
   push:
     branches: [main]
@@ -24,6 +25,23 @@ jobs:
         run: uv run ruff check --output-format=github .
       - name: Run ruff format
         run: uv run ruff format --check .
+  types:
+    name: pyright
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        # pyright comes from uv.lock at one exact version, with the Node it runs on, and
+        # checks the code against the packages the lock file installs.
+        run: uv sync --locked
+      - name: Run pyright
+        # Over src/, as pyproject.toml has it.
+        run: uv run pyright
   web:
     name: biome
     timeout-minutes: 10

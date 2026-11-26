@@ -21,14 +21,16 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit
 
 from psycopg import errors, sql
-from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.llm.providers import ENVIRONMENT_NAME, PROVIDERS
+from freyja_agent.runtime.persistence import Pool, one_row
 
+# The step of a profile's test that a result is about (``check.check_model``).
+Step = Literal["first_message", "conversation"]
 # The rules of data-model.md, in one place.
 PROFILE_LIMIT = 50
 NAME_LIMIT = 64
@@ -84,7 +86,7 @@ class LlmProfileRecord:
     config_version: int
     last_test_ok: bool | None
     last_test_at: datetime | None
-    last_test_step: str | None
+    last_test_step: Step | None
     last_test_reason: str | None
     created_at: datetime
     updated_at: datetime
@@ -131,7 +133,7 @@ class LlmProfileStore(Protocol):
         config_version: int,
         *,
         ok: bool,
-        step: str | None,
+        step: Step | None,
         reason: str | None,
     ) -> bool: ...
 
@@ -298,7 +300,7 @@ class InMemoryLlmProfileStore:
         config_version: int,
         *,
         ok: bool,
-        step: str | None,
+        step: Step | None,
         reason: str | None,
     ) -> bool:
         record = self._profiles.get(profile_id)
@@ -367,7 +369,7 @@ def _record(row: dict[str, Any]) -> LlmProfileRecord:
 class PostgresLlmProfileStore:
     """The service's store: two tables in the shared pool (research R5)."""
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: Pool) -> None:
         self._pool = pool
 
     async def setup(self) -> None:
@@ -417,11 +419,11 @@ class PostgresLlmProfileStore:
                 # Two adds at once cannot both pass the count: the second waits for the first.
                 await conn.execute("SELECT pg_advisory_xact_lock(%(lock)s)", {"lock": _LIMIT_LOCK})
                 cursor = await conn.execute("SELECT count(*) AS count FROM freyja_llm_profiles")
-                if (await cursor.fetchone())["count"] >= PROFILE_LIMIT:
+                if (await one_row(cursor))["count"] >= PROFILE_LIMIT:
                     raise ProfileLimitError
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(insert + _RETURNING, values)
-                return _record(await cursor.fetchone())
+                return _record(await one_row(cursor))
         except errors.UniqueViolation:
             raise NameTakenError from None
 
@@ -439,7 +441,7 @@ class PostgresLlmProfileStore:
                 real, reach = changed(record, changes)
                 if not real:
                     return record
-                assignments = [
+                assignments: list[sql.Composable] = [
                     sql.SQL("{} = {}").format(sql.Identifier(name), sql.Placeholder(name))
                     for name in real
                 ]
@@ -460,7 +462,7 @@ class PostgresLlmProfileStore:
                     + _RETURNING,
                     {**real, "id": profile_id},
                 )
-                updated = _record(await cursor.fetchone())
+                updated = _record(await one_row(cursor))
                 # An edit of the active profile changes the model in use (FR-013).
                 await conn.execute(
                     "UPDATE freyja_llm_state SET revision = revision + 1, updated_at = now()"
@@ -489,7 +491,7 @@ class PostgresLlmProfileStore:
             cursor = await conn.execute(
                 "SELECT active_profile_id, revision FROM freyja_llm_state WHERE id = 1"
             )
-            row = await cursor.fetchone()
+            row = await one_row(cursor)
             return LlmState(row["active_profile_id"], row["revision"])
 
     async def activate(self, profile_id: str | None) -> LlmState:
@@ -512,7 +514,7 @@ class PostgresLlmProfileStore:
         config_version: int,
         *,
         ok: bool,
-        step: str | None,
+        step: Step | None,
         reason: str | None,
     ) -> bool:
         async with self._pool.connection() as conn:

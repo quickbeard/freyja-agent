@@ -11,7 +11,8 @@ from urllib.parse import urlsplit, urlunsplit
 
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from langgraph.store.postgres.aio import AsyncPostgresStore
-from psycopg.rows import dict_row
+from psycopg import AsyncConnection, AsyncCursor
+from psycopg.rows import DictRow, dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.config import Settings
@@ -24,9 +25,24 @@ class DatabaseUnavailableError(RuntimeError):
     """Raised at startup when the configured database cannot be reached."""
 
 
+# The pool as the service opens it and every store is handed it: each connection returns a
+# row as a dict, by the ``row_factory`` given below.
+Pool = AsyncConnectionPool[AsyncConnection[DictRow]]
+
+
+async def one_row(cursor: AsyncCursor[DictRow]) -> DictRow:
+    """The row of a statement that always returns one, such as a count or a ``RETURNING``
+    of a row the transaction holds; a statement that returned none is an error here, where
+    it is found, and not at the first use of the row."""
+    row = await cursor.fetchone()
+    if row is None:
+        raise RuntimeError("A statement that returns one row returned none.")
+    return row
+
+
 @dataclass
 class Persistence:
-    pool: AsyncConnectionPool
+    pool: Pool
     saver: AsyncPostgresSaver
     store: AsyncPostgresStore
 
@@ -48,7 +64,7 @@ def redact_uri(uri: str) -> str:
 
 async def open_persistence(settings: Settings) -> Persistence:
     """Open the pool, run the LangGraph table setup, and return the ready components."""
-    pool = AsyncConnectionPool(
+    pool: Pool = AsyncConnectionPool(
         settings.database_uri,
         kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
         open=False,

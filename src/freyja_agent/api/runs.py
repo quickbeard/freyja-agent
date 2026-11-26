@@ -20,7 +20,7 @@ Feature 009 adds two rules here, and nothing else:
 import asyncio
 import logging
 import uuid
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable
 from typing import Any
 
 from fastapi import HTTPException
@@ -45,6 +45,9 @@ from freyja_agent.runtime.unattended import UnattendedRuns
 logger = logging.getLogger(__name__)
 
 Events = AsyncIterator[ServerSentEvent]
+# A reader of a console run, as ``UnattendedRuns`` hands one out: its events, and a way to
+# leave it (``aclose``), which a reader that stops early uses.
+Reader = AsyncGenerator[ServerSentEvent, None]
 # Called under the lease, once a message's run is accepted and before it starts, with the
 # thread's state as the run found it (feature 009: a received task's start, research R7).
 OnStarted = Callable[[Any], Awaitable[None]]
@@ -377,8 +380,11 @@ async def open_first(
 
 
 def go_on(
-    runs: UnattendedRuns, thread_id: str, events: Events, first_message: str | None
-) -> Events:
+    runs: UnattendedRuns,
+    thread_id: str,
+    events: AsyncIterable[ServerSentEvent],
+    first_message: str | None,
+) -> Reader:
     """Drive the run a handler accepted without its reader, and return its first reader.
 
     The handler took the thread's lease and made the run's events; nothing of the run has
@@ -398,7 +404,7 @@ async def start_console_run(
     debug: bool = False,
     refuse_awaited: bool = False,
     on_started: OnStarted | None = None,
-) -> Events:
+) -> Reader:
     """Start a console run with ``message``: the body of
     ``POST /threads/{thread_id}/runs/unattended``, with the same refusals and events as
     ``start_message``, from the same code (007 research R2, R3)."""

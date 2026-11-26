@@ -170,7 +170,7 @@ class AgentTasksMiddleware(AgentMiddleware):
             ProposedCall(
                 thread_id=thread_id,
                 namespace="",  # the store keeps each under the namespace it is given
-                tool_call_id=call["id"],
+                tool_call_id=call_id,
                 agent=tool.agent,
                 agent_id=tool.agent_id,
                 gated=tool.gated,
@@ -178,7 +178,8 @@ class AgentTasksMiddleware(AgentMiddleware):
             for message in response.result
             if isinstance(message, AIMessage)
             for call in message.tool_calls
-            if call.get("id") and (tool := self.agent_tools.get(call["name"])) is not None
+            if (call_id := call.get("id"))
+            and (tool := self.agent_tools.get(call["name"])) is not None
         ]
         await self.store.replace_calls(thread_id, _namespace(), calls)
 

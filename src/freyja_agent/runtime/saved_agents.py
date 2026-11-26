@@ -24,7 +24,6 @@ from typing import Any, Protocol
 
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
-from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.config import SERVER_NAME_PATTERN, AddressError, canonical_address, destination
 from freyja_agent.runtime.agent_tasks import (
@@ -33,6 +32,7 @@ from freyja_agent.runtime.agent_tasks import (
     GIVEN_UP_REMOVED,
     InMemoryAgentTaskStore,
 )
+from freyja_agent.runtime.persistence import Pool, one_row
 
 # Each saved agent adds two tools to every run of the orchestrator and its subagent (FR-006).
 AGENT_LIMIT = 20
@@ -162,6 +162,7 @@ def plain(card: dict[str, Any]) -> dict[str, Any]:
     Both stores keep and compare this form, so the same details are the same in each.
     """
     refused = False
+    kept: object = None
     try:
         kept = json.loads(json.dumps(card))
     except (TypeError, ValueError):
@@ -383,7 +384,7 @@ class PostgresSavedAgentStore:
     ``PostgresAgentTaskStore.setup`` provides: set that store up first.
     """
 
-    def __init__(self, pool: AsyncConnectionPool) -> None:
+    def __init__(self, pool: Pool) -> None:
         self._pool = pool
 
     async def setup(self) -> None:
@@ -394,7 +395,7 @@ class PostgresSavedAgentStore:
     async def revision(self) -> int:
         async with self._pool.connection() as conn:
             cursor = await conn.execute("SELECT revision FROM freyja_agents_state WHERE id = 1")
-            return (await cursor.fetchone())["revision"]
+            return (await one_row(cursor))["revision"]
 
     async def list_agents(self) -> list[SavedAgentRecord]:
         async with self._pool.connection() as conn:
@@ -431,11 +432,11 @@ class PostgresSavedAgentStore:
                 # Two adds at once cannot both pass the count: the second waits for the first.
                 await conn.execute("SELECT pg_advisory_xact_lock(%(lock)s)", {"lock": _LIMIT_LOCK})
                 cursor = await conn.execute("SELECT count(*) AS count FROM freyja_agents")
-                if (await cursor.fetchone())["count"] >= AGENT_LIMIT:
+                if (await one_row(cursor))["count"] >= AGENT_LIMIT:
                     raise AgentLimitError
                 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
                 cursor = await conn.execute(insert + _RETURNING, values)
-                record = _record(await cursor.fetchone())
+                record = _record(await one_row(cursor))
                 await conn.execute(BUMP_REVISION)
                 return record
         except errors.UniqueViolation as exc:
@@ -494,7 +495,7 @@ class PostgresSavedAgentStore:
                     + _RETURNING,
                     {**changes, "key_id": agent_id, "key_version": version},
                 )
-                changed = _record(await cursor.fetchone())
+                changed = _record(await one_row(cursor))
                 given_up = 0
                 if moved:
                     # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query

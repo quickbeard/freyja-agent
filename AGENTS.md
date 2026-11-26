@@ -19,6 +19,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
+- `uv run pyright` checks the types of the service's code under `src/`, with the settings in
+  `pyproject.toml` (`[tool.pyright]`). The commit hook and CI run it this way. It needs
+  nothing but uv: Node comes with the package, and pyright itself is downloaded the first
+  time it runs, which needs the network. The tests are not checked.
 - `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
   client with in-memory persistence and a scripted model; no server, database, or model
   provider is needed. Tool servers are played by the stub in `tests/mcp_stub.py`, and A2A
@@ -48,8 +52,8 @@ Always go through uv. Never call python, pip, or pytest directly.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
-  parses, merge markers), gitleaks over what is staged, Ruff and
-  pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  parses, merge markers), gitleaks over what is staged, Ruff, pyright when the service's
+  code or its packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
   pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
   needs the network.
@@ -192,7 +196,9 @@ startup and exits with an error naming the connection when it is unreachable.
   second carrying earlier turns and a tool call) and the count of tests in progress
   (`CheckSlots`).
 - `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
-  and store; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
+  and store, and holds what every Postgres store takes from it: `Pool`, the pool's type, whose
+  connections return a row as a dict, and `one_row`, the row of a statement that always
+  returns one; `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
   `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, agent
   tasks, and the calls of agents' tools that a model proposed (`PostgresAgentTaskStore` with
   its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); a task keeps the progress
@@ -452,9 +458,11 @@ startup and exits with an error naming the connection when it is unreachable.
   hands a page no answer sees the console as it is with the service stopped; only
   `stream.spec.ts` listens there, in its own projects.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
-  `lint.yml` runs Ruff (`ruff check` and `ruff format --check`) and Biome (`pnpm lint`), and
+  `lint.yml` runs Ruff (`ruff check` and `ruff format --check`), pyright (`uv run pyright`),
+  and Biome (`pnpm lint`), and
   `unit-tests.yml` runs pytest and Vitest, both on every pull request and on `main`;
-  GitLab's `ruff`, `biome`, `pytest`, and `vitest` jobs do the same for merge requests.
+  GitLab's `ruff`, `pyright`, `biome`, `pytest`, and `vitest` jobs do the same for merge
+  requests.
   `secrets.yml` and GitLab's `gitleaks` job search every commit for secrets, on every change.
   `playwright.yml` and GitLab's `playwright` job run the end-to-end tests when a file under
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
@@ -540,6 +548,13 @@ startup and exits with an error naming the connection when it is unreachable.
   part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
   `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
   that is a few lines over public types is written here instead.
+- pyright reports nothing over `src/`. A type error is fixed in the code or in its
+  annotations. A line is silenced only where a library's own types say less, or other, than
+  what the library does, with `# pyright: ignore[<rule>]` on that line and the reason beside
+  it; a bare `# type: ignore` silences nothing. No file is left out of the check and no rule
+  is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
+  so the hook and both CI systems report the same; a new version is taken in a change of its
+  own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before

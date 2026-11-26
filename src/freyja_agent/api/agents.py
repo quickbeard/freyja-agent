@@ -17,7 +17,7 @@ confirm before it sends such a request (FR-011).
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Annotated
+from typing import Annotated, Literal, TypedDict
 
 from a2a.types import AgentCard as A2aCard
 from fastapi import APIRouter, Depends, HTTPException, Path, Query, Request
@@ -119,7 +119,15 @@ def _claims(card: AgentCardSummary | None) -> AgentCard | None:
     )
 
 
-def _attempt(link: AgentLink) -> dict[str, object]:
+class _Attempt(TypedDict):
+    """The three fields of an agent's answer that say how the last attempt to use it went."""
+
+    state: Literal["reachable", "unreachable", "not_tried", "not_in_use"]
+    checked_at: datetime | None
+    reason: str | None
+
+
+def _attempt(link: AgentLink) -> _Attempt:
     """The outcome of this instance's most recent attempt to use the link's agent (FR-003)."""
     if not link.tried:
         return {"state": "not_tried", "checked_at": None, "reason": None}
@@ -159,7 +167,7 @@ def _saved(record: SavedAgentRecord, agents: AgentSet | None, pending: int) -> A
         else None
     )
     if unused is not None:
-        attempt: dict[str, object] = {
+        attempt: _Attempt = {
             "state": "not_in_use",
             "checked_at": None,
             "reason": unused.reason,
@@ -248,6 +256,18 @@ def _unusable(problem: CardProblem) -> HTTPException:
     )
 
 
+async def _card_or_problem(
+    registry: AgentRegistry, name: str, url: str, limit: float
+) -> A2aCard | CardProblem:
+    """The card at ``url``, or why it cannot be used. The problem is returned, not raised,
+    so that the refusal a route makes of it is raised outside the handling of the read's
+    own error and carries nothing of it."""
+    try:
+        return await registry.read_card(name, url, limit=limit)
+    except CardError as error:
+        return error.problem
+
+
 async def _free(runtime: Runtime, registry: AgentRegistry, name: str, leads_to: str) -> None:
     """Refuse a name or an address that is taken, or an add beyond the limit (FR-006).
 
@@ -318,14 +338,10 @@ async def add_agent(body: AgentCreate, request: Request) -> Agent:
         # Known to the scrubber before it is first requested, whatever comes of the request.
         SCRUBBER.register(url)
         limit = min(runtime.settings.a2a_startup_timeout_seconds, CARD_READ_SECONDS)
-        problem: CardProblem | None = None
-        try:
-            card = await registry.read_card(name, url, limit=limit)
-        except CardError as error:
-            problem = error.problem
-        if problem is not None:
-            logger.info("Agent %s was not added: %s", name, problem.message)
-            raise _unusable(problem)
+        card = await _card_or_problem(registry, name, url, limit)
+        if isinstance(card, CardProblem):
+            logger.info("Agent %s was not added: %s", name, card.message)
+            raise _unusable(card)
         record = await _save(runtime, body, card_details(card, SCRUBBER.scrub))
     finally:
         slots.release(None)
@@ -407,14 +423,10 @@ async def _card_at(runtime: Runtime, registry: AgentRegistry, name: str, url: st
         # Known to the scrubber before it is first requested, whatever comes of the request.
         SCRUBBER.register(url)
         limit = min(runtime.settings.a2a_startup_timeout_seconds, CARD_READ_SECONDS)
-        problem: CardProblem | None = None
-        try:
-            card = await registry.read_card(name, url, limit=limit)
-        except CardError as error:
-            problem = error.problem
-        if problem is not None:
-            logger.info("Agent %s was not moved: %s", name, problem.message)
-            raise _unusable(problem)
+        card = await _card_or_problem(registry, name, url, limit)
+        if isinstance(card, CardProblem):
+            logger.info("Agent %s was not moved: %s", name, card.message)
+            raise _unusable(card)
         return card
     finally:
         slots.release(None)
@@ -671,9 +683,10 @@ async def check_agent(agent_id: AgentIdPath, request: Request) -> AgentCheck:
             failure: HTTPException | None = None
             try:
                 kept_details = AgentCardSummary.from_dict(record.card)
-                if problem is None and _differs(kept_details, link.last_read):
+                read = link.last_read
+                if problem is None and read is not None and _differs(kept_details, read):
                     kept = await runtime.saved_agents.replace_card(
-                        record.id, record.ref, link.last_read.to_dict()
+                        record.id, record.ref, read.to_dict()
                     )
                     recorded, card_changed = kept.recorded, kept.changed
                 else:

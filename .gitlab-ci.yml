@@ -1,7 +1,7 @@
-# GitLab CI: the linters (Ruff, Biome) and the unit tests (pytest, Vitest) of both projects,
-# and the web app's end-to-end tests (Playwright). The same jobs run on GitHub from lint.yml,
-# unit-tests.yml, and playwright.yml under .github/workflows/. A job added since says in its
-# own comment which workflow it has there.
+# GitLab CI: the linters (Ruff, Biome), the type checker (pyright), and the unit tests
+# (pytest, Vitest) of both projects, and the web app's end-to-end tests (Playwright). The
+# same jobs run on GitHub from lint.yml, unit-tests.yml, and playwright.yml under
+# .github/workflows/. A job added since says in its own comment which workflow it has there.
 stages:
   - test
 
@@ -27,6 +27,23 @@ ruff:
     # Both report and change nothing; the commit hook is where files get fixed.
     - uv run ruff check .
     - uv run ruff format --check .
+
+# The service's types. The same job runs on GitHub from lint.yml, and the commit hook runs
+# the same command.
+pyright:
+  extends: .every-change
+  # The Python that .python-version names.
+  image: python:3.12-slim
+  variables:
+    UV_LINK_MODE: copy
+  before_script:
+    - pip install --quiet "uv==0.12.*"
+    # pyright comes from uv.lock at one exact version, with the Node it runs on, and checks
+    # the code against the packages the lock file installs.
+    - uv sync --locked
+  script:
+    # Over src/, as pyproject.toml has it.
+    - uv run pyright
 
 biome:
   extends: .every-change
