@@ -362,6 +362,20 @@ class AgentRemoved(BaseModel):
     given_up: Annotated[int, Field(ge=0)]
 
 
+# The agents' approval mode (feature 010): ``manual`` has every message to every agent wait
+# for a person; ``auto`` lets an agent whose approval choice is ``none`` run without one.
+AgentsModeValue = Literal["manual", "auto"]
+
+
+class AgentsMode(BaseModel):
+    """The agents' approval mode, as ``PUT /agents/mode`` takes it and answers with it (010
+    FR-005). Nothing else is accepted, and no refused value is repeated."""
+
+    model_config = ConfigDict(extra="forbid", hide_input_in_errors=True)
+
+    mode: AgentsModeValue
+
+
 # A saved agent's id, or ``env.<name>`` for an environment agent (contracts/openapi.yaml).
 AGENT_ID_PATTERN = r"^([0-9a-f]{32}|env\.[a-z][a-z0-9_-]{0,31})$"
 
@@ -397,6 +411,8 @@ class AgentCheck(BaseModel):
 class AgentList(BaseModel):
     # Environment agents first, in configuration order, then saved agents by name.
     agents: list[Agent]
+    # The agents' approval mode (feature 010).
+    mode: AgentsModeValue
     # How many agents can be saved.
     limit: int
     # How many agents are ``unreachable`` or ``not_in_use``.

@@ -152,14 +152,17 @@ startup and exits with an error naming the connection when it is unreachable.
   out of text in every form it can be written in, its path included, and cleans every log
   record through a record factory installed at startup. `agent_registry.py` is the
   `AgentRegistry`, which holds the instance's `AgentSet`: the links in use, of environment
-  agents and of saved ones, each agent's approval choice, and the saved agents that are not in
-  use. It refuses an entry that is invalid in itself at startup, tries every agent at once,
+  agents and of saved ones, each agent's approval choice, the agents' approval mode (feature
+  010: an agent's tools run without approval only when the mode is `auto` and its choice
+  allows it, `AgentSet.gated`), and the saved agents that are not in use. It refuses an entry that is invalid in itself at startup, tries every agent at once,
   warns about one it cannot use, makes a new set when the saved agents' revision moved, and
   closes a link once no set that is held has it. `a2a_tools.py` builds each agent's
   `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step that
   runs again never sends twice, checks that a task belongs to the agent the tool was built
   for, that the link is connected, that the call was proposed for the agent the tool
-  sends to (`_proposed_for`), and, for a saved agent, that the agent as the store has it
+  sends to (`_proposed_for`), that the agents' approval mode is not `manual` now when the
+  tool was built to run without approval and no person decided the call (feature 010), and,
+  for a saved agent, that the agent as the store has it
   now still exists, still runs without approval when no person decided the call (a person
   decided it only when its row records an approve or an edit), and,
   when it was moved since the run's tools were built, that no other saved agent has the
@@ -213,7 +216,9 @@ startup and exits with an error naming the connection when it is unreachable.
   columns that migration 1 adds to a table of an earlier deployment, as it adds `agent_ref`;
   `saved_agents.py` is the `SavedAgentStore` for the agents an operator
   saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
-  `InMemorySavedAgentStore`); `received_tasks.py` is the `ReceivedTaskStore` of feature 009,
+  `InMemorySavedAgentStore`), and for the agents' approval mode of feature 010 (`mode`,
+  `set_mode`), a column of `freyja_agents_state` that migration 2 adds, whose change moves
+  the saved agents' revision; `received_tasks.py` is the `ReceivedTaskStore` of feature 009,
   the conversations and received tasks of other agents (`PostgresReceivedTaskStore` with
   `freyja_a2a_conversations` and `freyja_a2a_tasks`, and `InMemoryReceivedTaskStore`), whose
   conversation row is what makes a thread a caller's and which accepts a message under one
@@ -318,7 +323,8 @@ startup and exits with an error naming the connection when it is unreachable.
   agent and gives up its pending tasks, and
   `POST /agents/{id}/check`, which reads an agent's card again through its link and says
   whether the agent can be used; the first three are the only answers of the service that hold
-  a saved agent's address;
+  a saved agent's address; and `PUT /agents/mode`, which sets the agents' approval mode
+  (feature 010), returned with the list as `mode`;
   `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
   `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
   asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
@@ -354,9 +360,13 @@ startup and exits with an error naming the connection when it is unreachable.
   with), removes a saved agent behind a confirmation (`remove-dialog.tsx`), says how many
   pending tasks a move or a removal gave up, checks an agent from
   its card (`check-result.tsx`), and warns above the cards about every agent that cannot be
-  used (`agents-warning.tsx`). The sidebar reads the same
-  list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used, so
-  every page asks for `/api/agents` once.
+  used (`agents-warning.tsx`). Feature 010 names an agent's approval choice Manual or Auto:
+  a saved agent's card switches it behind a confirmation (`mode-dialog.tsx`), and an Auto
+  agent's card says when the agents' approval mode holds it to Manual. The sidebar reads the
+  same list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used,
+  and the agents' approval mode, under the Tasks entry, as the dropdown that changes it
+  (`web/components/agents-mode.tsx`, which asks before Auto), so every page asks for
+  `/api/agents` once.
   `web/app/tasks/` is the Tasks section (feature 007), with the list of tasks under the notice
   that the console has no users (`task-list.tsx`), and `web/app/tasks/[id]/` one task, whose
   id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
@@ -442,6 +452,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
   the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
   agent, checking one, changing one's approval choice, moving one, and removing one;
+  `agents-mode.spec.ts` the agents' approval mode under Tasks and an agent's own mode on its
+  card (feature 010);
   `tasks.spec.ts` the Tasks section, and that a page of another origin cannot show it in a
   frame, `tasks-decide.spec.ts` deciding a proposal, and
   `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
@@ -513,6 +525,8 @@ startup and exits with an error naming the connection when it is unreachable.
   share (a tool step a test holds open, a stream read in a thread of its own);
   `test_a2a_progress.py` the tests of feature 008, the progress of pending agent tasks, in
   eight parts, from what counts as progress to the stream of an agent that does not stream;
+  `test_agents_mode.py` the tests of feature 010, the agents' approval mode, from the set's
+  rule to a run in progress that Manual holds at once;
   `a2a_caller.py` the stand-in caller of feature 009, the SDK's own client behind a small
   class and a command, as another agent would call Freyja; `a2a_requests.py` the requests
   the feature's tests make to the A2A routes, with the stand-in caller and without it;

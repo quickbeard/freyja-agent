@@ -59,6 +59,11 @@ export type Agent = {
 export type AgentList = {
   /** Environment agents first, in configuration order, then saved agents by name. */
   agents: Agent[];
+  /**
+   * The agents' approval mode (feature 010): `manual` has every message to every agent wait
+   * for a person; `auto` lets an agent whose own mode is Auto run without one.
+   */
+  mode: AgentsMode;
   /** How many agents can be saved. */
   limit: number;
   /** How many agents are `unreachable` or `not_in_use`. */
@@ -74,6 +79,31 @@ export function listAgents(): Promise<AgentList> {
 
 /** Whether a message to an agent waits for a person: `none` runs without approval. */
 export type Approval = "required" | "none";
+
+/** The agents' approval mode, the switch of the sidebar's Tasks section (feature 010). */
+export type AgentsMode = "manual" | "auto";
+
+/** An agent's own mode as the console names it: Auto is the approval choice `none`. */
+export function agentMode(approval: Approval): AgentsMode {
+  return approval === "none" ? "auto" : "manual";
+}
+
+/** The approval choice an agent's own mode is sent as. */
+export function approvalOf(mode: AgentsMode): Approval {
+  return mode === "auto" ? "none" : "required";
+}
+
+/**
+ * Set the agents' approval mode. Manual holds at once, also for runs in progress; Auto
+ * holds from the next run. The service contacts no agent.
+ */
+export async function setAgentsMode(mode: AgentsMode): Promise<AgentsMode> {
+  const answer = await api<{ mode: AgentsMode }>(`${AGENTS_KEY}/mode`, {
+    method: "PUT",
+    body: { mode },
+  });
+  return answer.mode;
+}
 
 /** What an operator enters to add an agent. */
 export type NewAgent = { name: string; url: string; approval?: Approval };

@@ -518,8 +518,8 @@ describe("AgentForm, adding", () => {
 const choice = (name: string) =>
   screen.getByRole("radio", { name }) as HTMLInputElement;
 const choose = (name: string) => fireEvent.click(choice(name));
-const REQUIRED = "Requires approval";
-const FREE = "Runs without approval";
+const REQUIRED = "Manual";
+const FREE = "Auto";
 const confirmation = () => screen.queryByRole("note", { name: "Confirmation" });
 const confirm = (detail = 1) =>
   fireEvent.click(screen.getByRole("button", { name: "Confirm" }), { detail });

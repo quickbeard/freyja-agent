@@ -1,10 +1,11 @@
 """009: a caller's task and the approval gate (FR-013, FR-013a, research R6).
 
-Part 1, the strict build: the orchestrator a thread a caller started runs on. Every message to
-a delegate agent waits for a person there, whatever the agent's approval choice, also from the
-subagent and from a run of the worker's; the check at send time agrees with the gate; a
-caller's thread runs on no other build, and a graph of a run context runs through ``astream``
-only. Runs are started as a caller's message starts them (``ReceivedTasks.accept``) or through
+Part 1, the strict build: the orchestrator a thread a caller started runs on. Since feature
+010 (FR-007), which amended FR-013a, a message to a delegate agent there follows the rule of
+every thread: it waits for a person unless the agents' approval mode is Auto and the agent's
+own choice is to run without approval, also from the subagent and from a run of the
+worker's; the check at send time agrees with the gate; a caller's thread runs on no other
+build, and a graph of a run context runs through ``astream`` only. Runs are started as a caller's message starts them (``ReceivedTasks.accept``) or through
 the functions of ``api/runs.py``.
 """
 
@@ -71,12 +72,19 @@ def approve(client: TestClient, thread: str, sse_events: Any) -> list[tuple[str,
         return sse_events(response.iter_lines())
 
 
-def test_a_hand_off_on_a_caller_s_thread_waits_for_a_person_whatever_the_agent_s_choice(
+def manual(client: TestClient) -> None:
+    """Set the agents' approval mode to Manual, as the console does (feature 010)."""
+    response = client.put("/agents/mode", json={"mode": "manual"})
+    assert response.json() == {"mode": "manual"}, response.text
+
+
+def test_a_hand_off_on_a_caller_s_thread_waits_for_a_person_while_agent_approvals_are_manual(
     make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
 ) -> None:
     model = ScriptedChatModel(script=[handoff()], final_text="Handed over.")
     made = make_a2a_server_app(model)  # the stand-in runs without approval
     with TestClient(made.app) as client:
+        manual(client)
         accepted = made.accept(client, "Ask the stub.")
         events = made.finish(client, accepted)
         thread = accepted.task.thread_id
@@ -84,14 +92,38 @@ def test_a_hand_off_on_a_caller_s_thread_waits_for_a_person_whatever_the_agent_s
         (request,) = events[-1][1]["action_requests"]
         assert (request["name"], request["agent"]) == ("handoff_to_stub", "stub")
         assert made.stub.record.messages == []
-        strict = made.runtime.strict_catalog
-        assert strict.get("handoff_to_stub").classification is Classification.GATED
-        assert made.runtime.catalog.get("handoff_to_stub").classification is (
-            Classification.READ_ONLY
-        )
+        for catalog in (made.runtime.strict_catalog, made.runtime.catalog):
+            assert catalog.get("handoff_to_stub").classification is Classification.GATED
         approved = approve(client, thread, sse_events)
     assert approved[-1][0] == "end"
     assert [message.parts[0][1] for message in made.stub.record.messages] == ["Summarize the week."]
+
+
+def test_a_hand_off_on_a_caller_s_thread_to_an_auto_agent_is_sent_while_agent_approvals_are_auto(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    """010 FR-007: the strict build classifies an agent's tools as the ordinary one does."""
+    model = ScriptedChatModel(script=[handoff()], final_text="Handed over.")
+    made = make_a2a_server_app(model)  # the stand-in runs without approval; the mode is Auto
+    with TestClient(made.app) as client:
+        events = made.finish(client, made.accept(client, "Ask the stub."))
+        for catalog in (made.runtime.strict_catalog, made.runtime.catalog):
+            assert catalog.get("handoff_to_stub").classification is Classification.READ_ONLY
+    assert events[-1][0] != "interrupt"
+    assert [message.parts[0][1] for message in made.stub.record.messages] == ["Summarize the week."]
+
+
+def test_a_hand_off_on_a_caller_s_thread_to_a_manual_agent_waits_while_agent_approvals_are_auto(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(script=[handoff()]), read_only=False)
+    with TestClient(made.app) as client:
+        events = made.finish(client, made.accept(client, "Ask the stub."))
+        assert made.runtime.strict_catalog.get("handoff_to_stub").classification is (
+            Classification.GATED
+        )
+    assert events[-1][0] == "interrupt"
+    assert made.stub.record.messages == []
 
 
 def test_the_same_hand_off_on_a_console_thread_is_sent_without_a_pause(
@@ -112,6 +144,7 @@ def test_a_hand_off_the_subagent_proposes_on_a_caller_s_thread_waits_too(
 ) -> None:
     made = make_a2a_server_app(ScriptedChatModel(script=[DELEGATE, handoff("s")]))
     with TestClient(made.app) as client:
+        manual(client)
         events = made.finish(client, made.accept(client, "Ask through the subagent."))
     assert events[-1][0] == "interrupt"
     assert [r["name"] for r in events[-1][1]["action_requests"]] == ["handoff_to_stub"]
@@ -131,6 +164,7 @@ def test_a_run_of_the_worker_on_a_caller_s_thread_waits_for_a_person_too(
     made = make_a2a_server_app(
         model,
         stubs={"stub": agent},
+        read_only=False,
         a2a_call_timeout_seconds=0.3,
         a2a_poll_interval_seconds=10.0,
     )
@@ -149,24 +183,34 @@ def test_a_run_of_the_worker_on_a_caller_s_thread_waits_for_a_person_too(
     assert len(agent.record.messages) == 1
 
 
-def test_on_the_strict_build_the_check_at_send_time_wants_a_person_s_decision(
+def test_the_check_at_send_time_follows_the_agents_approval_mode(
     make_a2a_server_app: Callable[..., ServerApp],
 ) -> None:
+    """010 FR-004: a tool built to run without approval reads the mode before it sends a
+    message no person decided; a tool built gated wants a decision, as before."""
     made = make_a2a_server_app(ScriptedChatModel())
-    with TestClient(made.app):
+    with TestClient(made.app) as client:
         (link,) = made.runtime.agents
-        strict = a2a_tools._Send(link, made.runtime.agent_tasks, True, None, strict=True)
-        plain = a2a_tools._Send(link, made.runtime.agent_tasks, False, None)
+        saved = made.runtime.saved_agents
+        free = a2a_tools._Send(link, made.runtime.agent_tasks, False, None, saved)
+        gated = a2a_tools._Send(link, made.runtime.agent_tasks, True, None, saved)
 
         async def check(send: a2a_tools._Send, call: Any) -> None:
             await a2a_tools._still_allowed(send, call)
 
-        # No row for the call, and a row no person decided: both refused on the strict build.
+        # Auto: nothing is kept back from a tool built to run without approval.
+        for call in (None, _Call(decided=False), _Call(decided=True)):
+            client.portal.call(check, free, call)
+        manual(client)
+        # Manual: a message no person decided is kept back, whether or not it has a row.
         for call in (None, _Call(decided=False)):
-            with pytest.raises(ToolException, match="only once a person approved"):
-                asyncio.run(check(strict, call))
-        asyncio.run(check(strict, _Call(decided=True)))
-        asyncio.run(check(plain, None))
+            with pytest.raises(ToolException, match="now requires approval"):
+                client.portal.call(check, free, call)
+        client.portal.call(check, free, _Call(decided=True))
+        # A tool built gated wants a person's decision whatever the mode.
+        with pytest.raises(ToolException, match="now requires approval"):
+            client.portal.call(check, gated, _Call(decided=False))
+        client.portal.call(check, gated, _Call(decided=True))
 
 
 def wrappers(client: TestClient, made: ServerApp) -> tuple[Any, Any, str]:
@@ -699,12 +743,13 @@ def test_a_person_s_stop_ends_a_caller_s_task_as_stopped_before_it_finished(
     assert last["message"]["parts"][0]["text"] == "The run was stopped before it finished."
 
 
-def test_a_hand_off_to_an_agent_that_runs_without_approval_waits_for_a_person(
+def test_a_hand_off_to_an_agent_that_runs_without_approval_waits_for_a_person_while_manual(
     make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
 ) -> None:
     model = ScriptedChatModel(script=[handoff()], final_text="Handed on.")
     made = make_a2a_server_app(model, read_only=True)
     with TestClient(made.app) as client:
+        manual(client)
         answered = as_json(
             call(client, made, lambda caller: caller.send("Ask the stub.", return_immediately=True))
         )

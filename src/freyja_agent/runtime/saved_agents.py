@@ -3,7 +3,10 @@
 A saved agent is one an operator added through the console: operator-managed configuration,
 kept in the service's database and the same for every instance (constitution principle IV).
 Beside the agents sits a one-row revision that moves whenever what a run would be built with
-changes; an instance reads it to learn that the set it built for is no longer current.
+changes; an instance reads it to learn that the set it built for is no longer current. The
+same row holds the switch of feature 010, the agents' approval mode (``Mode``): ``auto`` lets
+an agent whose own choice is to run without approval do so, ``manual`` has every message to
+every agent wait for a person. A change of it moves the revision.
 
 Two stores meet in one place. Moving or removing a saved agent gives up its pending tasks,
 and the change and the giving up happen together or not at all (FR-024):
@@ -20,7 +23,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass, fields, replace
 from datetime import UTC, datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, get_args
 
 from psycopg import errors, sql
 from psycopg.types.json import Jsonb
@@ -39,6 +42,10 @@ AGENT_LIMIT = 20
 # The transaction-level advisory lock that makes the count and the insert one step.
 _LIMIT_LOCK = 0x4652414754  # "FRAGT"
 _NAME = re.compile(SERVER_NAME_PATTERN)
+
+# The agents' approval mode (feature 010): ``auto`` where nobody set it.
+Mode = Literal["manual", "auto"]
+MODES: tuple[Mode, ...] = get_args(Mode)
 
 
 class SavedAgentError(Exception):
@@ -108,6 +115,10 @@ class CardRecorded:
 
 class SavedAgentStore(Protocol):
     async def revision(self) -> int: ...
+
+    async def mode(self) -> Mode: ...
+
+    async def set_mode(self, mode: Mode) -> Mode: ...
 
     async def list_agents(self) -> list[SavedAgentRecord]: ...
 
@@ -191,12 +202,25 @@ class InMemorySavedAgentStore:
         self._clock = clock
         self._agents: dict[str, SavedAgentRecord] = {}
         self._revision = 0
+        self._mode: Mode = "auto"
 
     def _now(self) -> datetime:
         return datetime.fromtimestamp(self._clock(), UTC)
 
     async def revision(self) -> int:
         return self._revision
+
+    async def mode(self) -> Mode:
+        return self._mode
+
+    async def set_mode(self, mode: Mode) -> Mode:
+        """Keep ``mode``; the revision moves only when the mode changed (feature 010)."""
+        if mode not in MODES:
+            raise InvalidAgentError(f"The agents' mode is one of {list(MODES)}.")
+        if mode != self._mode:
+            self._mode = mode
+            self._revision += 1
+        return self._mode
 
     async def list_agents(self) -> list[SavedAgentRecord]:
         return sorted(self._agents.values(), key=lambda record: record.name)
@@ -330,6 +354,11 @@ BUMP_REVISION = (
 _OF_AGENT = " AND split_part(agent_ref, ':', 1) = %(id)s"
 
 
+def _mode(value: Any) -> Mode:
+    """The mode a row holds; anything else is taken for ``manual``, which asks a person."""
+    return "auto" if value == "auto" else "manual"
+
+
 def _record(row: dict[str, Any]) -> SavedAgentRecord:
     return SavedAgentRecord(**{name: row[name] for name in _COLUMNS})
 
@@ -358,6 +387,24 @@ class PostgresSavedAgentStore:
         async with self._pool.connection() as conn:
             cursor = await conn.execute("SELECT revision FROM freyja_agents_state WHERE id = 1")
             return (await one_row(cursor))["revision"]
+
+    async def mode(self) -> Mode:
+        async with self._pool.connection() as conn:
+            cursor = await conn.execute("SELECT mode FROM freyja_agents_state WHERE id = 1")
+            return _mode((await one_row(cursor))["mode"])
+
+    async def set_mode(self, mode: Mode) -> Mode:
+        """Keep ``mode``, moving the revision in the same statement when it changed."""
+        if mode not in MODES:
+            raise InvalidAgentError(f"The agents' mode is one of {list(MODES)}.")
+        async with self._pool.connection() as conn, conn.transaction():
+            await conn.execute(
+                "UPDATE freyja_agents_state SET mode = %(mode)s, revision = revision + 1,"
+                " updated_at = now() WHERE id = 1 AND mode <> %(mode)s",
+                {"mode": mode},
+            )
+            cursor = await conn.execute("SELECT mode FROM freyja_agents_state WHERE id = 1")
+            return _mode((await one_row(cursor))["mode"])
 
     async def list_agents(self) -> list[SavedAgentRecord]:
         async with self._pool.connection() as conn:

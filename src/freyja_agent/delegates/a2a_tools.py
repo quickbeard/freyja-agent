@@ -1,10 +1,13 @@
 """An A2A agent's two tools: the hand-off and the cancel (feature 003, research R4, R12).
 
 Each agent in use contributes ``handoff_to_<agent>`` and ``cancel_<agent>_task``. Both carry
-the agent's classification, decided by its approval choice alone: the environment's entry
-for an agent named there (``read_only: true`` or not), the saved choice for a saved agent,
-which the agent set carries (FR-011, 005 FR-022). What the card says about the agent
-describes the hand-off tool and never classifies it, and neither does whether it answers.
+the agent's classification, decided by its approval choice and the agents' approval mode
+alone: the environment's entry for an agent named there (``read_only: true`` or not), the
+saved choice for a saved agent, and the instance's mode, which the agent set carries (FR-011,
+005 FR-022, 010 FR-003). An agent's tools run without approval only when the mode is
+``auto`` and the agent's choice is to run without approval, on every orchestrator, the strict
+one of callers' threads included (010 FR-007). What the card says about the agent describes
+the hand-off tool and never classifies it, and neither does whether it answers.
 
 Before a tool sends anything it checks, in this order (005 research R7): the send ledger, so
 a step that runs again returns what it recorded; for an answer or a cancel, that the task
@@ -13,9 +16,11 @@ it when it does not; and that the call was proposed for the agent this tool was 
 which the row written at the model's reply says (005 FR-023, research R8). A saved agent's
 tool then reads its agent from the store, by id, with nothing left to await before the send's
 first write: an agent that was removed is sent nothing, and neither is one that requires
-approval now when no person decided the call (005 FR-022). So a removal and a switch to
-requiring approval hold at once, on every instance, for runs in progress and for a step
-that runs again. A message kept back by one of these is an error result that names the
+approval now when no person decided the call (005 FR-022). A tool built to run without
+approval also reads the agents' mode then, and sends nothing no person decided while the
+mode is ``manual`` (010 FR-004). So a removal, a switch to requiring approval, and the mode
+set to ``manual`` hold at once, on every instance, for runs in progress and for a step that
+runs again. A message kept back by one of these is an error result that names the
 agent, the run continues, and nothing is sent.
 
 The argument models are pydantic, so an edit decision is validated by the existing model path
@@ -154,9 +159,9 @@ class _Send:
     # Where a saved agent is read before a send; None for an agent named in the environment,
     # which cannot change while the service runs.
     saved: SavedAgentStore | None
-    # Feature 009: built for the strict orchestrator of callers' threads, where every message
-    # to an agent waits for a person whatever the agent's choice (FR-013a, research R6).
-    strict: bool = False
+    # Where the agents' approval mode is read before a send no person decided (010 FR-004),
+    # for every agent; None only for tools built without the store, which follow ``gated``.
+    modes: SavedAgentStore | None = None
 
 
 def agent_tools(
@@ -165,21 +170,18 @@ def agent_tools(
     *,
     gated: bool | None = None,
     saved: SavedAgentStore | None = None,
-    strict: bool = False,
 ) -> tuple[DelegateTool, DelegateTool]:
-    """The hand-off and cancel tools of one agent, classified by its approval choice (FR-011).
+    """The hand-off and cancel tools of one agent, classified as the agent set says (FR-011).
 
-    ``gated`` is the choice the agent set carries. Given none, the link's own entry decides,
-    as it always has for an agent named in the environment; a saved agent's link is never
-    read-only, so a caller that forgets the set gates. The tools keep the classification
-    they are built with, whatever becomes of the link.
+    ``gated`` is what the agent set says of the agent: its approval choice under the agents'
+    approval mode (010 FR-003). Given none, the link's own entry decides, as it always has
+    for an agent named in the environment; a saved agent's link is never read-only, so a
+    caller that forgets the set gates. The tools keep the classification they are built
+    with, whatever becomes of the link.
 
     ``saved`` is the saved-agent store, which a saved agent's tools read before every send
-    (005 FR-022). Tools for a saved agent are not built without it.
-
-    ``strict`` builds them for the strict orchestrator of the threads callers start over A2A
-    (feature 009): gated whatever ``gated`` says, and checked before every send for a
-    person's approval or edit (``_still_allowed``).
+    (005 FR-022), and every agent's tools read the agents' mode from (010 FR-004). Tools for
+    a saved agent are not built without it.
     """
     if link.source == "saved" and saved is None:
         raise ValueError(
@@ -187,9 +189,8 @@ def agent_tools(
         )
     if gated is None:
         gated = not link.read_only
-    gated = gated or strict
     classification = Classification.GATED if gated else Classification.READ_ONLY
-    send = _Send(link, store, gated, saved if link.source == "saved" else None, strict)
+    send = _Send(link, store, gated, saved if link.source == "saved" else None, saved)
     handoff = StructuredTool(
         name=handoff_tool_name(link.name),
         description=handoff_description(link),
@@ -448,9 +449,15 @@ async def _not_removed(send: _Send) -> None:
         raise _failed(send.link, was_removed(send.link.name))
 
 
+async def _manual(send: _Send) -> bool:
+    """Whether the agents' approval mode is ``manual`` now (010 FR-004)."""
+    return send.modes is not None and await send.modes.mode() == "manual"
+
+
 async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
     """Keep back a message to a saved agent that was removed, and a message that no person
-    decided to an agent that requires approval now (005 FR-022, research R7).
+    decided to an agent that requires approval now (005 FR-022, research R7), whether by its
+    own choice or because the agents' approval mode is ``manual`` now (010 FR-004).
 
     A saved agent is read from the store by its id, so the answer is the same on every
     instance from the moment a change is committed, and an agent saved again under the
@@ -472,13 +479,14 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
     """
     link = send.link
     decided = call is not None and call.decided
-    if send.strict and not decided:
-        # Feature 009: on a caller's thread a message to an agent leaves only once a person
-        # approved or edited it, also when no row was kept for the call (FR-013a, R6).
-        raise _failed(link, needs_a_person(link.name))
     if send.saved is None:
-        # A call with no row was proposed before the rows existed, and follows the tool.
-        if send.gated and call is not None and not decided:
+        if send.gated:
+            # A call with no row was proposed before the rows existed, and follows the tool.
+            if call is not None and not decided:
+                raise _failed(link, now_requires_approval(link.name))
+            return
+        # Built to run without approval: unless the mode was set to ``manual`` since.
+        if not decided and await _manual(send):
             raise _failed(link, now_requires_approval(link.name))
         return
     record = await send.saved.get_agent(link.agent_id or "")
@@ -494,18 +502,10 @@ async def _still_allowed(send: _Send, call: ProposedCall | None) -> None:
         taken = any(found.id != link.agent_id and found.destination == left for found in records)
     if record is None:
         raise _failed(link, was_removed(link.name))
-    if not record.read_only and not decided:
+    if not decided and (not record.read_only or await _manual(send)):
         raise _failed(link, now_requires_approval(link.name))
     if taken:
         raise _failed(link, address_is_another_agent_s(link.name))
-
-
-def needs_a_person(agent: str) -> str:
-    """The result of a message to an agent from a caller's thread that no person decided."""
-    return (
-        f"Nothing was sent to agent '{agent}': on a task another agent started, a message to "
-        "an agent is sent only once a person approved it."
-    )
 
 
 def may_not_have_received(agent: str) -> str:

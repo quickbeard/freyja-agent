@@ -196,6 +196,32 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationErrors" }
+  /agents/mode:
+    put:
+      summary: Set the agents' approval mode (added by feature 010)
+      description: >
+        Added by feature 010 (../../010-agent-auto-mode/spec.md, FR-005). `manual` has every
+        message to every agent wait for a person's decision, whatever each agent's approval
+        choice; `auto` lets an agent whose choice is `none` run without one. Manual holds at
+        once, on every instance, also for runs in progress; Auto holds from the next run. A
+        request that changes nothing answers with the mode. No agent is contacted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/AgentsMode" }
+      responses:
+        "200":
+          description: The mode as kept
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AgentsMode" }
+        "403": { $ref: "#/components/responses/OtherOrigin" }
+        "422":
+          description: A body with any field but `mode`, or a mode that is neither `manual` nor `auto`.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationErrors" }
   /agents/{agent_id}/check:
     parameters:
       - { $ref: "#/components/parameters/AgentId" }
@@ -310,11 +336,22 @@ components:
         pending_tasks: { type: integer, minimum: 0, description: Tasks pending for the agent, on every thread. }
         created_at: { type: [string, "null"], format: date-time, description: Null for an environment agent. }
         updated_at: { type: [string, "null"], format: date-time, description: Null for an environment agent. }
+    AgentsMode:
+      type: object
+      additionalProperties: false
+      required: [mode]
+      description: Added by feature 010. The agents' approval mode, one for the instance.
+      properties:
+        mode: { type: string, enum: [manual, auto] }
     AgentList:
       type: object
-      required: [agents, limit, unusable]
+      required: [agents, mode, limit, unusable]
       properties:
         agents: { type: array, items: { $ref: "#/components/schemas/Agent" } }
+        mode:
+          type: string
+          enum: [manual, auto]
+          description: Added by feature 010. The agents' approval mode; `auto` where nobody set it.
         limit: { type: integer, const: 20, description: How many agents can be saved. }
         unusable: { type: integer, minimum: 0, description: How many agents are `unreachable` or `not_in_use`. }
     AgentCreate:

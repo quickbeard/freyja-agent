@@ -81,7 +81,7 @@ function agent(name: string, state: Agent["state"]): Agent {
 }
 
 function list(...agents: Agent[]): Reply {
-  const json: AgentList = { agents, limit: 20, unusable: 0 };
+  const json: AgentList = { agents, mode: "auto", limit: 20, unusable: 0 };
   return { json };
 }
 

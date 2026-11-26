@@ -48,6 +48,7 @@ from tests.test_saved_agent_store import (
     test_card_details_are_replaced_only_for_the_address_they_were_read_at,
     test_one_change_can_move_an_agent_and_change_its_approval_choice,
     test_pending_tasks_are_counted_by_saved_agent,
+    test_the_agents_mode_is_auto_until_set_and_moves_the_revision_when_it_changes,
     test_the_revision_moves_once_for_every_change,
     test_the_twenty_first_agent_is_refused,
     test_two_agents_cannot_share_a_name_or_an_address,
@@ -69,6 +70,7 @@ __all__ = [
     "test_card_details_are_replaced_only_for_the_address_they_were_read_at",
     "test_one_change_can_move_an_agent_and_change_its_approval_choice",
     "test_pending_tasks_are_counted_by_saved_agent",
+    "test_the_agents_mode_is_auto_until_set_and_moves_the_revision_when_it_changes",
     "test_the_revision_moves_once_for_every_change",
     "test_the_twenty_first_agent_is_refused",
     "test_two_agents_cannot_share_a_name_or_an_address",
@@ -131,6 +133,15 @@ async def test_the_two_tables_are_created_and_the_state_is_one_row(
         assert (await cursor.fetchone()) == (1, 0)
         with pytest.raises(psycopg.errors.CheckViolation):
             await conn.execute("INSERT INTO freyja_agents_state (id) VALUES (2)")
+
+
+async def test_a_second_instance_sees_the_same_mode(
+    store: SavedAgentStore, other_store: SavedAgentStore
+) -> None:
+    """Feature 010 (FR-001): the mode is the same for every instance."""
+    await store.set_mode("manual")
+    assert await other_store.mode() == "manual"
+    assert await other_store.revision() == await store.revision()
 
 
 async def test_a_second_instance_sees_the_same_agents_and_revision(

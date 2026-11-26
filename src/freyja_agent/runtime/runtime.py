@@ -142,14 +142,15 @@ def _build(
     """The orchestrator around ``model`` with the tool servers' tools and the set's agents'.
 
     Each agent's two tools take their classification from the set, which carries the
-    approval choice, and a saved agent's tools are given the store they read their agent
-    from before a send (005 research R7). Agent tasks exist only with agents: without any,
-    the orchestrator is what it was before feature 003 (003 FR-024).
+    approval choice and the agents' approval mode, and are given the store they read their
+    agent and the mode from before a send (005 research R7, 010 FR-004). Agent tasks exist
+    only with agents: without any, the orchestrator is what it was before feature 003 (003
+    FR-024).
 
-    ``strict`` builds the orchestrator of callers' threads (feature 009, research R6): every
-    agent tool gated and checked for a person's decision before a send, the files of the
-    caller the run is for (``CallerFiles``, under ``files_dir``), and the thread named by its
-    alias.
+    ``strict`` builds the orchestrator of callers' threads (feature 009, research R6): the
+    files of the caller the run is for (``CallerFiles``, under ``files_dir``), and the thread
+    named by its alias. Its agent tools are classified as the ordinary build's are, since
+    feature 010 (FR-007), which amended 009's FR-013a.
     """
     links = agents.links if agents is not None else ()
     if strict:
@@ -174,7 +175,6 @@ def _build(
                 task_store,
                 gated=agents.gated(link),
                 saved=saved_store,
-                strict=strict,
             )
         ]
     )

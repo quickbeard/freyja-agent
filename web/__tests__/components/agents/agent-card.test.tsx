@@ -65,16 +65,16 @@ function when(time: string): string {
 }
 
 describe("AgentCard", () => {
-  it("shows the agent's name and its approval choice in words", () => {
+  it("shows the agent's name and its own mode, Manual or Auto", () => {
     const { unmount } = render(<AgentCard agent={STUB} />);
     expect(screen.getByRole("heading", { name: "stub" })).toBeTruthy();
-    expect(screen.getByText("Requires approval")).toBeTruthy();
+    expect(screen.getByText("Manual")).toBeTruthy();
     unmount();
 
     render(<AgentCard agent={HELLO} />);
     expect(screen.getByRole("heading", { name: "hello" })).toBeTruthy();
-    expect(screen.getByText("Runs without approval")).toBeTruthy();
-    expect(screen.queryByText("Requires approval")).toBeNull();
+    expect(screen.getByText("Auto")).toBeTruthy();
+    expect(screen.queryByText("Manual")).toBeNull();
   });
 
   it("shows its state with the time of the most recent attempt", () => {
@@ -165,7 +165,7 @@ describe("AgentCard", () => {
     expect(said.getByText("just returns hello world")).toBeTruthy();
     expect(said.getByText("hello world, greeting")).toBeTruthy();
     // The approval choice is the operator's, and stands apart from the claim.
-    expect(said.queryByText("Runs without approval")).toBeNull();
+    expect(said.queryByText("Auto")).toBeNull();
     expect(screen.queryByText(/was cut/)).toBeNull();
   });
 
@@ -241,16 +241,21 @@ describe("AgentCard", () => {
     ).toBeNull();
   });
 
-  it("offers Check, and Edit and Remove for a saved agent, and nothing in the card itself that changes or removes the agent", () => {
-    for (const [shown, buttons] of [
-      [HELLO, ["Check"]],
-      [STUB, ["Check", "Edit", "Remove"]],
+  it("offers Check, and Edit, Remove, and its mode's switch for a saved agent, and nothing in the card itself that changes or removes the agent", () => {
+    for (const [shown, buttons, switches] of [
+      [HELLO, ["Check"], []],
+      [STUB, ["Check", "Edit", "Remove"], ["Auto mode for stub"]],
     ] as const) {
       const { unmount } = render(<AgentCard agent={shown} />);
       expect(
         screen.getAllByRole("button").map((button) => button.textContent),
       ).toEqual(buttons);
-      for (const role of ["link", "textbox", "switch", "combobox", "radio"]) {
+      expect(
+        screen
+          .queryAllByRole("switch")
+          .map((found) => found.getAttribute("aria-label")),
+      ).toEqual(switches);
+      for (const role of ["link", "textbox", "combobox", "radio"]) {
         expect(screen.queryAllByRole(role)).toEqual([]);
       }
       unmount();
@@ -714,6 +719,182 @@ describe("AgentCard, Remove and pending tasks", () => {
       const { unmount } = render(<AgentCard agent={shown} />);
       expect(screen.queryByText("Pending tasks")).toBeNull();
       unmount();
+    }
+  });
+});
+
+// Feature 010: the agent's own mode, Manual or Auto, switched from its card.
+
+const autoSwitch = () =>
+  screen.getByRole("switch", { name: "Auto mode for stub" });
+
+function sentBodies(fetchStub: ReturnType<typeof stubFetch>) {
+  return fetchStub.mock.calls.map(([input, init]) => [
+    String(input),
+    init?.method ?? "GET",
+    init?.body === undefined ? undefined : JSON.parse(String(init.body)),
+  ]);
+}
+
+describe("AgentCard, its own mode", () => {
+  it("shows an environment agent's mode and a not-in-use agent's without a switch", () => {
+    for (const shown of [
+      HELLO,
+      { ...HELLO, approval: "required" as const },
+      agent({
+        state: "not_in_use",
+        reason: "An agent named in the environment has this name.",
+      }),
+    ]) {
+      const { unmount } = render(<AgentCard agent={shown} />);
+      expect(screen.queryAllByRole("switch")).toEqual([]);
+      expect(
+        screen.getByText(shown.approval === "none" ? "Auto" : "Manual"),
+      ).toBeTruthy();
+      unmount();
+    }
+  });
+
+  it("asks first when the switch is pressed, and sends nothing when the question is canceled", async () => {
+    const fetchStub = stubFetch({ json: {} });
+    render(<AgentCard agent={STUB} />);
+    expect((autoSwitch() as HTMLElement).getAttribute("aria-checked")).toBe(
+      "false",
+    );
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog", {
+      name: "Set stub to Auto?",
+    });
+    expect(asked.textContent).toContain(
+      "every message to stub will be sent without approval",
+    );
+    expect(fetchStub).not.toHaveBeenCalled();
+    fireEvent.click(within(asked).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("sends the version the card showed and the new choice once confirmed, and has the list read again", async () => {
+    const fetchStub = stubFetch({
+      json: { agent: { ...STUB, approval: "none", version: 3 }, given_up: 0 },
+    });
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog");
+    // The second press of a double press is not a decision.
+    fireEvent.click(
+      within(asked).getByRole("button", { name: "Set to Auto" }),
+      {
+        detail: 2,
+      },
+    );
+    expect(fetchStub).not.toHaveBeenCalled();
+    fireEvent.click(within(asked).getByRole("button", { name: "Set to Auto" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sentBodies(fetchStub)).toEqual([
+      [`/api/agents/${STUB.id}`, "PATCH", { version: 2, approval: "none" }],
+    ]);
+    expect(onChecked).toHaveBeenCalled();
+  });
+
+  it("sets an Auto agent back to Manual, saying that it holds at once", async () => {
+    const fetchStub = stubFetch({
+      json: { agent: { ...STUB, version: 4 }, given_up: 0 },
+    });
+    render(<AgentCard agent={agent({ approval: "none", version: 3 })} />);
+    expect(autoSwitch().getAttribute("aria-checked")).toBe("true");
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog", {
+      name: "Set stub to Manual?",
+    });
+    expect(asked.textContent).toContain("This holds at once");
+    fireEvent.click(
+      within(asked).getByRole("button", { name: "Set to Manual" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(sentBodies(fetchStub)).toEqual([
+      [`/api/agents/${STUB.id}`, "PATCH", { version: 3, approval: "required" }],
+    ]);
+  });
+
+  it("sends nothing once the list shows the agent at a later version, and says so", async () => {
+    const fetchStub = stubFetch({ json: {} });
+    const { rerender } = render(<AgentCard agent={STUB} />);
+    fireEvent.click(autoSwitch());
+    await screen.findByRole("alertdialog");
+    rerender(<AgentCard agent={agent({ version: 3 })} />);
+    const asked = screen.getByRole("alertdialog");
+    expect(within(asked).getByRole("alert").textContent).toContain(
+      "was changed elsewhere while this was open",
+    );
+    const confirm = within(asked).getByRole("button", {
+      name: "Set to Auto",
+    }) as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    fireEvent.click(confirm);
+    expect(fetchStub).not.toHaveBeenCalled();
+  });
+
+  it("shows the service's refusal, and has the list read again", async () => {
+    stubFetch(
+      refusal(
+        409,
+        "agent_changed",
+        "The agent was changed since this page read it. Nothing was changed.",
+      ),
+    );
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog");
+    fireEvent.click(within(asked).getByRole("button", { name: "Set to Auto" }));
+    expect((await within(asked).findByRole("alert")).textContent).toBe(
+      "The agent was changed since this page read it. Nothing was changed.",
+    );
+    expect(onChecked).toHaveBeenCalled();
+  });
+
+  it("says that the outcome is not known when no answer came, never that it failed", async () => {
+    stubFetch({ fails: "network down" });
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog");
+    fireEvent.click(within(asked).getByRole("button", { name: "Set to Auto" }));
+    expect((await within(asked).findByRole("alert")).textContent).toContain(
+      "it is not known whether the agent was changed",
+    );
+    expect(onChecked).toHaveBeenCalled();
+  });
+
+  it("closes when the service says the agent is gone, and has the list read again", async () => {
+    stubFetch(
+      refusal(404, "agent_not_found", "There is no agent with this id."),
+    );
+    const onChecked = vi.fn();
+    render(<AgentCard agent={STUB} onChecked={onChecked} />);
+    fireEvent.click(autoSwitch());
+    const asked = await screen.findByRole("alertdialog");
+    fireEvent.click(within(asked).getByRole("button", { name: "Set to Auto" }));
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    expect(onChecked).toHaveBeenCalled();
+  });
+
+  it("says that an Auto agent is held to Manual while agent approvals are Manual", () => {
+    const { unmount } = render(
+      <AgentCard agent={agent({ approval: "none" })} mode="manual" />,
+    );
+    expect(screen.getByText(/^Held to Manual/)).toBeTruthy();
+    unmount();
+    for (const [shown, mode] of [
+      [agent({ approval: "none" }), "auto"],
+      [STUB, "manual"],
+      [agent({ approval: "none" }), undefined],
+    ] as const) {
+      const { unmount: gone } = render(<AgentCard agent={shown} mode={mode} />);
+      expect(screen.queryByText(/^Held to Manual/)).toBeNull();
+      gone();
     }
   });
 });

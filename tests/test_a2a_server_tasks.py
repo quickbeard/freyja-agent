@@ -182,6 +182,8 @@ def test_an_agent_task_awaited_is_working_and_names_the_agent(
     made = make_a2a_server_app(
         ScriptedChatModel(script=[HAND_OFF, AIMessage(content="Handed over.")]),
         stubs={"stub": agent},
+        # An agent that requires approval: the hand-off waits for a person (010 FR-007).
+        read_only=False,
         a2a_call_timeout_seconds=0.3,
     )
     with TestClient(made.app) as client:
