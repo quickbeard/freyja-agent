@@ -169,7 +169,14 @@ class ReceivedTaskStore(Protocol):
         """Remove a task whose run never started, as when the run was refused."""
         ...
 
-    async def count_rejection(self, task_id: str, next_at: datetime) -> None: ...
+    async def count_rejection(self, task_id: str, attempts: int, next_at: datetime) -> bool:
+        """Count one attempt to reject the thread's proposal by rule, not before ``next_at``
+        again, when ``attempts`` were counted so far; False when another counted it first."""
+        ...
+
+    async def rejection_done(self, task_id: str) -> None:
+        """No proposal of the task's thread is left to reject by rule: it is not tried again."""
+        ...
 
     async def conversation_of(self, thread_id: str) -> Conversation | None: ...
 
@@ -179,7 +186,18 @@ class ReceivedTaskStore(Protocol):
 
     async def last_task_of_thread(self, thread_id: str) -> ReceivedTask | None: ...
 
+    async def last_started_task_of_thread(self, thread_id: str) -> ReceivedTask | None:
+        """The last task of the thread whose run took the lease: the only one a run on the
+        thread, and so a proposal of it, can be of. A message accepted and not yet started
+        is not it."""
+        ...
+
     async def unreleased(self, limit: int) -> list[ReceivedTask]: ...
+
+    async def to_reject(self, attempts: int, limit: int) -> list[ReceivedTask]:
+        """Tasks that ended and whose proposal is to be rejected by rule again: tried fewer
+        than ``attempts`` times, at most ``limit`` of them, the earliest first."""
+        ...
 
 
 def _checked_end(state: str, reason: str | None, result: str | None) -> None:
@@ -302,12 +320,17 @@ class InMemoryReceivedTaskStore:
         del self._tasks[task_id]
         return True
 
-    async def count_rejection(self, task_id: str, next_at: datetime) -> None:
+    async def count_rejection(self, task_id: str, attempts: int, next_at: datetime) -> bool:
         task = self._tasks.get(task_id)
-        if task is not None:
-            self._tasks[task_id] = replace(
-                task, reject_attempts=task.reject_attempts + 1, reject_after=next_at
-            )
+        if task is None or task.reject_attempts != attempts:
+            return False
+        self._tasks[task_id] = replace(task, reject_attempts=attempts + 1, reject_after=next_at)
+        return True
+
+    async def rejection_done(self, task_id: str) -> None:
+        task = self._tasks.get(task_id)
+        if task is not None and task.reject_after is not None:
+            self._tasks[task_id] = replace(task, reject_after=None)
 
     async def conversation_of(self, thread_id: str) -> Conversation | None:
         return next(
@@ -335,8 +358,19 @@ class InMemoryReceivedTaskStore:
     async def last_task_of_thread(self, thread_id: str) -> ReceivedTask | None:
         return self._last(lambda task: task.thread_id == thread_id)
 
+    async def last_started_task_of_thread(self, thread_id: str) -> ReceivedTask | None:
+        return self._last(lambda task: task.thread_id == thread_id and task.started_at is not None)
+
     async def unreleased(self, limit: int) -> list[ReceivedTask]:
         return [task for task in self._tasks.values() if task.released_at is None][:limit]
+
+    async def to_reject(self, attempts: int, limit: int) -> list[ReceivedTask]:
+        found = [
+            task
+            for task in self._tasks.values()
+            if task.ended and task.reject_after is not None and task.reject_attempts < attempts
+        ]
+        return sorted(found, key=lambda task: task.reject_after or task.created_at)[:limit]
 
 
 # Fixed statements with bound parameters only.
@@ -355,6 +389,11 @@ SELECT * FROM freyja_a2a_tasks
 """
 _LAST_OF_THREAD = """
 SELECT * FROM freyja_a2a_tasks WHERE thread_id = %(thread_id)s ORDER BY created_at DESC LIMIT 1
+"""
+_LAST_STARTED_OF_THREAD = """
+SELECT * FROM freyja_a2a_tasks
+ WHERE thread_id = %(thread_id)s AND started_at IS NOT NULL
+ ORDER BY created_at DESC LIMIT 1
 """
 _COUNTING = """
 SELECT count(*) FILTER (WHERE caller = %(caller)s) AS mine, count(*) AS total
@@ -388,7 +427,11 @@ DELETE FROM freyja_a2a_tasks
 _COUNT_REJECTION = """
 UPDATE freyja_a2a_tasks
    SET reject_attempts = reject_attempts + 1, reject_after = %(next_at)s
- WHERE task_id = %(task_id)s
+ WHERE task_id = %(task_id)s AND reject_attempts = %(attempts)s
+"""
+_REJECTION_DONE = """
+UPDATE freyja_a2a_tasks SET reject_after = NULL
+ WHERE task_id = %(task_id)s AND reject_after IS NOT NULL
 """
 _CONVERSATION_OF = "SELECT * FROM freyja_a2a_conversations WHERE thread_id = %(thread_id)s"
 _CALLERS_OF = """
@@ -403,6 +446,11 @@ SELECT c.thread_id, c.caller,
 """
 _UNRELEASED = """
 SELECT * FROM freyja_a2a_tasks WHERE released_at IS NULL ORDER BY created_at LIMIT %(limit)s
+"""
+_TO_REJECT = """
+SELECT * FROM freyja_a2a_tasks
+ WHERE state <> 'working' AND reject_after IS NOT NULL AND reject_attempts < %(attempts)s
+ ORDER BY reject_after LIMIT %(limit)s
 """
 _NOW = "SELECT now() AS now"
 
@@ -504,8 +552,12 @@ class PostgresReceivedTaskStore:
     async def remove(self, task_id: str) -> bool:
         return await self._execute(_REMOVE, {"task_id": task_id}) == 1
 
-    async def count_rejection(self, task_id: str, next_at: datetime) -> None:
-        await self._execute(_COUNT_REJECTION, {"task_id": task_id, "next_at": next_at})
+    async def count_rejection(self, task_id: str, attempts: int, next_at: datetime) -> bool:
+        params = {"task_id": task_id, "attempts": attempts, "next_at": next_at}
+        return await self._execute(_COUNT_REJECTION, params) == 1
+
+    async def rejection_done(self, task_id: str) -> None:
+        await self._execute(_REJECTION_DONE, {"task_id": task_id})
 
     async def conversation_of(self, thread_id: str) -> Conversation | None:
         rows = await self._rows(_CONVERSATION_OF, {"thread_id": thread_id})
@@ -523,5 +575,13 @@ class PostgresReceivedTaskStore:
         rows = await self._rows(_LAST_OF_THREAD, {"thread_id": thread_id})
         return _task(rows[0]) if rows else None
 
+    async def last_started_task_of_thread(self, thread_id: str) -> ReceivedTask | None:
+        rows = await self._rows(_LAST_STARTED_OF_THREAD, {"thread_id": thread_id})
+        return _task(rows[0]) if rows else None
+
     async def unreleased(self, limit: int) -> list[ReceivedTask]:
         return [_task(row) for row in await self._rows(_UNRELEASED, {"limit": limit})]
+
+    async def to_reject(self, attempts: int, limit: int) -> list[ReceivedTask]:
+        params = {"attempts": attempts, "limit": limit}
+        return [_task(row) for row in await self._rows(_TO_REJECT, params)]

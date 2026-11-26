@@ -109,6 +109,16 @@ export function byCaller<T extends { row: ThreadSummary; state: ThreadState }>(
   return { ...task, row: { ...task.row, caller: LOCAL_CALLER } };
 }
 
+/** `task` as one whose agent canceled it, the console's row says so (feature 009, request 4). */
+export function canceledByCaller<
+  T extends { row: ThreadSummary; state: ThreadState },
+>(task: T): T {
+  return {
+    ...task,
+    row: { ...task.row, caller: { ...LOCAL_CALLER, canceled: true } },
+  };
+}
+
 /** A task another agent started on this machine, that ended with `reply` (feature 009). */
 export function callerTask(
   service: TaskService,

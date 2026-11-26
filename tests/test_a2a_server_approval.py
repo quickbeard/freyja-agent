@@ -565,26 +565,29 @@ def test_nothing_a_caller_sends_decides_a_pending_proposal(
                 client, "CreateTaskPushNotificationConfig", {"taskId": task_id, "url": "https://x"}
             ),
             rpc(client, "GetExtendedAgentCard", {}),
-            rpc(client, "CancelTask", {"id": task_id, "metadata": approving}),
-            rpc(client, "SubscribeToTask", {"id": task_id}),
         ]
+        # A subscription gives the task as it stands and decides nothing. A cancel, which
+        # rejects the proposal by rule and runs nothing, is part 7 of
+        # tests/test_a2a_server_tasks.py.
+        followed = call(client, made, lambda caller: first_event(caller, task_id))
         after = client.get(f"/threads/{thread}/state").json()["pending"]
         state = made.task(client, task_id).state
     busy = [found.json()["error"]["data"][0]["metadata"] for found in tried[:3]]
     assert busy == 3 * [{"reason": "conversation_busy"}]
     assert tried[3].json()["error"]["code"] == -32602
     assert tried[4].json()["result"]["status"]["state"] == "TASK_STATE_WORKING"
-    assert [found.json()["error"]["code"] for found in tried[5:]] == [
-        -32004,
-        -32003,
-        -32007,
-        -32004,
-        -32004,
-    ]
+    assert [found.json()["error"]["code"] for found in tried[5:]] == [-32004, -32003, -32007]
+    assert text_of(followed) == WAITING
     assert after == before
     assert state == "working"
     assert model.calls == calls
     assert sent_notifications(caplog) == []
+
+
+async def first_event(caller: StandInCaller, task_id: str) -> dict[str, Any]:
+    async for event in caller.follow(task_id):
+        return as_json(event)
+    raise AssertionError("the subscription sent nothing")
 
 
 def test_approved_in_the_console_the_action_runs_once_and_the_stream_follows_to_the_end(

@@ -103,7 +103,7 @@ async def an_end_is_written_once_and_never_changes(store: ReceivedTaskStore) -> 
     assert (ended.state, ended.result, ended.reason) == ("completed", "It works.", None)
     assert ended.ended_at is not None and ended.released_at is not None
     # Only the two columns of rejections by rule still change.
-    await store.count_rejection(task.task_id, ended.ended_at + timedelta(seconds=30))
+    assert await store.count_rejection(task.task_id, 0, ended.ended_at + timedelta(seconds=30))
     counted = await store.get(task.task_id)
     assert counted.reject_attempts == 1 and counted.reject_after is not None
     assert counted.state == "completed"
@@ -170,6 +170,59 @@ async def a_context_id_is_kept_without_a_nul(store: ReceivedTaskStore) -> None:
     assert task.context_id == "ab"
 
 
+async def a_rejection_to_try_again_is_listed_until_it_is_done_or_spent(
+    store: ReceivedTaskStore,
+) -> None:
+    """Request 4 (research R11): the sweep's second list, the tasks that ended and whose
+    proposal is to be rejected by rule again."""
+    tasks = [(await accept(store, context=f"c{n}")).task for n in range(4)]
+    base = datetime(2026, 11, 26, 9, 0, tzinfo=UTC)
+    for task in tasks:
+        assert await store.end(task.task_id, "canceled", reason="canceled")
+    working = (await accept(store, context="c9")).task
+    await store.count_rejection(working.task_id, 0, base)
+    assert await store.to_reject(5, 10) == []
+    for minutes, task in zip((3, 1, 2), tasks[:3], strict=True):
+        await store.count_rejection(task.task_id, 0, base + timedelta(minutes=minutes))
+    for done in range(1, 5):
+        await store.count_rejection(tasks[2].task_id, done, base + timedelta(minutes=2))
+    listed = await store.to_reject(5, 10)
+    # The earliest first; one tried five times is spent, one never tried is not listed.
+    assert [found.task_id for found in listed] == [tasks[1].task_id, tasks[0].task_id]
+    assert [found.task_id for found in await store.to_reject(5, 1)] == [tasks[1].task_id]
+    await store.rejection_done(tasks[1].task_id)
+    done = await store.get(tasks[1].task_id)
+    assert (done.reject_after, done.reject_attempts) == (None, 1)
+    assert [found.task_id for found in await store.to_reject(5, 10)] == [tasks[0].task_id]
+
+
+async def an_attempt_is_counted_once_for_the_count_it_was_read_at(
+    store: ReceivedTaskStore,
+) -> None:
+    """Two instances that read one row try one attempt between them (review of request 4)."""
+    task = (await accept(store)).task
+    assert await store.end(task.task_id, "canceled", reason="canceled")
+    next_at = datetime(2026, 11, 26, 9, 0, tzinfo=UTC)
+    assert await store.count_rejection(task.task_id, 0, next_at) is True
+    assert await store.count_rejection(task.task_id, 0, next_at) is False
+    assert await store.count_rejection(task.task_id, 1, next_at) is True
+    assert (await store.get(task.task_id)).reject_attempts == 2
+
+
+async def the_last_task_that_started_is_the_one_a_proposal_can_be_of(
+    store: ReceivedTaskStore,
+) -> None:
+    first = (await accept(store)).task
+    await started(store, first.task_id)
+    assert await store.end(first.task_id, "canceled", reason="canceled")
+    second = (await accept(store)).task
+    assert (await store.last_task_of_thread(first.thread_id)).task_id == second.task_id
+    assert (await store.last_started_task_of_thread(first.thread_id)).task_id == first.task_id
+    await started(store, second.task_id)
+    assert (await store.last_started_task_of_thread(first.thread_id)).task_id == second.task_id
+    assert await store.last_started_task_of_thread("no-such-thread") is None
+
+
 CASES: list[Case] = [
     a_new_conversation_gets_a_thread_and_a_working_task,
     two_callers_with_one_conversation_id_have_two_threads,
@@ -184,6 +237,9 @@ CASES: list[Case] = [
     a_task_is_read_by_its_own_caller_only,
     the_rows_that_count_are_listed_up_to_a_number,
     a_context_id_is_kept_without_a_nul,
+    a_rejection_to_try_again_is_listed_until_it_is_done_or_spent,
+    an_attempt_is_counted_once_for_the_count_it_was_read_at,
+    the_last_task_that_started_is_the_one_a_proposal_can_be_of,
 ]
 
 

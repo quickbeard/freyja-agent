@@ -23,7 +23,10 @@ started the thread. A caller's thread is refused on the ordinary build, and so i
 whose lookup fails; on the strict build the run's config says whose files it works in
 (research R6, R16). Every other way to run a graph raises on the wrapper, so that none
 becomes a way around. ``UnattendedRuns.join`` gives one more reader of a console run in
-progress (research R10).
+progress (research R10). A run can be started to stop at its first boundary (``stop_first``),
+which is how a proposal is rejected by rule, and a console run on a caller's thread also
+stops at its next boundary once that caller canceled its task (``canceled``, research R10,
+R11).
 """
 
 from __future__ import annotations
@@ -31,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Protocol
 
@@ -45,8 +48,6 @@ from freyja_agent.runtime.received_tasks import LOCAL
 from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
     from freyja_agent.runtime.received_tasks import Conversation
     from freyja_agent.runtime.thread_index import ThreadIndex
 
@@ -245,6 +246,8 @@ class _Run:
     readers: list[_Reader] = field(default_factory=list)
     # Whether ``should_stop`` said yes for this run: the run then ended because of a stop.
     stopped: bool = False
+    # Whether the run stops at its first boundary, whatever else is asked (feature 009).
+    stop_first: bool = False
     task: asyncio.Task[None] | None = None
 
 
@@ -261,6 +264,9 @@ class UnattendedRuns:
         # Told of each run as it starts, before its first event (feature 009): a follower of
         # a caller's task joins the run a person's decision started.
         self.on_start: Callable[[str], None] | None = None
+        # Asked at each boundary (feature 009, research R10): whether the last task of a
+        # caller's thread was canceled by its caller; False for any other thread.
+        self.canceled: Callable[[str], Awaitable[bool]] | None = None
 
     def armed(self, thread_id: str) -> bool:
         return thread_id in self._runs
@@ -270,11 +276,28 @@ class UnattendedRuns:
 
         A stop counts when a person asked for it for this very run, on any instance, or when
         this instance is stopping. An index that cannot be read is no stop asked.
+
+        Feature 009 adds two: a run started to stop at its first boundary, and a run on a
+        caller's thread whose last task that caller canceled, whether or not the index was
+        marked, since a cancel can arrive before the run's first event marks it (R10). A
+        cancel that cannot be read is none asked.
         """
         run = self._runs.get(thread_id)
         if run is None:
             return False
-        asked = self._closing
+        asked = self._closing or run.stop_first
+        if not asked and self.canceled is not None:
+            try:
+                async with asyncio.timeout(INDEX_WRITE_SECONDS):
+                    asked = await self.canceled(thread_id)
+            except Exception as exc:
+                logger.warning(
+                    "Thread %s: whether its caller canceled could not be read (%s); the run "
+                    "goes on",
+                    thread_id,
+                    type(exc).__name__,
+                )
+                asked = False
         if not asked and run.owner is not None:
             try:
                 async with asyncio.timeout(INDEX_WRITE_SECONDS):
@@ -295,15 +318,18 @@ class UnattendedRuns:
         thread_id: str,
         events: AsyncIterable[ServerSentEvent],
         first_message: str | None = None,
+        *,
+        stop_first: bool = False,
     ) -> AsyncGenerator[ServerSentEvent, None]:
         """Arm the thread, drive ``events`` in a task, and give the first reader its events.
 
         The caller holds the thread's lease, taken by the handler that made ``events``, so
         no other run of this instance is armed for the thread. The row is marked as a console
         run's at the run's first event, which names the run's owner; ``first_message`` is
-        the message the run was started with, None for a resume.
+        the message the run was started with, None for a resume. ``stop_first`` makes the
+        run stop at its first boundary (feature 009, research R11).
         """
-        run = _Run(thread_id=thread_id, first_message=first_message)
+        run = _Run(thread_id=thread_id, first_message=first_message, stop_first=stop_first)
         reader = _Reader()
         run.readers.append(reader)
         self._runs[thread_id] = run

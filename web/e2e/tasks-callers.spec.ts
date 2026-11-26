@@ -3,6 +3,7 @@ import {
   ai,
   byCaller,
   callerTask,
+  canceledByCaller,
   continued,
   human,
   notify,
@@ -168,4 +169,78 @@ test("Stop is offered for a caller's task's run in progress", async ({
   await expect.poll(() => service.stops).toEqual([PAUSED_ID]);
   // And still no box for another message.
   await expect(page.getByRole("textbox")).toHaveCount(0);
+});
+
+// User Story 4: the agent that started a task cancels it.
+
+const CANCELED_ID = "7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a21";
+
+test("a caller's task its agent canceled is not counted to decide and says the agent canceled", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  const ended = byCaller(
+    pausedTask(
+      CANCELED_ID,
+      "Compile and tell #ops.",
+      proposal("int-7", notify()),
+    ),
+  );
+  service.tasks.set(
+    CANCELED_ID,
+    canceledByCaller({
+      row: { ...ended.row, status: "stopped" },
+      state: { ...ended.state, pending: null },
+    }),
+  );
+  await service.serve(page);
+  await page.goto("/tasks");
+  await expect(
+    page.getByRole("list", { name: "Tasks" }).getByRole("listitem"),
+  ).toContainText("Started by an agent on this machine");
+  await expect(tasksItem(page)).not.toContainText("to decide");
+  await page.goto(`/tasks/${CANCELED_ID}`);
+  await expect(
+    page.getByText(
+      "The agent that started this task canceled it. Nothing the task still proposed can be approved any more: Freyja rejects it by itself, for that cancel and not as a person's decision. What ran before the cancel is in the conversation.",
+    ),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: CARD })).toHaveCount(0);
+});
+
+test("an approval refused because the agent canceled is said so, and the proposal is still rejected", async ({
+  page,
+}) => {
+  const service = await pausedByCaller(page);
+  const task = service.tasks.get(PAUSED_ID);
+  if (task === undefined) {
+    throw new Error("the paused task is missing");
+  }
+  service.answerDecisionsWith((_threadId, body) =>
+    body.decisions[0].type === "reject"
+      ? continued(task, "Rejected.", "It was not sent.")
+      : {
+          refusal: {
+            status: 409,
+            code: "requester_gone",
+            message:
+              "The agent that asked for this canceled its task, so the action is not carried out. The proposal can only be rejected.",
+          },
+        },
+  );
+  await page.getByRole("button", { name: "Approve send_notification" }).click();
+  await expect(
+    page.getByRole("region", { name: CARD }).getByRole("alert"),
+  ).toHaveText(
+    "The agent that started this task canceled it, so this action can no longer be approved. Reject it to close the proposal; nothing of it runs.",
+  );
+  await page.getByRole("button", { name: "Reject send_notification" }).click();
+  await page
+    .getByRole("button", { name: "Reject send_notification now" })
+    .click();
+  await expect(page.getByRole("heading", { name: CARD })).toBeHidden();
+  expect(service.decided.map((sent) => sent.decisions)).toEqual([
+    [{ type: "approve" }],
+    [{ type: "reject" }],
+  ]);
 });

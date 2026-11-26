@@ -980,6 +980,17 @@ export function TaskView({ threadId }: { threadId: string }) {
           for any task.
         </p>
       )}
+      {/* Feature 009: the requesting agent canceled; nobody can approve what the task still
+          proposed, and the service rejects it by rule (FR-021, FR-022a). What ran before the
+          cancel, such as an action a person approved, stays in the conversation. */}
+      {conversed && caller?.canceled === true && (
+        <p className="text-sm">
+          The agent that started this task canceled it. Nothing the task still
+          proposed can be approved any more: Freyja rejects it by itself, for
+          that cancel and not as a person's decision. What ran before the cancel
+          is in the conversation.
+        </p>
+      )}
       {conversed && caller === null && (
         // While a proposal's card is shown, it takes the box's place at the end of the page.
         // The box is hidden, not removed, so that what was typed in it stays.

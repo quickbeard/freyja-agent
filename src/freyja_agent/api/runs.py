@@ -7,7 +7,7 @@ through one piece of code and no module imports a route module. Each function ta
 runtime and the request's values, raises the ``HTTPException`` the route answers with, and
 returns the run's events; the routes put them in their response.
 
-Feature 009 adds two rules here, and nothing else:
+Feature 009 adds three rules here, and nothing else:
 
 - With the feature off, a thread a caller started while it was on is not run: a message and
   every decision are refused with 409 ``a2a_server_off`` before the lease is taken. Its state
@@ -15,6 +15,12 @@ Feature 009 adds two rules here, and nothing else:
 - Under the lease, a caller's thread with a delegate agent's task still awaited takes no
   message from its caller (research R8). Only ``ReceivedTasks`` asks for that rule, so the
   routes answer with no code the contracts do not define.
+- Under the lease, an approval or an edit on a caller's thread whose conversation has no
+  task that still works is refused with 409 ``requester_gone``, unless the request repeats
+  the decisions already taken; a rejection is taken (FR-022a, research R11).
+
+It also starts a console run's resume (``start_console_resume``), which the A2A service uses
+to reject a proposal by rule, with a run that stops at its first boundary.
 """
 
 import asyncio
@@ -34,7 +40,7 @@ from freyja_agent.api.outcomes import (
     record_answers,
     take_undelivered,
 )
-from freyja_agent.api.schemas import ResumeRequest
+from freyja_agent.api.schemas import RejectDecision, ResumeRequest
 from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.api.streaming import lease_owner, no_context_stream, run_stream, take_context
 from freyja_agent.runtime.agent_tasks import AgentTaskRecord
@@ -58,6 +64,9 @@ CALLER_THREAD = "caller_thread"
 # The code a caller's message is refused with when its thread is not at rest under the lease;
 # ``ReceivedTasks`` turns it into the protocol's "not now".
 AGENT_AWAITED = "agent_awaited"
+# An approval or an edit on a caller's thread whose caller is no longer waiting for it
+# (contracts/openapi.yaml).
+REQUESTER_GONE = "requester_gone"
 
 
 def error(status: int, code: str, message: str) -> HTTPException:
@@ -159,8 +168,9 @@ async def _not_decided_otherwise(
     decided: dict[str, Any] | None,
     interrupt_id: str,
     command: Any,
-) -> None:
-    """Refuse decisions other than those the proposal's gate already took.
+) -> bool:
+    """Refuse decisions other than those the proposal's gate already took; True when the
+    request repeats them.
 
     A resume whose run failed after the gate's step completed, inside a subagent, leaves the
     proposal shown although it was decided: the next resume continues past the gate with the
@@ -168,12 +178,14 @@ async def _not_decided_otherwise(
     the thread; any others are refused, and nothing runs.
     """
     if decided is None:
-        return
+        return False
     earlier = await decisions_taken(
         context.agent.checkpointer, thread_id, decided["namespace"], interrupt_id
     )
-    if earlier is None or earlier == [command.resume[interrupt_id]]:
-        return
+    if earlier is None:
+        return False
+    if earlier == [command.resume[interrupt_id]]:
+        return True
     taken = [
         str(decision.get("type"))
         for value in earlier
@@ -188,6 +200,35 @@ async def _not_decided_otherwise(
         f"decision was taken ({', '.join(taken) or 'no decision'}). That decision stands: "
         "send the same decisions to continue the thread.",
     )
+
+
+async def _requester_there(runtime: Runtime, thread_id: str) -> None:
+    """Refuse an approval or an edit on a caller's thread whose conversation has no task
+    that still works, as after its caller canceled (FR-022a, research R11).
+
+    Asked under the lease, so a cancel and a decision are ordered by it. Only this guard is
+    needed for safety: the rejection by rule is what takes the proposal out of the list. The
+    task asked is the last whose run started, the only one a proposal can be of: the
+    caller's next message, accepted and not yet started, does not let a person approve
+    what the canceled task proposed. A thread no caller started has no task, and is not
+    affected. When the task cannot be read, nothing is resumed.
+    """
+    try:
+        last = await runtime.received_tasks.last_started_task_of_thread(thread_id)
+    except Exception as exc:
+        logger.warning(
+            "Thread %s: whether its caller still waits could not be read (%s); nothing ran",
+            thread_id,
+            type(exc).__name__,
+        )
+        raise error(500, "internal", "This thread could not be read; nothing ran.") from None
+    if last is not None and last.ended:
+        raise error(
+            409,
+            REQUESTER_GONE,
+            "The agent that asked for this canceled its task, so the action is not carried "
+            "out. The proposal can only be rejected.",
+        )
 
 
 async def start_message(
@@ -309,7 +350,16 @@ async def start_resume(
             )
         command = build_resume_command(pending, body.decisions, context.catalog)
         decided = decided_calls(snapshot.tasks, snapshot.interrupts[0], body.decisions)
-        await _not_decided_otherwise(context, thread_id, decided, pending["interrupt_id"], command)
+        repeats = await _not_decided_otherwise(
+            context, thread_id, decided, pending["interrupt_id"], command
+        )
+        # Feature 009: nobody approves what a caller that is gone asked for (R11).
+        if (
+            runtime.settings.a2a_server
+            and not repeats
+            and not all(isinstance(decision, RejectDecision) for decision in body.decisions)
+        ):
+            await _requester_there(runtime, thread_id)
         if decided is not None:
             decided["calls"] = await _paused_calls(runtime, thread_id, decided["namespace"])
             decided["seen"] = []
@@ -384,14 +434,17 @@ def go_on(
     thread_id: str,
     events: AsyncIterable[ServerSentEvent],
     first_message: str | None,
+    *,
+    stop_first: bool = False,
 ) -> Reader:
     """Drive the run a handler accepted without its reader, and return its first reader.
 
     The handler took the thread's lease and made the run's events; nothing of the run has
     started. It is handed over at once, with nothing awaited before, so that nothing can
     leave the lease taken. The row is marked as a console run's at the run's first event.
+    ``stop_first`` makes the run stop at its first boundary (feature 009).
     """
-    reader = runs.start(thread_id, events, first_message)
+    reader = runs.start(thread_id, events, first_message, stop_first=stop_first)
     logger.info("Thread %s: a run started that goes on without a reader", thread_id)
     return reader
 
@@ -421,6 +474,18 @@ async def start_console_run(
     # Without the lookup, the row takes its first message from the thread's state once the
     # run is settled, which is the run's text when the thread is new (007 FR-002).
     return go_on(runs, thread_id, events, message if known else None)
+
+
+async def start_console_resume(
+    runtime: Runtime, thread_id: str, body: ResumeRequest, *, stop_first: bool = False
+) -> Reader:
+    """Decide a proposal and drive the continuation as a console run: the body of
+    ``POST /threads/{thread_id}/resume/unattended``, with the same refusals and events as
+    ``start_resume``. ``stop_first`` makes the continuation stop at its first boundary, as
+    a rejection by rule does (feature 009, research R11)."""
+    runs = console_runs(runtime)
+    events = await start_resume(runtime, thread_id, body)
+    return go_on(runs, thread_id, events, None, stop_first=stop_first)
 
 
 def _unreadable(thread_id: str, exc: Exception) -> HTTPException:

@@ -26,6 +26,16 @@ Three fences keep the reads, which are not one, from ending a task wrongly: a ta
 working until its run is known to have started; an end is written only when the lease and
 the checkpoint read again agree with the look; a note counts only when it is not older than
 the task's start nor than the thread's last checkpoint.
+
+A caller can cancel its task (research R11). The task is written canceled first; then a
+console run in progress stops at its next boundary, because every boundary asks whether the
+task was canceled (``canceled``), and a proposal nobody decided is rejected by rule: a resume
+that rejects every action with a fixed reason, started as a console run that stops at its
+first boundary, tried at most five times, 30 seconds apart. That rule is applied at every
+look of a thread that holds a proposal while its conversation has no task that still
+works, so a proposal a run comes to after the cancel is rejected too. A task that ended
+stops counting against the limits once its thread has no run in progress and no agent task
+awaited (research R9). Every release of a lease looks, and so does a sweep every 30 seconds.
 """
 
 from __future__ import annotations
@@ -42,13 +52,21 @@ from typing import Any, Literal
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage
 
-from freyja_agent.api.runs import Reader, awaited, start_console_run, state_of
+from freyja_agent.api.decisions import decided_namespace, decisions_taken
+from freyja_agent.api.runs import (
+    Reader,
+    awaited,
+    start_console_resume,
+    start_console_run,
+    state_of,
+)
+from freyja_agent.api.schemas import RejectDecision, ResumeRequest
 from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.llm.secrets import redact
 from freyja_agent.runtime.received_tasks import ReceivedTask, Refusal, TaskState, kept
 from freyja_agent.runtime.runtime import Runtime
-from freyja_agent.runtime.thread_index import ThreadRecord
+from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS, ThreadRecord
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +75,18 @@ logger = logging.getLogger(__name__)
 UNSTARTED_SECONDS = 60
 # How long a follower waits to be woken before it looks at its task's thread (research R13).
 FOLLOW_SECONDS = 4
+# How many streams follow one task on one instance at most (research R13).
+STREAMS_PER_TASK = 4
+# How often each instance looks at the tasks that still count or still have a proposal to
+# reject (research R9).
+SWEEP_SECONDS = 30
+# A proposal of a canceled task is rejected by rule at most this often, this far apart (R11).
+REJECT_ATTEMPTS = 5
+REJECT_SECONDS = 30
+# The reason every action of such a proposal is rejected with (FR-021).
+REJECTED = "The requesting agent canceled the task."
+# The events that end a run's stream (001 contracts/sse-events.md).
+_TERMINAL = frozenset({"end", "interrupt", "error"})
 # A failed run's code, as the index notes it, to the fixed reason a caller is given.
 _REASONS = {
     "no_usable_model": "no_usable_model",
@@ -126,6 +156,10 @@ class RefusedError(Exception):
     def __init__(self, why: Refusal) -> None:
         super().__init__(why)
         self.why = why
+
+
+class NotCancelableError(Exception):
+    """A cancel of a task that has ended."""
 
 
 @dataclass(frozen=True)
@@ -238,6 +272,24 @@ def _ready(text: str) -> tuple[str, str]:
     return "", text
 
 
+def _rejections(earlier: list[Any], actions: int) -> list[RejectDecision] | None:
+    """The decisions a gate already took for a proposal, when every one is a rejection, one
+    per action; None when one approved or edited, or they cannot be read as that."""
+    last = earlier[-1] if earlier else None
+    taken = last.get("decisions") if isinstance(last, dict) else None
+    if not isinstance(taken, list) or len(taken) != actions:
+        return None
+    found: list[RejectDecision] = []
+    for decision in taken:
+        if not isinstance(decision, dict) or decision.get("type") != "reject":
+            return None
+        message = decision.get("message")
+        found.append(
+            RejectDecision(type="reject", message=message if isinstance(message, str) else None)
+        )
+    return found
+
+
 def _messages_of(update: Any) -> list[dict[str, Any]]:
     messages = update.get("messages") if isinstance(update, dict) else None
     if isinstance(messages, dict):
@@ -266,6 +318,9 @@ class ReceivedTasks:
         # Readers of the runs that started on a follower's thread, joined for the follower
         # before each run's first event, in the order the runs started, by its wake.
         self._joined: dict[asyncio.Event, list[Reader]] = {}
+        # How many streams follow each task on this instance (research R13).
+        self._streams: dict[str, int] = {}
+        self._sweeper: asyncio.Task[None] | None = None
 
     async def accept(self, caller: str, context_id: str, text: str, *, hops: int = 0) -> Accepted:
         """Accept a message of ``caller`` in its conversation ``context_id`` and start its run.
@@ -404,8 +459,25 @@ class ReceivedTasks:
         return (await self._looked(task))[0]
 
     async def _looked(self, task: ReceivedTask) -> tuple[ReceivedTask, Standing]:
-        """``look``, with where the thread stood for a task that is still working."""
+        """``look``, with where the thread stood for a task that is still working.
+
+        A task that ended and still counts, or whose proposal is still to be rejected by
+        rule, is tidied (``_tidy``). It is answered from its row all the same: a tidy that
+        fails is logged and left to the next look, since an ended task is never read from
+        its thread (R7).
+        """
         if task.ended:
+            if task.released_at is None or task.reject_after is not None:
+                try:
+                    task = await self._tidy(task)
+                except Exception as exc:
+                    logger.warning(
+                        "Thread %s: what follows the end of received task %s could not be "
+                        "done now (%s); it is looked at again",
+                        task.thread_id,
+                        task.task_id,
+                        type(exc).__name__,
+                    )
             return task, Standing(task.state, task.reason, task.result)
         store = self.store
         if task.started_at is None:
@@ -544,21 +616,33 @@ class ReceivedTasks:
         runs = self.runtime.unattended
         return runs.join(thread_id) if runs is not None else None
 
+    def _running(self, thread_id: str) -> bool:
+        """Whether a console run is in progress on ``thread_id`` on this instance."""
+        runs = self.runtime.unattended
+        return runs is not None and runs.armed(thread_id)
+
     async def follow(
-        self, task: ReceivedTask, events: Reader | None = None
+        self, task: ReceivedTask, events: Reader | None = None, *, said: str | None = WORKING
     ) -> AsyncGenerator[Change, None]:
         """What changes for ``task``, as it changes, until it has ended (research R13).
+
+        ``said`` is the sentence its follower was last sent, which is not sent again.
 
         While a console run of its thread is in progress on this instance, the run's events
         are read and turned into changes: ``events``, the first reader of the run a message
         started, or one more reader of a run in progress. Otherwise the follower waits to be
         woken by the end of a run on the thread here, or for ``FOLLOW_SECONDS``, and looks at
         the thread. The last change is ``Ended``. Close it to stop following; the run goes on.
+
+        A follower that falls so far behind a run that the console's runs disconnect its
+        reader ends without ``Ended``: its caller is disconnected, and subscribes again
+        (contracts/a2a-server.md). A run that starts on the thread once the task has ended,
+        such as the caller's next message's, is not read for it.
         """
         wake = asyncio.Event()
         woken = self._wakers.setdefault(task.thread_id, set())
         woken.add(wake)
-        sentence: str | None = WORKING
+        sentence: str | None = said
         try:
             while True:
                 first, events = events, None
@@ -567,6 +651,12 @@ class ReceivedTasks:
                 if handed is not None and not handed:
                     del self._joined[wake]
                 reader = first or joined or self._join(task.thread_id)
+                if reader is not None and first is None:
+                    current = await self.store.get(task.task_id) or task
+                    if current.ended:
+                        # The run is another task's: this one's end is read below.
+                        self.leave(reader)
+                        reader = None
                 if reader is not None:
                     if first is None and sentence != WORKING:
                         # Another run on the thread, such as the one a person's decision
@@ -574,8 +664,10 @@ class ReceivedTasks:
                         sentence = WORKING
                         yield Status(WORKING)
                     held = ""
+                    finished = False
                     async with contextlib.aclosing(reader) as run:
                         async for event in run:
+                            finished = finished or event.event in _TERMINAL
                             change = self._change(event)
                             if isinstance(change, Piece):
                                 ready, held = _ready(held + change.text)
@@ -588,6 +680,9 @@ class ReceivedTasks:
                                 sentence = change.sentence
                             if change is not None:
                                 yield change
+                    if not finished and self._running(task.thread_id):
+                        # The reader was disconnected for falling behind; the run goes on.
+                        return
                 task, standing = await self._looked(await self.store.get(task.task_id) or task)
                 view = self._view(task, standing)
                 if task.ended:
@@ -639,10 +734,240 @@ class ReceivedTasks:
                 pass
 
     async def released(self, thread_id: str) -> None:
-        """What follows the end of any run on a thread: its last task is looked at (R9)."""
+        """What follows the end of any run on a thread: its last task is looked at (R9), and
+        one that has ended is tidied, so that a proposal a run came to after a cancel is
+        rejected by rule (FR-022a)."""
         task = await self.store.last_task_of_thread(thread_id)
-        if task is not None and not task.ended:
+        if task is None:
+            return
+        if task.ended:
+            await self._tidy(task)
+        else:
             await self.look(task)
+
+    async def _tidy(self, task: ReceivedTask) -> ReceivedTask:
+        """What follows a task that ended while its thread may still work (R9, R11).
+
+        Nothing while a run holds the thread's lease: its release looks again. Otherwise a
+        proposal the thread holds while its conversation has no task that still works is
+        rejected by rule, and the task stops counting against the limits once no agent task
+        of the thread is awaited; a pending proposal does not keep it counting (FR-025).
+        """
+        runtime, store, thread_id = self.runtime, self.store, task.thread_id
+        if await runtime.locks.is_active(thread_id):
+            return task
+        context = await runtime.begin_read(thread_id)
+        try:
+            snapshot = await state_of(context, thread_id)
+            catalog = context.catalog
+            checkpointer = context.agent.checkpointer
+        finally:
+            await context.release()
+        if snapshot.interrupts:
+            # The proposal is the last started task's; a message accepted meanwhile and not
+            # started yet is not the conversation working again.
+            last = await store.last_started_task_of_thread(thread_id)
+            if (last is None or last.ended) and await self._reject(
+                task, snapshot, catalog, checkpointer
+            ):
+                # A run took the lease; its release tidies again.
+                return await store.get(task.task_id) or task
+        elif task.reject_after is not None:
+            await store.rejection_done(task.task_id)
+        agents = await runtime.agent_tasks.list_tasks(thread_id)
+        if (
+            task.released_at is None
+            and not any(awaited(found) for found in agents)
+            and await store.release(task.task_id)
+        ):
+            logger.info("Caller %s: received task %s no longer counts", task.caller, task.task_id)
+        return await store.get(task.task_id) or task
+
+    async def _reject(
+        self, task: ReceivedTask, snapshot: Any, catalog: Any, checkpointer: Any
+    ) -> bool:
+        """Reject every action of the thread's proposal by rule; True when the run started.
+
+        A resume with a reject for each action and the fixed reason, started as a console
+        run that stops at its first boundary (R11). Counted and spaced in the task's row
+        before it is tried: at most ``REJECT_ATTEMPTS``, ``REJECT_SECONDS`` apart, since such
+        a run can fail without recording anything; the count names the attempts it read, so
+        two instances that look together make one attempt. A proposal a person approved or
+        edited is neither rejected nor resumed. One whose gate already took rejections, the
+        rule's own or a person's, and whose run then stopped, is resumed with those same
+        rejections, the only decisions that continue it (005).
+        """
+        if task.reject_attempts >= REJECT_ATTEMPTS:
+            return False
+        now = await self.store.now()
+        if task.reject_after is not None and now < task.reject_after:
+            return False
+        thread_id = task.thread_id
+        interrupt = snapshot.interrupts[0]
+        pending = interrupt_to_pending(interrupt, catalog)
+        decisions = [
+            RejectDecision(type="reject", message=REJECTED) for _ in pending["action_requests"]
+        ]
+        namespace = decided_namespace(snapshot.tasks, interrupt.id)
+        if namespace is not None:
+            earlier = await decisions_taken(checkpointer, thread_id, namespace, interrupt.id)
+            if earlier is not None:
+                taken = _rejections(earlier, len(decisions))
+                if taken is None:
+                    return False
+                decisions = taken
+        if not await self.store.count_rejection(
+            task.task_id, task.reject_attempts, now + timedelta(seconds=REJECT_SECONDS)
+        ):
+            return False
+        body = ResumeRequest(interrupt_id=pending["interrupt_id"], decisions=list(decisions))
+        try:
+            reader = await start_console_resume(self.runtime, thread_id, body, stop_first=True)
+        except HTTPException as exc:
+            if exc.status_code == 422:
+                # An action of it no longer needs approval, as when the agents' approval
+                # mode turned Auto after it was proposed: the gate would not ask about it,
+                # so only approve is taken for it, and approving is what a cancel forbids.
+                logger.warning(
+                    "Thread %s: the proposal of received task %s cannot be rejected by rule: "
+                    "an action of it no longer needs approval; set the agents' approval mode "
+                    "to Manual to reject it",
+                    thread_id,
+                    task.task_id,
+                )
+                return False
+            detail = exc.detail if isinstance(exc.detail, dict) else {}
+            logger.warning(
+                "Thread %s: the proposal of received task %s could not be rejected (%s); it "
+                "is tried again later",
+                thread_id,
+                task.task_id,
+                detail.get("code", exc.status_code),
+            )
+            return False
+        logger.info(
+            "Thread %s: the proposal of received task %s is rejected, as its caller canceled "
+            "it (attempt %d)",
+            thread_id,
+            task.task_id,
+            task.reject_attempts + 1,
+        )
+        self.leave(reader)
+        return True
+
+    async def cancel(self, task: ReceivedTask) -> View:
+        """Cancel ``task`` for its caller, and say it canceled (R11).
+
+        The task is looked at first, so one that has ended is not canceled: that raises
+        ``NotCancelableError``. It is written canceled before anything is done to its
+        thread, which is what its caller is answered with. Then a console run in progress
+        stops at its next boundary, also through the index's mark where the run is marked,
+        and a proposal nobody decided is rejected by rule; a run of another kind and an
+        agent task go on. What fails after the write is left to the next look.
+        """
+        found = await self.look(task)
+        if found.ended or not await self.store.end(found.task_id, "canceled", reason="canceled"):
+            raise NotCancelableError(found.task_id)
+        logger.info("Caller %s canceled received task %s", found.caller, found.task_id)
+        canceled = await self.store.get(found.task_id) or found
+        try:
+            await self._mark_stop(canceled.thread_id)
+        except Exception as exc:
+            # The index is kept on a best effort: the run stops by the cancel all the same.
+            logger.warning(
+                "Thread %s: the stop of its run could not be marked for the list (%s)",
+                canceled.thread_id,
+                type(exc).__name__,
+            )
+        try:
+            canceled = await self._tidy(canceled)
+        except Exception as exc:
+            logger.warning(
+                "Thread %s: what follows the cancel of received task %s could not be done "
+                "now (%s); it is looked at again",
+                canceled.thread_id,
+                canceled.task_id,
+                type(exc).__name__,
+            )
+        self._wake(canceled.thread_id)
+        return self._view(canceled, Standing(canceled.state, canceled.reason))
+
+    async def _mark_stop(self, thread_id: str) -> None:
+        """Mark the console run in progress as asked to stop, where it is marked, so the
+        console says it is stopping; the run stops at its boundary by the cancel anyway."""
+        runtime = self.runtime
+        async with asyncio.timeout(INDEX_WRITE_SECONDS):
+            record = await runtime.threads.get(thread_id)
+            if (
+                record is not None
+                and record.run_unattended
+                and record.run_owner is not None
+                and await runtime.locks.is_active(thread_id)
+            ):
+                await runtime.threads.request_stop(thread_id, record.run_owner)
+
+    async def canceled(self, thread_id: str) -> bool:
+        """Whether the last started task of ``thread_id`` was canceled by its caller; False
+        for a thread no caller started. Asked by the console's runs at each boundary (R10).
+        A message accepted and not started yet does not make it false."""
+        last = await self.store.last_started_task_of_thread(thread_id)
+        return last is not None and last.state == "canceled" and last.reason == "canceled"
+
+    def take_stream(self, task_id: str) -> bool:
+        """Count one more stream of ``task_id`` on this instance; False at the limit (R13)."""
+        held = self._streams.get(task_id, 0)
+        if held >= STREAMS_PER_TASK:
+            return False
+        self._streams[task_id] = held + 1
+        return True
+
+    def give_stream(self, task_id: str) -> None:
+        """A stream of ``task_id`` ended."""
+        left = self._streams.get(task_id, 0) - 1
+        if left > 0:
+            self._streams[task_id] = left
+        else:
+            self._streams.pop(task_id, None)
+
+    async def sweep(self) -> None:
+        """One round of the sweep (R9): every task that still counts, and every task whose
+        proposal is to be rejected again, each up to the total limit, is looked at as a
+        release would. It is what makes the rest true when a release's look did not run."""
+        limit = self.runtime.settings.a2a_server_tasks
+        seen: set[str] = set()
+        found = [
+            *await self.store.unreleased(limit),
+            *await self.store.to_reject(REJECT_ATTEMPTS, limit),
+        ]
+        for task in found:
+            if task.task_id in seen:
+                continue
+            seen.add(task.task_id)
+            try:
+                await self.look(task)
+            except Exception as exc:
+                logger.warning(
+                    "Received task %s could not be looked at by the sweep (%s)",
+                    task.task_id,
+                    type(exc).__name__,
+                )
+            self._wake(task.thread_id)
+
+    def start_sweeping(self) -> None:
+        """Sweep now and every ``SWEEP_SECONDS`` until ``close``."""
+        self._sweeper = asyncio.create_task(self._sweeping(), name="freyja-a2a-sweep")
+
+    async def _sweeping(self) -> None:
+        while True:
+            try:
+                await self.sweep()
+            except Exception as exc:
+                logger.warning("The sweep of received tasks failed (%s)", type(exc).__name__)
+            await asyncio.sleep(SWEEP_SECONDS)
+
+    def _wake(self, thread_id: str) -> None:
+        for wake in self._wakers.get(thread_id, ()):
+            wake.set()
 
     def on_run_started(self, thread_id: str) -> None:
         """Given to the console's runs: hand each follower of ``thread_id`` on this instance
@@ -677,13 +1002,16 @@ class ReceivedTasks:
             )
         finally:
             # Its followers on this instance look now, not at their next interval.
-            for wake in self._wakers.get(thread_id, ()):
-                wake.set()
+            self._wake(thread_id)
 
     async def close(self) -> None:
-        """Stop reading the runs nobody follows, and wait for the looks under way; the
-        service is stopping. A run whose reader is let go goes on, and is stopped at its
-        next boundary by the console's runs, as every console run is."""
+        """Stop the sweep and reading the runs nobody follows, and wait for the looks under
+        way; the service is stopping. A run whose reader is let go goes on, and is stopped
+        at its next boundary by the console's runs, as every console run is."""
+        sweeper, self._sweeper = self._sweeper, None
+        if sweeper is not None:
+            sweeper.cancel()
+            await asyncio.gather(sweeper, return_exceptions=True)
         for drain in list(self._drains):
             drain.cancel()
         waited = [*self._looks, *self._drains]

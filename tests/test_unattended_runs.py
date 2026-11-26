@@ -766,3 +766,58 @@ async def test_a_reader_that_joins_gets_the_events_that_follow_to_the_run_s_end(
     flood.set()
     await runs.close()
     assert [event async for event in slow] == []
+
+
+# Feature 009, request 4 (research R10, R11): a run that stops at its first boundary, and a
+# caller's thread whose last task its caller canceled.
+
+
+async def _held(step: asyncio.Event) -> AsyncIterator[ServerSentEvent]:
+    yield ServerSentEvent(event="start", data=json.dumps({"run_id": "r1"}))
+    await step.wait()
+    yield ServerSentEvent(event="end", data=json.dumps({"status": "completed"}))
+
+
+async def test_a_run_started_to_stop_first_stops_at_its_first_boundary_and_says_so() -> None:
+    index = InMemoryThreadIndex()
+    runs = UnattendedRuns(index, "instance-a")
+    step = asyncio.Event()
+    reader = runs.start("t-1", _held(step), stop_first=True)
+    other = runs.start("t-2", _held(step))
+    assert await runs.should_stop("t-1") is True
+    assert await runs.should_stop("t-2") is False
+    step.set()
+    got = [event async for event in reader]
+    assert (got[-1].event, json.loads(got[-1].data)) == ("end", {"status": "stopped"})
+    await runs.close()
+    assert json.loads([event async for event in other][-1].data) == {"status": "completed"}
+
+
+async def test_a_console_run_on_a_thread_whose_caller_canceled_stops_marked_or_not(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    index = InMemoryThreadIndex()
+    runs = UnattendedRuns(index, "instance-a")
+    asked: list[str] = []
+    canceled = {"caller-thread"}
+
+    async def by_its_caller(thread_id: str) -> bool:
+        asked.append(thread_id)
+        if thread_id == "broken":
+            raise RuntimeError("the store is down")
+        return thread_id in canceled
+
+    held = asyncio.Event()
+    for thread in ("caller-thread", "person-thread", "broken"):
+        runs.start(thread, _held(held))
+    # Before any event: no owner yet, so the index was never marked for these runs.
+    assert await runs.should_stop("caller-thread") is False
+    runs.canceled = by_its_caller
+    assert await runs.should_stop("caller-thread") is True
+    assert await runs.should_stop("person-thread") is False
+    assert await runs.should_stop("broken") is False
+    assert await runs.should_stop("no-run") is False
+    assert asked == ["caller-thread", "person-thread", "broken"]
+    assert "whether its caller canceled could not be read" in caplog.text
+    held.set()
+    await runs.close()

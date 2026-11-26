@@ -633,8 +633,8 @@ PUSH = {"taskId": "t", "url": "https://example.com/hook"}
         ("ListTaskPushNotificationConfigs", {"taskId": "t"}, -32003),
         ("DeleteTaskPushNotificationConfig", {"taskId": "t", "id": "p"}, -32003),
         ("GetExtendedAgentCard", {}, -32007),
-        ("CancelTask", {"id": "t"}, -32004),
-        ("SubscribeToTask", {"id": "t"}, -32004),
+        ("CancelTask", {"id": "t"}, -32001),
+        ("SubscribeToTask", {"id": "t"}, -32001),
         ("GetTask", {"id": "0" * 32}, -32001),
         (
             "SendMessage",
