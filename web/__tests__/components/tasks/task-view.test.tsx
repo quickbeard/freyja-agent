@@ -32,7 +32,7 @@ import {
   streamed,
   TaskView,
 } from "@/components/tasks/task-view";
-import { begin, clear, get } from "@/lib/task-runs";
+import { begin, clear, get, subscribe } from "@/lib/task-runs";
 import { listThreads, type PendingDecision, THREADS_KEY } from "@/lib/tasks";
 
 const NOT_USED = refusal(
@@ -175,6 +175,10 @@ describe("a task's page", () => {
     ) as HTMLTextAreaElement;
     expect(box.value).toBe("Summarize the week.");
 
+    // Every way the tab's run is seen to end, kept as it is told: the page forgets the run
+    // once it has read the task again, which can come before a look at the run would.
+    const ends: (string | undefined)[] = [];
+    const unsubscribe = subscribe(() => ends.push(get("t-1")?.ended?.kind));
     fireEvent.click(screen.getByRole("button", { name: "Send again" }));
     await waitFor(() =>
       expect(asked.filter(({ method }) => method === "POST")).toEqual([
@@ -185,7 +189,8 @@ describe("a task's page", () => {
         },
       ]),
     );
-    await waitFor(() => expect(get("t-1")?.ended?.kind).toBe("event"));
+    await waitFor(() => expect(ends).toContain("event"));
+    unsubscribe();
   });
 
   // Phase 14's review: the box that sends a failed first message again says a refusal whose

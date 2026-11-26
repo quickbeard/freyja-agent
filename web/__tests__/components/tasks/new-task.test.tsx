@@ -4,10 +4,22 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { body, END, refusal, START, serve } from "@/__tests__/tasks-testing";
+import {
+  AGENTS,
+  approvals,
+  body,
+  chooseApprovals,
+  END,
+  refusal,
+  START,
+  serve,
+} from "@/__tests__/tasks-testing";
 import { NewTask } from "@/components/tasks/new-task";
+import type { AgentsMode } from "@/lib/agents";
 import { clear, get } from "@/lib/task-runs";
 
 const navigation = vi.hoisted(() => ({ push: vi.fn() }));
@@ -181,5 +193,52 @@ describe("New task", () => {
     fireEvent.click(send());
     await waitFor(() => expect(navigation.push).toHaveBeenCalledTimes(1));
     wentTo();
+  });
+});
+
+// Feature 010, FR-008 as the owner placed it on 2026-11-26: the agents' approval mode stands
+// beside the button that sends.
+describe("the agents' approval mode beside New task's Send", () => {
+  it("is confirmed before Auto, and the task being written stays as it was", async () => {
+    let mode: AgentsMode = "manual";
+    const asked = serve(
+      (method, path) => {
+        if (method === "PUT" && path === "/agents/mode") {
+          mode = "auto";
+          return { json: { mode } };
+        }
+        return { stream: body(START, END) };
+      },
+      () => ({ ...AGENTS, mode }),
+    );
+    render(
+      <SWRConfig value={{ provider: () => new Map(), dedupingInterval: 0 }}>
+        <NewTask />
+      </SWRConfig>,
+    );
+    open();
+    type("Summarize the week.");
+    await waitFor(() => expect(approvals().textContent).toContain("Manual"));
+    expect(send().parentElement?.contains(approvals())).toBe(true);
+
+    await chooseApprovals("Auto");
+    const confirm = await screen.findByRole("alertdialog", {
+      name: "Set agent approvals to Auto?",
+    });
+    // Beside one task's Send button, it says that the mode is every task's.
+    expect(confirm.textContent).toContain("In every task");
+    fireEvent.click(
+      within(confirm).getByRole("button", { name: "Set to Auto" }),
+    );
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
+    await waitFor(() => expect(approvals().textContent).toContain("Auto"));
+
+    // The task is still being written: its dialog is open with its text, and nothing started.
+    expect(screen.getByRole("dialog", { name: "New task" })).toBeTruthy();
+    expect((box() as HTMLTextAreaElement).value).toBe("Summarize the week.");
+    expect(asked).toEqual([
+      { method: "PUT", path: "/agents/mode", body: { mode: "auto" } },
+    ]);
+    expect(navigation.push).not.toHaveBeenCalled();
   });
 });

@@ -13,7 +13,9 @@ combination gates them, on the ordinary orchestrator and on the strict one of ca
 alike. Manual holds at once because the check every agent tool makes before it sends a message
 no person decided reads the switch; Auto holds from the next build, which the revision moves
 to. The console shows the switch as a dropdown under Tasks in the sidebar and an agent's mode
-as a switch on its card, each behind a confirmation where it loosens approval.
+as a switch on its card, each behind a confirmation where it loosens approval. The owner's
+change of 2026-11-26 (spec) moved the dropdown to the left of the Send button of New task and
+of a task's follow-up box; the sidebar no longer shows it.
 
 ## Technical Context
 
@@ -107,8 +109,9 @@ src/freyja_agent/delegates/a2a_tools.py     # _Send.modes, _still_allowed; no st
 src/freyja_agent/runtime/runtime.py         # the strict build takes the set's rule
 src/freyja_agent/api/agents.py, schemas.py  # PUT /agents/mode, AgentList.mode
 web/lib/agents.ts                           # AgentsMode, setAgentsMode
-web/components/agents-mode.tsx              # the dropdown under Tasks
-web/components/app-sidebar.tsx              # places it
+web/components/agents-mode.tsx              # the dropdown
+web/components/tasks/send-box.tsx           # `beside`, left of the Send button (owner's change)
+web/components/tasks/follow-up.tsx, new-task.tsx  # place the dropdown there (owner's change)
 web/components/agents/agent-card.tsx, mode-dialog.tsx, agent-form.tsx, agent-list.tsx
 ```
 

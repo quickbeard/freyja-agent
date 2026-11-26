@@ -1,7 +1,9 @@
 // Helpers for the Tasks section's tests only (feature 007): runs' streams as the service
 // sends them, and the shapes it answers with. No test reaches the service.
 
+import { fireEvent, screen } from "@testing-library/react";
 import { vi } from "vitest";
+import type { AgentList } from "@/lib/agents";
 import type {
   AgentTask,
   Message,
@@ -130,13 +132,24 @@ export type Answer =
   | { status?: number; stream: ReadableStream<Uint8Array> }
   | { fails: string };
 
+/** The list of agents `serve` reads out: none, with the agents' approval mode on Auto. */
+export const AGENTS: AgentList = {
+  agents: [],
+  mode: "auto",
+  limit: 20,
+  unusable: 0,
+};
+
 /**
  * Replace `fetch` with one that answers by the request: `answer` is given the method and the
  * path under `/api`, and says what the service would, at once or later. Every request is
- * kept.
+ * kept, but one: the reading of the list of agents, which the agents' approval mode beside
+ * each Send button makes (feature 010) and no task's request is, is answered with `agents`
+ * and not kept. A change of the mode goes to `answer` and is kept.
  */
 export function serve(
   answer: (method: string, path: string) => Answer | Promise<Answer>,
+  agents: () => AgentList = () => AGENTS,
 ) {
   const asked: { method: string; path: string; body: unknown }[] = [];
   const fetchStub = vi.fn(
@@ -144,6 +157,9 @@ export function serve(
       const url = String(input);
       const method = init?.method ?? "GET";
       const path = url.replace(/^\/api/, "");
+      if (method === "GET" && path === "/agents") {
+        return Response.json(agents());
+      }
       asked.push({
         method,
         path,
@@ -168,6 +184,19 @@ export function serve(
   );
   vi.stubGlobal("fetch", fetchStub);
   return asked;
+}
+
+/** The agents' approval mode beside a box's Send button (feature 010). */
+export const approvals = () =>
+  screen.getByRole("combobox", { name: "Agent approvals" });
+
+/** Choose a mode from it, with the keyboard, as a listbox is chosen from. */
+export async function chooseApprovals(label: "Manual" | "Auto") {
+  const trigger = approvals();
+  trigger.focus();
+  fireEvent.keyDown(trigger, { key: "ArrowDown" });
+  const option = await screen.findByRole("option", { name: label });
+  fireEvent.keyDown(option, { key: "Enter" });
 }
 
 /** A refusal as the service sends it. */
