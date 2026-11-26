@@ -73,6 +73,7 @@ from a2a.utils.errors import (
     InternalError,
     InvalidParamsError,
     PushNotificationNotSupportedError,
+    TaskNotCancelableError,
     TaskNotFoundError,
     UnsupportedOperationError,
 )
@@ -84,8 +85,17 @@ from starlette.routing import Route
 from starlette.types import Message as AsgiMessage
 
 from freyja_agent.api.guards import refuse_other_origins
-from freyja_agent.api.received import Ended, Piece, ReceivedTasks, RefusedError, Status, View
-from freyja_agent.runtime.received_tasks import LOCAL, new_id
+from freyja_agent.api.received import (
+    Change,
+    Ended,
+    NotCancelableError,
+    Piece,
+    ReceivedTasks,
+    RefusedError,
+    Status,
+    View,
+)
+from freyja_agent.runtime.received_tasks import LOCAL, ReceivedTask, new_id
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +138,7 @@ BUSY = (
     "started is still going on."
 )
 TASK_LIMIT = "A limit on tasks in progress was reached. Send again when one has ended."
+STREAM_LIMIT = "This task has as many streams as it takes. Read it with GetTask."
 
 _STATES = {
     "working": TaskState.TASK_STATE_WORKING,
@@ -342,6 +353,23 @@ def _message_of(params: SendMessageRequest) -> tuple[str, str]:
     return text, message.context_id
 
 
+async def _events(first: View, changes: AsyncGenerator[Change, None]) -> AsyncGenerator[Any, None]:
+    """A task's changes as the protocol's events, to its end (contracts/a2a-server.md): a
+    status for each sentence, a piece of the reply for each piece, and at the end the whole
+    reply of a completed task and the last status."""
+    async with contextlib.aclosing(changes) as found:
+        async for change in found:
+            if isinstance(change, Status):
+                yield _status_update(View(first.task, "working", change.sentence, None))
+            elif isinstance(change, Piece):
+                yield _piece(first, change.text)
+            elif isinstance(change, Ended):
+                if change.view.state == "completed":
+                    yield _piece(change.view, change.view.result or "", whole=True)
+                yield _status_update(change.view)
+                return
+
+
 def _guard[F: Callable[..., Awaitable[Any]]](method: F) -> F:
     """A handler's method that answers whatever it did not expect with the internal error."""
 
@@ -362,11 +390,11 @@ def _guard[F: Callable[..., Awaitable[Any]]](method: F) -> F:
 class FreyjaRequestHandler(RequestHandler):
     """The protocol's operations, on ``ReceivedTasks`` (contracts/a2a-server.md).
 
-    Five operations are offered: send, with and without a stream, and reading a task; cancel
-    and subscribe come with the next request and are answered as operations that are not
-    offered until then. Every other refuses as the contract says. Whatever goes wrong
-    otherwise is answered with the protocol's internal error and a fixed sentence, and
-    logged by its kind, never with its text sent (research R1).
+    Five operations are offered: send, with and without a stream, reading a task,
+    subscribing to it, and canceling it. Every other refuses as the contract says. Whatever
+    goes wrong otherwise is answered with the protocol's internal error and a fixed
+    sentence, and logged by its kind, never with its text sent (research R1). A stream of a
+    task counts against its streams on this instance (``stream_limit``, research R13).
     """
 
     def __init__(self, received: ReceivedTasks) -> None:
@@ -389,6 +417,20 @@ class FreyjaRequestHandler(RequestHandler):
                 ) from None
             raise UnsupportedOperationError(TASK_LIMIT, data={"reason": "task_limit"}) from None
 
+    async def _own(self, task_id: str, context: ServerCallContext) -> ReceivedTask:
+        """The caller's own task by its id; an id the service could not have made is not
+        looked up, and a task that is not the caller's is answered as one never made."""
+        if TASK_ID.fullmatch(task_id) is None:
+            raise TaskNotFoundError
+        task = await self.received.store.get(task_id, context.user.user_name)
+        if task is None:
+            raise TaskNotFoundError
+        return task
+
+    def _stream(self, task_id: str) -> None:
+        if not self.received.take_stream(task_id):
+            raise UnsupportedOperationError(STREAM_LIMIT, data={"reason": "stream_limit"})
+
     @override
     @_guard
     async def on_message_send(
@@ -410,40 +452,29 @@ class FreyjaRequestHandler(RequestHandler):
         except Exception as exc:
             self._internal("on_message_send_stream", exc)
         events, following = accepted.events, False
+        task_id = accepted.task.task_id
+        # A new task: the first of its streams.
+        self.received.take_stream(task_id)
         try:
             first = self.received.as_accepted(accepted.task)
             yield task_of(first)
             following = True
-            async with contextlib.aclosing(self.received.follow(accepted.task, events)) as changes:
-                async for change in changes:
-                    if isinstance(change, Status):
-                        yield _status_update(View(first.task, "working", change.sentence, None))
-                    elif isinstance(change, Piece):
-                        yield _piece(first, change.text)
-                    elif isinstance(change, Ended):
-                        if change.view.state == "completed":
-                            yield _piece(change.view, change.view.result or "", whole=True)
-                        yield _status_update(change.view)
-                        return
+            async for event in _events(first, self.received.follow(accepted.task, events)):
+                yield event
         except A2AError:
             raise
         except Exception as exc:
             self._internal("on_message_send_stream", exc)
         finally:
+            self.received.give_stream(task_id)
             if not following:
                 self.received.leave(events)
 
     @override
     @_guard
     async def on_get_task(self, params: GetTaskRequest, context: ServerCallContext) -> Task:
-        # No history is returned, whatever ``historyLength`` asks. An id the service could
-        # not have made is not looked up.
-        if TASK_ID.fullmatch(params.id) is None:
-            raise TaskNotFoundError
-        task = await self.received.store.get(params.id, context.user.user_name)
-        if task is None:
-            raise TaskNotFoundError
-        return task_of(await self.received.view(task))
+        # No history is returned, whatever ``historyLength`` asks.
+        return task_of(await self.received.view(await self._own(params.id, context)))
 
     @override
     async def on_list_tasks(
@@ -452,17 +483,44 @@ class FreyjaRequestHandler(RequestHandler):
         raise UnsupportedOperationError
 
     @override
+    @_guard
     async def on_cancel_task(
         self, params: CancelTaskRequest, context: ServerCallContext
     ) -> Task | None:
-        raise UnsupportedOperationError
+        """The task, canceled: a run stops after the step under way, and a proposal is
+        rejected by rule (research R11). Nothing of the request but the id is read."""
+        task = await self._own(params.id, context)
+        try:
+            return task_of(await self.received.cancel(task))
+        except NotCancelableError:
+            raise TaskNotCancelableError from None
 
     @override
     async def on_subscribe_to_task(
         self, params: SubscribeToTaskRequest, context: ServerCallContext
     ) -> AsyncGenerator[Any, None]:
-        raise UnsupportedOperationError
-        yield  # an async generator, as the interface has it
+        """The task as it stands, then its changes to its end; refused for a task that has
+        ended, and past the streams one task takes on this instance."""
+        try:
+            first = await self.received.view(await self._own(params.id, context))
+            if first.state != "working":
+                raise UnsupportedOperationError
+            self._stream(first.task.task_id)
+        except A2AError:
+            raise
+        except Exception as exc:
+            self._internal("on_subscribe_to_task", exc)
+        try:
+            yield task_of(first)
+            changes = self.received.follow(first.task, said=first.sentence)
+            async for event in _events(first, changes):
+                yield event
+        except A2AError:
+            raise
+        except Exception as exc:
+            self._internal("on_subscribe_to_task", exc)
+        finally:
+            self.received.give_stream(first.task.task_id)
 
     @override
     async def on_create_task_push_notification_config(

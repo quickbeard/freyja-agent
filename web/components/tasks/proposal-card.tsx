@@ -38,6 +38,17 @@ const STALE: Record<string, string> = {
 
 const UNKNOWN =
   "No answer came, so whether the decision was applied is not known. The task is read again, and the proposal is shown only if it is still pending.";
+// Feature 009: the agent that started the task canceled it, so only a rejection is taken
+// (`requester_gone`). The card stays, with Reject where the service lists it: an action that
+// no longer needs approval, as after the agents' approval mode turned Auto, takes only
+// approve, so it can be rejected only once the mode is Manual again.
+function requesterGone(single: boolean, rejectable: boolean): string {
+  const them = single ? "this action" : "these actions";
+  const it = single ? "it" : "them";
+  return rejectable
+    ? `The agent that started this task canceled it, so ${them} can no longer be approved. Reject ${it} to close the proposal; nothing of it runs.`
+    : `The agent that started this task canceled it, so ${them} can no longer be approved. ${single ? "It no longer needs" : "They no longer need"} approval, so ${it} can be rejected only once the agents' approval mode is Manual again.`;
+}
 
 type Choice = {
   decision: Decision | null;
@@ -156,6 +167,9 @@ export function ProposalCard({
   const busy = useRef(false);
   const heading = useId();
   const single = actions.length === 1;
+  const rejectable = actions.every((action) =>
+    action.allowed_decisions.includes("reject"),
+  );
 
   function choose(index: number, values: Partial<Choice>) {
     setRefused(null);
@@ -182,7 +196,13 @@ export function ProposalCard({
     try {
       await send(decisions as DecisionSent[]);
     } catch (failure) {
-      if (failure instanceof ApiError && failure.code === "invalid") {
+      if (failure instanceof ApiError && failure.code === "requester_gone") {
+        setRefused({
+          byAction: new Map(),
+          card: [requesterGone(single, rejectable)],
+        });
+        onRefused?.();
+      } else if (failure instanceof ApiError && failure.code === "invalid") {
         // Each edit stays, with the service's reason beside it (FR-015). The reason can be
         // that a decision is no longer allowed for the action: the task is read again, so
         // that the card offers what the service lists now (FR-014).
@@ -259,6 +279,11 @@ export function ProposalCard({
             {single
               ? `${startedBy(caller)}. No person asked for this action: the agent's task led Freyja to propose it.`
               : `${startedBy(caller)}. No person asked for these actions: the agent's task led Freyja to propose them.`}
+          </p>
+        )}
+        {caller?.canceled === true && refused === null && (
+          <p className="text-sm font-medium">
+            {requesterGone(single, rejectable)}
           </p>
         )}
       </div>

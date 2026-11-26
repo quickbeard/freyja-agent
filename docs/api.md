@@ -37,6 +37,8 @@ The `interrupt_id` ties a decision to one proposal: a request that names any oth
 
 A decision that was taken stands. When a resume decides a proposal of the subagent and its run then fails before it ends, the thread can still show that proposal, because the step that runs the subagent did not complete. A resume after that is `409` with code `already_decided` when it sends other decisions than the earlier ones, which the message names by type, and nothing runs; the same decisions continue the thread.
 
+On a thread another agent started over A2A (see [Receive tasks from agents](a2a-server.md)), a resume that approves or edits an action is `409` with code `requester_gone` once that agent canceled its task, or whenever the conversation has no task that still works; nothing runs. A resume that rejects every action is taken, and so is one that repeats decisions already taken.
+
 **List the threads.** `GET /threads` answers with one row per thread that has had a run, whichever client started it, and `GET /threads/{thread_id}` with one row. They are the service's side of the Tasks section of the web console (feature 007); the console calls a thread a task, and the API keeps the word thread.
 
 ```bash

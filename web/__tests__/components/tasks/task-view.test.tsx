@@ -415,6 +415,36 @@ describe("a task another agent started", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  // Request 4: the requesting agent canceled the task (T069).
+  it("says that the requesting agent canceled, and that its proposal was rejected by that cancel and not by a person", async () => {
+    service({
+      row: () => ({
+        json: summary({
+          caller: { ...LOCAL, canceled: true },
+          status: "stopped",
+        }),
+      }),
+      state: () => ({ json: state([human("Tell #ops."), ai("")]) }),
+    });
+    renderView();
+    expect(
+      await screen.findByText(
+        "The agent that started this task canceled it. Nothing the task still proposed can be approved any more: Freyja rejects it by itself, for that cancel and not as a person's decision. What ran before the cancel is in the conversation.",
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("says nothing of a cancel while the agent has not canceled", async () => {
+    service({
+      row: () => ({ json: summary({ caller: LOCAL }) }),
+      state: () => ({ json: state([human("Compile it."), ai("Done.")]) }),
+    });
+    renderView();
+    await screen.findByText("Started by an agent on this machine");
+    expect(screen.queryByText(/canceled it/)).toBeNull();
+  });
+
   it("keeps the box on a task a person started, and says nothing new", async () => {
     service({
       row: () => ({ json: summary() }),

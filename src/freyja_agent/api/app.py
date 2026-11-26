@@ -35,24 +35,29 @@ def configure_logging() -> None:
 
 
 def _receive_tasks(runtime: Runtime) -> ReceivedTasks:
-    """The A2A service of this runtime, told of the end of every run on any thread (R9)."""
+    """The A2A service of this runtime, told of the end of every run on any thread (R9),
+    with its sweep started once the runtime is open."""
     received = ReceivedTasks(runtime)
     if isinstance(runtime.locks, IndexedRunLocks):
         runtime.locks.on_release = received.on_release
-    # A follower joins the run a person's decision starts on its thread (T058).
     if runtime.unattended is not None:
+        # A follower joins the run a person's decision starts on its thread (T058).
         runtime.unattended.on_start = received.on_run_started
+        # A console run on a caller's thread stops once its caller canceled (R10).
+        runtime.unattended.canceled = received.canceled
+    received.start_sweeping()
     return received
 
 
 async def _stop_receiving(runtime: Runtime, received: ReceivedTasks) -> None:
-    """Stop looking at tasks when runs end, and wait for the looks under way. A task whose
-    run the service stops on its way down is read from its thread when it is next asked
-    for."""
+    """Stop looking at tasks when runs end, stop the sweep, and wait for the looks under
+    way, before the runtime is closed. A task whose run the service stops on its way down
+    is read from its thread when it is next asked for."""
     if isinstance(runtime.locks, IndexedRunLocks):
         runtime.locks.on_release = None
     if runtime.unattended is not None:
         runtime.unattended.on_start = None
+        runtime.unattended.canceled = None
     await received.close()
 
 

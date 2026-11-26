@@ -829,26 +829,26 @@ console no longer counts it.
 
 ### Tests for User Story 4
 
-- [ ] T063 [US4] Add part 4 to `tests/test_a2a_server_tasks.py`, following (FR-017):
+- [X] T063 [US4] Add part 4 to `tests/test_a2a_server_tasks.py`, following (FR-017):
       `SubscribeToTask` gives the task as it stands and every change to its end; on a task that
       ended, -32004; a fifth stream of one task on one instance is refused with `stream_limit`
       and its sentence, and a fourth is not; a follower through a second instance on the same
       stores receives each change of state, of the status, and the result, and no pieces; a
       follower that falls `READER_BACKLOG` events behind is disconnected and the run goes on
-- [ ] T064 [US4] Add part 5 to `tests/test_a2a_server_tasks.py`, restarts (FR-012, SC-010): a
+- [X] T064 [US4] Add part 5 to `tests/test_a2a_server_tasks.py`, restarts (FR-012, SC-010): a
       second application on the same stores, and a runtime opened again on them, read a
       task with the same id, state, and result, and subscribe to and cancel one that works;
       a caller's run in progress when `UnattendedRuns.close` runs ends canceled with `The run
       was stopped before it finished.`; nothing runs by itself afterwards; a follow-up
       continues with the stopped run's work in mind
-- [ ] T065 [US4] Add part 6 to `tests/test_a2a_server_tasks.py`, a cancel of a run (FR-021,
+- [X] T065 [US4] Add part 6 to `tests/test_a2a_server_tasks.py`, a cancel of a run (FR-021,
       SC-011), as `tests/test_unattended_stop.py` stops runs: during a model call, a tool
       step, and an approved action, the step completes, the run stops before the next one,
       the thread keeps what was done, and the cancel is answered with the task canceled with
       `The caller canceled the task.`; the task stays canceled when the run ended by itself
       before the stop took effect; a cancel of a task that ended answers -32002, and of an
       id never used -32001; each accepted cancel is logged with the caller and the task's id
-- [ ] T066 [US4] Add part 7 to `tests/test_a2a_server_tasks.py`, a cancel and a proposal
+- [X] T066 [US4] Add part 7 to `tests/test_a2a_server_tasks.py`, a cancel and a proposal
       (FR-021, FR-022, FR-022a, R11): a pending proposal of Freyja's is rejected by rule, every
       action with `The requesting agent canceled the task.`, none runs, the rejecting run stops
       at its first boundary without asking the model, and the list no longer counts the task; a
@@ -869,17 +869,17 @@ console no longer counts it.
       through `/threads/{id}/resume`, the route whose run ends when its client stops reading,
       is applied as today, a cancel that follows cannot stop that run, and the task is
       canceled all the same, with what the run does left in the thread (Edge Cases)
-- [ ] T067 [US4] Add part 8 to `tests/test_a2a_server_tasks.py`, releases and the sweep (R9):
+- [X] T067 [US4] Add part 8 to `tests/test_a2a_server_tasks.py`, releases and the sweep (R9):
       a canceled task is released once its thread has no run in progress and no agent task
       awaited, and a pending proposal does not keep it counting; the sweep, run on the
       suite's clock every 30 seconds, finds a canceled task whose release function was lost
       and rejects its proposal, and looks at no more rows than the total limit;
       `tests/test_unattended_stop.py` passes unchanged
-- [ ] T068 [P] [US4] In `tests/test_unattended_runs.py`: a run started with `stop_first=True`
+- [X] T068 [P] [US4] In `tests/test_unattended_runs.py`: a run started with `stop_first=True`
       stops at its first boundary; `should_stop` asks whether a caller's last task was
       canceled, for a caller's thread only, and a console run on such a thread stops at its
       next boundary whether or not the index was marked
-- [ ] T069 [P] [US4] In `web/__tests__/components/tasks/task-view.test.tsx`: a task whose
+- [X] T069 [P] [US4] In `web/__tests__/components/tasks/task-view.test.tsx`: a task whose
       `caller.canceled` is true says that the requesting agent canceled, and its rejected
       proposal is said to be rejected by that cancel and not by a person. In
       `web/__tests__/components/tasks/proposal-card.test.tsx`: an approval answered with
@@ -887,38 +887,38 @@ console no longer counts it.
 
 ### Implementation for User Story 4
 
-- [ ] T070 [US4] In `src/freyja_agent/runtime/unattended.py`: `UnattendedRuns.start(...,
+- [X] T070 [US4] In `src/freyja_agent/runtime/unattended.py`: `UnattendedRuns.start(...,
       stop_first=False)`, a run that stops at its first boundary; `should_stop` also asks a
       function it is given whether a caller's thread's last task was canceled (R10)
-- [ ] T071 [US4] In `src/freyja_agent/api/runs.py`, under the lease in the resume function,
+- [X] T071 [US4] In `src/freyja_agent/api/runs.py`, under the lease in the resume function,
       refuse with 409 `requester_gone` an approval or an edit on a caller's thread whose
       conversation has no task that works, unless every decision is a rejection or the
       request repeats the decisions already taken (R11)
-- [ ] T072 [US4] In `src/freyja_agent/api/received.py`: `cancel`, which writes the task
+- [X] T072 [US4] In `src/freyja_agent/api/received.py`: `cancel`, which writes the task
       canceled first and then acts on the thread as R11 says; the rejection by rule, a resume
       rejecting every action with the fixed reason, started as a console run with `stop_first`,
       counted and spaced in the task's row; R11 applied at every look of a thread with a
       proposal and no task that works; the release of a canceled task; subscribing, with at
       most four followers of a task on this instance; the sweep, every 30 seconds, over the
       rows not released
-- [ ] T073 [US4] In `src/freyja_agent/api/a2a_server.py`, serve `on_cancel_task` and
+- [X] T073 [US4] In `src/freyja_agent/api/a2a_server.py`, serve `on_cancel_task` and
       `on_subscribe_to_task`, and refuse them as the contract says for a task that ended
-- [ ] T074 [US4] In `src/freyja_agent/api/app.py`, start the sweep after the runtime is open
+- [X] T074 [US4] In `src/freyja_agent/api/app.py`, start the sweep after the runtime is open
       when the feature is on, and stop it before the runtime is closed
-- [ ] T075 [P] [US4] In `src/freyja_agent/api/thread_index.py`, `caller.canceled` is true
+- [X] T075 [P] [US4] In `src/freyja_agent/api/thread_index.py`, `caller.canceled` is true
       while the conversation's last task is one its caller canceled
-- [ ] T076 [P] [US4] In `web/components/tasks/task-view.tsx` and
+- [X] T076 [P] [US4] In `web/components/tasks/task-view.tsx` and
       `web/components/tasks/proposal-card.tsx`, say that the requesting agent canceled, that
       a proposal was rejected by that cancel, and `requester_gone` in the console's words
-- [ ] T077 [US4] Add User Story 4's part to `web/e2e/tasks-callers.spec.ts`: a canceled
+- [X] T077 [US4] Add User Story 4's part to `web/e2e/tasks-callers.spec.ts`: a canceled
       caller's task is not counted among those that need a decision and says the agent
       canceled; an approval refused with `requester_gone` is said so; `web/e2e/tasks-api.ts`
       answers both
-- [ ] T078 [US4] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+- [X] T078 [US4] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
       `docs/a2a-server.md`, subscribing, reading a task after a restart, and cancel, with
       what it does to a run and to a proposal; in `docs/web-console.md`, Tasks: what a
       canceled caller's task shows
-- [ ] T079 [US4] Walk quickstart.md section 4 on a check instance by the standing rules, and
+- [X] T079 [US4] Walk quickstart.md section 4 on a check instance by the standing rules, and
       correct it where the built feature differs
 
 **Checkpoint**: request 4. A caller continues, comes back to, and cancels its tasks; nobody

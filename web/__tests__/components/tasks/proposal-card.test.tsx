@@ -318,6 +318,77 @@ describe("the proposal card", () => {
     );
   });
 
+  // Feature 009, request 4 (T069): the agent that asked for the action canceled its task.
+  it("says in the console's words that an approval was refused because the requesting agent canceled, and still offers rejecting", async () => {
+    const send = vi.fn(async () => {
+      throw new ApiError(
+        "The agent that asked for this canceled its task, so the action is not carried out. The proposal can only be rejected.",
+        409,
+        "requester_gone",
+      );
+    });
+    const onRefused = vi.fn();
+    const onStale = vi.fn();
+    render(
+      <ProposalCard
+        pending={proposal(NOTIFY)}
+        send={send}
+        onStale={onStale}
+        onRefused={onRefused}
+      />,
+    );
+    fireEvent.click(button("Approve send_notification"));
+    expect((await screen.findByRole("alert")).textContent).toBe(
+      "The agent that started this task canceled it, so this action can no longer be approved. Reject it to close the proposal; nothing of it runs.",
+    );
+    expect(onRefused).toHaveBeenCalledTimes(1);
+    expect(onStale).not.toHaveBeenCalled();
+    fireEvent.click(button("Reject send_notification"));
+    fireEvent.click(button("Reject send_notification now"));
+    await waitFor(() => expect(send).toHaveBeenCalledTimes(2));
+    expect(send.mock.calls[1]).toEqual([[{ type: "reject" }]]);
+  });
+
+  it("says that an action which no longer needs approval can be rejected only once the agents' mode is Manual", async () => {
+    const send = vi.fn(async () => {
+      throw new ApiError(
+        "The agent that asked for this canceled its task, so the action is not carried out. The proposal can only be rejected.",
+        409,
+        "requester_gone",
+      );
+    });
+    render(
+      <ProposalCard
+        pending={proposal({ ...HANDOFF, allowed_decisions: ["approve"] })}
+        caller={{ name: "local", canceled: true, configured: true }}
+        send={send}
+        onStale={vi.fn()}
+      />,
+    );
+    const said =
+      "The agent that started this task canceled it, so this action can no longer be approved. It no longer needs approval, so it can be rejected only once the agents' approval mode is Manual again.";
+    expect(screen.getByText(said)).toBeTruthy();
+    fireEvent.click(button("Approve handoff_to_stub"));
+    expect((await screen.findByRole("alert")).textContent).toBe(said);
+  });
+
+  it("says before any press that the requesting agent canceled, on the card of a canceled caller's task", () => {
+    render(
+      <ProposalCard
+        pending={proposal(NOTIFY)}
+        caller={{ name: "local", canceled: true, configured: true }}
+        send={vi.fn(async () => {})}
+        onStale={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(
+        "The agent that started this task canceled it, so this action can no longer be approved. Reject it to close the proposal; nothing of it runs.",
+      ),
+    ).toBeTruthy();
+    expect(button("Reject send_notification")).toBeTruthy();
+  });
+
   it("says that the outcome is not known when no answer came", async () => {
     const send = vi.fn(async () => {
       throw new ApiError(
