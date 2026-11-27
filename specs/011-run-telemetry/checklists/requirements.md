@@ -41,11 +41,13 @@
   2026-11-27): no trace's id is ever sent to a model, a tool server, or an agent; Freyja
   holds no credential for a collector; and the work that waits, the requests the service
   answers, and the model calls a library makes by itself are all in scope.
-- Decided in the spec and the owner's to overturn at clarify: a run's span stands under the
-  span of the request that started it (FR-013); a trace's id a client sends is not used
-  (FR-028); the routes that say whether the service is up or ready are not recorded
-  (FR-027); a profile's test is recorded as a request and its model calls are not
-  (Assumptions); every run is recorded, with no sampling (FR-006).
+- The clarify session of the same day put to the owner what the spec had decided by itself:
+  a run's span stands under its request's (FR-013), a client's trace id is not used
+  (FR-028), a thread's id is on the run's span and nowhere else (FR-032), a profile's test's
+  model calls are recorded and marked (FR-010a, which changed the spec), and everything is
+  recorded with no sampling (FR-006). Still decided without the owner being asked: the
+  routes that say whether the service is up or ready are not recorded (FR-027).
+- Re-validated after clarify on 2026-11-27: 16 of 16 items pass.
 - An implementation of the first two user stories exists from before this spec
   (Assumptions). The spec was written from what an operator gets, and the implementation is
   brought to it at the implement step.
