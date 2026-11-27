@@ -30,8 +30,10 @@ Always go through uv. Never call python, pip, or pytest directly.
   installed or running and no network is used; only the transport tests launch a stub as a
   process or serve it on the loopback interface.
 - `uv run pytest --cov` runs the suite with coverage and fails below `fail_under` in
-  `pyproject.toml`. The commit hook and CI run it this way. Without `--cov` nothing is
-  measured, so a run of one file is not held to the suite's number.
+  `pyproject.toml`, which is the floor of a run with the Postgres tests, as CI runs it. The
+  commit hook runs it without a database and with a floor of its own, `--cov-fail-under` in
+  `.pre-commit-config.yaml`; give a run without the Postgres tests that option too. Without
+  `--cov` nothing is measured, so a run of one file is not held to the suite's number.
 - `uv run python -m tests.mcp_stub --http 8765` serves the stub at
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
@@ -48,7 +50,9 @@ Always go through uv. Never call python, pip, or pytest directly.
   other id answers. A request that asks for a stream is answered as one, so
   a profile pointing at it can be run on.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
-  tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
+  tests/integration` runs the Postgres tests; without the variable they are skipped, so
+  they are opt-in on a developer's machine and in the commit hook. CI sets it, in both
+  systems, to a Postgres the `pytest` job starts for itself.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
@@ -503,7 +507,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
   to the other side too. The linters only report in CI; the commit hook is where files get
-  fixed. CI does not run the opt-in Postgres tests.
+  fixed. The `pytest` job of both sides starts a Postgres of its own and runs the Postgres
+  tests with the rest of the suite.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `Dockerfile` and `web/Dockerfile`: the two container images, the service and the web
   console, each with its `.dockerignore` (the service's names the files that are let in).
@@ -572,8 +577,11 @@ startup and exits with an error naming the connection when it is unreachable.
   file under `web/__tests__/` for the web app.
 - Coverage has a floor: `fail_under` in `pyproject.toml` for the service's lines, and the
   four thresholds in `web/vitest.config.mts` for the web app. Both are measured as CI runs the
-  suites, so without the opt-in Postgres tests, and nothing of either project is left out of
-  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. A floor
+  suites, so with the Postgres tests, and nothing of either project is left out of
+  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. The commit hook
+  runs the service's suite without a database, so it holds a lower floor of its own, beside
+  its command in `.pre-commit-config.yaml`; `tests/test_coverage_gate.py` keeps the three
+  places in step. A floor
   is raised as its number rises and lowered only with the reason written beside it. Coverage
   shows what no test runs; it does not show that what runs is checked.
 - Write the tests before opening a pull request or merge request, not after. Its description
@@ -600,7 +608,8 @@ startup and exits with an error naming the connection when it is unreachable.
   works on the newer schema while a release is rolled out. No other module makes or
   changes a table, which `tests/test_migrations.py` checks, and
   `tests/integration/test_migrations_postgres.py` applies the list to a real Postgres; run
-  it for every new migration, since CI does not.
+  it for every new migration, since the commit hook does not and CI does only once the
+  change is pushed.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before

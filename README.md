@@ -133,7 +133,8 @@ A finding is reported without its value. A secret that was committed is in the h
 uv run pytest                  # full suite
 uv run pytest -q               # quiet output
 uv run pytest tests/test_health.py::test_healthz   # a single test
-uv run pytest --cov            # full suite with coverage; fails below the threshold
+uv run pytest --cov            # full suite with coverage; fails below the threshold, which needs the Postgres tests
+uv run pytest --cov --cov-fail-under=89   # the same without a database, as the commit hook runs it
 ```
 
 The web app's unit tests run with Vitest:
@@ -163,7 +164,7 @@ docker compose exec postgres createdb -U freyja freyja_test
 FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest tests/integration
 ```
 
-CI runs both unit test suites on every pull request and merge request and on `main`: `.github/workflows/unit-tests.yml` on GitHub, and the `pytest` and `vitest` jobs of `.gitlab-ci.yml` on GitLab. The Postgres tests under `tests/integration` stay opt-in and are skipped there.
+CI runs both unit test suites on every pull request and merge request and on `main`: `.github/workflows/unit-tests.yml` on GitHub, and the `pytest` and `vitest` jobs of `.gitlab-ci.yml` on GitLab. The `pytest` job of both starts a Postgres of its own and runs the Postgres tests under `tests/integration` with the rest of the suite. On a developer's machine and in the commit hook they stay opt-in.
 
 ### Coverage
 
@@ -171,10 +172,11 @@ Both suites have a floor, and the commit hook and CI run them with coverage, so 
 
 | Project | Measured | Floor | Where it is set |
 |---|---|---|---|
-| Service | 89.97% of lines | 88% | `fail_under` under `[tool.coverage.report]` in `pyproject.toml` |
+| Service | 96.64% of lines | 95% | `fail_under` under `[tool.coverage.report]` in `pyproject.toml` |
+| Service, without the Postgres tests | 91.50% of lines | 89% | `--cov-fail-under` in the commit hook's command, in `.pre-commit-config.yaml` |
 | Web app | 95.05% of statements, 93.67% of branches, 95% of functions, 96.74% of lines | 90% each | `coverage.thresholds` in `web/vitest.config.mts` |
 
-The numbers were measured on 2026-11-19, as CI runs the suites. For the service that means without the Postgres tests, which leaves the Postgres stores unmeasured; with them it is 96.62%. Nothing of either project is left out of the count, except `web/components/ui/`, which shadcn generates. A run without coverage (`uv run pytest`, `pnpm test`) is not measured, so running one file is not held to the whole suite's number. Raise a floor as its number rises.
+The service's numbers were measured on 2026-11-27 and the web app's on 2026-11-19, as CI runs the suites. For the service that means with the Postgres tests, which both CI systems run against a Postgres the job starts. The commit hook has no database, so it skips those tests, which leaves the Postgres stores unmeasured, and it holds the lower floor of the second row. Nothing of either project is left out of the count, except `web/components/ui/`, which shadcn generates. A run without coverage (`uv run pytest`, `pnpm test`) is not measured, so running one file is not held to the whole suite's number. Raise a floor as its number rises.
 
 The service's lines are counted with Python 3.12's own monitoring (`core = "sysmon"`), which adds about a second to the suite; on 3.12 that counts lines and not branches.
 

@@ -59,11 +59,13 @@ source = ["freyja_agent"]
 core = "sysmon"
 
 [tool.coverage.report]
-# The share of the service's lines the suite must run, as CI runs it: without the opt-in
-# Postgres tests, which leaves the Postgres stores unmeasured. Measured at 89.97 on
-# 2026-11-19 (96.62 with the Postgres tests). Raise it as the number rises; lower it only
-# with the reason written here.
-fail_under = 88
+# The share of the service's lines the suite must run, as CI runs it: with the Postgres
+# tests, which both CI systems run against a Postgres the job starts. Measured at 96.64 on
+# 2026-11-27. A run without a database skips those tests and leaves the Postgres stores
+# unmeasured (91.50 on the same day): the commit hook is such a run and holds a floor of its
+# own, beside its command in .pre-commit-config.yaml. Raise it as the number rises; lower it
+# only with the reason written here.
+fail_under = 95
 precision = 2
 show_missing = true
 skip_covered = true
