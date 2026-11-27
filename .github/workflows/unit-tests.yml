@@ -11,6 +11,22 @@ jobs:
     name: pytest
     timeout-minutes: 15
     runs-on: ubuntu-latest
+    services:
+      # For the Postgres tests under tests/integration. The same container as
+      # docker-compose.yml, made with the database those tests may wipe.
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: freyja
+          POSTGRES_PASSWORD: freyja
+          POSTGRES_DB: freyja_test
+        ports:
+          - "5432:5432"
+        options: >-
+          --health-cmd "pg_isready -U freyja -d freyja_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - name: Install uv
@@ -22,8 +38,11 @@ jobs:
         # out of step with pyproject.toml instead of rewriting it.
         run: uv sync --locked
       - name: Run pytest
-        # The Postgres tests under tests/integration are skipped: they are opt-in and need
-        # FREYJA_TEST_DATABASE_URI. --cov: with coverage, held to fail_under in pyproject.toml.
+        # The variable has the Postgres tests under tests/integration run, against the
+        # service above; without it they would be skipped and the run would fall below the
+        # floor. --cov: with coverage, held to fail_under in pyproject.toml.
+        env:
+          FREYJA_TEST_DATABASE_URI: postgresql://freyja:freyja@localhost:5432/freyja_test
         run: uv run pytest --cov
   web:
     name: vitest

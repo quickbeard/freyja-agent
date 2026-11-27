@@ -33,7 +33,9 @@ def _env(stage: list[str]) -> dict[str, str]:
     pairs: dict[str, str] = {}
     for line in stage:
         if line.startswith("ENV "):
-            pairs.update(pair.split("=", 1) for pair in line.removeprefix("ENV ").split())
+            for pair in line.removeprefix("ENV ").split():
+                name, value = pair.split("=", 1)
+                pairs[name] = value
     return pairs
 
 

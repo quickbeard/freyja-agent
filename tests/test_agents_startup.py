@@ -22,7 +22,7 @@ from langchain_core.messages import AIMessage
 
 from freyja_agent.config import A2aAgentConfig
 from freyja_agent.delegates.a2a_agents import AgentLink, AgentStartupError, default_transport
-from freyja_agent.runtime.agent_tasks import AgentTaskRecord
+from freyja_agent.runtime.agent_tasks import AgentTaskRecord, TaskState
 from tests.a2a_stub import make_stub, stub_card
 from tests.conftest import A2aApp, saved_card
 from tests.fakes import ScriptedChatModel
@@ -68,7 +68,7 @@ def seed_task(
     task_id: str,
     *,
     ref: str | None = None,
-    state: str = "working",
+    state: TaskState = "working",
     thread: str = "t-1",
 ) -> None:
     """Record a task as an earlier run would have, before the app starts."""
@@ -82,7 +82,7 @@ def seed_task(
                 thread_id=thread,
                 context_id=f"ctx-{task_id}",
                 message="Compile the report.",
-                state=state,  # type: ignore[arg-type]
+                state=state,
                 started_at=now,
                 last_checked_at=now,
                 ended_at=now if state == "given_up" else None,
@@ -208,7 +208,7 @@ def test_a_hand_off_reads_the_card_inside_its_own_time_limit(
         # The agent answers again, slowly: its card takes most of a call's time limit, and
         # the task it is then given takes longer than any limit here.
         transport.down = False
-        transport.handle_async_request = slowly  # type: ignore[method-assign]
+        transport.handle_async_request = slowly
         began = time.monotonic()
         events = run(client, "s-5", sse_events)
         took = time.monotonic() - began

@@ -7,10 +7,11 @@ import importlib
 import os
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 
 from freyja_agent.config import Settings
 from freyja_agent.llm.providers import (
@@ -261,6 +262,8 @@ def test_a_deployments_telemetry_opt_out_holds_for_a_saved_profile_too(
     environment = build_model(environment_spec(Settings(model="anthropic:m")))
     saved = build_model(ModelSpec(provider="anthropic", model="m", api_key=KEY))
 
+    # Neither the provider's package nor its SDK has a public name for what a client reports.
+    environment, saved = cast(Any, environment), cast(Any, saved)
     chosen = environment._async_client._open_telemetry
     assert chosen["propagation"] is False
     assert chosen["traces"]["enabled"] is False
@@ -291,8 +294,8 @@ def test_a_spec_never_shows_its_key() -> None:
 def test_the_api_choice_changes_only_what_the_provider_profile_set() -> None:
     on = build_model(ModelSpec(provider="openai", model="m", api_key=KEY))
     off = build_model(ModelSpec(provider="openai", model="m", api_key=KEY, responses_api=False))
-    assert on.use_responses_api is True
-    assert off.use_responses_api is False
+    assert isinstance(on, ChatOpenAI) and on.use_responses_api is True
+    assert isinstance(off, ChatOpenAI) and off.use_responses_api is False
     # A provider with no such choice is built the same either way.
     build_model(ModelSpec(provider="anthropic", model="m", api_key=KEY, responses_api=False))
 

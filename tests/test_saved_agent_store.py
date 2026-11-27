@@ -8,7 +8,7 @@ store. ``store`` is the store under test, ``tasks`` the task store beside it, an
 
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -249,7 +249,7 @@ async def test_the_agents_mode_is_auto_until_set_and_moves_the_revision_when_it_
     assert await store.revision() == revision + 1
     assert await store.mode() == "manual"
     with pytest.raises(SavedAgentError):
-        await store.set_mode("off")  # type: ignore[arg-type]
+        await store.set_mode(cast(Any, "off"))
     assert await store.mode() == "manual"
     assert await store.set_mode("auto") == "auto"
     assert await store.revision() == revision + 2
@@ -311,13 +311,14 @@ async def test_one_change_can_move_an_agent_and_change_its_approval_choice(
 
 async def test_a_change_that_changes_nothing_moves_nothing(store: SavedAgentStore) -> None:
     added = await an_agent(store, "stub", "http://127.0.0.1:9998")
-    for same in (
+    unchanged: list[dict[str, Any]] = [
         {"read_only": False},
         # An entry that comes to the saved form is not a move, whatever card comes with it.
         {"url": "HTTP://127.0.0.1:9998/", "card": OTHER_CARD},
         {"url": "http://127.0.0.1:9998"},
         {},
-    ):
+    ]
+    for same in unchanged:
         record, given_up = await store.change(added.id, 1, **same)
         assert (record, given_up) == (added, 0)
     assert await store.revision() == 1
@@ -395,7 +396,7 @@ async def test_a_move_and_a_removal_give_up_the_agents_pending_tasks(
         assert task is not None
         assert task.state == "given_up"
         assert task.outcome == given_up_text(GIVEN_UP_MOVED, "stub", task_id)
-        assert "moved to another address" in task.outcome
+        assert "moved to another address" in (task.outcome or "")
         assert task.outcome_ready and task.delivered_at is None and task.ended_at is not None
     ended = await tasks.get_task("stub", "ended")
     assert ended is not None and (ended.state, ended.outcome) == ("completed", "done")
@@ -413,7 +414,7 @@ async def test_a_move_and_a_removal_give_up_the_agents_pending_tasks(
         task = await tasks.get_task("stub", task_id)
         assert task is not None and task.state == "given_up"
         assert task.outcome == given_up_text(GIVEN_UP_REMOVED, "stub", task_id)
-        assert "no longer configured" in task.outcome
+        assert "no longer configured" in (task.outcome or "")
     # What was given up at the move keeps the report it got then.
     working = await tasks.get_task("stub", "working")
     assert working is not None and "moved to another address" in (working.outcome or "")

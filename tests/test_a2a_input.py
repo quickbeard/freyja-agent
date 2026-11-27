@@ -104,7 +104,7 @@ def test_a_question_reaches_the_user_and_the_answer_continues_the_same_task(
         # The orchestrator received the question, marked as needing input and naming the task.
         (result,) = results(model, 1)
         assert result.status != "error"
-        assert result.content.startswith(ASKED)
+        assert result.text.startswith(ASKED)
         assert QUESTION in result.content
         # The reply that asks the user is the orchestrator's own message, not the agent's.
         after = state(client, "in-1")
@@ -130,7 +130,7 @@ def test_a_question_reaches_the_user_and_the_answer_continues_the_same_task(
     assert answer.task_id == TASK
     assert answer.context_id == first.context_id
     *_, done = results(model, -1)
-    assert done.content.startswith(f"Agent 'stub' completed task {TASK}:")
+    assert done.text.startswith(f"Agent 'stub' completed task {TASK}:")
     assert "Answered: Friday at 10." in done.content
     # One task, started with the first message, now ended.
     assert task["message"] == "ask: plan the release"

@@ -33,7 +33,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from a2a.helpers import new_data_part, new_raw_part, new_text_part
@@ -73,7 +73,7 @@ MAX_AGE = 100.0
 # Part 1: ``progress_text`` (research R1).
 
 
-def status(state: int, *parts: Any, message: bool = True) -> TaskStatus:
+def status(state: TaskState, *parts: Any, message: bool = True) -> TaskStatus:
     """A status in ``state`` whose message holds ``parts``, or that has no message."""
     found = TaskStatus(state=state)
     if message:
@@ -105,7 +105,7 @@ def test_a_submitted_status_counts_as_working() -> None:
         TaskState.TASK_STATE_AUTH_REQUIRED,
     ],
 )
-def test_a_status_that_is_not_working_gives_none_whatever_its_message(state: int) -> None:
+def test_a_status_that_is_not_working_gives_none_whatever_its_message(state: TaskState) -> None:
     """FR-002: an ending, a question, and a request to sign in are outcomes, not progress."""
     assert progress_text(status(state, text("The report is ready."))) is None
 
@@ -666,7 +666,7 @@ async def test_a_hand_off_keeps_its_progress_only_when_it_was_learned_last(
             # Seen five seconds ago on the event loop's clock.
             progress_seen=loop.time() - 5,
         )
-        result, ok = await _record(_Link(), store, "pr-9", "answer", outcome, "working")  # type: ignore[arg-type]
+        result, ok = await _record(cast(Any, _Link()), store, "pr-9", "answer", outcome, "working")
         assert ok and "pending" in result
     found = {task_id: await store.get_task("stub", task_id) for task_id in rows}
 
@@ -924,7 +924,8 @@ def test_a_proposal_waiting_for_a_decision_is_left_as_it_was(
     assert after["pending"] == before["pending"]
     assert after["messages"] == before["messages"]
     assert model.calls == calls
-    assert kept(entry_of(after))[0] == "Half done"  # type: ignore[index]
+    progress = kept(entry_of(after))
+    assert progress is not None and progress[0] == "Half done"
 
 
 def entry_of(found: dict[str, Any], task_id: str = TASK) -> dict[str, Any]:
@@ -1471,8 +1472,8 @@ async def test_the_text_a_send_returned_is_not_reported_again(
         TaskStatus(state=TaskState.TASK_STATE_COMPLETED),
     )
     updates: list[tuple[str, str]] = []
-    await a2a_agents._poll(  # type: ignore[arg-type]
-        client, outcome, lambda _task, state, text: updates.append((state, text))
+    await a2a_agents._poll(
+        cast(Any, client), outcome, lambda _task, state, text: updates.append((state, text))
     )
 
     assert updates == [("working", "Started"), ("completed", "")]

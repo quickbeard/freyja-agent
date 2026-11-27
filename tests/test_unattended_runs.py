@@ -13,7 +13,7 @@ import logging
 import threading
 import time
 from collections.abc import AsyncIterator, Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -240,7 +240,7 @@ def test_the_handlers_answer_with_the_runs_events_not_yet_started(
     async def watching(*args: Any, **kwargs: Any) -> Any:
         response = await real(*args, **kwargs)
         answered.append(response.body_iterator)
-        states.append(inspect.getasyncgenstate(response.body_iterator))
+        states.append(inspect.getasyncgenstate(cast(Any, response.body_iterator)))
         return response
 
     monkeypatch.setattr(threads_api, "start_run", watching)
@@ -657,7 +657,7 @@ async def test_a_drive_that_is_cancelled_still_gives_the_run_back() -> None:
         await asyncio.sleep(30)
         return True
 
-    index.note = slow_note  # type: ignore[method-assign]
+    index.note = slow_note
 
     async def events() -> AsyncIterator[ServerSentEvent]:
         try:
@@ -763,6 +763,7 @@ async def test_a_reader_that_joins_gets_the_events_that_follow_to_the_run_s_end(
     runs.start("t-2", many())
     await asyncio.sleep(0.01)
     slow = runs.join("t-2")
+    assert slow is not None
     flood.set()
     await runs.close()
     assert [event async for event in slow] == []
@@ -788,9 +789,9 @@ async def test_a_run_started_to_stop_first_stops_at_its_first_boundary_and_says_
     assert await runs.should_stop("t-2") is False
     step.set()
     got = [event async for event in reader]
-    assert (got[-1].event, json.loads(got[-1].data)) == ("end", {"status": "stopped"})
+    assert (got[-1].event, json.loads(got[-1].data or "")) == ("end", {"status": "stopped"})
     await runs.close()
-    assert json.loads([event async for event in other][-1].data) == {"status": "completed"}
+    assert json.loads([event async for event in other][-1].data or "") == {"status": "completed"}
 
 
 async def test_a_console_run_on_a_thread_whose_caller_canceled_stops_marked_or_not(

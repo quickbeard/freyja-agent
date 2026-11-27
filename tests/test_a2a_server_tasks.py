@@ -25,10 +25,10 @@ from collections.abc import Callable
 from concurrent.futures import Future
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
@@ -44,7 +44,7 @@ from tests.a2a_caller import StandInCaller, as_json
 from tests.a2a_requests import ADDRESS, at_rest, ended, rpc, sending, text_of
 from tests.a2a_stub import make_stub
 from tests.asgi_stream import StreamingASGITransport
-from tests.conftest import ServerApp, read_events
+from tests.conftest import ServerApp, detail_of, indexed_locks, read_events
 from tests.fakes import (
     FailingChatModel,
     LabelledChatModel,
@@ -333,7 +333,7 @@ def test_two_looks_at_once_write_one_end_and_a_moved_thread_writes_none(
     made = make_a2a_server_app(ScriptedChatModel(final_text="Hi."))
     with TestClient(made.app) as client:
         service = made.service()
-        made.runtime.locks.on_release = None  # no look by the release: the test looks
+        indexed_locks(made.runtime).on_release = None  # no look by the release: the test looks
         accepted = made.accept(client, "hello")
         made.finish(client, accepted)
         task = made.task(client, accepted.task.task_id)
@@ -388,7 +388,7 @@ def test_accepting_looks_first_at_the_tasks_that_still_count(
         ScriptedChatModel(final_text="Hi."), a2a_server_caller_tasks=1, a2a_server_tasks=1
     )
     with TestClient(made.app) as client:
-        made.runtime.locks.on_release = None  # the release function was lost
+        indexed_locks(made.runtime).on_release = None  # the release function was lost
         first = made.accept(client, "hello", context="a")
         made.finish(client, first)
         assert made.task(client, first.task.task_id).state == "working"
@@ -422,10 +422,10 @@ def test_the_release_function_runs_for_every_kind_of_run_and_holds_nothing_up(
 
         never = asyncio.Event()
 
-        async def blocks(_thread_id: str) -> None:
+        async def blocks(thread_id: str) -> None:
             await never.wait()
 
-        async def raises(_thread_id: str) -> None:
+        async def raises(thread_id: str) -> None:
             raise RuntimeError("the store is down")
 
         service.released = blocks
@@ -498,7 +498,7 @@ def test_a_thread_left_with_a_next_step_ends_its_task_as_interrupted(
 
     made = make_a2a_server_app(ScriptedChatModel(final_text="Hi."))
     with TestClient(made.app) as client:
-        made.runtime.locks.on_release = None
+        indexed_locks(made.runtime).on_release = None
         accepted = made.accept(client, "hello")
         made.finish(client, accepted)
         task = made.task(client, accepted.task.task_id)
@@ -542,7 +542,7 @@ def test_a_look_that_fails_keeps_its_task_counted_and_blocks_no_message(
     made = make_a2a_server_app(ScriptedChatModel(final_text="Hi."))
     with TestClient(made.app) as client:
         service = made.service()
-        made.runtime.locks.on_release = None
+        indexed_locks(made.runtime).on_release = None
         first = made.accept(client, "hello", context="a")
         made.finish(client, first)
 
@@ -645,7 +645,7 @@ def test_a_message_is_refused_while_a_proposal_is_pending_and_while_a_decision_r
 
 
 def _resume(client: TestClient, thread: str, body: dict[str, Any]) -> Any:
-    runtime = client.app.state.runtime
+    runtime = cast(FastAPI, client.app).state.runtime
 
     async def start() -> Any:
         return await start_resume(runtime, thread, ResumeRequest.model_validate(body))
@@ -1113,7 +1113,7 @@ def test_a_cancel_rejects_a_pending_proposal_by_rule_and_nothing_of_it_runs(
             try:
                 await start_resume(made.runtime, thread, ResumeRequest.model_validate(late))
             except HTTPException as exc:
-                at_once.append(exc.detail["code"])
+                at_once.append(detail_of(exc)["code"])
             return await real_stop(thread_id)
 
         monkeypatch.setattr(runs, "should_stop", asked)
@@ -1484,7 +1484,7 @@ def test_the_sweep_finds_a_canceled_task_whose_release_was_lost_and_rejects_its_
         client.portal.call(
             functools.partial(made.received.end, task_id, "canceled", reason="canceled")
         )
-        made.runtime.locks.on_release = None
+        indexed_locks(made.runtime).on_release = None
         asked: list[int] = []
         unreleased = made.received.unreleased
         to_reject = made.received.to_reject
@@ -1575,7 +1575,7 @@ def test_a_caller_s_next_message_does_not_let_a_person_approve_the_canceled_task
             try:
                 events = await start_resume(made.runtime, thread, body)
             except HTTPException as exc:
-                found.append(exc.detail["code"])
+                found.append(detail_of(exc)["code"])
             else:
                 found.append([kind for kind, _ in await read_events(events)][-1])
             return written

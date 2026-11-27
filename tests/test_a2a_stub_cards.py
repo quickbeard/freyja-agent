@@ -74,7 +74,8 @@ def test_a_text_length_pads_or_cuts_to_exactly_that_many_characters() -> None:
 @pytest.mark.parametrize("option", ["skill_count", "tag_count", "text_length"])
 def test_a_negative_size_is_refused(option: str) -> None:
     with pytest.raises(ValueError, match=option):
-        stub_card("x", **{option: -1})
+        sizes: dict[str, Any] = {option: -1}
+        stub_card("x", **sizes)
 
 
 async def test_any_bytes_can_be_served_where_the_card_would_be() -> None:
@@ -103,7 +104,12 @@ async def test_a_body_can_be_sent_with_no_length_announced() -> None:
 def test_options_that_cannot_be_served_together_are_refused() -> None:
     with pytest.raises(ValueError, match="card_encoding"):
         make_stub("x", card_encoding="br")
-    for option in ({"card_body": b"x"}, {"card_status": 404}, {"card_encoding": "gzip"}):
+    options: list[dict[str, Any]] = [
+        {"card_body": b"x"},
+        {"card_status": 404},
+        {"card_encoding": "gzip"},
+    ]
+    for option in options:
         with pytest.raises(ValueError, match="redirect_card_to"):
             make_stub("x", redirect_card_to=ELSEWHERE, **option)
     with pytest.raises(ValueError, match="redirect_card_to"):

@@ -9,11 +9,10 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
-from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.api.app import create_app
 from freyja_agent.config import Settings
-from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.persistence import Pool, open_persistence
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import PostgresThreadIndex, ThreadIndex
 from tests.fakes import LabelledChatModel, ScriptedChatModel
@@ -60,7 +59,7 @@ __all__ = [
 
 
 @pytest.fixture
-async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
+async def pool(settings: Settings) -> AsyncIterator[Pool]:
     persistence = await open_persistence(settings)
     try:
         yield persistence.pool
@@ -69,13 +68,13 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 
 
 @pytest.fixture
-async def index(pool: AsyncConnectionPool) -> ThreadIndex:
+async def index(pool: Pool) -> ThreadIndex:
     made = PostgresThreadIndex(pool)
     return made
 
 
 async def test_two_instances_on_one_database_see_each_others_writes(
-    pool: AsyncConnectionPool, settings: Settings
+    pool: Pool, settings: Settings
 ) -> None:
     here = PostgresThreadIndex(pool)
     other = await open_persistence(settings)

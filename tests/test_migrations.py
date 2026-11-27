@@ -8,6 +8,7 @@ that the migrations are the one place the service makes or changes a table.
 
 import re
 from pathlib import Path
+from typing import LiteralString
 
 import pytest
 
@@ -145,7 +146,7 @@ def test_a_checksum_does_not_count_how_a_statement_is_laid_out() -> None:
     ],
     ids=["a type", "the order", "one fewer", "one more", "a comment", "two joined into one"],
 )
-def test_a_checksum_counts_every_other_change(statements: tuple[str, ...]) -> None:
+def test_a_checksum_counts_every_other_change(statements: tuple[LiteralString, ...]) -> None:
     assert checksum(Migration(2, "two", statements)) != checksum(TWO)
 
 

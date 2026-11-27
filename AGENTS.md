@@ -19,10 +19,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
-- `uv run pyright` checks the types of the service's code under `src/`, with the settings in
-  `pyproject.toml` (`[tool.pyright]`). The commit hook and CI run it this way. It needs
-  nothing but uv: Node comes with the package, and pyright itself is downloaded the first
-  time it runs, which needs the network. The tests are not checked.
+- `uv run pyright` checks the types of the service's code under `src/` and of the tests
+  under `tests/`, with the settings in `pyproject.toml` (`[tool.pyright]`). The commit hook
+  and CI run it this way. It needs nothing but uv: Node comes with the package, and pyright
+  itself is downloaded the first time it runs, which needs the network.
 - `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
   client with in-memory persistence and a scripted model; no server, database, or model
   provider is needed. Tool servers are played by the stub in `tests/mcp_stub.py`, and A2A
@@ -30,8 +30,10 @@ Always go through uv. Never call python, pip, or pytest directly.
   installed or running and no network is used; only the transport tests launch a stub as a
   process or serve it on the loopback interface.
 - `uv run pytest --cov` runs the suite with coverage and fails below `fail_under` in
-  `pyproject.toml`. The commit hook and CI run it this way. Without `--cov` nothing is
-  measured, so a run of one file is not held to the suite's number.
+  `pyproject.toml`, which is the floor of a run with the Postgres tests, as CI runs it. The
+  commit hook runs it without a database and with a floor of its own, `--cov-fail-under` in
+  `.pre-commit-config.yaml`; give a run without the Postgres tests that option too. Without
+  `--cov` nothing is measured, so a run of one file is not held to the suite's number.
 - `uv run python -m tests.mcp_stub --http 8765` serves the stub at
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
@@ -48,12 +50,14 @@ Always go through uv. Never call python, pip, or pytest directly.
   other id answers. A request that asks for a stream is answered as one, so
   a profile pointing at it can be run on.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
-  tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
+  tests/integration` runs the Postgres tests; without the variable they are skipped, so
+  they are opt-in on a developer's machine and in the commit hook. CI sets it, in both
+  systems, to a Postgres the `pytest` job starts for itself.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
   parses, merge markers), gitleaks over what is staged, Ruff, pyright when the service's
-  code or its packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  code, a test, or their packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
   pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
   needs the network.
@@ -137,7 +141,8 @@ file, and that this list names every such file.
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
   to the other side too. The linters only report in CI; the commit hook is where files get
-  fixed. CI does not run the opt-in Postgres tests.
+  fixed. The `pytest` job of both sides starts a Postgres of its own and runs the Postgres
+  tests with the rest of the suite.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `Dockerfile` and `web/Dockerfile`: the two container images, the service and the web
   console, each with its `.dockerignore` (the service's names the files that are let in).
@@ -175,8 +180,11 @@ file, and that this list names every such file.
   file under `web/__tests__/` for the web app.
 - Coverage has a floor: `fail_under` in `pyproject.toml` for the service's lines, and the
   four thresholds in `web/vitest.config.mts` for the web app. Both are measured as CI runs the
-  suites, so without the opt-in Postgres tests, and nothing of either project is left out of
-  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. A floor
+  suites, so with the Postgres tests, and nothing of either project is left out of
+  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. The commit hook
+  runs the service's suite without a database, so it holds a lower floor of its own, beside
+  its command in `.pre-commit-config.yaml`; `tests/test_coverage_gate.py` keeps the three
+  places in step. A floor
   is raised as its number rises and lowered only with the reason written beside it. Coverage
   shows what no test runs; it does not show that what runs is checked.
 - Write the tests before opening a pull request or merge request, not after. Its description
@@ -188,13 +196,20 @@ file, and that this list names every such file.
   part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
   `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
   that is a few lines over public types is written here instead.
-- pyright reports nothing over `src/`. A type error is fixed in the code or in its
-  annotations. A line is silenced only where a library's own types say less, or other, than
-  what the library does, with `# pyright: ignore[<rule>]` on that line and the reason beside
-  it; a bare `# type: ignore` silences nothing. No file is left out of the check and no rule
-  is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
-  so the hook and both CI systems report the same; a new version is taken in a change of its
-  own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
+- pyright reports nothing over `src/` and `tests/`. A type error is fixed in the code or in
+  its annotations. A line is silenced only where a library's own types say less, or other,
+  than what the library does, with `# pyright: ignore[<rule>]` on that line and the reason
+  beside it; a bare `# type: ignore` silences nothing, and none is written. No file is left
+  out of the check and no rule is switched off for the service. One rule is off for the
+  tests alone, `reportOptionalMemberAccess`, with its reason beside it in `pyproject.toml`:
+  a test that reads an attribute of `None` fails when it runs. Every other rule holds for
+  the tests as for the service. A test that gives a function what its signature refuses, to
+  show the refusal, or a stand-in for what it takes, types that value as `Any`
+  (`cast(Any, ...)`, or a variable annotated so); the tests' shared typed accessors are in
+  `tests/conftest.py` (`detail_of`, `indexed_locks`). pyright is pinned to one exact version
+  in `pyproject.toml`, so the hook and both CI systems report the same; a new version is
+  taken in a change of its own, with what it newly reports fixed in it.
+  `tests/test_type_check_gate.py` holds this.
 - A change to the schema is a new migration at the end of `MIGRATIONS` in
   `runtime/migrations.py`, with its checksum added to `RELEASED` in
   `tests/test_migrations.py`. A migration that was merged is never edited: a database keeps
@@ -203,7 +218,8 @@ file, and that this list names every such file.
   works on the newer schema while a release is rolled out. No other module makes or
   changes a table, which `tests/test_migrations.py` checks, and
   `tests/integration/test_migrations_postgres.py` applies the list to a real Postgres; run
-  it for every new migration, since CI does not.
+  it for every new migration, since the commit hook does not and CI does only once the
+  change is pushed.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before

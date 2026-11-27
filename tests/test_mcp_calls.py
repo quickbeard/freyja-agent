@@ -259,7 +259,7 @@ def test_structured_data_is_delivered_once(
         run(client, "c-5", "go", sse_events)
         (result,) = tool_results(client, made.runtime, "c-5")
     # The server sends the same data as a text block and as structured content.
-    assert json.loads(result.content) == {"calls": 1, "notes": 0}
+    assert json.loads(result.text) == {"calls": 1, "notes": 0}
     assert result.content.count('"calls"') == 1
 
 
@@ -280,7 +280,7 @@ def test_structured_data_without_a_text_block_is_delivered_as_json(
         run(client, "c-6", "go", sse_events)
         (result,) = tool_results(client, made.runtime, "c-6")
     assert result.status == "success"
-    assert json.loads(result.content) == {"count": 3, "label": "three"}
+    assert json.loads(result.text) == {"count": 3, "label": "three"}
 
 
 def test_result_blocks_are_converted_in_order() -> None:
