@@ -32,6 +32,7 @@ from freyja_agent.api.serialize import (
 )
 from freyja_agent.llm.guard import ModelError
 from freyja_agent.llm.secrets import redact
+from freyja_agent.runtime.telemetry import CANCELLED, STOPPED, RunSpan
 
 if TYPE_CHECKING:  # the runtime starts the worker, which runs this stream
     from freyja_agent.llm.active import ActiveModel
@@ -91,6 +92,45 @@ def _is_model_error(exc: BaseException) -> bool:
 
 
 _INTERNAL = {"code": "internal", "message": "The run failed because of an internal error."}
+
+
+def _console(runtime: Runtime, thread_id: str) -> bool:
+    """Whether the run starting on ``thread_id`` is a console run: its thread was armed
+    before its first event (``UnattendedRuns.start``)."""
+    return runtime.unattended is not None and runtime.unattended.armed(thread_id)
+
+
+def _stopped(runtime: Runtime, thread_id: str) -> bool:
+    """Whether the console run on ``thread_id`` reached its end because a stop was applied."""
+    return runtime.unattended is not None and runtime.unattended.stopped(thread_id)
+
+
+def _span(
+    runtime: Runtime,
+    thread_id: str,
+    run_id: str,
+    mode: RunMode,
+    active: ActiveModel,
+    *,
+    strict: bool,
+) -> RunSpan:
+    """The span of a run that starts now (``runtime/telemetry.py``): ids and names only.
+
+    Neither starting it nor ending it can raise: telemetry that fails is left out, and the
+    run and the release of its lease go on (``Telemetry._safely``).
+    """
+    return runtime.telemetry.run(
+        thread_id=thread_id,
+        run_id=run_id,
+        mode=mode,
+        console=_console(runtime, thread_id),
+        strict=strict,
+        profile_id=active.profile.id,
+        profile_source=active.profile.source,
+        provider=active.provider,
+        model=active.model,
+    )
+
 
 # The node of Freyja's own graph that calls the model (feature 009, contracts/sse-events.md).
 MODEL_NODE = "model"
@@ -216,11 +256,14 @@ async def no_context_stream(
     lease.
     """
     owner = lease_owner(runtime, run_id)
+    active = runtime.applied_model()
+    span = _span(runtime, thread_id, run_id, mode, active, strict=False)
     try:
-        yield _event("start", _start(runtime.applied_model(), thread_id, run_id, mode, debug))
+        yield _event("start", _start(active, thread_id, run_id, mode, debug))
         yield _event("error", _INTERNAL)
     finally:
         with anyio.CancelScope(shield=True):
+            span.end("error", "internal")
             if on_end is not None:
                 try:
                     await on_end("error", "internal")
@@ -275,8 +318,11 @@ async def run_stream(
     renewals = asyncio.create_task(heartbeat())
     # How the run ended, for ``on_end``; None while it runs and after a disconnect.
     ended: tuple[str, str | None] | None = None
+    # Whether a console run's end is a stop's, which the stream's own event does not say.
+    stopped = False
+    active = context.active
+    span = _span(runtime, thread_id, run_id, mode, active, strict=context.strict)
     try:
-        active = context.active
         agent = context.agent
         profile = active.profile
         if not active.usable:
@@ -328,8 +374,12 @@ async def run_stream(
             # Subgraph streaming is on so an agent's progress, written by a hand-off made inside
             # the subagent, reaches the stream. What it adds is filtered back to the 001
             # contract: updates and interrupts come from the root only (feature 003, R7).
-            async for namespace, stream_mode, chunk in agent.astream(
-                input, config, stream_mode=stream_modes, durability="sync", subgraphs=True
+            # Read through the run's span, so that the model calls and tool calls the graph
+            # makes are recorded under it.
+            async for namespace, stream_mode, chunk in span.within(
+                agent.astream(
+                    input, config, stream_mode=stream_modes, durability="sync", subgraphs=True
+                )
             ):
                 if on_recorded is not None and not namespace and stream_mode == "updates":
                     recorded, on_recorded = on_recorded, None
@@ -439,11 +489,16 @@ async def run_stream(
             yield _event("interrupt", interrupt_to_pending(interrupts[0], context.catalog))
         else:
             ended = ("end", None)
+            stopped = _stopped(runtime, thread_id)
             yield _event("end", {"status": "completed"})
     finally:
         renewals.cancel()
         # A disconnect cancels this generator; shield the release so it completes.
         with anyio.CancelScope(shield=True):
+            if ended is None:
+                span.end(CANCELLED)
+            else:
+                span.end(STOPPED if stopped else ended[0], ended[1])
             if ended is not None and (ended[0] != "error" or ended[1] == "step_limit"):
                 # A run that completed, paused, or reached the step limit had the thread's
                 # outcomes: a background run's pending retries stop (feature 003, FR-027).

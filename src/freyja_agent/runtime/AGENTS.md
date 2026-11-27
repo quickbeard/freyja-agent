@@ -42,6 +42,18 @@ map of the other directories are in the `AGENTS.md` at the root of the repositor
   (`delegates/addresses.py`), and warns of refused credentials once and then at most once in
   ten seconds for each of the two addresses;
 
+- `telemetry.py` is `Telemetry`, the one module
+  that imports OpenTelemetry and the one place a span's or a metric's name or attribute is
+  written: off without `FREYJA_OTEL_ENDPOINT` (the API's tracer and meter that do nothing,
+  no SDK, no thread), and otherwise a span per run (`RunSpan`, ended by `run_stream`), per
+  model call, and per tool call, and the counts, sent over OTLP/HTTP from providers of its
+  own that are never registered as the process's; which span a call belongs under is kept
+  in a context variable of its own and OpenTelemetry's current span is never set, so
+  nothing a model, a tool server, or an agent receives changes; recording that fails is
+  left out with one warning and never fails a run or a call (`_safely`); `Runtime.assemble` takes
+  `telemetry`, the seam the tests swap to read what was recorded, and shuts down the one it
+  made itself after the worker has stopped;
+
 - `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation
   worker. `Runtime.assemble` opens the tool servers, starts the registry, builds the agent, and

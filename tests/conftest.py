@@ -40,6 +40,7 @@ from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore, ReceivedTaskStore
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore, SavedAgentRecord
+from freyja_agent.runtime.telemetry import Telemetry
 from freyja_agent.runtime.thread_index import IndexedRunLocks, InMemoryThreadIndex, ThreadIndex
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
@@ -79,18 +80,21 @@ def make_runtime(workspace: Path, clock: FakeClock) -> Callable[..., Runtime]:
         saver: InMemorySaver | None = None,
         store: InMemoryStore | None = None,
         locks: InMemoryRunLocks | None = None,
+        telemetry: Telemetry | None = None,
         **overrides: Any,
     ) -> Runtime:
         settings = Settings(workspace_dir=str(workspace), **overrides)
         saver = saver or InMemorySaver()
         store = store or InMemoryStore()
         locks = locks or InMemoryRunLocks(settings.run_lock_ttl_seconds, clock=clock.now)
+        telemetry = telemetry or Telemetry.off()
         orchestrator = build_agent(
             model,
             checkpointer=saver,
             store=store,
             workspace_dir=settings.workspace_dir,
             max_steps=settings.max_steps,
+            telemetry=telemetry,
         )
         return Runtime(
             agent=orchestrator.agent,
@@ -98,6 +102,7 @@ def make_runtime(workspace: Path, clock: FakeClock) -> Callable[..., Runtime]:
             locks=locks,
             instance_id=instance_id,
             settings=settings,
+            telemetry=telemetry,
         )
 
     return _make
@@ -177,6 +182,7 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
         locks: InMemoryRunLocks | None = None,
         # Feature 007: an index shared with an earlier app, for a second instance.
         thread_index: ThreadIndex | None = None,
+        telemetry: Telemetry | None = None,
         **overrides: Any,
     ) -> McpApp:
         settings = Settings(workspace_dir=str(workspace), mcp_servers=servers, **overrides)
@@ -202,6 +208,7 @@ def make_mcp_app(workspace: Path, clock: FakeClock) -> Callable[..., McpApp]:
                 connect=connect,
                 run_worker=False,
                 thread_index=thread_index,
+                telemetry=telemetry,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
@@ -303,6 +310,7 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         received_tasks: ReceivedTaskStore | None = None,
         thread_index: ThreadIndex | None = None,
         listen: bool = False,
+        telemetry: Telemetry | None = None,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -378,6 +386,7 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 # Feature 009: given by ``make_a2a_server_app``, and shared with a second app.
                 received_tasks=received_tasks,
                 thread_index=thread_index,
+                telemetry=telemetry,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime
@@ -570,6 +579,7 @@ def make_llm_app(workspace: Path, clock: FakeClock) -> Callable[..., LlmApp]:
         locks: InMemoryRunLocks | None = None,
         instance_id: str = "instance-a",
         secret: str | None = TEST_SECRET,
+        telemetry: Telemetry | None = None,
         **overrides: Any,
     ) -> LlmApp:
         settings = Settings(workspace_dir=str(workspace), secret_key=secret, **overrides)
@@ -590,6 +600,7 @@ def make_llm_app(workspace: Path, clock: FakeClock) -> Callable[..., LlmApp]:
                 run_worker=False,
                 llm_profiles=profile_store,
                 model_factory=factory,
+                telemetry=telemetry,
             ) as runtime:
                 made.runtimes.append(runtime)
                 yield runtime

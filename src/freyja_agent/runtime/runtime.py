@@ -14,6 +14,7 @@ received-task store who started it, with the feature on or off, and is the stric
 for a caller's thread (research R6).
 """
 
+import asyncio
 import logging
 import uuid
 from collections.abc import AsyncIterator, Callable, Sequence
@@ -88,6 +89,7 @@ from freyja_agent.runtime.saved_agents import (
     PostgresSavedAgentStore,
     SavedAgentStore,
 )
+from freyja_agent.runtime.telemetry import Telemetry
 
 # Feature 007: the index of threads, kept through the run lease.
 from freyja_agent.runtime.thread_index import (
@@ -108,6 +110,18 @@ CARD_READ_FULL = (
     "{at_once} agent cards are already being read on this instance. Try again when one of "
     "those reads ends."
 )
+
+
+@asynccontextmanager
+async def _closing(telemetry: Telemetry | None) -> AsyncIterator[None]:
+    """Shut ``telemetry`` down on the way out, off the event loop: it waits for the
+    collector, for at most the export's time limit. None, or telemetry that is off, has
+    nothing to shut down, and no thread is used."""
+    try:
+        yield
+    finally:
+        if telemetry is not None and telemetry.on:
+            await asyncio.to_thread(telemetry.close)
 
 
 def _card_reads() -> CheckSlots:
@@ -276,6 +290,9 @@ class Runtime:
     strict_agent: Any = None
     strict_catalog: Catalog | None = None
     strict_segmented: SegmentedGraph | None = field(default=None, repr=False)
+    # The spans and counts of what this instance does (``runtime/telemetry.py``); a runtime
+    # put together by hand records nothing.
+    telemetry: Telemetry = field(default_factory=Telemetry.off, repr=False)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -299,6 +316,11 @@ class Runtime:
                 return self.environment_model
             spec = self.environment_values or environment_spec(self.settings)
         return self.model_factory(replace(spec, max_retries=0))
+
+    def environment_named(self) -> tuple[str, str]:
+        """The provider and the model the environment names, as telemetry says them."""
+        spec = self.environment_values or environment_spec(self.settings)
+        return spec.provider, spec.model
 
     def applied_model(self) -> ActiveModel:
         """The model this instance last built its orchestrator for; reads nothing."""
@@ -452,6 +474,7 @@ class Runtime:
         saved_agents: SavedAgentStore | None = None,
         thread_index: ThreadIndex | None = None,
         received_tasks: ReceivedTaskStore | None = None,
+        telemetry: Telemetry | None = None,
     ) -> AsyncIterator["Runtime"]:
         """Connect the tool servers and the agents, build the agent with their tools, and yield.
 
@@ -487,15 +510,28 @@ class Runtime:
         Feature 009 keeps conversations and received tasks: ``received_tasks``, or a store in
         memory. While the feature is on, the model manager builds the strict orchestrator for
         callers' threads beside the other (research R6).
+
+        ``telemetry`` records the spans and counts of this runtime. Given none, it is what the
+        settings configure, which is nothing unless ``FREYJA_OTEL_ENDPOINT`` is set, and is
+        shut down, with what it still holds sent, as the last thing here: after the runs and
+        the worker have ended, and before ``open`` closes the pool. One that is handed in,
+        as a test does to read what was recorded, is its maker's to shut down.
         """
         index = thread_index if thread_index is not None else InMemoryThreadIndex()
         locks = IndexedRunLocks(locks, index)
-        async with open_tool_servers(
-            settings.mcp_servers,
-            connect=connect,
-            call_timeout=settings.mcp_call_timeout_seconds,
-            startup_timeout=settings.mcp_startup_timeout_seconds,
-        ) as servers:
+        own: Telemetry | None = None
+        if telemetry is None:
+            own = Telemetry.configured(settings.otel_endpoint, settings.otel_service_name)
+            telemetry = own
+        async with (
+            _closing(own),
+            open_tool_servers(
+                settings.mcp_servers,
+                connect=connect,
+                call_timeout=settings.mcp_call_timeout_seconds,
+                startup_timeout=settings.mcp_startup_timeout_seconds,
+            ) as servers,
+        ):
             server_tools = [tool for server in servers for tool in server.tools]
             task_store = agent_tasks if agent_tasks is not None else InMemoryAgentTaskStore()
             saved_store = saved_agents if saved_agents is not None else InMemorySavedAgentStore()
@@ -550,6 +586,7 @@ class Runtime:
                     "workspace_dir": settings.workspace_dir,
                     "max_steps": settings.max_steps,
                     "openai_responses_api": settings.openai_responses_api,
+                    "telemetry": telemetry,
                 }
                 manager = ModelManager(
                     store=profile_store,
@@ -576,6 +613,8 @@ class Runtime:
                         if settings.a2a_server
                         else None
                     ),
+                    environment_named=(spec.provider, spec.model),
+                    record=telemetry.model_request,
                 )
                 orchestrator = await manager.load(agents)
                 # Whether the environment's model can be built is known when the manager has
@@ -617,6 +656,7 @@ class Runtime:
                         if received_tasks is not None
                         else InMemoryReceivedTaskStore()
                     ),
+                    telemetry=telemetry,
                 )
                 if manager.strict is not None:
                     runtime.strict_agent = manager.strict.agent

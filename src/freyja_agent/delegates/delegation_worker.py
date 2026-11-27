@@ -39,6 +39,7 @@ research R3).
 
 import asyncio
 import logging
+import time
 import uuid
 from datetime import timedelta
 from typing import TYPE_CHECKING
@@ -118,17 +119,21 @@ class DelegationWorker:
 
     async def _run(self) -> None:
         while True:
+            began = time.monotonic()
             try:
                 await self.watch()
                 await self.start_deliveries()
             except Exception:  # one failed round must not stop the watching
                 logger.exception("Delegation worker: the round failed; trying again next interval")
+            self.runtime.telemetry.worker_round(time.monotonic() - began)
             await asyncio.sleep(self.interval)
 
     async def tick(self) -> None:
         """One round, waited for: claim, check or give up, then deliver and retry (R9, R10)."""
+        began = time.monotonic()
         await self.watch()
         await self.start_deliveries()
+        self.runtime.telemetry.worker_round(time.monotonic() - began)
         await asyncio.gather(*self._deliveries.values())
 
     async def watch(self) -> None:
@@ -208,6 +213,8 @@ class DelegationWorker:
         store = self.runtime.agent_tasks
         threads = set(await store.threads_with_ready_outcomes())
         threads |= set(await store.threads_with_due_followups())
+        # What this round found waiting, a delivery already under way included.
+        self.runtime.telemetry.threads_waiting(len(threads))
         if not threads:
             return
         # While no usable model is active a background run could only fail, and each failure

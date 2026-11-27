@@ -34,3 +34,7 @@ other directories are in the `AGENTS.md` at the root of the repository.
   (`A2aCallerConfig`, a token held as `SecretStr`), and the outside listener's
   `FREYJA_A2A_SERVER_HOST`, `FREYJA_A2A_SERVER_PORT`, and `FREYJA_A2A_SERVER_URL`, whose host
   without its port, or the listener set while the feature is off, stops startup also then.
+
+- Two belong to telemetry: `FREYJA_OTEL_ENDPOINT`, a collector's address or unset, which is
+  off, and which stops startup when it holds a user name or a password, and
+  `FREYJA_OTEL_SERVICE_NAME`.

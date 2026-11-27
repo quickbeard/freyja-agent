@@ -136,7 +136,11 @@ def test_model_string_is_passed_through_unchanged(
     ]
     assert Path(captured["backend"].cwd) == workspace.resolve()
     assert [tool.name for tool in captured["tools"]] == ["send_notification"]
-    assert [type(m).__name__ for m in captured["middleware"]] == ["ThreadContextMiddleware"]
+    assert [type(m).__name__ for m in captured["middleware"]] == [
+        "ThreadContextMiddleware",
+        # There whether telemetry is on or off, so the graph does not depend on it.
+        "TelemetryMiddleware",
+    ]
     assert captured["subagents"][0]["name"] == "general-purpose"
     assert captured["subagents"][0]["runnable"].config["recursion_limit"] == 7
 

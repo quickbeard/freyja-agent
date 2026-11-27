@@ -8,7 +8,8 @@ over the Responses API.
 
 import asyncio
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import replace
 from typing import Any
 
@@ -304,3 +305,21 @@ def test_slots_refuse_in_the_words_they_were_made_with() -> None:
     reads.release(None)
     reads.release("a1")
     assert reads.refusal("a1") is None
+
+
+async def test_what_a_test_is_recorded_with_is_entered_around_each_of_its_two_requests() -> None:
+    """Feature 011: telemetry records a test's calls through this, and changes no result."""
+    entered: list[str] = []
+
+    @contextmanager
+    def recorded() -> Iterator[None]:
+        entered.append("in")
+        yield
+        entered.append("out")
+
+    stub = LlmStub()
+    built = stub.factory(spec("ok"))
+    result = await check_model(built, limit=5, secrets=[KEY], recorded=recorded)
+
+    assert result.ok and entered == ["in", "out", "in", "out"]
+    assert len(stub.requests) == 2

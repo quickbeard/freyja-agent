@@ -24,7 +24,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import SecretStr
 
 from freyja_agent.agent.factory import Orchestrator
-from freyja_agent.llm.guard import guard_model
+from freyja_agent.llm.guard import Record, guard_model
 from freyja_agent.llm.providers import (
     ENVIRONMENT_ID,
     ENVIRONMENT_NAME,
@@ -87,6 +87,10 @@ class ActiveModel:
     reason: str | None = None
     # The keys that text about this model is cleaned of (FR-021). Never shown.
     secrets: tuple[str, ...] = field(default=(), repr=False)
+    # The provider and the model the profile names, as telemetry says them of a run; None
+    # where they are not known, as for a runtime put together by hand.
+    provider: str | None = None
+    model: str | None = None
 
 
 class ModelManager:
@@ -108,6 +112,8 @@ class ModelManager:
         environment_secrets: tuple[str, ...] = (),
         environment_unusable: str | None = None,
         strict_build: Callable[[BaseChatModel, "AgentSet | None"], Orchestrator] | None = None,
+        environment_named: tuple[str, str] | None = None,
+        record: Record | None = None,
     ) -> None:
         self._store = store
         self._secret = secret
@@ -122,6 +128,11 @@ class ModelManager:
         # Why the environment's profile cannot be used before a model is even built: its
         # provider's key is not set (FR-011a). None when nothing is known against it.
         self._environment_unusable = environment_unusable
+        # The provider and the model the environment names, for telemetry; never a key.
+        self._environment_named = environment_named
+        # What tells telemetry of a request to the model that nothing else records: one a
+        # library makes by itself within a run (``guard_model``).
+        self._record = record
         # Two runs that start together rebuild once, not twice.
         self._lock = asyncio.Lock()
         self.active = ActiveModel(revision=-1, profile=ENVIRONMENT_PROFILE)
@@ -186,6 +197,7 @@ class ModelManager:
             return orchestrator
         model: BaseChatModel | None = None
         secrets: tuple[str, ...] = ()
+        named = self._environment_named
         if state.active_profile_id is None:
             profile = ENVIRONMENT_PROFILE
             secrets = self._environment_secrets
@@ -207,6 +219,7 @@ class ModelManager:
                 # broke its own rule, not a state to recover from.
                 raise RuntimeError("the active LLM profile no longer exists")
             profile = RunProfile(record.id, record.name, "saved")
+            named = (record.provider, record.model)
             why = unusable_reason(record, self._secret)
             if why is None:
                 key = decrypt(record.api_key_encrypted, self._secret)
@@ -229,7 +242,7 @@ class ModelManager:
         else:
             # A provider may repeat the key in an error, and LangGraph shows a failed step's
             # error in the debug stream and saves it with the thread (FR-020, FR-021).
-            model = guard_model(model, secrets)
+            model = guard_model(model, secrets, self._record)
         orchestrator = self._build(model, agents)
         strict = self._build_strict(model, agents)
         if self.orchestrator is None:
@@ -255,6 +268,8 @@ class ModelManager:
             why=why,
             reason=reason,
             secrets=secrets,
+            provider=named[0] if named else None,
+            model=named[1] if named else None,
         )
         return orchestrator
 
