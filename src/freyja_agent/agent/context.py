@@ -10,6 +10,10 @@ SHA-256 of the id. It is stable for the conversation and the same on every insta
 is not an id of anything in Freyja's API, so a caller that asks Freyja for its thread's id
 learns nothing it can use (FR-018, research R6). A thread's id is 32 random hexadecimal
 characters, so the alias cannot be turned back into it by trying ids.
+
+The run of a caller's thread also carries the hand-over count of the conversation's last
+message from its caller (``HOPS_KEY``), which every message to an agent sent from it passes
+on, plus one, under ``HOPS_METADATA`` (FR-027, research R17).
 """
 
 import hashlib
@@ -19,6 +23,12 @@ from langchain.agents.middleware.types import AgentMiddleware, ModelRequest, Mod
 from langgraph.config import get_config
 
 from freyja_agent.agent.prompts import append_to_system_message
+
+# Where a message says how many hand-overs between agents it has passed through: the
+# metadata key a caller's message carries it under, and Freyja's messages to agents.
+HOPS_METADATA = "freyja.hops"
+# Where the run of a caller's thread carries the count, in its config's ``configurable``.
+HOPS_KEY = "freyja_hops"
 
 THREAD_LINE = (
     "You are working on thread `{thread_id}`. Working files for this conversation belong "

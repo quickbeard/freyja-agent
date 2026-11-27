@@ -9,8 +9,15 @@ are started as a caller's message starts them; no caller's token is involved bef
 Part 2, a message's form and the limits. Part 3, isolation through A2A (FR-009a, FR-020,
 SC-007): two named callers, by their tokens, reach nothing of each other's or of a console
 thread's, and work in their own files.
+
+Part 4, the hand-over count (FR-027, research R17): a message's count is kept with its task,
+one of another form or at the limit is refused before the model, and every message Freyja
+sends to an agent from a caller's thread carries the conversation's count plus one, under a
+message id that names the thread by its alias.
 """
 
+import itertools
+import json
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -18,10 +25,14 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, ToolMessage
+from pydantic import ValidationError
 
 from freyja_agent.agent.caller_files import READ_ONLY, CallerFiles, NoFilesError
+from freyja_agent.agent.context import thread_alias
 from freyja_agent.agent.factory import tool_node_tools, workspace_backend
-from tests.a2a_requests import at_rest, ended, rpc, sending
+from freyja_agent.config import Settings
+from tests.a2a_requests import VERSION, at_rest, ended, rpc, sending
+from tests.a2a_stub import make_stub
 from tests.conftest import ServerApp
 from tests.fakes import ScriptedChatModel
 
@@ -584,3 +595,270 @@ def test_the_total_limit_with_two_named_callers_refuses_with_the_same_sentence(
     assert [r.getMessage() for r in caplog.records if "was refused" in r.getMessage()] == [
         "A message of caller local was refused: the total limit on tasks in progress was reached"
     ]
+
+
+# Part 4: the hand-over count (FR-027, research R17), on messages in and out.
+
+HOPS = "freyja.hops"
+FORM = "The hand-over count is not a whole number of zero or more."
+TOO_MANY = "The message has passed through too many agents."
+
+
+@pytest.mark.parametrize(
+    ("metadata", "kept"),
+    [(None, 0), ({"other": "x"}, 0), ({HOPS: 0}, 0), ({HOPS: 2}, 2), ({HOPS: 2.0}, 2)],
+)
+def test_a_message_s_hand_over_count_is_kept_with_its_task(
+    make_a2a_server_app: Callable[..., ServerApp], metadata: dict[str, Any] | None, kept: int
+) -> None:
+    made = make_a2a_server_app(ScriptedChatModel(final_text="Hi."))
+    extra = {} if metadata is None else {"metadata": metadata}
+    with TestClient(made.app) as client:
+        answer = rpc(client, "SendMessage", sending("hello", **extra)).json()
+        task = made.task(client, answer["result"]["task"]["id"])
+    assert answer["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert task.hops == kept
+
+
+@pytest.mark.parametrize(
+    ("value", "sentence"),
+    [
+        (-1, FORM),
+        (1.5, FORM),
+        # Not whole and past the limit: its form is judged first.
+        (4.5, FORM),
+        ("1", FORM),
+        (True, FORM),
+        ([1], FORM),
+        (None, FORM),
+        ({"n": 1}, FORM),
+        (3, TOO_MANY),
+        (3.0, TOO_MANY),
+        (1e20, TOO_MANY),
+    ],
+)
+def test_a_count_of_another_form_or_at_the_limit_is_refused_before_the_model(
+    make_a2a_server_app: Callable[..., ServerApp], value: Any, sentence: str
+) -> None:
+    model = ScriptedChatModel()
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        params = sending("hello", metadata={HOPS: value})
+        found = refused_before_the_model(client, made, model, params)
+        nothing_made(client, made)
+    assert (found["code"], found["message"]) == (-32602, sentence)
+
+
+@pytest.mark.parametrize("raw", ["NaN", "Infinity", "-Infinity"])
+def test_a_count_that_is_no_finite_number_is_refused_for_its_form(
+    make_a2a_server_app: Callable[..., ServerApp], raw: str
+) -> None:
+    """Python's JSON parser takes these, which only raw JSON text can carry."""
+    model = ScriptedChatModel()
+    made = make_a2a_server_app(model)
+    body = {"jsonrpc": "2.0", "id": 7, "method": "SendMessage"}
+    body["params"] = sending("hello", metadata={HOPS: "RAW"})
+    text = json.dumps(body).replace('"RAW"', raw)
+    with TestClient(made.app) as client:
+        answer = client.post(
+            "/a2a", content=text, headers={**VERSION, "Content-Type": "application/json"}
+        )
+        nothing_made(client, made)
+    assert (answer.json()["error"]["code"], answer.json()["error"]["message"]) == (-32602, FORM)
+    assert model.calls == 0
+
+
+def test_the_count_is_checked_after_the_message_s_other_parts(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    model = ScriptedChatModel()
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        found = refused_before_the_model(
+            client, made, model, sending("hello", contextId="c" * 129, metadata={HOPS: -1})
+        )
+    assert found["message"] == "The contextId is longer than 128 characters."
+
+
+def test_the_limit_is_the_setting_s(make_a2a_server_app: Callable[..., ServerApp]) -> None:
+    model = ScriptedChatModel(final_text="Hi.")
+    made = make_a2a_server_app(model, a2a_server_max_hops=5)
+    with TestClient(made.app) as client:
+        four = rpc(client, "SendMessage", sending("hi", contextId="c-4", metadata={HOPS: 4})).json()
+        five = refused_before_the_model(
+            client, made, model, sending("hi", contextId="c-5", metadata={HOPS: 5})
+        )
+    assert four["result"]["task"]["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert (five["code"], five["message"]) == (-32602, TOO_MANY)
+
+
+@pytest.mark.parametrize("value", [0, 17, -1])
+def test_the_limit_of_hand_overs_is_1_to_16_and_3_by_default(workspace: Path, value: int) -> None:
+    assert Settings(workspace_dir=str(workspace)).a2a_server_max_hops == 3
+    for bound in (1, 16):
+        on = Settings(workspace_dir=str(workspace), a2a_server=True, a2a_server_max_hops=bound)
+        assert on.a2a_server_max_hops == bound
+    with pytest.raises(ValidationError) as caught:
+        Settings(workspace_dir=str(workspace), a2a_server=True, a2a_server_max_hops=value)
+    assert "FREYJA_A2A_SERVER_MAX_HOPS must be from 1 to 16" in str(caught.value)
+    # With the feature off the setting is not used, and not checked.
+    assert Settings(workspace_dir=str(workspace), a2a_server_max_hops=value).a2a_server is False
+
+
+def handoff(message: str, call_id: str, task_id: str | None = None) -> AIMessage:
+    args = {"message": message, **({"task_id": task_id} if task_id else {})}
+    return call("handoff_to_stub", call_id, **args)
+
+
+def test_every_message_from_a_caller_s_thread_carries_the_conversation_s_count_plus_one(
+    make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
+) -> None:
+    numbers = itertools.count(1)
+    stub = make_stub("stub", task_ids=lambda: f"task-{next(numbers)}")
+    model = ScriptedChatModel(
+        script=[
+            # A hand-off whose task asks a question, then the answer to it, then a follow-up
+            # in the agent's conversation, canceled in the same run; then a console thread's.
+            handoff("ask: plan the release", "h1"),
+            AIMessage(content="The agent asks which date."),
+            handoff("Friday at 10.", "h2", task_id="task-1"),
+            AIMessage(content="Answered."),
+            handoff("ask: plan another", "h3"),
+            call("cancel_stub_task", "x1", task_id="task-2"),
+            AIMessage(content="Canceled."),
+            handoff("Hello from the console.", "h4"),
+            AIMessage(content="Sent."),
+        ]
+    )
+    # The agent runs without approval, and the agents' mode is Auto: each is sent at once.
+    made = make_a2a_server_app(model, stubs={"stub": stub})
+    with TestClient(made.app) as client:
+
+        def send(text: str, hops: int | None) -> dict[str, Any]:
+            extra = {} if hops is None else {"metadata": {HOPS: hops}}
+            answer = rpc(client, "SendMessage", sending(text, contextId="c-hops", **extra))
+            return answer.json()["result"]["task"]
+
+        tasks = [
+            send("Plan the release with the stub.", 1),
+            send("Friday at 10.", None),
+            send("Plan another, then cancel it.", 2),
+        ]
+        with client.stream("POST", "/threads/k-console/runs", json={"message": "Hi."}) as answer:
+            sse_events(answer.iter_lines())
+        thread = made.task(client, tasks[0]["id"]).thread_id
+        # The send ledger, where a cancel's message id is kept.
+        sends = list(made.a2a.store._sends.values())
+    assert [task["status"]["state"] for task in tasks] == ["TASK_STATE_COMPLETED"] * 3
+    record = stub.record
+    assert [(message.text, message.hops) for message in record.messages] == [
+        ("ask: plan the release", 2),
+        # After a message that carried no count, and one that carried another.
+        ("Friday at 10.", 1),
+        ("ask: plan another", 3),
+        ("Hello from the console.", None),
+    ]
+    # The answer continued the agent's task, and the follow-up its conversation.
+    assert record.messages[1].task_id == "task-1"
+    assert record.messages[2].context_id == record.messages[0].context_id
+    # A cancel is a request about a task, and starts no work: it carries no count.
+    assert (record.cancels, record.cancel_hops) == (["task-2"], [None])
+    alias = thread_alias(thread)
+    for message in record.messages[:3]:
+        assert alias in message.message_id
+        assert thread not in message.message_id
+    (cancel,) = [found for found in sends if found.kind == "cancel"]
+    assert alias in cancel.message_id
+    assert thread not in cancel.message_id
+    # A console thread's message is sent as before.
+    assert "k-console" in record.messages[3].message_id
+
+
+def test_a_hand_off_a_person_approves_carries_the_count_plus_one(
+    make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
+) -> None:
+    """Through both routes that carry a decision: with the agents' mode on Manual, a hand-off
+    waits for a person, as the quickstart walks it."""
+    stub = make_stub("stub")
+    model = ScriptedChatModel(
+        script=[handoff("say hello", "h1"), AIMessage(content="Sent."), handoff("again", "h2")],
+        final_text="Sent again.",
+    )
+    made = make_a2a_server_app(model, stubs={"stub": stub})
+    with TestClient(made.app) as client:
+        assert client.put("/agents/mode", json={"mode": "manual"}).status_code == 200
+        threads = []
+        for index, route in enumerate(("resume", "resume/unattended")):
+            params = {
+                **sending("Hand it over.", contextId=f"c-{index}", metadata={HOPS: index + 1}),
+                "configuration": {"returnImmediately": True},
+            }
+            task_id = rpc(client, "SendMessage", params).json()["result"]["task"]["id"]
+            at_rest(client, made, task_id)
+            thread = made.task(client, task_id).thread_id
+            threads.append(thread)
+            pending = client.get(f"/threads/{thread}/state").json()["pending"]
+            body = {"interrupt_id": pending["interrupt_id"], "decisions": [{"type": "approve"}]}
+            with client.stream("POST", f"/threads/{thread}/{route}", json=body) as answer:
+                assert answer.status_code == 200, answer.read()
+                sse_events(answer.iter_lines())
+            ended(client, made, task_id)
+    assert [(message.text, message.hops) for message in stub.record.messages] == [
+        ("say hello", 2),
+        ("again", 3),
+    ]
+    for message, thread in zip(stub.record.messages, threads, strict=True):
+        assert thread_alias(thread) in message.message_id
+        assert thread not in message.message_id
+
+
+def test_the_run_that_reports_an_agent_s_outcome_carries_the_count_plus_one(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    stub = make_stub("stub")
+    model = ScriptedChatModel(
+        script=[
+            handoff("hold", "h1"),
+            AIMessage(content="Waiting for the agent."),
+            # The worker's run that reports the outcome hands work over again.
+            handoff("Thanks, one more.", "h2"),
+        ],
+        final_text="Done.",
+    )
+    made = make_a2a_server_app(model, stubs={"stub": stub}, a2a_call_timeout_seconds=0.3)
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "Ask the agent.", context="c-w", hops=1)
+        made.finish(client, accepted)
+        assert len(stub.record.messages) == 1
+        stub.release()
+        client.portal.call(made.runtime.worker.tick)
+        client.portal.call(made.runtime.worker.tick)
+    thread = accepted.task.thread_id
+    assert [(message.text, message.hops) for message in stub.record.messages] == [
+        ("hold", 2),
+        ("Thanks, one more.", 2),
+    ]
+    assert all(thread_alias(thread) in message.message_id for message in stub.record.messages)
+
+
+def test_a_subagent_s_hand_off_carries_the_count_plus_one(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    stub = make_stub("stub")
+    model = ScriptedChatModel(
+        script=[
+            call("task", "t1", description="Ask the stub.", subagent_type="general-purpose"),
+            handoff("From the subagent.", "h1"),
+            AIMessage(content="The subagent is done."),
+        ],
+        final_text="Done.",
+    )
+    made = make_a2a_server_app(model, stubs={"stub": stub})
+    with TestClient(made.app) as client:
+        answer = rpc(client, "SendMessage", sending("Delegate.", metadata={HOPS: 2})).json()
+        thread = made.task(client, answer["result"]["task"]["id"]).thread_id
+    assert [(message.text, message.hops) for message in stub.record.messages] == [
+        ("From the subagent.", 3)
+    ]
+    assert thread_alias(thread) in stub.record.messages[0].message_id
+    assert thread not in stub.record.messages[0].message_id

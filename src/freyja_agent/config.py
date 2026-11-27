@@ -373,6 +373,9 @@ class Settings(BaseSettings):
     # Received tasks in progress at once: for one caller, and for all callers (FR-025).
     a2a_server_caller_tasks: int = 5
     a2a_server_tasks: int = 20
+    # The hand-over count at which a caller's message is refused (FR-027): how many
+    # hand-overs between agents it may have passed through, at most, is one less.
+    a2a_server_max_hops: int = 3
     # Where a named caller's runs keep their files, one directory per caller (FR-009a). It
     # is beside the workspace and never inside it, so that no thread that works in the
     # workspace reaches a caller's files.
@@ -472,6 +475,8 @@ class Settings(BaseSettings):
                 "FREYJA_A2A_SERVER_TASKS must be at least FREYJA_A2A_SERVER_CALLER_TASKS and "
                 "at most 1000"
             )
+        if not 1 <= self.a2a_server_max_hops <= 16:
+            raise ValueError("FREYJA_A2A_SERVER_MAX_HOPS must be from 1 to 16")
         files = Path(self.a2a_server_files_dir).resolve()
         workspace = Path(self.workspace_dir).resolve()
         if files == workspace or workspace in files.parents or files in workspace.parents:

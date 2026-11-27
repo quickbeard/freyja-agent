@@ -21,8 +21,9 @@ Feature 009 makes ``SegmentedGraph`` the place a thread a caller started over A2
 the strict build: every run of every kind goes through its ``astream``, which asks first who
 started the thread. A caller's thread is refused on the ordinary build, and so is any thread
 whose lookup fails; on the strict build the run's config says whose files it works in
-(research R6, R16). Every other way to run a graph raises on the wrapper, so that none
-becomes a way around. ``UnattendedRuns.join`` gives one more reader of a console run in
+(research R6, R16), and the hand-over count of the last message from its caller whose run
+started, which the agent tools pass on (FR-027, research R17). Every other way to run a
+graph raises on the wrapper, so that none becomes a way around. ``UnattendedRuns.join`` gives one more reader of a console run in
 progress (research R10). A run can be started to stop at its first boundary (``stop_first``),
 which is how a proposal is rejected by rule, and a console run on a caller's thread also
 stops at its next boundary once that caller canceled its task (``canceled``, research R10,
@@ -43,6 +44,7 @@ from langgraph.errors import GraphRecursionError
 from sse_starlette import ServerSentEvent
 
 from freyja_agent.agent.caller_files import FILES_KEY
+from freyja_agent.agent.context import HOPS_KEY
 from freyja_agent.delegates.addresses import SCRUBBER
 from freyja_agent.runtime.received_tasks import LOCAL
 from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS
@@ -53,6 +55,8 @@ if TYPE_CHECKING:
 
     # Who started a thread: its conversation, or None for a thread no caller started.
     Lookup = Callable[[str], Awaitable[Conversation | None]]
+    # The hand-over count of a caller's thread's last message from its caller.
+    Count = Callable[[str], Awaitable[int]]
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +113,7 @@ class SegmentedGraph:
         *,
         strict: bool = False,
         lookup: Lookup | None = None,
+        count: Count | None = None,
     ) -> None:
         nodes = getattr(graph, "nodes", {})
         for node in BOUNDARY_NODES:
@@ -123,6 +128,8 @@ class SegmentedGraph:
         # thread. A runtime put together by hand has no lookup, and no caller's thread.
         self.strict = strict
         self.lookup = lookup
+        # How to learn the hand-over count a caller's run passes on; none means 0.
+        self.count = count
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self.graph, name)
@@ -159,8 +166,21 @@ class SegmentedGraph:
                 f"Thread {thread_id} was started by another agent and runs only on the "
                 "orchestrator kept for such threads; the run was refused"
             )
+        hops = 0
+        if self.count is not None:
+            try:
+                hops = await self.count(thread_id)
+            except Exception as exc:
+                raise CallerThreadError(
+                    f"Thread {thread_id}: the hand-over count of its caller's last message "
+                    f"could not be read ({type(exc).__name__}); the run was refused"
+                ) from None
         caller = conversation.caller
-        configurable = {**config["configurable"], FILES_KEY: "" if caller == LOCAL else caller}
+        configurable = {
+            **config["configurable"],
+            FILES_KEY: "" if caller == LOCAL else caller,
+            HOPS_KEY: hops,
+        }
         return {**config, "configurable": configurable}
 
     def _other_entry(self, *_: Any, **__: Any) -> Any:
