@@ -11,6 +11,8 @@ from pathlib import Path
 
 import yaml
 
+from tests.ci_files import call, commands
+
 ROOT = Path(__file__).resolve().parent.parent
 SERVICE = ROOT / "Dockerfile"
 WEB = ROOT / "web/Dockerfile"
@@ -111,20 +113,21 @@ def test_the_scanners_are_the_same_version_on_github_and_on_gitlab():
 
 
 def test_the_scans_ask_the_same_on_github_and_on_gitlab():
+    """Each scan is written once, in its script, and each side runs that script and no
+    scan of its own beside it."""
     workflow = yaml.safe_load((ROOT / ".github/workflows/scan.yml").read_text())["jobs"]
     gitlab = yaml.safe_load((ROOT / ".gitlab-ci.yml").read_text())
-
-    def flags(command: str, tool: str) -> list[str]:
-        words = " ".join(command.replace("\\\n", " ").split())
-        return words[words.index(f"{tool} ") :].split()[1:]
 
     def step(job: str, name: str) -> str:
         return next(s["run"] for s in workflow[job]["steps"] if s.get("name") == name)
 
-    assert flags(step("trivy", "Run Trivy over the source"), "fs") == flags(
-        gitlab["trivy"]["script"][0], "fs"
-    )
-    assert flags(step("semgrep", "Run Semgrep"), "scan") == flags(
-        gitlab["semgrep"]["script"][0], "scan"
-    )
-    assert "--metrics=off" in gitlab["semgrep"]["script"][0]
+    assert step("trivy", "Run Trivy over the source") == call("trivy")
+    assert gitlab["trivy"]["script"] == [call("trivy")]
+    assert step("semgrep", "Run Semgrep") == call("semgrep")
+    assert gitlab["semgrep"]["script"] == [call("semgrep")]
+    (trivy,) = commands("trivy")
+    (semgrep,) = commands("semgrep")
+    assert trivy.split()[:2] == ["trivy", "fs"]
+    assert semgrep.split()[:2] == ["semgrep", "scan"]
+    # Nothing about the repository is sent, on either side.
+    assert "--metrics=off" in semgrep

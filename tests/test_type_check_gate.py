@@ -3,7 +3,8 @@ the service's code and all of the tests.
 
 A type checker only holds where it is run, at the version the others run, with nothing left
 out of its reading. These tests keep the three places that run it asking the same question,
-as ``test_coverage_gate.py`` does for the coverage thresholds.
+as ``test_coverage_gate.py`` does for the coverage thresholds. Both CI systems run it by
+``scripts/ci/pyright.sh``, so the command they run is read from there.
 """
 
 import io
@@ -15,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 import yaml
+
+from tests.ci_files import call, commands
 
 ROOT = Path(__file__).resolve().parent.parent
 SRC = ROOT / "src"
@@ -118,12 +121,16 @@ def test_the_hook_runs_pyright_before_the_tests():
     assert order.index("pyright") < order.index("pytest")
 
 
+def test_the_script_both_ci_systems_call_runs_the_one_command():
+    assert commands("pyright") == [COMMAND]
+
+
 def test_github_runs_pyright_from_the_lock_file():
     workflow = yaml.safe_load((ROOT / ".github/workflows/lint.yml").read_text())
     job = next(job for job in workflow["jobs"].values() if job["name"] == "pyright")
     runs = [step["run"] for step in job["steps"] if "run" in step]
 
-    assert runs == [INSTALL, COMMAND]
+    assert runs == [INSTALL, call("pyright")]
     # On every pull request and on main, as the other linters. YAML reads the key `on` as
     # the boolean True.
     triggers = workflow[True]
@@ -134,7 +141,7 @@ def test_github_runs_pyright_from_the_lock_file():
 def test_gitlab_runs_pyright_from_the_lock_file():
     job = yaml.safe_load((ROOT / ".gitlab-ci.yml").read_text())["pyright"]
 
-    assert job["script"] == [COMMAND]
+    assert job["script"] == [call("pyright")]
     assert job["before_script"][-1] == INSTALL
     # On every merge request and on main, as the other linters.
     assert job["extends"] == ".every-change"

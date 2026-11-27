@@ -1,6 +1,8 @@
 name: Unit Tests
 # Both suites run on every change: they are quick, and a check that always runs can be made
-# a required one. The end-to-end tests have their own workflow (playwright.yml).
+# a required one. The end-to-end tests have their own workflow (playwright.yml). What each job
+# runs is in scripts/ci/<job>.sh, which GitLab's job of the same name calls too
+# (tests/test_ci_parity.py).
 on:
   push:
     branches: [main]
@@ -40,24 +42,20 @@ jobs:
       - name: Run pytest
         # The variable has the Postgres tests under tests/integration run, against the
         # service above; without it they would be skipped and the run would fall below the
-        # floor. --cov: with coverage, held to fail_under in pyproject.toml.
+        # floor.
         env:
           FREYJA_TEST_DATABASE_URI: postgresql://freyja:freyja@localhost:5432/freyja_test
-        run: uv run pytest --cov
+        run: scripts/ci/pytest.sh
   web:
     name: vitest
     timeout-minutes: 15
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
       - name: Install dependencies
-        run: npm install -g pnpm@12 && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@12 && pnpm --dir web install --frozen-lockfile
       - name: Run Vitest
-        # With coverage, held to the thresholds in web/vitest.config.mts.
-        run: pnpm test:coverage
+        run: scripts/ci/vitest.sh

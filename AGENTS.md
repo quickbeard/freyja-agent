@@ -146,9 +146,24 @@ file, and that this list names every such file.
   `playwright.yml` and GitLab's `playwright` job run the end-to-end tests when a file under
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
-  to the other side too. The linters only report in CI; the commit hook is where files get
-  fixed. The `pytest` job of both sides starts a Postgres of its own and runs the Postgres
-  tests with the rest of the suite.
+  to the other side too: a job calls its script under `scripts/ci/` and runs nothing else
+  of the check, so a check is changed in its script, once, and a new job is added to both
+  files with a script of its own. The linters only report in CI; the commit hook is where
+  files get fixed. The `pytest` job of both sides starts a Postgres of its own and runs the
+  Postgres tests with the rest of the suite.
+- `scripts/ci/`: what each CI job checks, one `<job>.sh` for each of `ruff`, `pyright`,
+  `pytest`, `biome`, `vitest`, `playwright`, `gitleaks`, `trivy`, and `semgrep`, named after
+  GitLab's job and called by that job and by GitHub's job of the same check. A script is
+  POSIX `sh`, goes to the repository's root or to `web/` by its own place, and installs
+  nothing: what a job installs first differs by side and stays in the CI file, which also
+  names each tool's version. On GitHub `ruff.sh` writes a finding as an annotation
+  (`GITHUB_ACTIONS`). `tests/test_ci_parity.py` fails when a job is on one side only and not
+  in its table `ONE_SIDE` (the `images` job of `scan.yml`), when a job runs a check outside
+  its script, and when a script is not called by both sides; `tests/ci_files.py` reads the
+  CI files and the scripts for it and for the gate tests. The Deep Agents canary is the one
+  job with a twin that calls no script, since it upgrades a package before its gate; it is
+  in the table `OWN_TEST`, and its own test compares its two sides. The commit hook keeps commands
+  of its own, since it changes files (`--fix`, `--write`) where CI only reports.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `Dockerfile` and `web/Dockerfile`: the two container images, the service and the web
   console, each with its `.dockerignore` (the service's names the files that are let in).

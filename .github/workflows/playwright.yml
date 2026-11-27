@@ -1,35 +1,35 @@
 name: Playwright Tests
+# The web app's end-to-end tests, when a file under web/ changes. What the job runs is in
+# scripts/ci/playwright.sh, which GitLab's playwright job calls too (tests/test_ci_parity.py).
 on:
   push:
     branches: [main]
     paths:
       - "web/**"
       - ".github/workflows/playwright.yml"
+      - "scripts/ci/playwright.sh"
   pull_request:
     branches: [main]
     paths:
       - "web/**"
       - ".github/workflows/playwright.yml"
+      - "scripts/ci/playwright.sh"
 jobs:
   test:
     timeout-minutes: 60
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        # The web app is one of two projects in this repository.
-        working-directory: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
       - name: Install dependencies
-        run: npm install -g pnpm@12 && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@12 && pnpm --dir web install --frozen-lockfile
       - name: Install Playwright Browsers
         # The browsers web/playwright.config.ts names.
-        run: pnpm exec playwright install --with-deps chromium firefox
+        run: pnpm --dir web exec playwright install --with-deps chromium firefox
       - name: Run Playwright tests
-        run: pnpm exec playwright test
+        run: scripts/ci/playwright.sh
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         if: ${{ !cancelled() }}
         with:
