@@ -24,6 +24,12 @@
 - Q: A profile's test (feature 004) calls the model outside any run. Are those calls recorded? → A: Yes, marked as a test: each has a span under its request's span and is counted with the model calls, so the counts cover every call the service makes to a model, and a test can be told from a run's call (FR-010a).
 - Q: Is every run and request recorded in full, or does a setting keep only a share of the traces? → A: Everything is recorded, so the run a person reports is always there. No setting thins traces; a deployment that wants fewer thins them at its collector (FR-006).
 
+### Plan review, 2026-11-27
+
+One requirement was made exact while the plan was written; [research.md](research.md) R10 gives the finding. It was not asked of the owner and is named in the plan's pull request.
+
+- FR-022 said that reading the two waiting values changes nothing. The index of threads settles a thread's row at the first reading after its run ended (feature 007), so a count taken without settling stays too low on a deployment where nobody opens the console. The reading settles those rows, as a reading of the list of threads does, and FR-022 now says what it may not change: no thread, and no lease.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The terms of the earlier features are used as they are there. A **run** is one stretch of the orchestrator's work on a thread: the answer to a message, the continuation after a person's decision (a resume), or the background run that delivers an agent task's outcome (feature 003). A run ends, pauses with a proposal for a person to decide, fails, is stopped at a boundary (feature 007), or is cancelled when its reader leaves or the service stops it. A **model call** is one request to the model, and a **tool call** one use of a tool: one of Freyja's own, a tool server's (feature 002), or an agent's hand-off or cancel (feature 003). The **delegation worker** is what watches pending agent tasks and delivers their outcomes, one **round** at a time.
@@ -165,7 +171,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 - **FR-020**: The service MUST report the number of threads whose last run paused with a proposal that no person has decided.
 - **FR-021**: The service MUST report the age of the oldest agent task's outcome that is ready and has not been delivered to its thread, and zero when there is none.
-- **FR-022**: The two values MUST be read from what every instance shares, no more often than metrics are sent, and never on the path of a run. Reading them MUST take no thread's lease, change nothing, and contact no model, tool server, or agent. A reading that fails MUST leave both values out, with one line in the log, and MUST affect no run and no other metric.
+- **FR-022**: The two values MUST be read from what every instance shares, no more often than metrics are sent, and never on the path of a run. Reading them MUST take no thread's lease, change no thread, and contact no model, tool server, or agent; it MAY settle a thread's row in the index of threads, as a reading of the list of threads does (feature 007). A reading that fails MUST leave both values out, with one line in the log, and MUST affect no run and no other metric.
 - **FR-023**: The documentation MUST say that the two values are the same from every instance and are not to be added up.
 
 **Requests**
