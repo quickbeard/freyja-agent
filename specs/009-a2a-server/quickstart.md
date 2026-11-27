@@ -262,15 +262,21 @@ for i in 1 2 3 4 5 6; do caller send --return-immediately "Hand this to the stub
 Five tasks are working, each waiting for a person; the sixth prints `task_limit` (phase 2).
 Reject one in the console and send again: it is accepted.
 
-The hand-over count (phase 6):
+The hand-over count (phase 6). With the stand-in model, `handoff stub <text>` makes Freyja
+hand `<text>` to the stand-in agent; set the agents' mode to Manual first, so that the
+hand-off waits for a person:
 
 ```bash
+curl -s -X PUT localhost:8000/agents/mode -H 'content-type: application/json' -d '{"mode": "manual"}'
 caller send --hops 3 "Say hello." | jq .error.message      # passed through too many agents
-caller send --hops 1 "Hand this to the stub agent: say hello"
+caller send --hops -1 "Say hello." | jq .error.message     # not a whole number of zero or more
+caller send --hops 1 --return-immediately "handoff stub say hello" | jq .status.state
 ```
 
-Approve the second in the console. The stand-in agent's terminal prints the message it
-received with its hand-over count, 2.
+Approve the hand-off in the console. The stand-in agent's terminal prints
+`Received, hand-over count 2: say hello`. A next message in the same conversation without
+`--hops` hands over with 1, and a hand-off from a task started in the console prints `None`.
+With the mode on Auto the hand-off is sent at once, with the same count.
 
 ## What the automated suites cover instead
 

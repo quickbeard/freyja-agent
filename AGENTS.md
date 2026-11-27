@@ -19,10 +19,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
-- `uv run pyright` checks the types of the service's code under `src/`, with the settings in
-  `pyproject.toml` (`[tool.pyright]`). The commit hook and CI run it this way. It needs
-  nothing but uv: Node comes with the package, and pyright itself is downloaded the first
-  time it runs, which needs the network. The tests are not checked.
+- `uv run pyright` checks the types of the service's code under `src/` and of the tests
+  under `tests/`, with the settings in `pyproject.toml` (`[tool.pyright]`). The commit hook
+  and CI run it this way. It needs nothing but uv: Node comes with the package, and pyright
+  itself is downloaded the first time it runs, which needs the network.
 - `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
   client with in-memory persistence and a scripted model; no server, database, or model
   provider is needed. Tool servers are played by the stub in `tests/mcp_stub.py`, and A2A
@@ -57,7 +57,7 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
   parses, merge markers), gitleaks over what is staged, Ruff, pyright when the service's
-  code or its packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  code, a test, or their packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
   pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
   needs the network.
@@ -108,9 +108,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
   a Fernet key or unset, which protects stored API keys and stops startup when it is not a
   Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
-  Nine belong to receiving tasks from other agents (feature 009), checked only while it is
+  Ten belong to receiving tasks from other agents (feature 009), checked only while it is
   on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_WAIT_SECONDS`, `FREYJA_A2A_SERVER_CALLER_TASKS`,
-  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
+  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_MAX_HOPS`, the hand-over count at which a
+  caller's message is refused, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
   be inside it, or contain it, `FREYJA_A2A_SERVER_CALLERS`, named callers with their tokens
   (`A2aCallerConfig`, a token held as `SecretStr`), and the outside listener's
   `FREYJA_A2A_SERVER_HOST`, `FREYJA_A2A_SERVER_PORT`, and `FREYJA_A2A_SERVER_URL`, whose host
@@ -134,7 +135,9 @@ startup and exits with an error naming the connection when it is unreachable.
   build's backend, which gives a named caller `<files dir>/<name>` and the skills read-only,
   by the key `freyja_caller_files` of the run's config, and refuses a call without it; and
   `context.py`'s `thread_alias` is what the strict build tells the model in place of a
-  thread's id.
+  thread's id, and its `HOPS_KEY` the key of a caller's run's config that holds the
+  hand-over count of the conversation's last message (`SegmentedGraph` puts it there), which
+  the agent tools send on, plus one, as the metadata `freyja.hops` (`HOPS_METADATA`).
 - `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
   connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
   applies the call time limit, records each server's status, and redacts `pass_env` values from
@@ -538,7 +541,9 @@ startup and exits with an error naming the connection when it is unreachable.
   records every message and cancel and behaves by a keyword at the start of the message, and
   which, for feature 008, sends `working_text` with every task's first working status, has a
   held task send a working status with the text a test reports (`report`, which returns once
-  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`;
+  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`, and, for
+  feature 009, keeps the hand-over count each message and cancel carried (`hops`,
+  `cancel_hops`) and, served by hand, writes it with each message;
   `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams
   its replies as they are sent; `unattended_helpers.py` what the tests of the console's runs
   share (a tool step a test holds open, a stream read in a thread of its own);
@@ -593,13 +598,20 @@ startup and exits with an error naming the connection when it is unreachable.
   part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
   `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
   that is a few lines over public types is written here instead.
-- pyright reports nothing over `src/`. A type error is fixed in the code or in its
-  annotations. A line is silenced only where a library's own types say less, or other, than
-  what the library does, with `# pyright: ignore[<rule>]` on that line and the reason beside
-  it; a bare `# type: ignore` silences nothing. No file is left out of the check and no rule
-  is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
-  so the hook and both CI systems report the same; a new version is taken in a change of its
-  own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
+- pyright reports nothing over `src/` and `tests/`. A type error is fixed in the code or in
+  its annotations. A line is silenced only where a library's own types say less, or other,
+  than what the library does, with `# pyright: ignore[<rule>]` on that line and the reason
+  beside it; a bare `# type: ignore` silences nothing, and none is written. No file is left
+  out of the check and no rule is switched off for the service. One rule is off for the
+  tests alone, `reportOptionalMemberAccess`, with its reason beside it in `pyproject.toml`:
+  a test that reads an attribute of `None` fails when it runs. Every other rule holds for
+  the tests as for the service. A test that gives a function what its signature refuses, to
+  show the refusal, or a stand-in for what it takes, types that value as `Any`
+  (`cast(Any, ...)`, or a variable annotated so); the tests' shared typed accessors are in
+  `tests/conftest.py` (`detail_of`, `indexed_locks`). pyright is pinned to one exact version
+  in `pyproject.toml`, so the hook and both CI systems report the same; a new version is
+  taken in a change of its own, with what it newly reports fixed in it.
+  `tests/test_type_check_gate.py` holds this.
 - A change to the schema is a new migration at the end of `MIGRATIONS` in
   `runtime/migrations.py`, with its checksum added to `RELEASED` in
   `tests/test_migrations.py`. A migration that was merged is never edited: a database keeps

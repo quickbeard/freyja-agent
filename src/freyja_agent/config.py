@@ -2,7 +2,7 @@ import ipaddress
 import json
 import re
 from pathlib import Path
-from typing import Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 from urllib.parse import SplitResult, urlsplit
 
 from cryptography.fernet import Fernet
@@ -312,6 +312,14 @@ class Settings(BaseSettings):
         env_prefix="FREYJA_", extra="ignore", hide_input_in_errors=True
     )
 
+    if TYPE_CHECKING:
+        # What a call takes, for the type checker alone. pydantic-settings fills a field that
+        # is not given from the environment, one that has no default included, and pydantic
+        # turns what a field is given into the field's type. The signature a type checker
+        # works out from the fields says neither: a call would look short of an argument,
+        # or given the wrong type.
+        def __init__(self, **values: Any) -> None: ...
+
     # Local runs listen only on this machine. Containers set FREYJA_HOST=0.0.0.0.
     host: str = "127.0.0.1"
     port: int = 8000
@@ -373,6 +381,9 @@ class Settings(BaseSettings):
     # Received tasks in progress at once: for one caller, and for all callers (FR-025).
     a2a_server_caller_tasks: int = 5
     a2a_server_tasks: int = 20
+    # The hand-over count at which a caller's message is refused (FR-027): how many
+    # hand-overs between agents it may have passed through, at most, is one less.
+    a2a_server_max_hops: int = 3
     # Where a named caller's runs keep their files, one directory per caller (FR-009a). It
     # is beside the workspace and never inside it, so that no thread that works in the
     # workspace reaches a caller's files.
@@ -472,6 +483,8 @@ class Settings(BaseSettings):
                 "FREYJA_A2A_SERVER_TASKS must be at least FREYJA_A2A_SERVER_CALLER_TASKS and "
                 "at most 1000"
             )
+        if not 1 <= self.a2a_server_max_hops <= 16:
+            raise ValueError("FREYJA_A2A_SERVER_MAX_HOPS must be from 1 to 16")
         files = Path(self.a2a_server_files_dir).resolve()
         workspace = Path(self.workspace_dir).resolve()
         if files == workspace or workspace in files.parents or files in workspace.parents:
@@ -519,7 +532,4 @@ class Settings(BaseSettings):
         return value
 
 
-# pydantic-settings fills a field that has no default, such as the database's address, from
-# the environment; its types describe the class and not that, so the call looks short of an
-# argument.
-settings = Settings()  # pyright: ignore[reportCallIssue]
+settings = Settings()

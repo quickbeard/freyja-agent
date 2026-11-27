@@ -7,6 +7,7 @@ the same table layout the service creates at startup and drops every table after
 """
 
 import os
+from collections.abc import Iterator
 from pathlib import Path
 
 import psycopg
@@ -37,7 +38,7 @@ def settings(workspace: Path) -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def clean_database() -> None:
+def clean_database() -> Iterator[None]:
     """Drop every table the test created: the LangGraph tables and ``freyja_run_locks``."""
     yield
     if TEST_URI is None:

@@ -22,7 +22,7 @@ from freyja_agent.agent.catalog import Catalog, CatalogTool, Classification
 from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import EditDecision
 from freyja_agent.api.serialize import interrupt_to_pending
-from tests.conftest import McpApp
+from tests.conftest import McpApp, detail_of
 from tests.fakes import ScriptedChatModel
 from tests.mcp_stub import StubServer, make_stub
 
@@ -613,6 +613,7 @@ def test_an_open_declared_input_accepts_an_argument_it_does_not_name() -> None:
     }
     pending_proposal, catalog = pending_edit(schema)
     command = build_resume_command(pending_proposal, edit_of({"q": "x", "more": 1}), catalog)
+    assert command.resume is not None
     (decision,) = command.resume["int-9"]["decisions"]
     # The arguments go to the server exactly as the approver wrote them.
     assert decision == {
@@ -630,8 +631,8 @@ def test_a_closed_declared_input_reports_each_unnamed_argument_once() -> None:
     pending_proposal, catalog = pending_edit(schema)
     with pytest.raises(HTTPException) as refused:
         build_resume_command(pending_proposal, edit_of({"q": "x", "a": 1, "b": 2}), catalog)
-    assert [entry["loc"][-1] for entry in refused.value.detail] == ["a", "b"]
-    assert {entry["type"] for entry in refused.value.detail} == {"extra_forbidden"}
+    assert [entry["loc"][-1] for entry in detail_of(refused.value)] == ["a", "b"]
+    assert {entry["type"] for entry in detail_of(refused.value)} == {"extra_forbidden"}
 
 
 def test_a_declared_input_that_points_elsewhere_is_not_fetched() -> None:
@@ -646,10 +647,11 @@ def test_a_declared_input_that_points_elsewhere_is_not_fetched() -> None:
         build_resume_command(pending_proposal, edit_of({"q": "x"}), catalog)
     assert time.monotonic() - started < 1
     assert refused.value.status_code == 422
-    assert "cannot be edited" in refused.value.detail[0]["msg"]
+    assert "cannot be edited" in detail_of(refused.value)[0]["msg"]
 
 
 def test_the_edit_keeps_the_tool_of_the_proposal() -> None:
     pending_proposal, catalog = pending_edit({"type": "object", "properties": {"q": {}}})
     command = build_resume_command(pending_proposal, edit_of({"q": 1}), catalog)
+    assert command.resume is not None
     assert command.resume["int-9"]["decisions"][0]["edited_action"]["name"] == "odd"

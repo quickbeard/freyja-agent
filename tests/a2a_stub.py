@@ -27,6 +27,12 @@ the message text:
   before, then completes right after the last (feature 008, for a run by hand too);
 - ``message``: answers with a direct message instead of a task.
 
+Feature 009: the stand-in keeps the hand-over count each message carried,
+``metadata["freyja.hops"]``, in its record (``ReceivedMessage.hops``, None for a message that
+carried none), and the metadata each cancel request carried (``StubRecord.cancel_hops``).
+Served by hand it writes one line per message to its terminal, with the count, as the
+quickstart reads it (specs/009-a2a-server/quickstart.md, section 5).
+
 Every task's first working status carries ``StubAgent.working_text``, "Working on it." unless a
 test changes it; with None it carries no message.
 
@@ -47,9 +53,10 @@ import argparse
 import asyncio
 import gzip
 import json
+import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -98,6 +105,8 @@ JSON = "application/json"
 CHUNK = 64 * 1024
 # How long ``StubAgent.report`` waits for the held tasks to store what it asked them to send.
 REPORT_SECONDS = 5.0
+# Where a message carries the count of hand-overs between agents it has passed (feature 009).
+HOPS_METADATA = "freyja.hops"
 
 
 @dataclass
@@ -108,12 +117,25 @@ class ReceivedMessage:
     context_id: str
     task_id: str
     message_id: str
+    # The hand-over count the message carried, as it was sent; None when it carried none.
+    hops: Any = None
 
 
 @dataclass
 class StubRecord:
     messages: list[ReceivedMessage] = field(default_factory=list)
     cancels: list[str] = field(default_factory=list)
+    # The hand-over count each cancel request carried, None for one that carried none.
+    cancel_hops: list[Any] = field(default_factory=list)
+
+
+def hops_of(metadata: Any) -> Any:
+    """The hand-over count in a message's or a request's metadata, a whole number as an
+    ``int``; None when there is none."""
+    found = MessageToDict(metadata).get(HOPS_METADATA)
+    if isinstance(found, float) and found.is_integer():
+        return int(found)
+    return found
 
 
 def _parts(message: Any) -> list[tuple[str, str | None, dict[str, Any]]]:
@@ -140,8 +162,13 @@ class _Executor(AgentExecutor):
                 context_id=context.context_id or "",
                 task_id=context.task_id or "",
                 message_id=message.message_id if message is not None else "",
+                hops=hops_of(message.metadata) if message is not None else None,
             )
         )
+        if self.stub.echo:
+            count = self.stub.record.messages[-1].hops
+            sys.stdout.write(f"Received, hand-over count {count}: {text}\n")
+            sys.stdout.flush()
         keyword, _, rest = text.strip().partition(" ")
         keyword = keyword.rstrip(":").lower()
 
@@ -153,6 +180,7 @@ class _Executor(AgentExecutor):
 
         task = context.current_task
         if task is None:
+            assert message is not None
             task = new_task_from_user_message(message)
             await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue=event_queue, task_id=task.id, context_id=task.context_id)
@@ -443,6 +471,8 @@ class StubAgent:
     # Each waiting ``hold`` task, by id, with how many reports it has sent and stored.
     holding: dict[str, int] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    # Whether each message is written to the terminal, as when served by hand.
+    echo: bool = False
 
     def release(self) -> None:
         """Let every ``hold`` task finish.
@@ -515,6 +545,19 @@ class StubAgent:
             await asyncio.sleep(0.005)
 
 
+class _Handler(DefaultRequestHandler):
+    """The SDK's handler, which also keeps what each cancel request carried (feature 009):
+    the executor is not given a cancel's request."""
+
+    def __init__(self, stub: StubAgent, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self.stub = stub
+
+    async def on_cancel_task(self, params: Any, context: ServerCallContext) -> Any:
+        self.stub.record.cancel_hops.append(hops_of(params.metadata))
+        return await super().on_cancel_task(params, context)
+
+
 def make_stub(
     name: str = "stub",
     *,
@@ -543,10 +586,12 @@ def make_stub(
         raise ValueError("redirect_card_to serves no body: give it no card_* option")
     card = card or stub_card(name)
     record = StubRecord()
-    stub = StubAgent(app=None, card=card, record=record, task_store=InMemoryTaskStore())
-    handler = DefaultRequestHandler(
+    task_store = InMemoryTaskStore()
+    stub = StubAgent(app=None, card=card, record=record, task_store=task_store)
+    handler = _Handler(
+        stub,
         agent_executor=_Executor(stub),
-        task_store=stub.task_store,
+        task_store=task_store,
         agent_card=card,
         request_context_builder=(
             SimpleRequestContextBuilder(task_id_generator=_CallableIds(task_ids))
@@ -566,7 +611,7 @@ def make_stub(
             body = gzip.compress(body)
             headers["content-encoding"] = "gzip"
 
-        async def pieces() -> Any:
+        async def pieces() -> AsyncIterator[bytes]:
             for start in range(0, len(body), CHUNK):
                 yield body[start : start + CHUNK]
 
@@ -594,6 +639,7 @@ def main() -> None:
     args = parser.parse_args()
     url = f"http://127.0.0.1:{args.http}/"
     stub = make_stub(args.name, card=stub_card(args.name, url=url, streaming=not args.no_streaming))
+    stub.echo = True
     uvicorn.run(stub.app, host="127.0.0.1", port=args.http)
 
 

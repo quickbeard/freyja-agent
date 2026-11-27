@@ -10,6 +10,7 @@ import pytest
 from deepagents.profiles.provider.provider_profiles import apply_provider_profile
 from fastapi.testclient import TestClient
 from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
 
@@ -195,9 +196,10 @@ def test_the_setting_hands_another_provider_no_argument_it_does_not_know(
 def test_the_openai_client_takes_the_setting(monkeypatch: pytest.MonkeyPatch) -> None:
     # The key only lets the client be built; nothing is sent.
     monkeypatch.setenv("OPENAI_API_KEY", "not-a-key")
-    assert resolve_model("openai:served-model").use_responses_api is True
+    on = resolve_model("openai:served-model")
+    assert isinstance(on, ChatOpenAI) and on.use_responses_api is True
     off = resolve_model("openai:served-model", openai_responses_api=False)
-    assert off.use_responses_api is False
+    assert isinstance(off, ChatOpenAI) and off.use_responses_api is False
 
 
 def test_a_model_instance_is_passed_through_whatever_the_setting() -> None:
@@ -252,7 +254,7 @@ class Recorded:
             self.orchestrator_gate = kwargs["interrupt_on"]
             return real_create(**kwargs)
 
-        def sub(spec: dict[str, Any]) -> Any:
+        def sub(spec: Any) -> Any:
             self.subagent_gate = spec["interrupt_on"]
             self.subagent_graph = real_sub(spec)
             return self.subagent_graph

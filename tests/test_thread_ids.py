@@ -1,7 +1,7 @@
 """FR-001a: thread ids are 1 to 128 characters of letters, digits, hyphen, underscore, dot,
 and never only dots."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 
 import pytest
 from fastapi import FastAPI
@@ -39,7 +39,7 @@ VALID_IDS = ["a", "x" * 128, "case-2026-10-30_0042.v1", "0123456789abcdef", "v1.
 @pytest.fixture
 def client(
     make_runtime: Callable[..., Runtime], make_app: Callable[[Runtime], FastAPI]
-) -> TestClient:
+) -> Iterator[TestClient]:
     runtime = make_runtime(ScriptedChatModel())
     with TestClient(make_app(runtime)) as client:
         yield client

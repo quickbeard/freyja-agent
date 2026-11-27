@@ -9,11 +9,12 @@ import re
 import threading
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
-from typing import Any
+from typing import Any, cast
 
 from langchain_core.callbacks import CallbackManagerForLLMRun
+from langchain_core.language_models import LangSmithParams
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolCallChunk
 from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
 from pydantic import Field, PrivateAttr
 
@@ -61,7 +62,7 @@ class ScriptedChatModel(BaseChatModel):
     def _llm_type(self) -> str:
         return "scripted"
 
-    def _get_ls_params(self, stop: list[str] | None = None, **kwargs: Any) -> dict[str, Any]:
+    def _get_ls_params(self, stop: list[str] | None = None, **kwargs: Any) -> LangSmithParams:
         return {"ls_provider": "scripted", "ls_model_name": "scripted", "ls_model_type": "chat"}
 
 
@@ -166,7 +167,7 @@ class StreamingChatModel(ScriptedChatModel):
         self.seen.append(list(messages))
         message = self.next_message()
         if message.tool_calls:
-            calls = [
+            calls: list[ToolCallChunk] = [
                 {
                     "name": call["name"],
                     "args": json.dumps(call["args"]),
@@ -212,9 +213,10 @@ class ProfileModels:
 
     def __init__(self) -> None:
         self.built: list[ModelSpec] = []
-        self.models: dict[str, LabelledChatModel] = {}
+        # A test may put another scripted model under a label, such as one that fails.
+        self.models: dict[str, ScriptedChatModel] = {}
 
-    def __call__(self, spec: ModelSpec) -> LabelledChatModel:
+    def __call__(self, spec: ModelSpec) -> ScriptedChatModel:
         self.built.append(spec)
         return self.model(spec.model)
 
@@ -222,7 +224,7 @@ class ProfileModels:
         """The model for a label, made on first use so a test can script it beforehand."""
         if label not in self.models:
             self.models[label] = LabelledChatModel(label=label, final_text=f"Answered by {label}.")
-        return self.models[label]
+        return cast(LabelledChatModel, self.models[label])
 
 
 class FakeClock:

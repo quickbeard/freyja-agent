@@ -6,6 +6,7 @@ import sys
 import time
 from collections.abc import Iterator
 from types import MappingProxyType
+from typing import Any
 
 import pytest
 from uvicorn.logging import AccessFormatter
@@ -299,9 +300,10 @@ def test_a_path_a_library_wrote_encoded_is_removed_with_its_address() -> None:
 
 def test_what_is_no_address_is_not_registered() -> None:
     scrubber = AddressScrubber()
-    for value in (None, 7, b"http://127.0.0.1:9998", "", "not an address", "http://[::1"):
-        scrubber.register(value)  # type: ignore[arg-type]
-        scrubber.mark_saved(value)  # type: ignore[arg-type]
+    values: list[Any] = [None, 7, b"http://127.0.0.1:9998", "", "not an address", "http://[::1"]
+    for value in values:
+        scrubber.register(value)
+        scrubber.mark_saved(value)
     assert scrubber.empty
     scrubber.mark_saved(URL)
     assert scrubber.scrub("127.0.0.1:9998") == ADDRESS
@@ -461,7 +463,7 @@ def test_an_argument_that_is_not_text_is_replaced_only_when_cleaning_changes_it(
         logger.name, logging.INFO, __file__, 1, "%s %s %s", (kept, 404, ("127.0.0.1", 9998)), None
     )
     assert record.args is not None
-    first, second, third = record.args  # type: ignore[misc]
+    first, second, third = record.args
     assert first is kept
     assert second == 404
     assert third == ADDRESS
@@ -554,7 +556,7 @@ def test_installing_twice_installs_once_and_the_earlier_factory_still_makes_the_
     made: list[str] = []
 
     def earlier(*args: object, **kwargs: object) -> logging.LogRecord:
-        record = before(*args, **kwargs)  # type: ignore[arg-type]
+        record = before(*args, **kwargs)
         made.append(record.name)
         return record
 

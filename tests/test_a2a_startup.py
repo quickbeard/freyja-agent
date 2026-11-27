@@ -12,7 +12,7 @@ the agent as not reachable with that reason, still with both of its tools.
 import logging
 import time
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -248,7 +248,7 @@ def test_the_card_address_is_replaced_by_the_configured_one(
         # The client the link built speaks to the configured host and port, at the card's path.
         assert link.client is not None
         # The SDK has no public accessor for the URL its transport was built with.
-        assert link.client._transport.url == f"{URL}/a2a"
+        assert cast(Any, link.client)._transport.url == f"{URL}/a2a"
     assert {r.host for r in made.transports["far"].requests} == {"127.0.0.1"}
     pinned = pinned_card(card, "https://localhost:8443/base")
     assert [i.url for i in pinned.supported_interfaces] == ["https://localhost:8443/a2a"]

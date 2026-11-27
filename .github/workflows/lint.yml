@@ -1,7 +1,7 @@
 name: Lint
 # Ruff for the service and Biome for the web app, each checking lint and formatting, and
-# pyright checking the service's types. They report and change nothing; the commit hook is
-# where files get fixed.
+# pyright checking the types of the service and of its tests. They report and change
+# nothing; the commit hook is where files get fixed.
 on:
   push:
     branches: [main]
@@ -40,7 +40,7 @@ jobs:
         # checks the code against the packages the lock file installs.
         run: uv sync --locked
       - name: Run pyright
-        # Over src/, as pyproject.toml has it.
+        # Over src/ and tests/, as pyproject.toml has it.
         run: uv run pyright
   web:
     name: biome

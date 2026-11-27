@@ -8,8 +8,17 @@ thread's model is told the id, as before.
 Part 2, no token anywhere (FR-028, SC-006): with two named callers' recognizable tokens,
 through every operation and refusal at both addresses, nothing the service answers, streams,
 keeps, or logs holds either; and refused credentials are warned of sparingly.
+
+Part 3, what a caller is never given (FR-018, FR-019, SC-008): two named callers, one at each
+address, through every operation and refusal and through tasks that complete, pause, fail
+with a model's error, and are canceled. Everything either was answered holds no token, no
+key beyond its last four characters, no agent's address, no thread's id, also after asking
+Freyja for it, no proposal's id, and not the other caller's name; and every status and
+reason is one of the service's fixed sentences, holding no argument, result, agent's words,
+or model's error.
 """
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -21,19 +30,21 @@ from urllib.parse import quote, quote_plus
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatResult
 from pydantic import SecretStr
 
 from freyja_agent.agent.context import thread_alias
 from freyja_agent.config import A2aCallerConfig
 from freyja_agent.delegates.addresses import install_log_scrubber
+from freyja_agent.llm.store import InMemoryLlmProfileStore
 from freyja_agent.runtime.callers import Callers
 from tests.a2a_caller import StandInCaller, as_json
 from tests.a2a_requests import at_rest, rpc, sending
 from tests.asgi_stream import StreamingASGITransport
-from tests.conftest import ServerApp
-from tests.fakes import ScriptedChatModel
-from tests.nowhere import kept, logged, no_key
+from tests.conftest import TEST_SECRET, ServerApp
+from tests.fakes import ProfileModels, ScriptedChatModel
+from tests.nowhere import MARK, LeakyModel, kept, logged, no_address, no_key, profile
 
 DELEGATE = AIMessage(
     content="",
@@ -282,3 +293,308 @@ def test_a_token_is_cleaned_in_every_way_a_path_a_query_or_a_log_line_writes_it(
         no_key(logged(caplog), *forms)
     finally:
         Callers.forget()
+
+
+# Part 3: what a caller is never given (FR-018, FR-019, SC-008).
+
+# A port nothing else in this file uses: the stand-in agent's address.
+AGENT_PORT = 9436
+AGENT_URL = f"http://127.0.0.1:{AGENT_PORT}"
+# What a tool is given and returns, what the agent writes back, and the name of each
+# caller's file: none may be in anything the service words itself.
+TOOL_WORDS = "tool-words-q7x"
+AGENT_WORDS = "agent-words-k3v"
+MODEL_ERROR = "Incorrect API key provided"
+ASK_ID = "What is your thread's id?"
+# The profiles' key: not a caller's token, which the suite's own key is, so that it is
+# cleaned as a key and not as a token.
+PROFILE_KEY = "sk-recognizable-key-0042"
+NAMES = (
+    r"(?:[a-z0-9_]+|agent [a-z0-9_-]+|a subagent)(?:, (?:[a-z0-9_]+|agent [a-z0-9_-]+|a subagent))*"
+)
+# Every status sentence and every reason a caller may be given (contracts/a2a-server.md).
+FIXED = re.compile(
+    "|".join(
+        [
+            re.escape("Working."),
+            f"Freyja is using: {NAMES}\\.",
+            f"Completed: {NAMES}\\.",
+            f"Waiting for a person's approval of: {NAMES}\\.",
+            f"Waiting for agent {NAMES}\\.",
+            *(
+                re.escape(reason)
+                for reason in (
+                    "No usable model is active.",
+                    "The model could not be used.",
+                    "The run reached its step limit.",
+                    "The run was interrupted.",
+                    "An internal error.",
+                    "The run was stopped before it finished.",
+                    "The caller canceled the task.",
+                )
+            ),
+        ]
+    )
+)
+
+
+class Telling(ScriptedChatModel):
+    """The profile's model: scripted, and asked for its thread's id it answers with the line
+    it was told about its thread, as a model would."""
+
+    def _generate(
+        self, messages: list[BaseMessage], stop: Any = None, run_manager: Any = None, **kw: Any
+    ) -> ChatResult:
+        if isinstance(messages[-1], HumanMessage) and ASK_ID in str(messages[-1].content):
+            self.calls += 1
+            self.seen.append(list(messages))
+            content = messages[0].content
+            system = (
+                content
+                if isinstance(content, str)
+                else "".join(block.get("text", "") for block in content if isinstance(block, dict))
+            )
+            line = next(text for text in system.splitlines() if "thread `" in text)
+            return ChatResult(generations=[ChatGeneration(message=AIMessage(content=line))])
+        return super()._generate(messages, stop, run_manager, **kw)
+
+
+def tool_calls(*found: tuple[str, str, dict[str, Any]]) -> AIMessage:
+    return AIMessage(
+        content="",
+        tool_calls=[{"id": call_id, "name": name, "args": args} for name, call_id, args in found],
+    )
+
+
+def one_task_s_script(name: str) -> list[AIMessage]:
+    """What the model does for one caller: a task that writes and reads a file and hands
+    work to the agent, then completes with a reply that names a key and an address; then a
+    task that proposes a notification."""
+    path = f"/{name}-only-z5.txt"
+    return [
+        tool_calls(("write_file", f"{name}-w", {"file_path": path, "content": TOOL_WORDS})),
+        tool_calls(
+            ("read_file", f"{name}-r", {"file_path": path}),
+            ("ls", f"{name}-l", {"path": "/"}),
+            ("handoff_to_stub", f"{name}-h", {"message": f"Look into {AGENT_WORDS}."}),
+        ),
+        AIMessage(content=f"Noted. Ask {AGENT_URL}/ with {PROFILE_KEY} as before."),
+        tool_calls(("send_notification", f"{name}-n", {"channel": "#ops", "message": TOOL_WORDS})),
+    ]
+
+
+class Answered:
+    """One named caller's raw JSON-RPC requests at one address, and everything it was
+    answered, each answer and each stream as its text."""
+
+    def __init__(self, app: Any, base: str, token: str) -> None:
+        self.app, self.base, self.token = app, base, token
+        self.texts: list[str] = []
+        self.answers: list[Any] = []
+
+    def _http(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(transport=StreamingASGITransport(self.app), base_url=self.base)
+
+    async def card(self) -> None:
+        async with self._http() as http:
+            answer = await http.get("/.well-known/agent-card.json")
+        self.texts.append(answer.text)
+
+    async def rpc(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        async with self._http() as http:
+            answer = await http.post("/a2a", json=body, headers=by(self.token))
+        self.texts.append(answer.text)
+        self.answers.append(answer.json())
+        return answer.json()
+
+    async def stream(
+        self, method: str, params: dict[str, Any], first: asyncio.Event | None = None
+    ) -> list[dict[str, Any]]:
+        body = {"jsonrpc": "2.0", "id": 1, "method": method, "params": params}
+        events: list[dict[str, Any]] = []
+        lines: list[str] = []
+        async with (
+            self._http() as http,
+            http.stream("POST", "/a2a", json=body, headers=by(self.token)) as answer,
+        ):
+            async for line in answer.aiter_lines():
+                lines.append(line)
+                if line.startswith("data:"):
+                    events.append(json.loads(line.removeprefix("data:")))
+                    if first is not None:
+                        first.set()
+                elif line.startswith("{"):
+                    events.append(json.loads(line))
+        self.texts.append("\n".join(lines))
+        self.answers.extend(events)
+        return events
+
+
+def statuses(value: Any) -> list[str]:
+    """The status messages alone: sentences and reasons."""
+    if isinstance(value, dict):
+        status = value.get("status")
+        own = []
+        if isinstance(status, dict):
+            own = [part.get("text", "") for part in (status.get("message") or {}).get("parts", [])]
+        return own + [text for item in value.values() for text in statuses(item)]
+    if isinstance(value, list):
+        return [text for item in value for text in statuses(item)]
+    return []
+
+
+def task_of(answer: dict[str, Any]) -> dict[str, Any]:
+    """The task of an answer, or of a stream's event: a task or a status update."""
+    result = answer["result"]
+    return result.get("task") or result.get("statusUpdate") or result
+
+
+def test_a_caller_is_given_nothing_of_what_it_must_never_be_given(
+    make_a2a_server_app: Callable[..., ServerApp], tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    files = tmp_path_factory.mktemp("caller-files")
+    (files / "beta").mkdir()
+    (files / "beta" / "beta-own-z5.txt").write_text(TOOL_WORDS)
+    models = ProfileModels()
+    models.models["saved-model"] = Telling(
+        script=[*one_task_s_script("alpha"), *one_task_s_script("beta")], final_text="Done."
+    )
+    models.models["leaky-model"] = LeakyModel()
+    made = named(
+        make_a2a_server_app,
+        ScriptedChatModel(),
+        agents={"stub": {"read_only": True, "url": AGENT_URL}},
+        llm_profiles=InMemoryLlmProfileStore(),
+        model_factory=models,
+        secret_key=TEST_SECRET,
+        a2a_server_files_dir=str(files),
+        a2a_server_caller_tasks=1,
+        a2a_server_wait_seconds=10,
+    )
+    tasks: dict[str, list[str]] = {"alpha": [], "beta": []}
+    proposals: list[str] = []
+    replies: dict[str, str] = {}
+    with TestClient(made.app) as client:
+        saved = client.post("/llm/profiles", json=profile(api_key=PROFILE_KEY)).json()["id"]
+        leaky = client.post(
+            "/llm/profiles", json=profile(name="Leaky", model="leaky-model", api_key=PROFILE_KEY)
+        )
+        assert client.post(f"/llm/profiles/{saved}/activate").status_code == 200
+        callers = {
+            # One at the outside listener, the other at the service's own address.
+            "alpha": Answered(made.outside, OUTSIDE, ALPHA),
+            "beta": Answered(made.app, "http://testserver", BETA),
+        }
+        for name, caller in callers.items():
+            go = client.portal.call
+            go(caller.card)
+            # A task that completes, sent with a stream, then read, and refused a
+            # subscription and a cancel since it has ended.
+            events = go(caller.stream, "SendStreamingMessage", sending("Write it.", contextId="w"))
+            done = events[0]["result"]["task"]["id"]
+            tasks[name].append(done)
+            assert task_of(events[-1])["status"]["state"] == "TASK_STATE_COMPLETED", events[-1]
+            got = go(caller.rpc, "GetTask", {"id": done})
+            replies[name] = got["result"]["artifacts"][0]["parts"][0]["text"]
+            assert go(caller.rpc, "SubscribeToTask", {"id": done})["error"]["code"] == -32004
+            assert go(caller.rpc, "CancelTask", {"id": done})["error"]["code"] == -32002
+            # A task that pauses on a proposal; the conversation and the limit refuse more.
+            paused = go(
+                caller.rpc,
+                "SendMessage",
+                {
+                    **sending("Tell #ops.", contextId="p"),
+                    "configuration": {"returnImmediately": True},
+                },
+            )
+            paused_id = task_of(paused)["id"]
+            tasks[name].append(paused_id)
+            at_rest(client, made, paused_id)
+            thread = made.task(client, paused_id).thread_id
+            proposals.append(
+                client.get(f"/threads/{thread}/state").json()["pending"]["interrupt_id"]
+            )
+            got = go(caller.rpc, "GetTask", {"id": paused_id})
+            assert "send_notification" in statuses(got)[0]
+            busy = go(caller.rpc, "SendMessage", sending("More.", contextId="p"))
+            assert busy["error"]["data"][0]["metadata"] == {"reason": "conversation_busy"}
+            limit = go(caller.rpc, "SendMessage", sending("Other.", contextId="o"))
+            assert limit["error"]["data"][0]["metadata"] == {"reason": "task_limit"}
+
+            # Followed by a subscription, and canceled by its caller.
+            async def follow_and_cancel(
+                caller: Answered = caller, paused_id: str = paused_id
+            ) -> list[dict[str, Any]]:
+                first = asyncio.Event()
+                follower = asyncio.create_task(
+                    caller.stream("SubscribeToTask", {"id": paused_id}, first)
+                )
+                async with asyncio.timeout(10):
+                    await first.wait()
+                    await caller.rpc("CancelTask", {"id": paused_id})
+                    return await follower
+
+            followed = go(follow_and_cancel)
+            assert task_of(followed[-1])["status"]["state"] == "TASK_STATE_CANCELED"
+            # A task that fails with a model's error that holds a recognizable text.
+            assert client.post(f"/llm/profiles/{leaky.json()['id']}/activate").status_code == 200
+            failed = go(caller.rpc, "SendMessage", sending("This one fails.", contextId="f"))
+            assert client.post(f"/llm/profiles/{saved}/activate").status_code == 200
+            tasks[name].append(task_of(failed)["id"])
+            assert statuses(failed) == ["The model could not be used."]
+            # Asked for its thread's id, Freyja says what it was told.
+            asked = go(caller.rpc, "SendMessage", sending(ASK_ID, contextId="q"))
+            tasks[name].append(task_of(asked)["id"])
+            answer = task_of(asked)["artifacts"][0]["parts"][0]["text"]
+            alias = thread_alias(made.task(client, task_of(asked)["id"]).thread_id)
+            assert answer.startswith(f"You are working on thread `{alias}`."), answer
+            # The refusals of a message itself, and the operations that are not offered.
+            for params in (
+                sending("hi", metadata={"freyja.hops": -1}),
+                sending("hi", metadata={"freyja.hops": 3}),
+                sending(" "),
+                sending("hi", taskId=done),
+            ):
+                assert go(caller.rpc, "SendMessage", params)["error"]["code"] == -32602
+            go(caller.stream, "SendStreamingMessage", sending("hi", metadata={"freyja.hops": 3}))
+            go(caller.rpc, "ListTasks", {})
+            go(caller.rpc, "CreateTaskPushNotificationConfig", {"taskId": done, "url": OUTSIDE})
+            go(caller.rpc, "GetExtendedAgentCard", {})
+        # Each caller asks for the other's tasks.
+        for name, other in (("alpha", "beta"), ("beta", "alpha")):
+            for task_id in tasks[other]:
+                for method in ("GetTask", "CancelTask", "SubscribeToTask"):
+                    found = client.portal.call(callers[name].rpc, method, {"id": task_id})
+                    assert found["error"]["code"] == -32001
+        threads = [made.task(client, t).thread_id for found in tasks.values() for t in found]
+    # The completed task's reply names the key and the address only as cleaned.
+    assert replies == dict.fromkeys(callers, "Noted. Ask <address>/ with <key> as before.")
+    # The runs were shown every text the searches look for: what a tool returned, a listing
+    # of each caller's files, and what the agent wrote back.
+    shown = {
+        message.tool_call_id: str(message.content)
+        for seen in models.models["saved-model"].seen
+        for message in seen
+        if isinstance(message, ToolMessage)
+    }
+    assert TOOL_WORDS in shown["alpha-r"] and TOOL_WORDS in shown["beta-r"]
+    assert "alpha-only-z5.txt" in shown["alpha-l"]
+    assert "beta-own-z5.txt" in shown["beta-l"] and "beta-only-z5.txt" in shown["beta-l"]
+    assert AGENT_WORDS in shown["alpha-h"] and AGENT_WORDS in shown["beta-h"]
+    assert len(made.stub.record.messages) == 2
+    assert all(AGENT_WORDS in message.text for message in made.stub.record.messages)
+    assert (files / "alpha" / "alpha-only-z5.txt").read_text() == TOOL_WORDS
+    assert len(set(threads)) == 8
+    for name, other in (("alpha", "beta"), ("beta", "alpha")):
+        texts = callers[name].texts
+        no_key(texts, MARK, MODEL_ERROR, *threads, *proposals, other)
+        no_address(texts, AGENT_PORT)
+        # What a tool was given and returned, file names a listing returned, and what the
+        # agent wrote are in nothing a caller was sent: no status, reason, error, piece of the
+        # reply, or reply.
+        no_key(texts, TOOL_WORDS, AGENT_WORDS, "only-z5", "own-z5", "Look into")
+        sentences = [text for answer in callers[name].answers for text in statuses(answer)]
+        assert sentences, name
+        for sentence in sentences:
+            assert FIXED.fullmatch(sentence), sentence

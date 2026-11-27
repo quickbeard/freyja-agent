@@ -11,7 +11,7 @@ import time
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from datetime import timedelta
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -415,7 +415,7 @@ def test_every_model_call_is_told_of_the_threads_pending_tasks(
         tick(client, made.runtime)
         run(client, "b-10", "Thanks.", sse_events)
 
-    systems = [call[0] for call in model.seen]
+    systems = cast(list[SystemMessage], [call[0] for call in model.seen])
     assert all(isinstance(system, SystemMessage) for system in systems)
     first, during, delivered, later = (pending_lines(s) for s in systems)
     assert first == []
@@ -621,7 +621,7 @@ def test_a_failure_is_delivered_as_an_error_result(
 
     (delivered,) = seen_outcomes(model, -1)
     assert delivered.status == "error"
-    assert delivered.content.startswith(f"Agent 'stub' task {TASK} failed.")
+    assert delivered.text.startswith(f"Agent 'stub' task {TASK} failed.")
     assert after["agent_tasks"][0]["status"] == "failed"
 
 
