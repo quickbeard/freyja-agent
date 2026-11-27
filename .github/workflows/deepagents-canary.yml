@@ -1,0 +1,59 @@
+name: Deep Agents canary
+# The service is built on Deep Agents, which pyproject.toml holds to one minor version
+# (`deepagents<0.8`) and uv.lock to one release. Once a week this runs pyright and the Python
+# suite against a newer release than the lock file names, so that what an upgrade breaks is
+# learned the week the release comes out and not on the day of the upgrade. It runs on a
+# schedule and by hand, never for a pull request: a library's new release is no fault of the
+# change under review. What it upgrades stays in the job and is not committed. The same job
+# runs on GitLab as `deepagents-canary` in .gitlab-ci.yml, and
+# tests/test_deepagents_canary.py keeps the two in step.
+on:
+  schedule:
+    # Mondays at 03:17 UTC.
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+jobs:
+  canary:
+    name: ${{ matrix.gate }}, ${{ matrix.leg }}
+    timeout-minutes: 20
+    runs-on: ubuntu-latest
+    strategy:
+      # Each leg and each gate reports for itself: a type error says nothing of the suite.
+      fail-fast: false
+      matrix:
+        leg: [inside the pin, newest release]
+        gate: [pyright, pytest]
+        include:
+          # The newest release the pin allows, with the lock file written again around it:
+          # what an upgrade inside the pin would install today.
+          - leg: inside the pin
+            upgrade: uv sync --upgrade-package deepagents
+          # The newest release of all, past the pin, put over what the lock file installed:
+          # what the next minor version changes. The same release as the other leg until
+          # one is published outside the pin.
+          - leg: newest release
+            upgrade: uv pip install --upgrade-package deepagents deepagents
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: Install uv
+        uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6.8.0
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        # What the lock file names first, so that the upgrade moves Deep Agents and what the
+        # newer release needs, and nothing else.
+        run: uv sync --locked
+      - name: Upgrade Deep Agents
+        # Prints every package it replaces, with the version before and after.
+        run: ${{ matrix.upgrade }}
+      - name: Show the release under test
+        run: uv pip show deepagents
+      - name: Report the requirements the upgrade broke
+        # Past the pin the environment is one the project's own requirements do not allow,
+        # and it may be one another package's do not allow either. This says which, so that
+        # a failure below can be told from an environment that does not fit together. It
+        # fails nothing: the gate's result is the job's.
+        run: uv pip check || true
+      - name: Run ${{ matrix.gate }}
+        # --no-sync: `uv run` would otherwise put back what the lock file names.
+        run: uv run --no-sync ${{ matrix.gate }}
