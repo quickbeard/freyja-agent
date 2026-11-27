@@ -7,6 +7,7 @@ not on this page is sent, and `tests/test_telemetry_nowhere.py` holds the servic
 The resource of both is `service.name`, from `FREYJA_OTEL_SERVICE_NAME`, and nothing else.
 The instrumentation scope is `freyja_agent`. No span has an event or a link, and no metric
 has an exemplar.
+A value that is text is cut to 256 characters.
 
 ## Spans
 
@@ -19,7 +20,8 @@ has an exemplar.
 
 A span that ended in an error has the error status, described by the run's error code, the
 exception's class name, or, for a request, nothing. A request answered with a status of 500
-or above has the error status.
+or above has the error status; one the application failed to answer is recorded with 500
+and the error's class name.
 
 ## Metrics
 

@@ -30,6 +30,17 @@ One requirement was made exact while the plan was written; [research.md](researc
 
 - FR-022 said that reading the two waiting values changes nothing. The index of threads settles a thread's row at the first reading after its run ended (feature 007), so a count taken without settling stays too low on a deployment where nobody opens the console. The reading settles those rows, as a reading of the list of threads does, and FR-022 now says what it may not change: no thread, and no lease.
 
+### Checklist review, 2026-11-27
+
+Changes made while reviewing [checklists/privacy-reliability.md](checklists/privacy-reliability.md); its "Review record" gives the finding behind each. None was asked of the owner; each is named in the pull request.
+
+- What is never sent also names an agent's reply and progress text and what its card says (FR-031), and every value that is text is cut to 256 characters (FR-030), which bounds a tool's name that its server chose.
+- The service's own lines never say where telemetry is sent; the component that sends may name the collector's address when it fails, and that address holds no credential (FR-005).
+- A failure to record is said in the log once an instance, at its first occurrence (FR-034).
+- `unmatched` also names a request whose method its route does not take (FR-024), and a request the application fails to answer is recorded with 500 and the error's class (Edge Cases).
+- SC-005 is measured against the time limit of one attempt to send, and SC-006 names the three points at which recording is made to fail.
+- Sending goes on without a restart when the collector answers again (Edge Cases), and an address with `http` is taken without a warning, since nothing sent is content (Assumptions).
+
 ## User Scenarios & Testing *(mandatory)*
 
 The terms of the earlier features are used as they are there. A **run** is one stretch of the orchestrator's work on a thread: the answer to a message, the continuation after a person's decision (a resume), or the background run that delivers an agent task's outcome (feature 003). A run ends, pauses with a proposal for a person to decide, fails, is stopped at a boundary (feature 007), or is cancelled when its reader leaves or the service stops it. A **model call** is one request to the model, and a **tool call** one use of a tool: one of Freyja's own, a tool server's (feature 002), or an agent's hand-off or cancel (feature 003). The **delegation worker** is what watches pending agent tasks and delivers their outcomes, one **round** at a time.
@@ -118,7 +129,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 ### Edge Cases
 
-- **The collector cannot be reached, or answers slowly.** No run waits for it. What cannot be sent in time is dropped, the memory telemetry holds stays bounded, and the log says that sending failed, in the words of the component that sends.
+- **The collector cannot be reached, or answers slowly.** No run waits for it. What cannot be sent in time is dropped, the memory telemetry holds stays bounded, and the log says that sending failed, in the words of the component that sends. When the collector answers again, sending goes on without a restart; what was dropped is not sent later.
 - **The collector's address is wrong in form**, such as one with a user name and a password in it. The service does not start, and the error does not repeat the address.
 - **Recording a span or a count fails**, for any reason. It is left out, the log says so once with the kind of failure, and the run, the model call, or the tool call it was for goes on as it would with telemetry off.
 - **Recording the end of an approved action fails.** The action has run once and does not run again.
@@ -127,10 +138,11 @@ An operator wants to see the service as its clients see it: which routes are ask
 - **The service stops while it still holds telemetry.** It sends what it holds after the last run has ended, within a time limit, and does not wait longer than that.
 - **A run on a thread another agent started** (feature 009). It is recorded like any other, marked as such, and named by its thread's id as the log names it; the caller's name and token are not sent, and telemetry goes to the operator and not to the caller.
 - **A thread's id is one a client chose.** It is the one value in a span that the service did not make or configure. It is held to the characters and the length feature 001 allows, appears on the run's span and nowhere else, and the log already names it.
-- **A tool server's tool has a name its server chose.** It is named as the orchestrator was built with it; a name a model made up never is.
+- **A tool server's tool has a name its server chose.** It is named as the orchestrator was built with it, which is the name the catalog already lists (feature 002), cut to the length a value may have; a name a model made up never is.
 - **A model call fails with an error whose text holds a key or an address.** The span says the error's class name and nothing of its text.
 - **A profile's test** (feature 004) calls a model outside any run. Its request is recorded like any request, and each of its calls of the model has a span under the request's, marked as a test. A test of values that are not saved names the provider and not the model.
 - **A request never reaches a route**, because it is refused for its host name. It is recorded with the route `unmatched` and the status of the refusal.
+- **The application fails before it answers a request.** The request is recorded with the status 500 and the error's class name, and with none of the error's text.
 - **The same instance restarts.** Counts start again from zero, as a collector expects of a restarted source.
 - **A deployment turns on the telemetry of a library the service uses**, through that library's own configuration. That telemetry is the library's: this feature neither sends it nor answers for what it holds.
 
@@ -144,7 +156,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 - **FR-002**: The deployment's configuration MUST take the collector's address and the name the service is given in what is sent, each through a setting of the service with the safe default: no address, and the service's own name.
 - **FR-003**: The collector's address MUST be checked at startup: a scheme of `http` or `https`, a host, and at most a port and a path. An address with a user name, a password, a query, or a fragment MUST stop startup with an error that does not repeat the address.
 - **FR-004**: Freyja MUST hold no credential for a collector: no setting takes one and none is stored. The documentation MUST say so, and MUST say what the collector's client reads from the environment by itself, which Freyja neither reads nor vouches for.
-- **FR-005**: At startup the service MUST say in its log whether telemetry is on, and MUST NOT say where it is sent.
+- **FR-005**: At startup the service MUST say in its log whether telemetry is on, and no line the service writes MUST say where it is sent. The component that sends says a failure in its own words, which may name the collector's address; that address holds no credential (FR-003).
 - **FR-006**: Telemetry MUST be sent in the OpenTelemetry protocol over HTTP, so that any collector that takes it can receive it. Every run, call, and request this spec names MUST be recorded: no setting keeps only a share of them.
 
 **Traces of runs**
@@ -176,7 +188,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 **Requests**
 
-- **FR-024**: Every request the service answers, on its own address and on the address other agents call (feature 009), MUST have a span with the method, the route as the service declares it, and the status code. The path as it was written MUST NOT be sent; a request for which the service has no route, or that is refused before a route is found, MUST be named `unmatched`.
+- **FR-024**: Every request the service answers, on its own address and on the address other agents call (feature 009), MUST have a span with the method, the route as the service declares it, and the status code. The path as it was written MUST NOT be sent; a request for which the service has no route, one with a method its route does not take, and one that is refused before a route is found MUST each be named `unmatched`.
 - **FR-025**: A request's span MUST hold nothing of the query, the headers, the body, the host name asked for, the client's address, or a credential.
 - **FR-026**: The service MUST count requests and record how long each took, told apart by method, route, and status code.
 - **FR-027**: A request to a route that says whether the service is up or ready MUST NOT be recorded.
@@ -185,14 +197,14 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 **Names, never content**
 
-- **FR-030**: Every value this feature sends MUST be one of: an id the service made (a run's, an LLM profile's); a thread's id; a name the deployment or an operator configured (a model's provider and name, a tool server's, an agent's, the service's); the name of a tool the orchestrator was built with; a route as the service declares it; a method; a status code; one of the service's own words (a kind of run, an outcome, a classification, an error code); an error's class name; a number, a time, or a duration.
-- **FR-031**: The service MUST NOT send a message, a tool's arguments or result, a model's reply, an error's text, an agent's address, an API key, a caller's name or token, the name an operator gave an LLM profile, or anything a model wrote.
+- **FR-030**: Every value this feature sends MUST be one of: an id the service made (a run's, an LLM profile's); a thread's id; a name the deployment or an operator configured (a model's provider and name, a tool server's, an agent's, the service's); the name of a tool the orchestrator was built with; a route as the service declares it; a method; a status code; one of the service's own words (a kind of run, an outcome, a classification, an error code); an error's class name; a number, a time, or a duration. A value that is text MUST be cut to 256 characters.
+- **FR-031**: The service MUST NOT send a message, a tool's arguments or result, a model's reply, an agent's reply or progress text, what an agent's card says, an error's text, an agent's address, an API key, a caller's name or token, the name an operator gave an LLM profile, or anything a model wrote.
 - **FR-032**: A thread's id MUST appear on the span of a run and nowhere else: on no other span, a request's included, and on no metric.
 - **FR-033**: A proof in the test suite MUST drive a recognizable key, caller's token, agent address, and text through every kind of run, call, and request this feature records, and MUST show that none appears in anything sent and that every named value is one this spec allows. A new span, metric, or named value MUST be added to it.
 
 **Telemetry never changes what the service does**
 
-- **FR-034**: Recording MUST never fail a run, a model call, a tool call, a request, or a round of the delegation worker. What cannot be recorded MUST be left out, with one line in the log that names the kind of failure, and the work it was for MUST go on as it would with telemetry off.
+- **FR-034**: Recording MUST never fail a run, a model call, a tool call, a request, or a round of the delegation worker. What cannot be recorded MUST be left out, and the work it was for MUST go on as it would with telemetry off. The first such failure of an instance MUST be said in the log, in one line that names the kind of failure and says that later ones are not logged.
 - **FR-035**: Recording MUST never make a step of a run happen again. An approved action MUST run once, also when recording its start or its end fails.
 - **FR-036**: Sending MUST happen off the path of every run and request. A collector that is slow or cannot be reached MUST delay no run and no answer, and the memory telemetry holds MUST stay bounded: what cannot be sent is dropped.
 - **FR-037**: When the service stops, it MUST send what it still holds after the last run has ended, within a time limit, and MUST NOT wait longer than that limit.
@@ -223,8 +235,8 @@ An operator wants to see the service as its clients see it: which routes are ask
 - **SC-002**: With telemetry on, every run has exactly one run span, and every model call and every tool call that ran has exactly one span, under the right parent.
 - **SC-003**: With no collector configured, the service makes no connection and starts no background activity for telemetry, and every existing test of the service passes unchanged.
 - **SC-004**: In the proof of FR-033, a recognizable key, caller's token, agent address, and text appear zero times in everything sent.
-- **SC-005**: With a collector that never answers, a run produces the same events in the same order as with telemetry off, and its duration differs by no more than the difference between two runs with telemetry off.
-- **SC-006**: With recording made to fail at every point where it records, every run produces the same events in the same order as with telemetry off, and every approved action runs exactly once.
+- **SC-005**: With a collector that takes a connection and never answers, a run produces the same events in the same order as with telemetry off, and ends without waiting for the collector: in less than the time limit of one attempt to send.
+- **SC-006**: With recording made to fail at each point where it records (the start of a span, the end of a span, and a count), every run produces the same events in the same order as with telemetry off, and every approved action runs exactly once.
 - **SC-007**: What a model, a tool server, and an agent receive is the same, header for header and field for field, with telemetry on and off.
 - **SC-008**: The two waiting values a collector holds are no older than two intervals at which metrics are sent.
 - **SC-009**: Every request but those that ask whether the service is up or ready has exactly one span and is counted once, and the path of a request for a route that does not exist appears zero times in everything sent.
@@ -234,7 +246,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 - An implementation of User Stories 1 and 2 was written before this spec, without the model calls a library makes by itself (FR-010) and without the run's span standing under a request's (FR-013). It is brought to this spec at the implement step and is not what decides a requirement.
 - Telemetry is for the operator of a deployment. No person who uses the console, no client of the API, and no agent that calls Freyja is shown any of it.
-- The deployment runs and secures its collector. What a collector keeps, for how long, and who reads it is outside this feature.
+- The deployment runs and secures its collector. What a collector keeps, for how long, and who reads it is outside this feature. What is sent holds names and no content, so an address with `http` is taken without a warning; a deployment that wants the names kept from the network path uses `https`.
 - Everything is recorded. A deployment that wants fewer traces thins them at its collector.
 - Counts are sent about once a minute and spans within seconds; the plan sets the intervals and the time limits.
 - A thread's id is treated as the log treats it: it names a thread to the operator. A deployment whose clients put something private into a thread's id has that in its log already.
