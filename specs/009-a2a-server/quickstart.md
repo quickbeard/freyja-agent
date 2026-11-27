@@ -51,8 +51,9 @@ uv run python -m tests.a2a_stub --http 9998 --name stub
 ```
 
 Add the agent in the console's Agents section as `stub` at `http://127.0.0.1:9998`, and
-choose that it runs **without** approval: section 2 shows that a caller's task waits for a
-person all the same.
+choose that it runs **without** approval. With the agents' approval mode on Auto, the default
+since feature 010, a hand-off to it is then sent at once, from a caller's task as from any
+other; sections 2 and 5 set the mode to Manual, which makes every hand-off wait for a person.
 
 The stand-in caller, in a fourth terminal:
 
@@ -78,8 +79,8 @@ caller stream "List the files in your workspace and say how many there are."
   push notifications are not, and declares no security.
 - The stream prints, in order: the task as working; `Freyja is using: ls.`; `Completed: ls.`;
   pieces of the reply; the whole reply as the artifact `reply`; and the task as completed.
-  With the stand-in model, send `steps 1` for the one step of `ls`; it sends its reply in
-  one piece.
+  With the stand-in model, send `steps 1` for the one step of `ls`; its reply comes as one
+  piece, which is sent up to its last space, and then whole as the artifact.
 - `caller send "Say hello."` prints one completed task with its reply.
 - In the console's Tasks section both are listed, each with "Started by an agent on this
   machine", and neither page has a box for another message.
@@ -96,13 +97,17 @@ Put the setting back and start the service again.
 
 ## 2. A person decides what a caller's task proposes (User Story 2, phase 3)
 
+Set the agents' approval mode to Manual, with the Approvals dropdown beside the Send button
+of the console's Tasks section, or:
+
 ```bash
+curl -s -X PUT localhost:8000/agents/mode -H 'content-type: application/json' -d '{"mode": "manual"}'
 caller stream "Hand this to the stub agent: say hello"
 ```
 
 - The stream ends its first part with `Waiting for a person's approval of: agent stub.`, and
   the task is still working. The stand-in agent's terminal shows that it received nothing,
-  although the agent is set to run without approval.
+  although the agent itself is set to run without approval: the mode holds it.
 - The console counts one task that needs a decision. Its page and the proposal's card say
   that an agent on this machine started the run, and the card that no person asked for the
   action. Approve it.
@@ -191,9 +196,9 @@ Turn the feature off with a caller's task waiting for a person: send one as in s
 leave it undecided, remove every `FREYJA_A2A_SERVER` line from `.env`, and start the service
 again. The task is still listed and can be read; approving or rejecting its proposal in the
 console is refused (`a2a_server_off`), and the page says that the task is continued only
-while receiving tasks from agents is on. Its row says the caller is no longer configured,
-since nothing names callers while the feature is off. Put the settings back: the task waits
-again, its caller configured.
+while receiving tasks from agents is on. A named caller's task is shown as started by an
+agent that is no longer configured, since nothing names callers while the feature is off;
+the local caller's is shown as before. Put the settings back: the task waits again.
 
 ## 4. Continue, come back, cancel (User Story 4, phase 4)
 
@@ -235,8 +240,8 @@ the step that was under way, and the console shows the task as stopped, with the
 until then.
 
 Cancel a task that waits for approval. A hand-off waits for a person only while the agents'
-approval mode, or the agent, is Manual (feature 010), so set the mode to Manual first, in the
-sidebar under Tasks or with
+approval mode, or the agent, is Manual (feature 010), so set the mode to Manual first, with
+the Approvals dropdown beside the Tasks section's Send button or with
 `curl -s -X PUT localhost:8000/agents/mode -H 'content-type: application/json' -d '{"mode": "manual"}'`;
 or send `notify hello` with the stand-in model, which always waits for a person.
 
@@ -255,12 +260,16 @@ nothing. Set the mode back to Auto if it was Auto before.
 
 ## 5. Only its own, and within limits (User Story 5, phases 2 and 6)
 
+With the agents' approval mode on Manual, as in section 2, and no other task of the local
+caller in progress:
+
 ```bash
 for i in 1 2 3 4 5 6; do caller send --return-immediately "Hand this to the stub agent: say $i" | jq -r '.status.state // .error.data[0].metadata.reason'; done
 ```
 
 Five tasks are working, each waiting for a person; the sixth prints `task_limit` (phase 2).
-Reject one in the console and send again: it is accepted.
+Reject one in the console and send again: it is accepted. Decide or cancel the five that
+wait before the next part, whose hand-off needs a free place.
 
 The hand-over count (phase 6). With the stand-in model, `handoff stub <text>` makes Freyja
 hand `<text>` to the stand-in agent; set the agents' mode to Manual first, so that the

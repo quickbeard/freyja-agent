@@ -88,9 +88,11 @@ map of the other directories are in the `AGENTS.md` at the root of the repositor
   segment what is left of the step limit, and asks between two segments, and nowhere else,
   whether to stop. Every other thread is passed straight to the graph. Since feature 009 it
   first asks, for every run, who started the thread: it refuses a caller's thread on the
-  ordinary build and any thread whose lookup fails, puts `freyja_caller_files` into the
-  config of a caller's thread on the strict build, and refuses every way to run a graph but
-  `astream`; `UnattendedRuns.join` gives one more reader of a console run in progress, and
+  ordinary build and any thread whose lookup fails, puts `freyja_caller_files` and the
+  hand-over count (`HOPS_KEY`, read by `Runtime.hops_of` from the conversation's last task
+  whose run started) into the config of a caller's thread on the strict build, refusing the
+  run when the count cannot be read, and refuses every way to run a graph but `astream`;
+  `UnattendedRuns.join` gives one more reader of a console run in progress, and
   `UnattendedRuns.on_start` is told of each run before its first event, which is how a
   caller's follower joins the run a person's decision starts (`ReceivedTasks.on_run_started`).
   `Runtime.unattended` is the console's runs of this instance.
