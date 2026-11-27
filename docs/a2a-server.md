@@ -1,6 +1,6 @@
 # Receive tasks from agents
 
-Freyja hands work to other agents over A2A (see [Agents](agents.md)); with `FREYJA_A2A_SERVER` on, another agent can hand work to Freyja the same way. The caller's message starts the run the console starts, on a thread of the service's own, so every action with an effect outside the workspace waits for a person in the console, as any other does. What the caller is told is read from that thread. The full contract is in `specs/009-a2a-server/contracts/a2a-server.md`.
+Freyja hands work to other agents over A2A (see [Agents](agents.md)); with `FREYJA_A2A_SERVER` on, another agent can hand work to Freyja the same way. The caller's message starts the run the console starts, on a thread of the service's own, so every action with an effect outside the workspace waits for a person in the console, as any other does; a message to a delegate agent waits as on every thread, unless the agents' approval mode and the agent are both Auto (see [Waiting for a person](#what-a-caller-can-do)). What the caller is told is read from that thread. The full contract is in `specs/009-a2a-server/contracts/a2a-server.md`.
 
 Callers on this machine call the service's own address and need no credential there. Agents on other hosts are named by the deployment, each with a token, and call an outside listener that serves A2A and nothing else (see [Named callers](#named-callers) and [The outside listener](#the-outside-listener)).
 
