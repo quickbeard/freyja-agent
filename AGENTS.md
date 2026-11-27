@@ -499,6 +499,11 @@ startup and exits with an error naming the connection when it is unreachable.
   GitLab's `ruff`, `pyright`, `biome`, `pytest`, and `vitest` jobs do the same for merge
   requests.
   `secrets.yml` and GitLab's `gitleaks` job search every commit for secrets, on every change.
+  `deepagents-canary.yml` and GitLab's `deepagents-canary` job run pyright and pytest once a
+  week against a newer Deep Agents than `uv.lock` names, the newest release inside the pin
+  and the newest of all, and for no pull or merge request. A scheduled run is theirs alone,
+  GitLab's schedule is made in the project's settings, and
+  `tests/test_deepagents_canary.py` keeps the two sides in step.
   `playwright.yml` and GitLab's `playwright` job run the end-to-end tests when a file under
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes

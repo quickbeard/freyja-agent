@@ -10,6 +10,9 @@ stages:
 .every-change:
   stage: test
   rules:
+    # A scheduled pipeline is the Deep Agents canary's alone (deepagents-canary, below).
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
@@ -105,6 +108,9 @@ playwright:
   # the @playwright/test version in web/pnpm-lock.yaml; change both together.
   image: mcr.microsoft.com/playwright:v1.65.1-noble
   rules:
+    # Not in a scheduled pipeline, where `changes` counts as true (see .every-change).
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+      when: never
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
       changes:
         - web/**/*
@@ -153,3 +159,40 @@ semgrep:
       semgrep scan --metrics=off --error
       --config p/default --config p/security-audit --config p/owasp-top-ten
       --config p/dockerfile .
+
+# The Deep Agents canary: pyright and the Python suite against a newer Deep Agents than
+# uv.lock names, so that what an upgrade breaks is learned the week the release comes out.
+# The same job runs on GitHub from deepagents-canary.yml, where each step says what it is
+# for; tests/test_deepagents_canary.py keeps the two in step. It runs in a scheduled
+# pipeline and in no other, and a scheduled pipeline runs nothing else. The schedule is not
+# in this file: it is made once in the project's settings (Build, Pipeline schedules), weekly
+# and for main, and its play button starts the canary by hand.
+deepagents-canary:
+  stage: test
+  # The Python that .python-version names.
+  image: python:3.12-slim
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule"
+  parallel:
+    matrix:
+      # The newest release the pin in pyproject.toml allows.
+      - LEG: inside the pin
+        UPGRADE: uv sync --upgrade-package deepagents
+        GATE: [pyright, pytest]
+      # The newest release of all, past the pin.
+      - LEG: newest release
+        UPGRADE: uv pip install --upgrade-package deepagents deepagents
+        GATE: [pyright, pytest]
+  variables:
+    UV_LINK_MODE: copy
+  before_script:
+    - pip install --quiet "uv==0.12.*"
+    - uv sync --locked
+  script:
+    # In this job's environment only: nothing it upgrades is committed.
+    - $UPGRADE
+    - uv pip show deepagents
+    # Says which requirements the upgrade broke, and fails nothing.
+    - uv pip check || true
+    # --no-sync: `uv run` would otherwise put back what the lock file names.
+    - uv run --no-sync $GATE

@@ -178,6 +178,10 @@ The numbers were measured on 2026-11-19, as CI runs the suites. For the service 
 
 The service's lines are counted with Python 3.12's own monitoring (`core = "sysmon"`), which adds about a second to the suite; on 3.12 that counts lines and not branches.
 
+### Deep Agents canary
+
+Once a week, and for no pull request or merge request, CI runs pyright and the Python suite against a newer [Deep Agents](https://docs.langchain.com/oss/python/deepagents/overview) than `uv.lock` names, so that what an upgrade breaks is learned the week a release comes out: `.github/workflows/deepagents-canary.yml` on GitHub, which can also be started by hand, and the `deepagents-canary` job of `.gitlab-ci.yml` on GitLab, which runs once a pipeline schedule for `main` is made in the project's settings (Build, Pipeline schedules). One leg takes the newest release the pin in `pyproject.toml` allows (`uv sync --upgrade-package deepagents`), the other the newest release of all, past the pin (`uv pip install --upgrade-package deepagents deepagents`); the two test the same release until one is published outside the pin. Each gate then runs with `uv run --no-sync`, without which `uv run` puts back what the lock file names. Neither leg commits what it upgrades.
+
 ## End-to-end tests
 
 The web app's end-to-end tests run with [Playwright](https://playwright.dev) in Chromium and Firefox:
