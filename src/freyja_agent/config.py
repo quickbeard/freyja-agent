@@ -272,6 +272,33 @@ def _once_each(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return dict(pairs)
 
 
+def _collector_address_error(url: str) -> str | None:
+    """What is wrong with ``FREYJA_OTEL_ENDPOINT``, without repeating it; None when it is a
+    collector's address: http or https, a host, a port and a path at most. A user name or a
+    password is refused: the setting carries no credential."""
+    try:
+        parts = urlsplit(url)
+        port = parts.port
+    except ValueError:
+        port, parts = 0, None
+    if (
+        parts is None
+        or parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.username is not None
+        or parts.password is not None
+        or parts.query
+        or parts.fragment
+        or url.endswith(("?", "#"))
+        or port == 0
+    ):
+        return (
+            "must be a collector's address: http or https, a host, and at most a port and a "
+            "path, with no query, fragment, user name, or password"
+        )
+    return None
+
+
 def _caller_address_error(url: str) -> str | None:
     """What is wrong with ``FREYJA_A2A_SERVER_URL``, without repeating it; None when it is
     the address callers reach the outside listener under: a scheme, a host, a port at most."""
@@ -398,6 +425,15 @@ class Settings(BaseSettings):
     a2a_server_host: str | None = None
     a2a_server_port: int | None = None
     a2a_server_url: str | None = None
+    # Telemetry (runtime/telemetry.py): the address of the collector that traces and metrics
+    # are sent to over OTLP/HTTP, to its /v1/traces and /v1/metrics. Unset, which is the
+    # default, telemetry is off: nothing is recorded and nothing is connected to. It carries
+    # no credential, and an address with a user name or a password stops startup.
+    otel_endpoint: str | None = None
+    # The service's name in what is sent, as ``service.name``.
+    otel_service_name: Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9._-]{1,64}$")] = (
+        "freyja"
+    )
 
     @field_validator("a2a_server_callers", mode="wrap")
     @classmethod
@@ -493,6 +529,25 @@ class Settings(BaseSettings):
                 "contain it (FREYJA_WORKSPACE_DIR)"
             )
         return self
+
+    @field_validator("otel_endpoint", mode="before")
+    @classmethod
+    def _blank_endpoint_is_unset(cls, value: object) -> object:
+        # A line left as ``FREYJA_OTEL_ENDPOINT=`` means telemetry off, not an invalid address.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("otel_endpoint")
+    @classmethod
+    def _collector_address(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        problem = _collector_address_error(value)
+        if problem is not None:
+            # Raised without the value: an address may hold a credential in its user part.
+            raise ValueError(problem)
+        return value
 
     @field_validator("allowed_hosts")
     @classmethod

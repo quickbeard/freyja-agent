@@ -17,7 +17,10 @@ the other directories are in the `AGENTS.md` at the root of the repository.
 
 - `guard.py` makes a model raise its errors with its profile's key already taken out
   (`guard_model`), because LangGraph shows a failed step's error in the debug stream and
-  saves it with the thread;
+  saves it with the thread; every request to a provider passes through the four methods it
+  wraps, so it is also where telemetry is told of a request that nothing else records, one
+  a library makes by itself within a run (`record`, feature 011), never across a `yield`
+  of the two that are generators;
 
 - `store.py` is the `LlmProfileStore` for saved profiles
   and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
@@ -30,5 +33,6 @@ the other directories are in the `AGENTS.md` at the root of the repository.
   starts and runs end with `no_usable_model`, and which guards every model it builds;
 
 - `check.py` is a profile's test (`check_model`: two requests under one time limit, the
-  second carrying earlier turns and a tool call) and the count of tests in progress
+  second carrying earlier turns and a tool call, each entered through `recorded`, by which
+  telemetry records them as a test's) and the count of tests in progress
   (`CheckSlots`).

@@ -9,6 +9,7 @@ be one (research R9).
 import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
+from functools import partial
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response
@@ -51,6 +52,7 @@ from freyja_agent.llm.store import (
     ProfileNotFoundError,
 )
 from freyja_agent.runtime.runtime import Runtime
+from freyja_agent.runtime.telemetry import TEST
 
 logger = logging.getLogger(__name__)
 
@@ -393,11 +395,19 @@ def _stored_key(record: LlmProfileRecord, secret: SecretStr | None) -> str:
 
 
 async def _check(
-    runtime: Runtime, *, profile_id: str | None, spec: ModelSpec | None, secrets: Sequence[str]
+    runtime: Runtime,
+    *,
+    profile_id: str | None,
+    spec: ModelSpec | None,
+    secrets: Sequence[str],
+    named: tuple[str, str | None],
 ) -> CheckResult:
     """Run one test within this instance's limits. ``spec`` None is the environment's model.
 
     A test beyond a limit is refused before a model is built, so nothing is sent (FR-019b).
+    ``named`` is what telemetry says of the test's two calls of the model: the provider, and
+    the model's name when the profile is a listed one. Values that are not saved name the
+    provider alone, since their model's name is what the request wrote (feature 011).
     """
     busy = runtime.checks.refusal(profile_id)
     if busy is not None:
@@ -410,8 +420,14 @@ async def _check(
             # Values that make no model are a failed test, not a failure of the service.
             reason = redact(f"No model can be built from these values: {exc}", secrets)
             return CheckResult(ok=False, step="first_message", reason=reason[:REASON_LIMIT])
+        provider, name = named
         return await check_model(
-            model, limit=runtime.settings.llm_test_timeout_seconds, secrets=secrets
+            model,
+            limit=runtime.settings.llm_test_timeout_seconds,
+            secrets=secrets,
+            recorded=partial(
+                runtime.telemetry.model_call, caller=TEST, provider=provider, model=name
+            ),
         )
     finally:
         runtime.checks.release(profile_id)
@@ -439,7 +455,11 @@ async def test_profile(profile_id: ProfileIdPath, request: Request) -> LlmTestRe
                 f"Profile {ENVIRONMENT_NAME} cannot be used: {UNUSABLE[reason]}.",
             )
         result = await _check(
-            runtime, profile_id=ENVIRONMENT_ID, spec=None, secrets=runtime.environment_secrets
+            runtime,
+            profile_id=ENVIRONMENT_ID,
+            spec=None,
+            secrets=runtime.environment_secrets,
+            named=runtime.environment_named(),
         )
         at = datetime.now(UTC)
         runtime.environment_test = LastCheck(
@@ -462,7 +482,13 @@ async def test_profile(profile_id: ProfileIdPath, request: Request) -> LlmTestRe
         api_key=key,
         responses_api=record.responses_api,
     )
-    result = await _check(runtime, profile_id=record.id, spec=spec, secrets=[key])
+    result = await _check(
+        runtime,
+        profile_id=record.id,
+        spec=spec,
+        secrets=[key],
+        named=(record.provider, record.model),
+    )
     # Kept only for the values that were tested: the version read before the test began.
     recorded = await store.record_test(
         record.id, record.config_version, ok=result.ok, step=result.step, reason=result.reason
@@ -497,7 +523,9 @@ async def test_draft(body: LlmProfileDraft, request: Request) -> LlmTestResult:
         api_key=key,
         responses_api=body.responses_api,
     )
-    result = await _check(runtime, profile_id=None, spec=spec, secrets=[key])
+    result = await _check(
+        runtime, profile_id=None, spec=spec, secrets=[key], named=(body.provider, None)
+    )
     return LlmTestResult(
         ok=result.ok, at=datetime.now(UTC), step=result.step, reason=result.reason, recorded=False
     )

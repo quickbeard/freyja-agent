@@ -111,4 +111,4 @@ The Models section, at `/models`, shows every profile as a card: its name, provi
 
 The browser only ever calls the web app's own origin. The web app's server forwards `/api/...` to the service at `FREYJA_API_URL`, `http://127.0.0.1:8000` by default; set the variable before `pnpm dev` when the service listens elsewhere. `pnpm build` writes the address into the build and `pnpm start` does not read it again, so a built app is built again to change it. The variable is documented in `web/.env.example` and read in `web/next.config.ts`.
 
-This is the last of the docs; the [README](../README.md#docs) lists them all.
+**Next:** [Observability](observability.md): the traces and metrics the service sends to a collector.

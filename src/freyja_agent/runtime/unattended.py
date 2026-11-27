@@ -291,6 +291,12 @@ class UnattendedRuns:
     def armed(self, thread_id: str) -> bool:
         return thread_id in self._runs
 
+    def stopped(self, thread_id: str) -> bool:
+        """Whether the console run in progress on ``thread_id`` was told to stop at a
+        boundary. Asked by the run itself as it ends, for its telemetry."""
+        run = self._runs.get(thread_id)
+        return run is not None and run.stopped
+
     async def should_stop(self, thread_id: str) -> bool:
         """Whether the run on ``thread_id`` is to end at this boundary; remembered when yes.
 

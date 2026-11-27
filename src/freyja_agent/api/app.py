@@ -10,6 +10,7 @@ from freyja_agent.api.agents import router as agents_router
 from freyja_agent.api.hosts import AllowedHosts
 from freyja_agent.api.llm import router as llm_router
 from freyja_agent.api.received import ReceivedTasks
+from freyja_agent.api.telemetry import RequestTelemetry
 from freyja_agent.api.thread_index import router as thread_index_router
 from freyja_agent.api.threads import router as threads_router
 from freyja_agent.api.tools import router as tools_router
@@ -126,7 +127,10 @@ def create_app(open_runtime: OpenRuntime = Runtime.open, *, listen: bool = True)
                     app.router.routes.extend(added)
                     if settings_now.a2a_server_listener:
                         outside = a2a_listener.application(
-                            received, callers, settings_now.a2a_server_url or ""
+                            received,
+                            callers,
+                            settings_now.a2a_server_url or "",
+                            runtime.telemetry,
                         )
                         app.state.a2a_outside = outside
                         if listen:
@@ -153,6 +157,9 @@ def create_app(open_runtime: OpenRuntime = Runtime.open, *, listen: bool = True)
     # Before any route: a request made for a host name the deployment does not list is
     # refused, a request that only reads included (api/hosts.py).
     app.add_middleware(AllowedHosts, names=settings.allowed_hosts)
+    # Added last, so it is outside every other middleware and sees a request one of them
+    # refuses (feature 011).
+    app.add_middleware(RequestTelemetry)
 
     app.include_router(threads_router)
     # Feature 007: the list of threads, beside the routes that run them.

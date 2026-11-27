@@ -57,5 +57,12 @@ root of the repository.
   `test_a2a_server_*.py` and `test_received_tasks.py`, with
   `integration/test_received_tasks_postgres.py` for the store on Postgres;
 
+- `telemetry_capture.py` is telemetry that keeps what it records in memory (`Captured`),
+  built through the seam of `runtime/telemetry.py`; the tests of feature 011 are
+  `test_telemetry.py`, telemetry off and on, runs, calls, and who made a model call,
+  `test_telemetry_requests.py`, the requests and a run under its request,
+  `test_telemetry_waiting.py`, the work that waits, and `test_telemetry_nowhere.py`, the
+  proof that none of it is content;
+
 - `integration/` holds the Postgres tests, skipped unless
   `FREYJA_TEST_DATABASE_URI` is set.

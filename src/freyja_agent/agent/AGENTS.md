@@ -32,3 +32,8 @@ other directories are in the `AGENTS.md` at the root of the repository.
   thread's id, and its `HOPS_KEY` the key of a caller's run's config that holds the
   hand-over count of the conversation's last message (`SegmentedGraph` puts it there), which
   the agent tools send on, plus one, as the metadata `freyja.hops` (`HOPS_METADATA`).
+
+- `telemetry.py` is `TelemetryMiddleware`, which `build_agent` puts on the
+  orchestrator and its subagent whether telemetry is on or off, and which records each model
+  call and each tool call, naming a tool from the tools the build was given and never from
+  what a model wrote.

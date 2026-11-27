@@ -12,7 +12,8 @@ decides whether the result is kept.
 """
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -78,21 +79,33 @@ def _reason(text: str, secrets: Sequence[str]) -> str:
     return redact(text, secrets)[:REASON_LIMIT]
 
 
+# What is entered around one request of a test: nothing, or telemetry's record of the call.
+Recorded = Callable[[], AbstractContextManager[object]]
+
+
 async def check_model(
-    model: BaseChatModel, *, limit: float, secrets: Sequence[str] = ()
+    model: BaseChatModel,
+    *,
+    limit: float,
+    secrets: Sequence[str] = (),
+    recorded: Recorded = nullcontext,
 ) -> CheckResult:
     """Hold the two-step conversation with ``model`` and say how it went.
 
     ``limit`` is the time both steps have together, in seconds. The model is expected to try
     nothing again by itself (``ModelSpec.max_retries``), or the limit would only be reached.
     ``secrets`` are removed from the reason: an endpoint may repeat a key in its error (FR-021).
+    ``recorded`` is entered around each of the two requests, which is how telemetry records
+    them as a test's (feature 011); it changes nothing of the result.
     """
     step: Step = "first_message"
     try:
         async with asyncio.timeout(limit):
-            await model.ainvoke([HumanMessage(FIRST_MESSAGE)])
+            with recorded():
+                await model.ainvoke([HumanMessage(FIRST_MESSAGE)])
             step = "conversation"
-            await model.bind_tools([TOOL]).ainvoke(conversation())
+            with recorded():
+                await model.bind_tools([TOOL]).ainvoke(conversation())
     except TimeoutError:
         return CheckResult(
             ok=False, step=step, reason=f"The endpoint did not answer within {limit:g} seconds."

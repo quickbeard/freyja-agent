@@ -44,8 +44,10 @@ from freyja_agent.agent.catalog import (
 )
 from freyja_agent.agent.context import ThreadContextMiddleware
 from freyja_agent.agent.prompts import DEFAULT_PROMPT
+from freyja_agent.agent.telemetry import TelemetryMiddleware
 from freyja_agent.agent.tools import send_notification
 from freyja_agent.runtime.agent_tasks import AgentTaskStore
+from freyja_agent.runtime.telemetry import Telemetry, ToolLabels
 
 AGENT_NAME = "freyja"
 # Relative to the backend root, which is the workspace directory.
@@ -75,6 +77,7 @@ def build_agent(
     openai_responses_api: bool = True,
     backend: BackendProtocol | None = None,
     alias_threads: bool = False,
+    telemetry: Telemetry | None = None,
 ) -> Orchestrator:
     """Build the orchestrator and its catalog.
 
@@ -106,6 +109,11 @@ def build_agent(
     subagent, the shared workspace's when none is given; the strict build passes
     ``CallerFiles``, which gives a named caller its own area (FR-009a). ``alias_threads``
     tells the model an alias in place of its thread's id (research R6).
+
+    ``telemetry`` is what records a span and a count for every call of the model and of a
+    tool, on the orchestrator and its subagent (``TelemetryMiddleware``). Given none, as
+    when it is off, the middleware is there all the same with a tracer and a meter that do
+    nothing, so the graph does not depend on it.
     """
     if backend is None:
         backend = workspace_backend(workspace_dir)
@@ -126,12 +134,23 @@ def build_agent(
         own_tools.append(check_agent_tasks(agent_tasks))
         task_middleware.append(AgentTasksMiddleware(agent_tasks, agent_tools))
     tools: list[BaseTool] = [*own_tools, *(tool.tool for tool in delegate_tools)]
+    recording = TelemetryMiddleware(
+        telemetry if telemetry is not None else Telemetry.off(), _tool_labels(delegate_entries)
+    )
     # The gate is generated from the classification before anything is compiled: the tools
     # passed in explicitly are the only ones that can be gated.
     gate = interrupt_config([*(_own_entry(tool) for tool in own_tools), *delegate_entries])
     chat_model = resolve_model(model, openai_responses_api=openai_responses_api)
     subagent_graph, subagent = _general_purpose_subagent(
-        chat_model, tools, backend, max_steps, gate, agent_tasks, agent_tools, alias_threads
+        chat_model,
+        tools,
+        backend,
+        max_steps,
+        gate,
+        agent_tasks,
+        agent_tools,
+        alias_threads,
+        recording,
     )
     agent = create_deep_agent(
         model=chat_model,
@@ -140,7 +159,7 @@ def build_agent(
         backend=backend,
         skills=[SKILLS_SOURCE],
         interrupt_on=gate,
-        middleware=[ThreadContextMiddleware(alias=alias_threads), *task_middleware],
+        middleware=[ThreadContextMiddleware(alias=alias_threads), *task_middleware, recording],
         subagents=[subagent],
         checkpointer=checkpointer,
         store=store,
@@ -171,6 +190,24 @@ def _delegate_entry(tool: Any) -> CatalogTool:
         pinned_args=tool.pinned_args,
         tool=tool.tool,
     )
+
+
+def _tool_labels(delegates: Sequence[CatalogTool]) -> dict[str, ToolLabels]:
+    """What telemetry says of each tool the orchestrator can hold: its name and its
+    classification from the fixed table or the delegate's entry, and the tool server or the
+    agent a delegate's tool belongs to, by its configured name."""
+    labels = {
+        name: ToolLabels(name=name, classification=classification.value)
+        for name, classification in OWN_TOOLS.items()
+    }
+    for entry in delegates:
+        labels[entry.name] = ToolLabels(
+            name=entry.name,
+            classification=entry.classification.value,
+            server=entry.server,
+            agent=entry.agent,
+        )
+    return labels
 
 
 def _own_entry(tool: BaseTool) -> CatalogTool:
@@ -258,6 +295,7 @@ def _general_purpose_subagent(
     agent_tasks: AgentTaskStore | None,
     agent_tools: dict[str, AgentTool],
     alias_threads: bool = False,
+    recording: TelemetryMiddleware | None = None,
 ) -> tuple[Any, CompiledSubAgent]:
     """Deep Agents' default general-purpose subagent, bound to the step limit.
 
@@ -278,6 +316,7 @@ def _general_purpose_subagent(
         SkillsMiddleware(backend=backend, sources=[SKILLS_SOURCE]),
         ThreadContextMiddleware(alias=alias_threads),
         *([AgentTasksMiddleware(agent_tasks, agent_tools)] if agent_tasks is not None else []),
+        *([recording] if recording is not None else []),
     ]
     append_prompt_caching_middleware(middleware)
     spec: SubAgent = {

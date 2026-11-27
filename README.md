@@ -75,6 +75,7 @@ The rest is documented by topic under `docs/`, listed in the order a newcomer ne
 4. [Agents](docs/agents.md): handing work to A2A agents, their pending tasks, and adding, changing, moving, checking, and removing agents while the service runs.
 5. [Receive tasks from agents](docs/a2a-server.md): other agents handing Freyja work over A2A, what a caller is told, conversations, and the limits.
 6. [Web console](docs/web-console.md): the console under `web/`, with its Tasks, Agents, and Models sections.
+7. [Observability](docs/observability.md): the traces and metrics the service sends to a collector when one is configured.
 
 ## Lint, format, and types
 
@@ -285,6 +286,8 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_A2A_SERVER_HOST` | unset | The address the outside listener binds; set with `FREYJA_A2A_SERVER_PORT`, or neither. It serves the card and the operations and nothing else: the card to anyone, the operations to named callers only. It needs the feature on, a named caller, and `FREYJA_A2A_SERVER_URL`. |
 | `FREYJA_A2A_SERVER_PORT` | unset | The outside listener's port, 1 to 65535, and not the service's own on the same address. |
 | `FREYJA_A2A_SERVER_URL` | unset | The address callers reach the outside listener under, as its card gives it: `http` or `https`, a host, and at most a port. With `http` the service warns at startup that tokens can be read on the network path; it does not encrypt itself. |
+| `FREYJA_OTEL_ENDPOINT` | unset | The collector that traces and metrics are sent to over OTLP/HTTP, such as `http://127.0.0.1:4318`; see [Observability](docs/observability.md). Unset, telemetry is off and nothing is connected to. `http` or `https`, a host, and at most a port and a path; it carries no credential, and an address with a user name or a password stops startup. |
+| `FREYJA_OTEL_SERVICE_NAME` | `freyja` | The service's name in what is sent: letters, digits, dots, hyphens, and underscores, at most 64. |
 | `OPENAI_API_KEY`, `OPENAI_API_BASE` | | Key for `openai:` models. `OPENAI_API_BASE` is optional: set it for self-hosted OpenAI-compatible servers or to route through a gateway. |
 | `ANTHROPIC_API_KEY`, `ANTHROPIC_API_URL` | | Key for `anthropic:` models. `ANTHROPIC_API_URL` is optional: set it to route through a gateway. |
 | `OPENROUTER_API_KEY`, `OPENROUTER_API_BASE` | | Key for `openrouter:` models; the model id is OpenRouter's slug. `OPENROUTER_API_BASE` is optional: set it to route through a proxy. |
