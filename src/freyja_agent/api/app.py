@@ -1,8 +1,10 @@
+import asyncio
 import logging
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
+from starlette.responses import JSONResponse
 from starlette.routing import BaseRoute
 
 from freyja_agent.api import a2a_listener, a2a_server
@@ -22,6 +24,9 @@ from freyja_agent.runtime.thread_index import IndexedRunLocks
 OpenRuntime = Callable[[Settings], AbstractAsyncContextManager[Runtime]]
 
 logger = logging.getLogger(__name__)
+
+# The most the readiness check takes, the wait for a connection included.
+READY_SECONDS = 2.0
 
 
 def configure_logging() -> None:
@@ -164,6 +169,26 @@ def create_app(open_runtime: OpenRuntime = Runtime.open, *, listen: bool = True)
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    async def readyz(request: Request) -> JSONResponse:
+        """Whether the service can do its work now: it reaches its database.
+
+        ``/healthz`` says the process is up; this says a run could be started. It asks the
+        database one statement that reads nothing, under a time limit, and contacts no
+        model, tool server, or agent, which do not stop the service from starting either.
+        Nothing of the connection is in the answer, and the log names the kind of failure
+        and no more.
+        """
+        ping = request.app.state.runtime.ping
+        if ping is not None:
+            try:
+                async with asyncio.timeout(READY_SECONDS):
+                    await ping()
+            except Exception as exc:
+                logger.warning("Not ready: the database did not answer (%s)", type(exc).__name__)
+                return JSONResponse({"status": "unavailable"}, status_code=503)
+        return JSONResponse({"status": "ok"})
 
     return app
 

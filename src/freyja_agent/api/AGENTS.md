@@ -3,7 +3,9 @@
 The FastAPI application, module by module. The commands, the conventions, and the map of the
 other directories are in the `AGENTS.md` at the root of the repository.
 
-- `app.py` is `create_app(open_runtime)`, `/healthz`, and the
+- `app.py` is `create_app(open_runtime)`, `/healthz`, `/readyz`,
+  which asks the database one statement under a time limit (`Runtime.ping`, set by
+  `Runtime.open`) and answers 200 or 503 with nothing of the connection, and the
   `freyja-api` entry point;
 
 - `hosts.py` is `AllowedHosts`, the middleware `create_app` puts

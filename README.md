@@ -37,6 +37,8 @@ curl localhost:8000/healthz
 # {"status":"ok"}
 ```
 
+`/healthz` says the process is up. `curl localhost:8000/readyz` says whether it reaches its database: `200`, or `503` with `{"status":"unavailable"}`; see [Use the API](docs/api.md).
+
 Interactive API docs are at <http://localhost:8000/docs>. There is no authentication: anyone who can reach the port acts as a user, which is why the server binds `127.0.0.1` by default.
 
 
