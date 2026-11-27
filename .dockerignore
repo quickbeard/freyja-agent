@@ -11,3 +11,7 @@
 
 **/__pycache__/
 **/*.py[cod]
+
+# The notes for coding agents that sit beside the code under src/ are not part of the service.
+**/AGENTS.md
+**/CLAUDE.md

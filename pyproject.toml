@@ -31,6 +31,11 @@ freyja-api = "freyja_agent.api.app:main"
 requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
 
+# The notes for coding agents that sit beside the code they describe (AGENTS.md, and the
+# CLAUDE.md that imports it) are not part of the service: an installed package has none.
+[tool.uv.build-backend]
+wheel-exclude = ["AGENTS.md", "CLAUDE.md"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
