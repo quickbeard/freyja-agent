@@ -1084,7 +1084,7 @@ automated proof of FR-018 and FR-019 passes.
 
 ### Tests for User Story 5
 
-- [ ] T098 [P] [US5] Add part 4 to `tests/test_a2a_server_limits.py`, the hand-over count
+- [X] T098 [P] [US5] Add part 4 to `tests/test_a2a_server_limits.py`, the hand-over count
       (FR-027, R17), each refusal before the model: no count is kept as 0 and 2 as 2; -1,
       1.5, a text, a boolean, and a list are refused with -32602 `The hand-over count is not
       a whole number of zero or more.`; 3, at `FREYJA_A2A_SERVER_MAX_HOPS`' default, is
@@ -1095,7 +1095,7 @@ automated proof of FR-018 and FR-019 passes.
       none, since it is a request about a task and starts no work; a message from a console
       thread carries none; the message id of a message from a caller's thread holds the
       thread's alias and not its id
-- [ ] T099 [P] [US5] Add part 3 to `tests/test_a2a_server_nowhere.py`, what a caller is never
+- [X] T099 [P] [US5] Add part 3 to `tests/test_a2a_server_nowhere.py`, what a caller is never
       given (FR-018, FR-019, SC-008), with two named callers, an LLM profile with a
       recognizable key (`LeakyModel` of `tests/nowhere.py`), the stand-in agent at a
       recognizable address, a tool whose arguments and result hold a recognizable text, an
@@ -1106,30 +1106,30 @@ automated proof of FR-018 and FR-019 passes.
       (also after asking Freyja for its thread's id), no proposal's id, and not the other
       caller's name; no status sentence and no reason holds an argument, a result, or an
       agent's words; no reason holds the model error's text
-- [ ] T100 [P] [US5] In `tests/a2a_stub.py`, keep the hand-over count each message carried in
+- [X] T100 [P] [US5] In `tests/a2a_stub.py`, keep the hand-over count each message carried in
       the stand-in agent's record and, served by hand, print it with each message, as
       quickstart.md section 5 reads it; document it in the module docstring
 
 ### Implementation for User Story 5
 
-- [ ] T101 [P] [US5] In `src/freyja_agent/config.py`, add `a2a_server_max_hops: int = 3`, "1
+- [X] T101 [P] [US5] In `src/freyja_agent/config.py`, add `a2a_server_max_hops: int = 3`, "1
       to 16"; document it in `.env.example`
-- [ ] T102 [US5] In `src/freyja_agent/api/a2a_server.py`, read `metadata["freyja.hops"]` (a
+- [X] T102 [US5] In `src/freyja_agent/api/a2a_server.py`, read `metadata["freyja.hops"]` (a
       protobuf `Struct` holds numbers as doubles), refuse the forms and the limit of T098
       with their sentences, and pass the count to `ReceivedTasks.accept`
-- [ ] T103 [US5] In `src/freyja_agent/runtime/unattended.py`, `SegmentedGraph` puts the count
+- [X] T103 [US5] In `src/freyja_agent/runtime/unattended.py`, `SegmentedGraph` puts the count
       of the conversation's last message from its caller into the run's config of a
       caller's thread, beside the files key (R17)
-- [ ] T104 [US5] In `src/freyja_agent/delegates/a2a_tools.py`, every message an agent's tool
+- [X] T104 [US5] In `src/freyja_agent/delegates/a2a_tools.py`, every message an agent's tool
       sends from a run whose config carries the count has `metadata["freyja.hops"]` set to
       the count plus one, and the message ids of messages and cancels from such a run name
       the thread by its alias (R6) where they name it by its id today, made by the same
       function wherever the send ledger makes them again; messages from every other thread
       are sent as today
-- [ ] T105 [US5] Run `uv run pytest`. In `docs/a2a-server.md`, the hand-over count's name,
+- [X] T105 [US5] Run `uv run pytest`. In `docs/a2a-server.md`, the hand-over count's name,
       its limit, and that it is a partial guard (FR-030); in the README's Configuration
       table, `FREYJA_A2A_SERVER_MAX_HOPS`
-- [ ] T106 [US5] Walk the hand-over count of quickstart.md section 5 on a check instance by the
+- [X] T106 [US5] Walk the hand-over count of quickstart.md section 5 on a check instance by the
       standing rules, and correct it where the built feature differs
 
 **Checkpoint**: request 6. Every user story is built.

@@ -91,6 +91,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from starlette.types import Message as AsgiMessage
 
+from freyja_agent.agent.context import HOPS_METADATA
 from freyja_agent.api.guards import refuse_other_origins
 from freyja_agent.api.received import (
     Change,
@@ -142,6 +143,8 @@ TASK_NAMED = (
     "A message names no task: a task takes one message. Continue a conversation by its contextId."
 )
 CONTEXT_TOO_LONG = "The contextId is longer than 128 characters."
+HOPS_FORM = "The hand-over count is not a whole number of zero or more."
+TOO_MANY_HOPS = "The message has passed through too many agents."
 # Not now (UnsupportedOperationError), each with its reason in the error's data.
 BUSY = (
     "This conversation takes no message now: its last task has not ended, or work it "
@@ -354,12 +357,33 @@ def _piece(view: View, text: str, *, whole: bool = False) -> TaskArtifactUpdateE
     )
 
 
-def _message_of(params: SendMessageRequest) -> tuple[str, str]:
-    """The text and the conversation id of a message whose form the contract takes.
+def _hops_of(message: Message, limit: int) -> int:
+    """The hand-over count ``message`` carries, 0 when it carries none (FR-027, research R17).
+
+    A protobuf ``Struct`` holds every number as a double: a count is a number that is whole
+    and not negative, and one at ``limit`` or above is refused.
+    """
+    if not message.HasField("metadata") or HOPS_METADATA not in message.metadata.fields:
+        return 0
+    value = message.metadata.fields[HOPS_METADATA]
+    if value.WhichOneof("kind") != "number_value":
+        raise InvalidParamsError(HOPS_FORM)
+    count = value.number_value
+    # Not a number (NaN) and an infinite one are not whole either.
+    if not count.is_integer() or count < 0:
+        raise InvalidParamsError(HOPS_FORM)
+    if count >= limit:
+        raise InvalidParamsError(TOO_MANY_HOPS)
+    return int(count)
+
+
+def _message_of(params: SendMessageRequest, max_hops: int) -> tuple[str, str, int]:
+    """The text, the conversation id, and the hand-over count of a message whose form the
+    contract takes.
 
     Raises the contract's error for each thing it refuses, in its order: push
     notifications, accepted output modes without text, a part that is not text, then the
-    message itself (FR-008, FR-026a).
+    message itself, its hand-over count last (FR-008, FR-026a, FR-027).
     """
     configuration = params.configuration
     if configuration.HasField("task_push_notification_config"):
@@ -382,7 +406,7 @@ def _message_of(params: SendMessageRequest) -> tuple[str, str]:
         raise InvalidParamsError(TASK_NAMED)
     if len(message.context_id) > MAX_CONTEXT_ID:
         raise InvalidParamsError(CONTEXT_TOO_LONG)
-    return text, message.context_id
+    return text, message.context_id, _hops_of(message, max_hops)
 
 
 async def _events(first: View, changes: AsyncGenerator[Change, None]) -> AsyncGenerator[Any, None]:
@@ -440,11 +464,14 @@ class FreyjaRequestHandler(RequestHandler):
         raise InternalError(INTERNAL) from None
 
     async def _accept(self, params: SendMessageRequest, context: ServerCallContext) -> Any:
-        text, context_id = _message_of(params)
+        settings = self.received.runtime.settings
+        text, context_id, hops = _message_of(params, settings.a2a_server_max_hops)
         # A caller that pastes its token into a message does not put it into a thread (R15).
         text = self.callers.scrub(text)
         try:
-            return await self.received.accept(context.user.user_name, context_id or new_id(), text)
+            return await self.received.accept(
+                context.user.user_name, context_id or new_id(), text, hops=hops
+            )
         except RefusedError as exc:
             if exc.why == "busy":
                 raise UnsupportedOperationError(

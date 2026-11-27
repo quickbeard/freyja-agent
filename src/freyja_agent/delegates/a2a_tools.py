@@ -31,6 +31,13 @@ A hand-off sends the orchestrator's message and chosen context in the thread's c
 the agent and returns the reply (research R5). A cancel asks the agent to cancel one of this
 thread's pending or given-up tasks (FR-022). Both go through the send ledger, so a step that
 runs again never sends twice.
+
+Feature 009: a run of a thread another agent started carries the hand-over count of the
+conversation's last message from its caller. Every message a hand-off tool sends from such a
+run, a hand-off, a follow-up, or an answer, carries that count plus one in its metadata,
+``freyja.hops``, and the message ids of its messages and cancels name the thread by its alias,
+as its model is told it, not by its id (FR-018, FR-027, research R6, R17). A cancel carries
+no count: it starts no work. Messages from every other thread are sent as before.
 """
 
 import asyncio
@@ -52,6 +59,7 @@ from langgraph.config import get_config, get_stream_writer
 from pydantic import BaseModel, ConfigDict, Field
 
 from freyja_agent.agent.catalog import Classification
+from freyja_agent.agent.context import HOPS_KEY, HOPS_METADATA, thread_alias
 from freyja_agent.config import destination
 from freyja_agent.delegates.a2a_agents import (
     AgentLink,
@@ -289,6 +297,20 @@ def _thread_id() -> str:
             "was sent."
         )
     return str(thread_id)
+
+
+def _hops() -> int | None:
+    """The hand-over count this run passes on: that of a caller's thread's last message from
+    its caller; None for a run of any other thread (FR-027)."""
+    count = get_config().get("configurable", {}).get(HOPS_KEY)
+    return None if count is None else int(count)
+
+
+def _message_id(prefix: str, thread_id: str, tool_call_id: str, step: str) -> str:
+    """The id of a message or a cancel of one call in one step. It goes to the agent, so a
+    thread a caller started is named by its alias, as its model is told it (research R6)."""
+    named = thread_alias(thread_id) if _hops() is not None else thread_id
+    return f"{prefix}-{named}-{tool_call_id}-{_digest(step)[:8]}"
 
 
 def _step() -> str:
@@ -558,12 +580,16 @@ def _handoff_coroutine(send: _Send) -> Any:
         proposed = await _proposed_for(link, store, thread_id, step, tool_call_id)
         await _still_allowed(send, proposed)
         a2a_message = Message(
-            message_id=f"freyja-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
+            message_id=_message_id("freyja", thread_id, tool_call_id, step),
             role=Role.ROLE_USER,
             parts=[Part(text=message), *([_context_part(context)] if context else [])],
             context_id=context_id or "",
             task_id=task_id or "",
         )
+        hops = _hops()
+        if hops is not None:
+            # One hand-over more than the caller's message had passed through (FR-027).
+            a2a_message.metadata.update({HOPS_METADATA: hops + 1})
         await store.start_send(
             AgentSend(
                 thread_id=thread_id,
@@ -825,7 +851,7 @@ def _cancel_coroutine(send: _Send) -> Any:
                 tool_call_id=tool_call_id,
                 agent=link.name,
                 kind="cancel",
-                message_id=f"freyja-cancel-{thread_id}-{tool_call_id}-{_digest(step)[:8]}",
+                message_id=_message_id("freyja-cancel", thread_id, tool_call_id, step),
                 request=request,
                 sent_at=sent_at,
                 task_id=task_id,

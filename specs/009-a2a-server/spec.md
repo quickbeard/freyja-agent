@@ -56,8 +56,9 @@ thread follows the agents' approval mode like any other thread.
   agent is set to Auto, and waits for one otherwise (010 FR-003, FR-007). With the mode on
   Manual, FR-013a's former rule holds for every agent.
 - The edge case of a loop between Freyja and an agent that hands work back says what follows:
-  while both are Auto the loop can turn without a person, bounded by the limits on tasks in
-  progress until the hand-over count (User Story 5) is built; the mode set to Manual stops it.
+  while both are Auto the loop can turn without a person, ended by the hand-over count (User
+  Story 5) when the other agent passes the count on and bounded by the limits on tasks in
+  progress when it does not; the mode set to Manual stops it.
 
 ## User Scenarios & Testing *(mandatory)*
 
@@ -206,7 +207,7 @@ A caller learns the state of its own tasks, the names of the steps Freyja took, 
 - **A caller asks for the result in a form Freyja does not produce.** The result is text. A message that accepts only other forms is refused with the protocol's own error.
 - **A caller asks for push notifications, or for the extended card.** Refused with the protocol's own error for an operation that is not offered. The card says that neither is.
 - **A caller sends a message that asks Freyja to approve its own proposal, or says that a person approved.** It is text, like any message. Nothing in a message, a status, or a metadata field is ever read as a decision.
-- **Freyja hands work to an agent that hands work back to Freyja.** The hand-over count stops such a loop when both sides carry it on. An agent that drops it starts from nothing. On Freyja's side a hand-off from a caller's thread waits for a person unless the agents' approval mode and the agent are both Auto (FR-013a, as amended by feature 010): while they are, a loop can turn without a person, bounded by the limits on tasks in progress until the hand-over count is built, and setting the mode to Manual stops it. What the other agent does by itself is bounded by the same limits. This is a known limit.
+- **Freyja hands work to an agent that hands work back to Freyja.** The hand-over count stops such a loop when both sides carry it on. An agent that drops it starts from nothing. On Freyja's side a hand-off from a caller's thread waits for a person unless the agents' approval mode and the agent are both Auto (FR-013a, as amended by feature 010): while they are, a loop can turn without a person until the hand-over count ends it, or, with an agent that drops the count, bounded by the limits on tasks in progress, and setting the mode to Manual stops it. What the other agent does by itself is bounded by the same limits. This is a known limit.
 - **A caller sends the same message twice because it did not see the answer.** Two received tasks are made, unless the second meets the refusal of a conversation with a task that has not ended. Freyja does not recognize a repeated message.
 - **The outside listener's address is taken, or cannot be listened on.** The service does not start, and the error names the setting.
 - **A caller subscribes to, or reads, a task while the answer to its own message has not arrived yet.** The task exists from the moment the message is accepted, and is answered as it stands.
