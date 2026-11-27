@@ -120,7 +120,7 @@ A caller's run that is in progress when the service stops is stopped between two
 
 ## Cancel a task
 
-`CancelTask` answers with the task canceled, `The caller canceled the task.`, and the log names the caller and the task. Then, on the task's thread:
+`CancelTask` answers with the task canceled, `The caller canceled the task.`, and the log names the caller and the task. A stream that follows the task then tells no more of its run, though the step under way completes: its next status is the task's end, canceled, and no piece of the reply comes before it, unless the cancel was sent to another instance than the one that runs the task. Then, on the task's thread:
 
 - **A run in progress** that a caller's message or a decision in the console started stops after the step under way, never inside it: a model's reply, a tool, or an action a person approved completes and is recorded, and nothing after it starts. A run that ends by itself first ends as it would have; the task stays canceled.
 - **A proposal that waits for a person** is rejected by the service itself, every action with the reason `The requesting agent canceled the task.`, and none of it runs. The run that rejects it stops before Freyja's model is asked again, and the task then no longer counts as one to decide. A subagent's proposal is rejected the same way; the subagent's step goes on until it ends, and anything it proposes in it is rejected too, 30 seconds later at the soonest (below). A proposal a run comes to after the cancel, such as one a delegate agent's report leads to, is rejected as well.

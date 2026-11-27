@@ -1070,3 +1070,68 @@ built otherwise and why; the differences from the plan that last are these:
 
 Open, the owner's to decide: whether to raise the web's coverage floors, and whether the
 console should label a calling agent's message other than "You", as it labels a person's.
+
+### Convergence (2026-11-27)
+
+`/speckit-converge` read the spec, this plan, and the tasks against the code once all 111
+tasks were done. Four reviewers, each given one area (who may call and the listener; a
+message, a task's states, and its stream; the approval gate, a cancel, and the console; what
+a caller is never given, the limits, the documents, and the tests), read the code and
+reported gaps. Each finding was checked against the code before it was kept. They found no
+gap of principle I or of a P1 story, and 17 findings: two MEDIUM, T112 and T113, and fifteen
+LOW, T114 to T128. One was rated lower than its reviewer rated it: FR-028 asks to log "each
+message refused for a limit", and FR-026 names "a limit" apart from "a message's form" and
+"a hand-over count", so the limits FR-028 means are FR-025's, which are logged; T128 logs the
+other two all the same, as LOW.
+
+The owner asked to run converge and implement until only LOW findings remain, so T112 and
+T113 are done here and T114 to T128 are left; T116 and T118 need the owner's word first.
+
+- T112: a stream that followed a task through a cancel sent the step under way after the
+  cancel's answer, a piece of the reply and `Freyja is using: ls.` as working, and only then
+  the task canceled. A follower that reads a run now stops reading it once the task's caller
+  has canceled it, the one end written while a run may still be in progress: a cancel on this
+  instance wakes it, and a cancel sent to another instance, which wakes no follower here, is
+  read from the task's row before a new status is sent. Every other end is written once the
+  run has ended, and a follower behind the run still reads what it left. The run goes on as
+  before; the follower's last change is `Ended`. When the cancel is sent to another instance,
+  pieces of the step under way can still be sent before the end, as the contract now says; a
+  status cannot. `test_a_stream_sends_nothing_of_the_run_once_its_task_was_canceled` fails
+  without the wake check, `test_a_stream_says_no_step_once_another_instance_canceled_its_task`
+  without the read of the row, and
+  `test_a_follower_behind_its_run_when_its_task_completes_is_sent_every_step` when any end
+  stops the reading. A row that cannot be read then is taken as not canceled, and logged, so
+  that a failed read keeps no status back
+  (`test_a_row_that_cannot_be_read_while_a_run_is_followed_is_taken_as_not_canceled`, which
+  fails without the guard).
+- T113: the five lines of the spec that still said every message to a delegate agent from a
+  caller's thread waits now say FR-013a as amended: User Story 2's scenario 3, FR-031's test,
+  SC-003, the assumption on what a caller can cause with no person involved, and the line on
+  feature 005's FR-022. Four more were found by the second pass below: the edge case of the
+  feature turned off, which named "the wider gate" among the rules that make a caller's
+  thread safe and now names the caller's files; the edge case of a delegate agent's question,
+  whose answer Freyja passes on with a person's approval unless the mode and the agent are
+  both Auto; FR-013a's own last sentence, now in the past tense; and the assumption that
+  every message to a delegate agent from a caller's thread waits, now the rule as it was
+  specified, with the amendment after it.
+
+The second pass of converge read the change itself, given the diff and the questions. It
+found one MEDIUM gap, a regression of T112's first version, which stopped reading a run on
+any end of the task, so that a follower behind its run when the task completed dropped the
+steps and pieces the run left; only a caller's cancel stops the reading now. It also found
+five LOW: the contract's sentence on another instance, which read as a stream through
+another instance; the three lines of the spec above; and a test of the failed read that
+called the helper and not the follower. All five are done here, but one: a cancel wakes its
+followers only once it has marked the stop and tidied the thread, so a piece of the step
+under way can still be sent in that moment. It is T133, LOW; T129 to T132 are the rest.
+
+The third pass read the code once more, given the same questions. It found nothing above
+LOW, so the loop ends here, with two LOW findings. A test that shows a follower behind a
+run a person stopped still sent its step, since a Stop also ends the task canceled and only
+the caller's cancel stops the reading, is T134, done here; without the reason in the check it
+fails. A stream on the instance that runs the task learns of the cancel with the run's next
+event, so the task canceled reaches it once the step under way completes, as before this
+change, though `CancelTask` and `GetTask` say canceled at once: T135, LOW, left.
+
+Left for the owner, all LOW: T114 to T128, T133, and T135; T116 and T118 need the owner's
+word first.

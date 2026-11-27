@@ -171,7 +171,10 @@ slowly is disconnected and subscribes again. At most four streams follow one tas
 
 Answers with the task as canceled. A run in progress is stopped after the step under way,
 never inside one. A proposal that waits for a person is rejected, with the reason that the
-requesting agent canceled. A delegate agent's task that the message started goes on.
+requesting agent canceled. A delegate agent's task that the message started goes on. A stream
+that follows the task sends nothing more of its run: its next event is the last
+`statusUpdate`, canceled. When the cancel is sent to another instance than the one that
+drives the run, pieces of the step under way may still be sent before it; a status is not.
 
 ## Refusals
 
