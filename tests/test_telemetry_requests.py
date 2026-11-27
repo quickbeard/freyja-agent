@@ -6,6 +6,7 @@ the service declares it, and the status code, and nothing a client wrote. A run 
 the request that started it.
 """
 
+import asyncio
 import socket
 from collections.abc import Callable
 from typing import Any
@@ -255,6 +256,49 @@ async def test_an_application_with_no_runtime_yet_and_what_is_no_request_are_pas
     await middleware(request, receive, send)
 
     assert seen == ["lifespan", "http"]
+
+
+@pytest.mark.parametrize("begun", [True, False], ids=["a stream that had begun", "no answer yet"])
+async def test_a_request_whose_client_leaves_is_ended_then(begun: bool) -> None:
+    """FR-029: a stream's request ends when its reader leaves. One left before any answer
+    began has no status code to name."""
+    captured = Captured()
+
+    async def leaving(scope: Any, receive: Any, send: Any) -> None:
+        if begun:
+            await send({"type": "http.response.start", "status": 200, "headers": []})
+            await send({"type": "http.response.body", "body": b"event: start", "more_body": True})
+        # What the server does to the application when the client is gone.
+        raise asyncio.CancelledError
+
+    sent: list[Any] = []
+
+    async def receive() -> Any:
+        return {"type": "http.disconnect"}
+
+    async def send(message: Any) -> None:
+        sent.append(message)
+
+    middleware = RequestTelemetry(leaving, telemetry=captured.telemetry)
+    request = {"type": "http", "path": "/threads/t-1/runs", "method": "POST"}
+    with pytest.raises(asyncio.CancelledError):
+        await middleware(request, receive, send)
+
+    span = one(requests(captured))
+    found = dict(span.attributes or {})
+    assert span.end_time is not None and span.status.status_code is StatusCode.UNSET
+    assert ERROR_TYPE not in found
+    assert found.get(HTTP_STATUS) == (200 if begun else None)
+    # What was sent is what the application sent, untouched.
+    assert len(sent) == (2 if begun else 0)
+    point = one_point(captured)
+    assert point.attributes.get(HTTP_STATUS) == (200 if begun else None)
+
+
+def one_point(captured: Captured) -> Any:
+    points = captured.points(REQUEST_DURATION)
+    assert len(points) == 1, points
+    return points[0]
 
 
 def test_a_route_is_named_by_its_declared_path_whoever_matched_it() -> None:

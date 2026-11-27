@@ -180,3 +180,7 @@ criteria and documents it.
   `tests/test_telemetry.py` fails when another does.
 - The coverage floor holds for every new module: `api/telemetry.py` and
   `runtime/waiting.py` are fully covered by their phase's tests.
+
+## Phase 8: Convergence
+
+- [X] T038 In `tests/test_telemetry_requests.py`, show that a request's span ends when its reader leaves a stream that had begun, with the status that was sent and no error, and that a request its client left before an answer began is recorded without a status code, per FR-029 (partial)
