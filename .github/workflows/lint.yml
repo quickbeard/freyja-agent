@@ -1,7 +1,9 @@
 name: Lint
 # Ruff for the service and Biome for the web app, each checking lint and formatting, and
 # pyright checking the types of the service and of its tests. They report and change
-# nothing; the commit hook is where files get fixed.
+# nothing; the commit hook is where files get fixed. What each job checks is in
+# scripts/ci/<job>.sh, which GitLab's job of the same name calls too
+# (tests/test_ci_parity.py).
 on:
   push:
     branches: [main]
@@ -21,10 +23,9 @@ jobs:
       - name: Install dependencies
         # Ruff comes from uv.lock, so CI checks with the version a developer has.
         run: uv sync --locked
-      - name: Run ruff check
-        run: uv run ruff check --output-format=github .
-      - name: Run ruff format
-        run: uv run ruff format --check .
+      - name: Run Ruff
+        # ruff check and ruff format --check; on GitHub a finding is written as an annotation.
+        run: scripts/ci/ruff.sh
   types:
     name: pyright
     timeout-minutes: 10
@@ -40,22 +41,17 @@ jobs:
         # checks the code against the packages the lock file installs.
         run: uv sync --locked
       - name: Run pyright
-        # Over src/ and tests/, as pyproject.toml has it.
-        run: uv run pyright
+        run: scripts/ci/pyright.sh
   web:
     name: biome
     timeout-minutes: 10
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: lts/*
       - name: Install dependencies
-        run: npm install -g pnpm@12 && pnpm install --frozen-lockfile
+        run: npm install -g pnpm@12 && pnpm --dir web install --frozen-lockfile
       - name: Run biome check
-        # Lint and formatting in one command.
-        run: pnpm lint
+        run: scripts/ci/biome.sh

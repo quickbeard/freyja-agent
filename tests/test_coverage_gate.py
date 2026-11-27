@@ -2,7 +2,8 @@
 
 A threshold only holds where the suite is run with coverage. These tests keep the three
 places that run each suite, the commit hook, GitHub's workflow, and GitLab's job, asking for
-it, so that none of them passes a change the others would stop.
+it, so that none of them passes a change the others would stop. Both CI systems run a suite
+by its script under ``scripts/ci/``, so the command is read from there.
 
 The service's threshold is the one of a run with the Postgres tests, so both CI systems have
 to run them: each starts a Postgres for the job and names it in the variable those tests
@@ -17,6 +18,7 @@ from typing import Any
 
 import yaml
 
+from tests.ci_files import call, commands
 from tests.integration.conftest import TEST_URI_VAR
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -79,9 +81,12 @@ def test_the_service_has_a_threshold_and_measures_its_own_code():
 
 def test_pytest_runs_with_coverage_wherever_the_whole_suite_runs():
     assert HOOK.fullmatch(_hooks()["pytest"]), _hooks()["pytest"]
-    # Nothing on the command line: CI is held to fail_under in pyproject.toml.
-    assert _github("python", "Run pytest") == "uv run pytest --cov"
-    assert _gitlab("pytest") == ["uv run pytest --cov"]
+    # Both CI systems run the one script and nothing beside it, and the script asks for
+    # coverage with nothing more on the command line: CI is held to fail_under in
+    # pyproject.toml.
+    assert _github("python", "Run pytest") == call("pytest")
+    assert _gitlab("pytest") == [call("pytest")]
+    assert commands("pytest") == ["uv run pytest --cov"]
 
 
 def test_the_commit_hook_holds_a_floor_of_its_own_that_is_not_above_the_one_ci_holds():
@@ -138,5 +143,6 @@ def test_vitest_runs_with_coverage_wherever_the_whole_suite_runs():
     # A run of one file is not measured.
     assert scripts["test"] == "vitest run"
     assert _hooks()["vitest"] == "pnpm --dir web run test:coverage"
-    assert _github("web", "Run Vitest") == "pnpm test:coverage"
-    assert _gitlab("vitest") == ["pnpm test:coverage"]
+    assert _github("web", "Run Vitest") == call("vitest")
+    assert _gitlab("vitest") == [call("vitest")]
+    assert commands("vitest") == ["pnpm test:coverage"]
