@@ -842,3 +842,89 @@ settings back it waited again. No token appeared in any log. The quickstart's fi
 a model that writes files and were not walked; with an unquoted JSON value `uv run
 --env-file` dropped the callers and every line after them without a word, which the
 quickstart now says.
+
+### Request 6 (2026-11-27): the hand-over count, and what a caller is never given
+
+**Starting point**, on the branch as made from `main` with request 5: the service suite passed
+2363 tests and skipped 160, with 91.50% of lines covered. The web app is not changed by this
+request.
+
+**Built otherwise than the tasks say, and why:**
+
+- The count a run passes on is that of the conversation's last task **whose run started**
+  (`ReceivedTaskStore.last_started_task_of_thread`, read by `Runtime.hops_of`), not of its
+  last task. They differ only between a new message's task row and its run taking the lease;
+  a run in that moment, such as the one that reports a delegate agent's outcome or the
+  rejection by rule after a cancel, continues the earlier task, and the new message is then
+  refused as `conversation_busy`. Request 4 read who a proposal belongs to the same way. The
+  contract, research R17, and data-model.md now say so; FR-027's wording is unchanged.
+- The wire name and the run's config key are named once, in `agent/context.py`:
+  `HOPS_METADATA` (`freyja.hops`) and `HOPS_KEY` (`freyja_hops`), beside `thread_alias`, so
+  that `api/a2a_server.py`, `runtime/unattended.py`, and `delegates/a2a_tools.py` share them
+  without one importing another. `SegmentedGraph` reads the count through `count`, a
+  function the runtime sets after making it, as it sets `lookup`; a count that cannot be read
+  refuses the run (`CallerThreadError`), as a lookup that fails does.
+- One function makes the message id of a hand-off and of a cancel (`_message_id`): a thread
+  whose run carries the count is named by its alias. The send ledger never makes an id
+  again; a step that runs again returns what the ledger recorded.
+- The stand-in agent keeps what each cancel request carried through a subclass of the SDK's
+  handler (`cancel_hops`), since the SDK does not give the executor a cancel's request. Served
+  by hand it writes `Received, hand-over count <n>: <text>` to its terminal, through
+  `sys.stdout` (Ruff's T20 rules out `print`).
+- Part 3 of the proof gives its LLM profiles a key of their own, `sk-recognizable-key-0042`:
+  the suite's usual key is also alpha's token, which is cleaned as a token first.
+- Left as they are, and recorded: a whole number too large for a double (such as 10^400) is
+  refused by the protocol library's own parse of the request, with `-32602` and the SDK's
+  `Invalid params`, before Freyja's handler and with nothing made; a count written with more
+  digits than a double holds is read as the double it rounds to (`2.0000000000000001` is 2),
+  and no count at or above the limit rounds below it; a count anywhere but the message's own
+  metadata, such as the request's metadata or a part's, is not read, which the docs now say.
+- The tests of the count (part 4, 28 cases) and the proof (part 3) were written before the
+  code: 17 of part 4's first 21 failed against it, the other four being the counts of 0 that
+  `main` already keeps and the order after the conversation id, which `main` already refused;
+  the proof stopped at the count's first refusal.
+
+**Review of request 6.** An independent reviewer read the change before its first commit. It
+found every refusal decided before a thread, a row, or a model; the count right in every run
+on a caller's thread, the subagent's included; no thread's id in anything sent to an agent;
+nothing different with the feature off; and a count that cannot be read failing closed. What
+it found, all low:
+
+| Finding | What was done |
+|---|---|
+| A count too large for a double gets the SDK's sentence, not the contract's. | Left, recorded above: it is refused before Freyja's handler, with nothing made |
+| Doubles round a few values (`1e-400` is 0, `2.0000000000000001` is 2). | Left, recorded above; the limit holds |
+| A count in the request's metadata or a part's is ignored, not refused. | As the contract has it; `docs/a2a-server.md` says only the message's own is read |
+| The code reads the last task whose run started; the documents said the last message. | The contract, R17, and data-model.md say what the code does (above) |
+| Part 4 drove only hand-offs in the task's own run: nothing held a person's approval through either resume route, the worker's run, or a subagent's hand-off. | Three tests added (`test_a_hand_off_a_person_approves_carries_the_count_plus_one`, `test_the_run_that_reports_an_agent_s_outcome_carries_the_count_plus_one`, `test_a_subagent_s_hand_off_carries_the_count_plus_one`); each fails without the count read |
+| No case showed a count's form is judged before its limit; NaN and Infinity were not tried. | `4.5` and the three raw forms added; `4.5` fails with the two checks swapped |
+| Two searches of the proof could not fail: a file no run listed, and a tool's and an agent's words searched in statuses only. | Each caller's run lists its files, the test asserts the model was shown every searched text, and the searches cover everything a caller was sent |
+| The spec still said the count is not built. | Both places corrected |
+| A docstring line of 128 characters; `HOPS_KEY` named two keys. | Reflowed; the stand-in's constant is `HOPS_METADATA` |
+
+Mutation checks, each restored after: without the `+ 1`, without the alias, without the count
+read, and without the check of a message's count, part 4 fails; with the limit checked before
+the form, the `4.5` case fails; with a reply not cleaned, the proof fails.
+
+Under the commit hook's first run, two tests of feature 008 (`tests/test_a2a_progress.py`,
+which give the stand-in agent 0.3 seconds) failed while another session ran four suites on
+the machine; the file passed alone and the hook's second run passed. No test of this request
+was involved.
+
+**Checked by hand (T106)**, on a check instance from `.env.example` on port 8020 (database
+`freyja_check_009`, dropped afterwards; not `freyja_check_a2a`, which tasks.md's standing
+rules name and which is not this feature's), with the stand-in model active and the stand-in
+agent added to run without approval: `caller send --hops 3` was refused with `The message has
+passed through too many agents.` and `--hops -1` with `The hand-over count is not a whole
+number of zero or more.`; `--hops 1 "handoff stub say hello"` on Auto was sent at once, and
+the stand-in agent printed `Received, hand-over count 2: say hello`; with the mode on Manual
+the same hand-off waited, was approved through `POST /threads/{id}/resume/unattended` (the
+console's route; the console itself was not opened), and printed count 2; a next message in
+that conversation without a count printed 1, and a console thread's hand-off `None`. The
+quickstart's section 5 now says how to make the hand-off wait and what the agent prints.
+
+**Feature 010's change to FR-013a, still to read in request 7** (named again from request 4):
+the quickstart's setup and sections 2 and 5's first part, which rely on a hand-off to an agent
+that runs without approval waiting all the same; this plan's Constitution Check row for
+principle I and its requirement map's row of FR-013a; research R6; and tasks.md's term "the
+strict build" and its line that every hand-off from a caller's thread waits for a person.

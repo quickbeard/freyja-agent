@@ -228,5 +228,7 @@ Freyja's reply is Freyja's wording of what the caller's own task did and found.
 ## The count of hand-overs, on messages Freyja sends
 
 Every message Freyja sends to a delegate agent from a caller's thread has
-`metadata["freyja.hops"]`: the count of the conversation's last message from its caller,
-plus one. Messages from every other thread carry none, as before.
+`metadata["freyja.hops"]`: the count of the conversation's last message from its caller
+whose run started, which is the task every run on the thread is of, plus one, and a
+message id that names the thread by its alias. A cancel carries none: it is a request about
+a task and starts no work. Messages from every other thread carry none, as before.
