@@ -104,9 +104,10 @@ startup and exits with an error naming the connection when it is unreachable.
   `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
   a Fernet key or unset, which protects stored API keys and stops startup when it is not a
   Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
-  Nine belong to receiving tasks from other agents (feature 009), checked only while it is
+  Ten belong to receiving tasks from other agents (feature 009), checked only while it is
   on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_WAIT_SECONDS`, `FREYJA_A2A_SERVER_CALLER_TASKS`,
-  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
+  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_MAX_HOPS`, the hand-over count at which a
+  caller's message is refused, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
   be inside it, or contain it, `FREYJA_A2A_SERVER_CALLERS`, named callers with their tokens
   (`A2aCallerConfig`, a token held as `SecretStr`), and the outside listener's
   `FREYJA_A2A_SERVER_HOST`, `FREYJA_A2A_SERVER_PORT`, and `FREYJA_A2A_SERVER_URL`, whose host
@@ -130,7 +131,9 @@ startup and exits with an error naming the connection when it is unreachable.
   build's backend, which gives a named caller `<files dir>/<name>` and the skills read-only,
   by the key `freyja_caller_files` of the run's config, and refuses a call without it; and
   `context.py`'s `thread_alias` is what the strict build tells the model in place of a
-  thread's id.
+  thread's id, and its `HOPS_KEY` the key of a caller's run's config that holds the
+  hand-over count of the conversation's last message (`SegmentedGraph` puts it there), which
+  the agent tools send on, plus one, as the metadata `freyja.hops` (`HOPS_METADATA`).
 - `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
   connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
   applies the call time limit, records each server's status, and redacts `pass_env` values from
@@ -533,7 +536,9 @@ startup and exits with an error naming the connection when it is unreachable.
   records every message and cancel and behaves by a keyword at the start of the message, and
   which, for feature 008, sends `working_text` with every task's first working status, has a
   held task send a working status with the text a test reports (`report`, which returns once
-  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`;
+  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`, and, for
+  feature 009, keeps the hand-over count each message and cancel carried (`hops`,
+  `cancel_hops`) and, served by hand, writes it with each message;
   `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams
   its replies as they are sent; `unattended_helpers.py` what the tests of the console's runs
   share (a tool step a test holds open, a stream read in a thread of its own);

@@ -154,7 +154,7 @@ To try the stand-in agent by hand, serve it on loopback and list it as an agent:
 uv run python -m tests.a2a_stub --http 9998   # http://127.0.0.1:9998
 ```
 
-It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `steps <n> <seconds>` (a task that reports "Step k of n" every `<seconds>`, then completes), `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](docs/models.md#try-it-with-the-stand-in-endpoint).
+It acts on a keyword at the start of the message, such as `ask`, `slow <seconds>`, `steps <n> <seconds>` (a task that reports "Step k of n" every `<seconds>`, then completes), `fail`, or `reject`; the list is at the top of `tests/a2a_stub.py`. It writes a line for each message it receives, with the hand-over count the message carried (`None` for none). The stand-in model endpoint is served the same way; see [Try it with the stand-in endpoint](docs/models.md#try-it-with-the-stand-in-endpoint).
 
 The Postgres integration tests under `tests/integration/` are skipped unless `FREYJA_TEST_DATABASE_URI` names a database that may be wiped. Create it once in the compose container, then run them:
 
@@ -271,6 +271,7 @@ Settings are read from `FREYJA_*` environment variables by `src/freyja_agent/con
 | `FREYJA_A2A_SERVER_WAIT_SECONDS` | `30` | The most a send without a stream waits for its task to end, 0 to 600. A task that has not ended by then is answered as working, and goes on. |
 | `FREYJA_A2A_SERVER_CALLER_TASKS` | `5` | Received tasks in progress at once for one caller, 1 to 100. |
 | `FREYJA_A2A_SERVER_TASKS` | `20` | Received tasks in progress at once for all callers: at least the caller's limit, at most 1000. |
+| `FREYJA_A2A_SERVER_MAX_HOPS` | `3` | The hand-over count at which a caller's message is refused, 1 to 16. A message carries its count in its metadata as `freyja.hops`, and every message Freyja sends to an agent from a caller's thread carries the count plus one; see [The hand-over count](docs/a2a-server.md#the-hand-over-count). |
 | `FREYJA_A2A_SERVER_FILES_DIR` | `caller-files` | Where a named caller's files are kept, one directory per caller, read and written by that caller's runs only; the skills are read from the workspace and cannot be changed there. It must not be the workspace, be inside it, or contain it, and is git-ignored. |
 | `FREYJA_A2A_SERVER_CALLERS` | `{}` | Named callers: a JSON object of a caller's name to `{"token": "..."}`. A name is lowercase letters, digits, hyphens, and underscores, starting with a letter, at most 32 characters, and not `local`; a token is 16 to 4,096 visible ASCII characters, each caller's its own; at most 20. A caller is who sends its token as `Authorization: Bearer <token>`; see [Receive tasks from agents](docs/a2a-server.md#named-callers). |
 | `FREYJA_A2A_SERVER_HOST` | unset | The address the outside listener binds; set with `FREYJA_A2A_SERVER_PORT`, or neither. It serves the card and the operations and nothing else, to named callers only, and needs the feature on, a named caller, and `FREYJA_A2A_SERVER_URL`. |
