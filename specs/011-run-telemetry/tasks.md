@@ -134,7 +134,7 @@ request's.
 - [X] T033 [P] Rewrite `docs/observability.md` from `contracts/telemetry.md` and `contracts/settings.md`: every span, metric, and value; what is never sent; that the two waiting values are not added up; what the exporter reads from the environment by itself. Keep it in the README's list and the **Next:** links.
 - [X] T034 [P] Update `.env.example`, the README's settings table, `AGENTS.md` (the convention on telemetry: names never content, the one module, the proof to extend), and the nested `AGENTS.md` files of `src/freyja_agent/`, `agent/`, `llm/`, `runtime/`, `api/`, and `tests/` for every new module and seam.
 - [X] T035 Run every gate: `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest --cov` with `FREYJA_TEST_DATABASE_URI` set and, at the hook's floor, without; Semgrep and Trivy as CI runs them.
-- [ ] T036 Walk `quickstart.md` against a collector on this machine and write under each step what was seen.
+- [X] T036 Walk `quickstart.md` against a collector on this machine and write under each step what was seen.
 - [ ] T037 Once PR 163 is on `main`: bring this branch onto `main`, and add to `tests/test_telemetry_requests.py` that `/readyz` records nothing (FR-027).
 
 ## Dependencies & Execution Order
