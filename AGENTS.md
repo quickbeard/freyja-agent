@@ -19,10 +19,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
-- `uv run pyright` checks the types of the service's code under `src/`, with the settings in
-  `pyproject.toml` (`[tool.pyright]`). The commit hook and CI run it this way. It needs
-  nothing but uv: Node comes with the package, and pyright itself is downloaded the first
-  time it runs, which needs the network. The tests are not checked.
+- `uv run pyright` checks the types of the service's code under `src/` and of the tests
+  under `tests/`, with the settings in `pyproject.toml` (`[tool.pyright]`). The commit hook
+  and CI run it this way. It needs nothing but uv: Node comes with the package, and pyright
+  itself is downloaded the first time it runs, which needs the network.
 - `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
   client with in-memory persistence and a scripted model; no server, database, or model
   provider is needed. Tool servers are played by the stub in `tests/mcp_stub.py`, and A2A
@@ -53,7 +53,7 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
   parses, merge markers), gitleaks over what is staged, Ruff, pyright when the service's
-  code or its packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  code, a test, or their packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
   pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
   needs the network.
@@ -590,13 +590,20 @@ startup and exits with an error naming the connection when it is unreachable.
   part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
   `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
   that is a few lines over public types is written here instead.
-- pyright reports nothing over `src/`. A type error is fixed in the code or in its
-  annotations. A line is silenced only where a library's own types say less, or other, than
-  what the library does, with `# pyright: ignore[<rule>]` on that line and the reason beside
-  it; a bare `# type: ignore` silences nothing. No file is left out of the check and no rule
-  is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
-  so the hook and both CI systems report the same; a new version is taken in a change of its
-  own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
+- pyright reports nothing over `src/` and `tests/`. A type error is fixed in the code or in
+  its annotations. A line is silenced only where a library's own types say less, or other,
+  than what the library does, with `# pyright: ignore[<rule>]` on that line and the reason
+  beside it; a bare `# type: ignore` silences nothing, and none is written. No file is left
+  out of the check and no rule is switched off for the service. One rule is off for the
+  tests alone, `reportOptionalMemberAccess`, with its reason beside it in `pyproject.toml`:
+  a test that reads an attribute of `None` fails when it runs. Every other rule holds for
+  the tests as for the service. A test that gives a function what its signature refuses, to
+  show the refusal, or a stand-in for what it takes, types that value as `Any`
+  (`cast(Any, ...)`, or a variable annotated so); the tests' shared typed accessors are in
+  `tests/conftest.py` (`detail_of`, `indexed_locks`). pyright is pinned to one exact version
+  in `pyproject.toml`, so the hook and both CI systems report the same; a new version is
+  taken in a change of its own, with what it newly reports fixed in it.
+  `tests/test_type_check_gate.py` holds this.
 - A change to the schema is a new migration at the end of `MIGRATIONS` in
   `runtime/migrations.py`, with its checksum added to `RELEASED` in
   `tests/test_migrations.py`. A migration that was merged is never edited: a database keeps

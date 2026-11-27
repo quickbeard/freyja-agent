@@ -38,7 +38,7 @@ import logging
 import re
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
@@ -120,7 +120,7 @@ def watch(client: TestClient, part: int) -> None:
             DRIVEN.add((method.upper(), _route(str(url)), code))
         return response
 
-    client.request = noting  # type: ignore[method-assign]
+    client.request = noting
 
 
 @pytest.mark.parametrize(
@@ -1263,8 +1263,8 @@ def test_the_table_of_refusals_is_the_contract_s() -> None:
     a route or a code added to either without a line here fails."""
     routes = {
         (method, f"/agents{route.path.removeprefix('/agents')}")
-        for route in agents_api.router.routes
-        for method in route.methods  # type: ignore[attr-defined]
+        for route in cast(list[Any], agents_api.router.routes)
+        for method in route.methods
     }
     assert routes == set(CONTRACT)
     contract = yaml.safe_load(CONTRACT_FILE.read_text())

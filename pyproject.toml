@@ -69,10 +69,9 @@ show_missing = true
 skip_covered = true
 
 # The type checker, run as `uv run pyright`: by the commit hook and in CI. It checks the
-# service's code against the packages in .venv. The tests are not checked yet: they are
-# written against fakes and stand-ins whose types are looser than the service's.
+# service's code and the tests against the packages in .venv.
 [tool.pyright]
-include = ["src"]
+include = ["src", "tests"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 # Only `# pyright: ignore[rule]` silences a line, so every suppression names its rule. A
@@ -80,6 +79,17 @@ typeCheckingMode = "standard"
 enableTypeIgnoreComments = false
 venvPath = "."
 venv = ".venv"
+
+# The tests are checked as the service is, with one rule off for them alone: reading an
+# attribute of a value that may be None. A test that does so with None fails when it runs,
+# which is what a test is for, so the rule adds nothing there, and it would ask for an
+# assert before most uses of the test client's portal, which Starlette types as optional
+# because it is None outside `with`. Nothing is switched off for src/. extraPaths: the
+# tests import each other as `tests.<module>`, from the repository's root.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["."]
+reportOptionalMemberAccess = false
 
 [tool.ruff]
 line-length = 100

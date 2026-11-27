@@ -857,6 +857,7 @@ def test_a_proposal_decided_on_another_instance_after_a_switch_to_running_withou
     first, second = two_instances(
         make_a2a_app, clock, propose(TO_HELPER), {"helper": {"url": SAVED_URL}}
     )
+    events, errors, still = [], [], {}
     with TestClient(first.app) as one, TestClient(second.app) as two:
         proposal = interrupted(run(two, "c-1", sse_events))
         changed = switch(one, first.saved["helper"], "none")

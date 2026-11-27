@@ -87,13 +87,13 @@ uv run ruff format .           # format in place
 uv run ruff format --check .   # report unformatted files without changing them (CI mode)
 ```
 
-[pyright](https://github.com/microsoft/pyright) checks the types of the service's code under `src/`. Its settings are in `pyproject.toml` under `[tool.pyright]`, and its version is pinned there to one exact release, so that it reports the same everywhere it runs. It needs nothing but uv: Node comes with the package, and pyright itself is downloaded the first time it runs, which needs the network. The tests are not checked.
+[pyright](https://github.com/microsoft/pyright) checks the types of the service's code under `src/` and of the tests under `tests/`. Its settings are in `pyproject.toml` under `[tool.pyright]`, and its version is pinned there to one exact release, so that it reports the same everywhere it runs. It needs nothing but uv: Node comes with the package, and pyright itself is downloaded the first time it runs, which needs the network. One rule is off for the tests alone, `reportOptionalMemberAccess`: a test that reads an attribute of `None` fails when it runs, so the rule adds nothing there.
 
 ```bash
-uv run pyright                 # check the types of src/; changes no file
+uv run pyright                 # check the types of src/ and tests/; changes no file
 ```
 
-A type error is fixed in the code or in its annotations. Where a library's own types say less than what the library does, the line is silenced with `# pyright: ignore[<rule>]` and the reason beside it; a bare `# type: ignore` silences nothing.
+A type error is fixed in the code or in its annotations. Where a library's own types say less than what the library does, the line is silenced with `# pyright: ignore[<rule>]` and the reason beside it; a bare `# type: ignore` silences nothing. A test that hands a function a value its signature refuses, to show the refusal, types that value as `Any`.
 
 Biome does the same as Ruff for the web app. Configuration lives in `web/biome.json`.
 
@@ -103,7 +103,7 @@ pnpm lint                      # biome check: lint and report unformatted files
 pnpm format                    # format in place
 ```
 
-The pre-commit hook first checks the staged files themselves: it removes whitespace at the end of a line, makes a file end with one newline, and stops a commit that holds YAML that does not parse, a marker a merge left behind, or a secret (see [Secrets](#secrets)). It then runs `ruff check --fix` and `ruff format` on staged Python files, then pyright over `src/` when a file under `src/`, `pyproject.toml`, or `uv.lock` is staged, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If pyright reports an error or a test fails, the commit is blocked until it passes.
+The pre-commit hook first checks the staged files themselves: it removes whitespace at the end of a line, makes a file end with one newline, and stops a commit that holds YAML that does not parse, a marker a merge left behind, or a secret (see [Secrets](#secrets)). It then runs `ruff check --fix` and `ruff format` on staged Python files, then pyright over `src/` and `tests/` when a file under `src/` or `tests/`, `pyproject.toml`, or `uv.lock` is staged, then the Python unit test suite. When a file under `web/` is staged, it also runs `biome check --write` over the web app and then the web unit tests. If Ruff or Biome changes a file, the commit is blocked: re-stage the file and commit again. If pyright reports an error or a test fails, the commit is blocked until it passes.
 
 The web hooks run the scripts in `web/package.json` with pnpm, so they need Node and pnpm on the path and the dependencies installed in `web/`. Without pnpm they fail with ``Executable `pnpm` not found``. To run the hook over the whole repo:
 

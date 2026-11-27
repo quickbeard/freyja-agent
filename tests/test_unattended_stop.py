@@ -394,6 +394,7 @@ def test_a_stop_asked_just_after_a_run_ended_does_not_land_on_the_next_one(
         reader.start()
         with first.held():
             current = client.portal.call(index.get, "t-1")
+            assert current is not None
             real = index.get
 
             async def read_before_the_follow_up(thread_id: str) -> Any:

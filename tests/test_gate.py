@@ -12,11 +12,12 @@ from langchain_core.tools import StructuredTool
 from langgraph.types import Interrupt
 from pydantic import BaseModel, ConfigDict, Field
 
-from freyja_agent.agent.catalog import Catalog, CatalogTool, Classification
+from freyja_agent.agent.catalog import Catalog, CatalogTool, Classification, Decision
 from freyja_agent.api.decisions import build_resume_command
 from freyja_agent.api.schemas import ApproveDecision, EditDecision
 from freyja_agent.api.serialize import interrupt_to_pending
 from freyja_agent.runtime.runtime import Runtime
+from tests.conftest import detail_of
 from tests.fakes import ScriptedChatModel
 
 ACTIONS = "freyja_agent.actions"
@@ -387,7 +388,7 @@ def test_debug_flag_on_resume_adds_debug_events(
 # shapes below are built by hand to stand in for a second tool with a narrower allowed set.
 
 
-def gated_tool(name: str, decisions: tuple[str, ...]) -> CatalogTool:
+def gated_tool(name: str, decisions: tuple[Decision, ...]) -> CatalogTool:
     return CatalogTool(
         name=name,
         server=None,
@@ -441,7 +442,7 @@ def test_an_edit_the_model_refuses_is_refused_also_when_no_entry_of_its_refusal_
         )
 
     assert refused.value.status_code == 422
-    assert [(entry["type"], entry["loc"]) for entry in refused.value.detail] == [
+    assert [(entry["type"], entry["loc"]) for entry in detail_of(refused.value)] == [
         ("extra_forbidden", ["body", "decisions", 0, "args", "recipient"])
     ]
 
@@ -499,10 +500,11 @@ def test_a_decision_is_checked_against_its_own_action_not_the_union(
     with pytest.raises(HTTPException) as refused:
         build_resume_command(pending, [edited, ApproveDecision(type="approve")], catalog)
     assert refused.value.status_code == 422
-    assert refused.value.detail[0]["loc"] == ["body", "decisions", 0, "type"]
-    assert "not allowed for action 'send_notification'" in refused.value.detail[0]["msg"]
+    assert detail_of(refused.value)[0]["loc"] == ["body", "decisions", 0, "type"]
+    assert "not allowed for action 'send_notification'" in detail_of(refused.value)[0]["msg"]
 
     command = build_resume_command(pending, [ApproveDecision(type="approve"), edited], catalog)
+    assert command.resume is not None
     decisions = command.resume["int-1"]["decisions"]
     assert [d["type"] for d in decisions] == ["approve", "edit"]
     assert decisions[1]["edited_action"]["args"] == {"channel": "#x", "message": "y"}

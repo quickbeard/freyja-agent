@@ -56,7 +56,7 @@ import json
 import sys
 import threading
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 from urllib.parse import urlsplit
@@ -180,6 +180,7 @@ class _Executor(AgentExecutor):
 
         task = context.current_task
         if task is None:
+            assert message is not None
             task = new_task_from_user_message(message)
             await event_queue.enqueue_event(task)
         updater = TaskUpdater(event_queue=event_queue, task_id=task.id, context_id=task.context_id)
@@ -585,11 +586,12 @@ def make_stub(
         raise ValueError("redirect_card_to serves no body: give it no card_* option")
     card = card or stub_card(name)
     record = StubRecord()
-    stub = StubAgent(app=None, card=card, record=record, task_store=InMemoryTaskStore())
+    task_store = InMemoryTaskStore()
+    stub = StubAgent(app=None, card=card, record=record, task_store=task_store)
     handler = _Handler(
         stub,
         agent_executor=_Executor(stub),
-        task_store=stub.task_store,
+        task_store=task_store,
         agent_card=card,
         request_context_builder=(
             SimpleRequestContextBuilder(task_id_generator=_CallableIds(task_ids))
@@ -609,7 +611,7 @@ def make_stub(
             body = gzip.compress(body)
             headers["content-encoding"] = "gzip"
 
-        async def pieces() -> Any:
+        async def pieces() -> AsyncIterator[bytes]:
             for start in range(0, len(body), CHUNK):
                 yield body[start : start + CHUNK]
 

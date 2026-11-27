@@ -20,8 +20,8 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from freyja_agent.api import thread_index as api
-from freyja_agent.runtime.thread_index import FIRST_MESSAGE_LIMIT, InMemoryThreadIndex
-from tests.conftest import A2aApp, McpApp
+from freyja_agent.runtime.thread_index import FIRST_MESSAGE_LIMIT, InMemoryThreadIndex, Settled
+from tests.conftest import A2aApp, McpApp, indexed_locks
 from tests.fakes import FakeClock, LabelledChatModel, ScriptedChatModel
 from tests.test_a2a_pending import TASK, go_pending, handoff, pending_app, stub, tick, wait_for
 
@@ -112,6 +112,7 @@ def test_reading_the_list_and_a_row_contacts_no_tool_server(
         assert before[0] >= 1
         calls = model.calls
 
+        answer: dict[str, Any] = {}
         for _ in range(3):
             answer = listed(client)
             row(client, "t-1")
@@ -466,7 +467,7 @@ def test_a_thread_opened_during_a_run_the_index_did_not_see_is_running(
         run(client, "t-1", "hi", sse_events)
         index_of(made)._rows.clear()
         # A run holds the lease that the index was not told of.
-        inner = made.runtime.locks.inner
+        inner = indexed_locks(made.runtime).inner
         assert client.portal.call(inner.acquire, "t-1", "instance-b:unseen") is True
         during = row(client, "t-1")
         assert listed(client)["threads"][0]["status"] == "running"
@@ -508,7 +509,7 @@ def test_the_list_puts_decisions_first_then_the_newest_up_to_one_hundred_rows(
     with TestClient(made.app) as client:
         index = index_of(made)
 
-        def seed(thread: str, settled: str, minutes: int) -> None:
+        def seed(thread: str, settled: Settled, minutes: int) -> None:
             client.portal.call(
                 lambda: index.open(
                     thread,
@@ -608,6 +609,7 @@ def test_a_row_nobody_looked_at_is_never_shown_with_a_status_of_its_own(
         run(client, "t-1", "Tell #ops.", sse_events)
         index = index_of(made)
         ended = client.portal.call(index.get, "t-1")
+        assert ended is not None
         # Put the row back to where it was between the lease's release and ``run_ended``.
         owner = "instance-a:just-ended"
         index._rows["t-1"] = replace(ended, run_owner=owner, settled=None)
@@ -634,6 +636,7 @@ def test_a_row_that_was_kept_wrong_is_put_right_once_its_thread_is_opened(
         # As when the index was told of neither the start nor the end of a later run.
         index = index_of(made)
         stale = client.portal.call(index.get, "t-1")
+        assert stale is not None
         index._rows["t-1"] = replace(stale, settled="paused")
         assert listed(client)["needs_decision"] == 1
 

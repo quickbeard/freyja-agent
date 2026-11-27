@@ -26,7 +26,7 @@ from freyja_agent.llm.store import InMemoryLlmProfileStore, LlmProfileRecord
 from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.runtime import Runtime
 from tests.conftest import TEST_SECRET, A2aApp, LlmApp
-from tests.fakes import LabelledChatModel, ProfileModels, ScriptedChatModel
+from tests.fakes import ProfileModels, ScriptedChatModel
 from tests.test_a2a_pending import (
     TASK,
     go_pending,
@@ -60,7 +60,7 @@ def environment_key(monkeypatch: pytest.MonkeyPatch) -> None:
 class Unbuildable(ProfileModels):
     """A factory that cannot build the model called ``broken``, and says the key in its error."""
 
-    def __call__(self, spec: ModelSpec) -> LabelledChatModel:
+    def __call__(self, spec: ModelSpec) -> ScriptedChatModel:
         if spec.model == "broken":
             self.built.append(spec)
             raise ValueError(f"no such model for key {ENV_KEY}")

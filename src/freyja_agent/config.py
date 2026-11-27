@@ -2,7 +2,7 @@ import ipaddress
 import json
 import re
 from pathlib import Path
-from typing import Annotated, Self
+from typing import TYPE_CHECKING, Annotated, Any, Self
 from urllib.parse import SplitResult, urlsplit
 
 from cryptography.fernet import Fernet
@@ -312,6 +312,14 @@ class Settings(BaseSettings):
         env_prefix="FREYJA_", extra="ignore", hide_input_in_errors=True
     )
 
+    if TYPE_CHECKING:
+        # What a call takes, for the type checker alone. pydantic-settings fills a field that
+        # is not given from the environment, one that has no default included, and pydantic
+        # turns what a field is given into the field's type. The signature a type checker
+        # works out from the fields says neither: a call would look short of an argument,
+        # or given the wrong type.
+        def __init__(self, **values: Any) -> None: ...
+
     # Local runs listen only on this machine. Containers set FREYJA_HOST=0.0.0.0.
     host: str = "127.0.0.1"
     port: int = 8000
@@ -524,7 +532,4 @@ class Settings(BaseSettings):
         return value
 
 
-# pydantic-settings fills a field that has no default, such as the database's address, from
-# the environment; its types describe the class and not that, so the call looks short of an
-# argument.
-settings = Settings()  # pyright: ignore[reportCallIssue]
+settings = Settings()

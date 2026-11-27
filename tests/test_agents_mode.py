@@ -9,7 +9,7 @@ reached an agent is read from the stand-in's own record of the messages it recei
 
 from collections.abc import Callable
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -50,9 +50,9 @@ def test_an_agent_runs_without_approval_only_when_the_mode_and_its_own_choice_al
     auto: bool, own: bool, gated: bool
 ) -> None:
     agents = AgentSet(read_only={"agent": own}, auto=auto)
-    assert agents.gated(SimpleNamespace(name="agent")) is gated  # type: ignore[arg-type]
+    assert agents.gated(cast(Any, SimpleNamespace(name="agent"))) is gated
     # An agent the set does not know is gated, whatever the mode.
-    assert agents.gated(SimpleNamespace(name="other")) is True  # type: ignore[arg-type]
+    assert agents.gated(cast(Any, SimpleNamespace(name="other"))) is True
 
 
 # The route and the list.
