@@ -110,10 +110,12 @@ outside listener's application. For an `http` scope it:
 4. when the application returns, raises, or is cancelled, ends the span and records the
    duration with the method, the route, and the status code.
 
-The route is the declared path of what the router matched: `scope["route"].path`, which
-Starlette 1.10 and FastAPI set on a match (`starlette/routing.py`, `fastapi/routing.py`).
-Without one it is `unmatched`: a path nobody routes, a method a route does not take, and a
-request `AllowedHosts` refused before routing. The method is the request's when it is one
+The route is the declared path of what the router matched. FastAPI writes the route into
+the scope for a route of its own (`scope["route"]`, `fastapi/routing.py`); for any other
+route, such as the A2A ones, it writes the endpoint, and the route is the application's
+route with that endpoint. Without either it is `unmatched`: a path nobody routes, and a
+request `AllowedHosts` refused before routing. A request with a method its route does not
+take is matched by its path and answered 405 by that route, so it is named by it. The method is the request's when it is one
 of the nine standard ones and `_OTHER` otherwise, since a method is a word a client writes.
 The path, the query, the headers, the host name, and the client's address are never read
 (FR-024, FR-025).

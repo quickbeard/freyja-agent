@@ -147,15 +147,20 @@ class _Recorded:
         self.asked = 0
         self.entered = 0
         self.ended: list[BaseException | None] = []
+        # As telemetry does: a request made inside one that is the call in progress is
+        # recorded by that one, and gets nothing of its own.
+        self.inside = False
 
     def __call__(self) -> Any:
         self.asked += 1
-        return self if self.records else None
+        return self if self.records and not self.inside else None
 
     def enter(self) -> None:
         self.entered += 1
+        self.inside = True
 
     def end(self, error: BaseException | None = None) -> None:
+        self.inside = False
         self.ended.append(error)
 
 
@@ -208,3 +213,31 @@ def test_a_request_telemetry_does_not_record_and_a_model_with_no_telemetry_ask_a
     assert guard_model(Repeats(), [KEY], elsewhere).invoke("go").text == "hello"
     assert guard_model(Repeats(), [KEY]).invoke("go").text == "hello"
     assert elsewhere.asked == 1 and elsewhere.entered == 0 and elsewhere.ended == []
+
+
+class Awaits(Repeats):
+    """A model with an ``_agenerate`` of its own, as a provider's client has."""
+
+    async def _agenerate(
+        self, messages: Any, stop: Any = None, run_manager: Any = None, **kwargs: Any
+    ) -> ChatResult:
+        if self.says is not None:
+            raise ProviderError(self.says)
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content="hello"))])
+
+
+async def test_a_model_that_is_awaited_raises_without_the_key_and_tells_telemetry_so() -> None:
+    recorded = _Recorded()
+    held = guard_model(Awaits(says=f"401: {KEY}"), [KEY], recorded)
+    plain = guard_model(Awaits(says="the endpoint is down"), [KEY], recorded)
+
+    with pytest.raises(ModelError) as cleaned:
+        await held.ainvoke("go")
+    with pytest.raises(ProviderError):
+        await plain.ainvoke("go")
+    assert (await guard_model(Awaits(), [KEY], recorded).ainvoke("go")).text == "hello"
+
+    assert KEY not in str(cleaned.value)
+    first, second, third = recorded.ended
+    assert isinstance(first, ModelError) and isinstance(second, ProviderError) and third is None
+    assert recorded.entered == 3

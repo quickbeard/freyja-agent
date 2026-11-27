@@ -28,7 +28,7 @@
 - [x] CHK010 Is the time limit at shutdown given a number somewhere a reviewer can find it? [Clarity, Spec §FR-037, Research §R5]
 - [x] CHK011 Is "the same events in the same order" clear about which events are compared? [Clarity, Spec §SC-005, §SC-006]
 - [x] CHK012 Is "a library the service uses" clear enough to say whose telemetry must not be turned on? [Clarity, Spec §FR-041, Research §R3]
-- [x] CHK013 Is `unmatched` defined for each way a request has no route: an unknown path, a method the route does not take, and a refusal before routing? [Clarity, Spec §FR-024]
+- [x] CHK013 Is the route's name defined for each way a request ends without an answer of its route: an unknown path, a method the route does not take, and a refusal before routing? [Clarity, Spec §FR-024]
 
 ## Requirement Consistency
 
@@ -80,7 +80,7 @@ Reviewed on 2026-11-27, before `/speckit-tasks`, as `AGENTS.md` asks: every item
 | CHK003, CHK030 | A tool server chooses its tools' names, and nothing bounded their length in what is sent. | FR-030 cuts every text value to 256 characters; the edge case says the name is the one the catalog lists. |
 | CHK004 | FR-005 forbade saying where telemetry is sent, while the component that sends names the address when it fails. | FR-005 is about the service's own lines, and says that the address holds no credential. |
 | CHK005, CHK019 | "One line in the log" did not say once per what. | FR-034: the first failure of an instance, in one line that says later ones are not logged. FR-022 keeps its own one line for a reading that failed. |
-| CHK013 | A request with a method its route does not take had no name. | FR-024 names it `unmatched`. |
+| CHK013 | A request with a method its route does not take had no name. | FR-024 names it by its route, whose path it matched. |
 | CHK021 | SC-005 compared a run's duration with the difference between two other runs, which no test can hold. | SC-005: the run ends in less than the time limit of one attempt to send. |
 | CHK022 | SC-006 said "every point" without naming them. | SC-006 names the three: the start of a span, the end of a span, a count. |
 | CHK026 | Nothing said what happens when the collector answers again. | Edge Cases: sending goes on without a restart, and what was dropped is not sent later. |

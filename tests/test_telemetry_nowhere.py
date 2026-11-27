@@ -7,7 +7,15 @@ of a tool server's tool with a recognizable argument, approved; a hand-off to an
 recognizable address, approved, whose reply repeats the message; a tool that fails with its
 reason; a tool a model made up; a model whose error repeats the key and the address; a
 rejection with a reason; and a caller's task on the strict build, sent with the caller's
-token and holding it. Then every span and every metric point is searched for each of them.
+token and holding it. Beside the runs: requests that hold the text, the key, and the token
+in their path, their query, their headers, and their body, on the service's own address and
+on the one other agents call; a test of values that are not saved, with the key under test,
+a model's name, and an address that are a request's own words; and a reading of the work
+that waits. Then every span and every metric point is searched for each of them.
+
+A model call a library makes by itself holds what a run's own call holds and no more; that
+it is recorded, and with nothing of the conversation it summarizes, is
+``tests/test_telemetry.py``'s to show, which drives the summarization itself.
 
 The second half does not search for what is known to be wrong but holds every attribute to
 what is known to be right: each key is one of the module's, and each value is an id the
@@ -19,12 +27,16 @@ import re
 from collections.abc import Callable
 from typing import Any
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from opentelemetry.trace import SpanKind
 
 from freyja_agent.runtime import telemetry as names
+from freyja_agent.runtime.waiting import read_waiting
 from tests.a2a_requests import at_rest, rpc, sending
+from tests.asgi_stream import StreamingASGITransport
 from tests.conftest import ServerApp
 from tests.fakes import FailingChatModel
 from tests.mcp_stub import make_stub
@@ -121,6 +133,39 @@ def driven(make: Callable[..., ServerApp]) -> tuple[Captured, FailingChatModel, 
         seen["caller_thread"] = made.task(client, task_id).thread_id
         assert made.runtime.worker is not None
         client.portal.call(made.runtime.worker.tick)
+        # Requests whose path, query, headers, and body hold the text, the key, and the token.
+        telling = {"x-zebra": f"{CONTENT}-header", "authorization": f"Bearer {CALLER_KEY}"}
+        answers = [
+            client.get(f"/threads/{CONTENT}-thread/state?{CONTENT}=1&key={KEY}", headers=telling),
+            client.get(f"/no/such/{CONTENT}-path?key={KEY}", headers=telling),
+            client.post("/threads/t-3/runs", content=f"{CONTENT}-body {KEY}", headers=telling),
+            client.get("/threads", headers={"host": f"{CONTENT}.internal"}),
+        ]
+        seen["answers"] = [answer.status_code for answer in answers]
+
+        async def from_outside() -> int:
+            transport = StreamingASGITransport(made.outside)
+            async with httpx.AsyncClient(transport=transport, base_url=OUTSIDE) as http:
+                answer = await http.get(f"/{CONTENT}-outside?key={KEY}", headers=telling)
+                return answer.status_code
+
+        seen["answers"].append(client.portal.call(from_outside))
+        # A test of values nobody saved: a model's name and an address that the request
+        # wrote, and the key under test. Nothing listens at the address.
+        draft = {
+            "provider": "openai",
+            "model": f"{CONTENT}-model",
+            "base_url": f"{AGENT_URL}/v1",
+            "api_key": KEY,
+        }
+        seen["test"] = client.post("/llm/test", json=draft).json()
+        # The work that waits, read as the timer reads it.
+        client.portal.call(read_waiting, made.runtime)
+        # Every path the two applications declare: the API's, with their placeholders, as
+        # the service's own description lists them, and the routes that are not the API's.
+        seen["routes"] = set(made.app.openapi()["paths"])
+        for served in (made.app, made.outside):
+            seen["routes"] |= {getattr(route, "path", None) for route in served.routes}
         seen["texts"] = captured.texts()
         seen["catalog"] = {tool.name for tool in made.runtime.catalog}
     seen["ends"] = [events[-1] for events in (first, second, third, fourth, fifth, sixth)]
@@ -178,8 +223,23 @@ def test_what_was_driven_is_what_the_proof_is_about(
         "ok",
         "error",
     }
+    # The requests that held content were answered as such requests are, and the test of a
+    # profile was held and failed at the address nothing listens at.
+    assert seen["answers"] == [404, 404, 422, 403, 404]
+    assert (seen["test"]["ok"], seen["test"]["step"]) == (False, "first_message")
+    callers = {found[names.MODEL_CALLER] for found in captured.attributes(names.MODEL_SPAN)}
+    assert callers == {"agent", "test"}
+    listeners = {
+        str((span.attributes or {})[names.HTTP_LISTENER])
+        for span in captured.spans()
+        if span.kind is SpanKind.SERVER
+    }
+    assert listeners == {"service", "outside"}
     metrics = {point.metric for point in captured.points()}
     assert metrics == {
+        names.REQUEST_DURATION,
+        names.THREADS_AWAITING_DECISION,
+        names.OLDEST_UNDELIVERED_AGE,
         names.RUNS_STARTED,
         names.RUNS_ENDED,
         names.RUN_DURATION,
@@ -206,6 +266,9 @@ def test_no_key_token_address_or_text_of_a_run_is_in_any_span_or_metric(
     no_key(texts, CONTENT)
     # The other address the service knows: where callers reach it.
     no_key(texts, "freyja.example.com")
+    # The name a request was made under, and the client it came from.
+    no_key(texts, "testserver")
+    no_key(texts, "testclient")
 
 
 def allowed(seen: dict[str, Any]) -> dict[str, Callable[[Any], bool]]:
@@ -223,7 +286,8 @@ def allowed(seen: dict[str, Any]) -> dict[str, Callable[[Any], bool]]:
         names.ERROR_CODE: lambda value: value in CODES,
         names.PROFILE_ID: lambda value: value == "environment",
         names.PROFILE_SOURCE: lambda value: value in {"environment", "saved"},
-        names.MODEL_PROVIDER: lambda value: value == PROVIDER,
+        # The environment's, and the one of the three that the test of a profile asked.
+        names.MODEL_PROVIDER: lambda value: value in {PROVIDER, "openai"},
         names.MODEL_NAME: lambda value: value == MODEL,
         names.MODEL_CALLER: lambda value: value in {"agent", "library", "test"},
         names.TOOL_NAME: lambda value: value in tools,
@@ -232,6 +296,11 @@ def allowed(seen: dict[str, Any]) -> dict[str, Callable[[Any], bool]]:
         names.TOOL_AGENT: lambda value: value == "stub",
         names.CALL_OUTCOME: lambda value: value in CALL_OUTCOMES,
         names.ERROR_TYPE: lambda value: bool(CLASS_NAME.fullmatch(value)),
+        names.HTTP_METHOD: lambda value: value in names.METHODS | {names.OTHER_METHOD},
+        # A path the service declares, with its placeholders, or the word for none.
+        names.HTTP_ROUTE: lambda value: value in seen["routes"] | {names.UNMATCHED},
+        names.HTTP_STATUS: lambda value: isinstance(value, int) and 100 <= value <= 599,
+        names.HTTP_LISTENER: lambda value: value in {"service", "outside"},
     }
 
 
@@ -243,7 +312,14 @@ def test_every_attribute_is_one_the_proof_knows_and_holds_a_name(
 
     found: list[tuple[str, str, Any]] = []
     for span in captured.spans():
-        assert span.name in {names.RUN_SPAN, names.MODEL_SPAN, names.TOOL_SPAN}
+        if span.kind is SpanKind.SERVER:
+            # A request is named by its method and its declared route, which the rules hold.
+            held = span.attributes or {}
+            assert span.name == f"{held[names.HTTP_METHOD]} {held[names.HTTP_ROUTE]}"
+        else:
+            assert span.name in {names.RUN_SPAN, names.MODEL_SPAN, names.TOOL_SPAN}
+        # A thread's id is on the span of its run and on no other (FR-032).
+        assert (names.THREAD_ID in (span.attributes or {})) == (span.name == names.RUN_SPAN)
         assert not span.events and not span.links
         # A status says nothing but one of the service's codes or an exception's class.
         description = span.status.description

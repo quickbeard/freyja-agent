@@ -169,6 +169,41 @@ async def test_ready_outcomes_wait_for_delivery_once(
     assert delivered is not None and delivered.outcome_delivered
 
 
+async def test_the_oldest_outcome_that_waits_is_as_old_as_the_time_since_it_was_learned(
+    store: AgentTaskStore, advance: Advance
+) -> None:
+    """Feature 011: what telemetry reports of the outcomes that are ready and not delivered."""
+    assert await store.oldest_ready_outcome_age() == 0
+    await store.record_task(await a_task(store, "t1"))
+    # A task that is still working has no outcome to wait.
+    assert await store.oldest_ready_outcome_age() == 0
+
+    ended = await store.now()
+    await store.record_task(
+        await a_task(store, "t2", state="completed", ended_at=ended, outcome="done")
+    )
+    await store.update_task("stub", "t2", outcome_ready=True, last_checked_at=ended)
+    await advance(2)
+    # A task that asks for input has an outcome and never ended: it counts from when the
+    # question was learned.
+    asked = await store.now()
+    await store.update_task(
+        "stub",
+        "t1",
+        state="input_required",
+        outcome="which?",
+        outcome_ready=True,
+        last_checked_at=asked,
+    )
+    await advance(1)
+
+    assert 3 <= await store.oldest_ready_outcome_age() < 8
+    await store.mark_delivered("stub", "t2")
+    assert 1 <= await store.oldest_ready_outcome_age() < 3
+    await store.mark_delivered("stub", "t1")
+    assert await store.oldest_ready_outcome_age() == 0
+
+
 async def test_follow_ups_are_set_and_cleared_per_thread(store: AgentTaskStore) -> None:
     await store.record_task(await a_task(store, "t1"))
     next_at = await store.now() + timedelta(seconds=60)

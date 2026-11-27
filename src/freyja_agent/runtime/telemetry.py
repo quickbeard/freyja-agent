@@ -2,18 +2,20 @@
 
 Off unless ``FREYJA_OTEL_ENDPOINT`` is set. Off, nothing of OpenTelemetry's SDK is made: the
 tracer and the meter are the API's own that do nothing, no thread is started, and nothing is
-connected to. On, one span is made per run, per model call, and per tool call, and a few
-counts and durations are kept, and both are sent to the endpoint's ``/v1/traces`` and
-``/v1/metrics``.
+connected to. On, one span is made per request, per run, per model call, and per tool call,
+each under the one that caused it, a few counts and durations are kept, and two values of
+the work that waits are read on a timer (``runtime/waiting.py``); all are sent to the
+endpoint's ``/v1/traces`` and ``/v1/metrics``.
 
 This module is the one place that imports OpenTelemetry. Every span's name, every metric's
 name, and every attribute of either is written here, so that what leaves the service can be
 read in one file:
 
-- **Names only, never content.** An attribute is an identifier the service made (a run's and
-  a thread's id), a name an operator configured (a tool, a tool server, an agent, a provider,
-  a model, an LLM profile's id), one of the service's own words (a mode, an outcome, an error
-  code, a classification), or an exception's class name. No message, no argument or result
+- **Names only, never content.** An attribute is an identifier the service made (a run's
+  id), a thread's id, on its run's span alone, a name an operator configured (a tool, a tool
+  server, an agent, a provider, a model, an LLM profile's id), a route as the service
+  declares it, a method, a status code, one of the service's own words (a mode, an outcome,
+  an error code, a classification, who made a call), or an exception's class name. No message, no argument or result
   of a tool, no reply of a model, no exception's text, no address, and no key or token is
   ever one. A tool's name is taken from the tools the orchestrator was built with, never
   from what a model wrote: a call of a tool that is not among them is named ``unknown``.
@@ -44,7 +46,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import AsyncIterator, Callable, Iterator
+from collections.abc import AsyncIterator, Callable, Iterable, Iterator
 from contextlib import AbstractContextManager, contextmanager, suppress
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -64,6 +66,25 @@ SCOPE = "freyja_agent"
 RUN_SPAN = "freyja.run"
 MODEL_SPAN = "freyja.model_call"
 TOOL_SPAN = "freyja.tool_call"
+
+# A request's span is named ``<method> <route>``, as OpenTelemetry's HTTP conventions have it,
+# and its values and its metric carry those conventions' names, so that a collector's stock
+# views read them. ``freyja.http.listener`` is Freyja's own.
+HTTP_METHOD = "http.request.method"
+HTTP_ROUTE = "http.route"
+HTTP_STATUS = "http.response.status_code"
+HTTP_LISTENER = "freyja.http.listener"
+REQUEST_DURATION = "http.server.request.duration"
+# The two addresses a request arrives at: the service's own, and the one other agents call.
+SERVICE_LISTENER = "service"
+OUTSIDE_LISTENER = "outside"
+# A method is a word a client writes: one that is none of these is not repeated.
+METHODS = frozenset(
+    {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "CONNECT", "TRACE"}
+)
+OTHER_METHOD = "_OTHER"
+# What stands for the route of a request that reached none.
+UNMATCHED = "unmatched"
 
 # The attributes, of spans and of metrics alike.
 RUN_ID = "freyja.run.id"
@@ -95,6 +116,10 @@ MODEL_ERRORS = "freyja.model.errors"
 TOOL_CALLS = "freyja.tool.calls"
 WORKER_ROUND_DURATION = "freyja.worker.round.duration"
 WORKER_THREADS_WAITING = "freyja.worker.threads_waiting"
+# The work that waits, read from what every instance shares (``runtime/waiting.py``): every
+# instance sends the same value, and a collector does not add them up.
+THREADS_AWAITING_DECISION = "freyja.threads.awaiting_decision"
+OLDEST_UNDELIVERED_AGE = "freyja.outcomes.oldest_undelivered.age"
 
 # How a run ended, beside the stream's own three (``end``, ``interrupt``, ``error``): a
 # console run that a stop ended, and a run whose reader left or that the service cancelled.
@@ -120,6 +145,8 @@ MODEL_ERROR_CODES = frozenset({"model_error", "no_usable_model"})
 # Seconds: a run takes from under a second to many minutes, a worker's round less.
 _RUN_BUCKETS = (0.5, 1, 2.5, 5, 10, 30, 60, 120, 300, 600, 1800, 3600)
 _ROUND_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60)
+# A request is answered in milliseconds, or lasts as long as the run whose stream it is.
+_REQUEST_BUCKETS = (0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 300, 1800)
 
 # What the SDK is given, so that none of it is left to an ``OTEL_*`` variable.
 EXPORT_TIMEOUT_SECONDS = 10.0
@@ -127,6 +154,9 @@ SPAN_BATCH_DELAY_MILLIS = 5000.0
 SPAN_QUEUE_SIZE = 2048
 SPAN_BATCH_SIZE = 512
 METRIC_INTERVAL_MILLIS = 60000.0
+# How often the work that waits is read: as often as metrics are sent. A reading older than
+# two of these is not sent, so that a number nobody read lately is not passed off as now's.
+WAITING_INTERVAL_SECONDS = METRIC_INTERVAL_MILLIS / 1000
 # A span of Freyja's has a dozen short attributes and no event or link.
 SPAN_ATTRIBUTES = 32
 SPAN_ATTRIBUTE_LENGTH = 256
@@ -154,6 +184,15 @@ class ToolLabels:
 
 
 UNKNOWN_TOOL = ToolLabels(name=UNKNOWN, classification=UNKNOWN)
+
+
+@dataclass(frozen=True)
+class _Waiting:
+    """What the last reading of the work that waits found, and when it was made."""
+
+    awaiting_decision: int
+    oldest_undelivered: float
+    read_at: float
 
 
 @dataclass(frozen=True)
@@ -217,7 +256,8 @@ def _left(error: BaseException | None) -> tuple[str, str | None]:
 
 class ModelRequest:
     """One request to the model that nothing else records: made within a run, by a library
-    that asks the model by itself. Started when made, ended once by ``end``.
+    that asks the model by itself. Started when made, and ended by ``end``, which the
+    guarded model calls once on every way out of a request.
 
     The model's own methods call it, two of which are generators, so it sets the current
     scope only when asked to (``enter``): a value set across a ``yield`` could not be taken
@@ -232,7 +272,6 @@ class ModelRequest:
         )
         self._span = telemetry.call_started(MODEL_SPAN, SpanKind.CLIENT, self._attributes, parent)
         self._token: Any = None
-        self._ended = False
 
     def enter(self) -> None:
         """Make this the call in progress, for a request that is awaited in one piece, so
@@ -243,9 +282,6 @@ class ModelRequest:
         )
 
     def end(self, error: BaseException | None = None) -> None:
-        if self._ended:
-            return
-        self._ended = True
         if self._token is not None:
             token, self._token = self._token, None
             # Ended in another context than it was entered in: nothing to take back there.
@@ -255,6 +291,48 @@ class ModelRequest:
         self._telemetry.call_ended(
             self._span, self._attributes, self._telemetry.model_calls, outcome, failed
         )
+
+
+class RequestSpan:
+    """One request under way. Whoever serves it says the route and the status code once
+    they are known; a request that reached no route is ``unmatched``."""
+
+    def __init__(self, telemetry: Telemetry, method: str, listener: str) -> None:
+        self._telemetry = telemetry
+        self._method = method if method in METHODS else OTHER_METHOD
+        self._labels: dict[str, Attribute] = {HTTP_METHOD: self._method, HTTP_LISTENER: listener}
+        self._started = telemetry.clock()
+        labels = self._labels
+        # The root of a trace, always: a trace's id a client sent is never read.
+        span = telemetry.call_started(self._method, SpanKind.SERVER, labels, None)
+        self.scope = _Scope(span, kind="request")
+        # The declared path of the route that answered, and the status code that was sent.
+        self.route: str | None = None
+        self.status: int | None = None
+
+    def end(self, error: BaseException | None = None) -> None:
+        """End the request's span and record how long it took. ``error`` is what the
+        application raised in place of an answer."""
+        route = self.route or UNMATCHED
+        _outcome, failed = _left(error)
+        status = self.status
+        if status is None and failed is not None:
+            # The application raised before it answered: the server answers 500 for it.
+            status = 500
+        labels = _present({**self._labels, HTTP_ROUTE: route, HTTP_STATUS: status})
+        span = self.scope.span
+        seconds = self._telemetry.clock() - self._started
+
+        def ended() -> None:
+            if span is not None:
+                span.update_name(f"{self._method} {route}")
+                span.set_attributes(_present({**labels, ERROR_TYPE: failed}))
+                if status is not None and status >= 500:
+                    span.set_status(Status(StatusCode.ERROR))
+                span.end()
+            self._telemetry.request_seconds.record(seconds, labels)
+
+        self._telemetry._safely(ended)
 
 
 class RunSpan:
@@ -355,6 +433,34 @@ class Telemetry:
             description=(
                 "Threads with an agent task's outcome to deliver or a delivery to try again, "
                 "as the delegation worker's last round found them."
+            ),
+        )
+
+        # The last reading of the work that waits, and the clock its age is told by.
+        self._waiting: _Waiting | None = None
+        self.clock: Callable[[], float] = time.monotonic
+        self.request_seconds = meter.create_histogram(
+            REQUEST_DURATION,
+            unit="s",
+            description="How long a request took, by method, route, and status code.",
+            explicit_bucket_boundaries_advisory=_REQUEST_BUCKETS,
+        )
+        meter.create_observable_gauge(
+            THREADS_AWAITING_DECISION,
+            callbacks=[self._awaiting_decision],
+            unit="{thread}",
+            description=(
+                "Threads whose last run paused with a proposal that no person has decided. "
+                "The same from every instance: not to be added up."
+            ),
+        )
+        meter.create_observable_gauge(
+            OLDEST_UNDELIVERED_AGE,
+            callbacks=[self._oldest_undelivered],
+            unit="s",
+            description=(
+                "Seconds since the oldest agent task's outcome that is ready and not delivered "
+                "to its thread was learned; 0 when none waits. The same from every instance."
             ),
         )
 
@@ -489,6 +595,28 @@ class Telemetry:
                 )
             return None
 
+    # Requests.
+
+    @contextmanager
+    def request(self, method: str, listener: str) -> Iterator[RequestSpan]:
+        """One request the service answers, from its arrival to the end of its answer.
+
+        Inside, the request is what a run started now stands under. It is the root of a
+        trace of its own, whatever its client sent.
+        """
+        # Making it cannot fail: starting its span is done inside ``_safely``.
+        record = RequestSpan(self, method, listener)
+        token = _CURRENT.set(record.scope)
+        error: BaseException | None = None
+        try:
+            yield record
+        except BaseException as exc:
+            error = exc
+            raise
+        finally:
+            _CURRENT.reset(token)
+            record.end(error)
+
     # Runs.
 
     def run(
@@ -522,9 +650,14 @@ class Telemetry:
             }
         )
 
+        # Under the request that started the run, when one did; a run the worker starts
+        # finds none and is a trace of its own.
+        current = _CURRENT.get()
+        parent = current if current is not None and current.kind == "request" else None
+
         def started() -> Span:
             span = self.tracer.start_span(
-                RUN_SPAN, context=_under(None), kind=SpanKind.INTERNAL, attributes=attributes
+                RUN_SPAN, context=_under(parent), kind=SpanKind.INTERNAL, attributes=attributes
             )
             self._runs_started.add(1, labels)
             return span
@@ -680,3 +813,33 @@ class Telemetry:
     def threads_waiting(self, count: int) -> None:
         """How many threads the worker's round found with something to deliver."""
         self._safely(lambda: self._threads_waiting.set(count))
+
+    # The work that waits.
+
+    def waiting(self, awaiting_decision: int, oldest_undelivered: float) -> None:
+        """What a reading of the stores just found (``runtime/waiting.py``): the threads
+        with a proposal nobody decided, and the age in seconds of the oldest outcome that
+        is ready and not delivered."""
+        self._waiting = _Waiting(awaiting_decision, oldest_undelivered, self.clock())
+
+    def waiting_unknown(self) -> None:
+        """A reading failed: neither value is sent until one succeeds."""
+        self._waiting = None
+
+    def _read_lately(self) -> _Waiting | None:
+        waiting = self._waiting
+        if waiting is None or self.clock() - waiting.read_at > 2 * WAITING_INTERVAL_SECONDS:
+            return None
+        return waiting
+
+    def _awaiting_decision(
+        self, _options: metrics_api.CallbackOptions
+    ) -> Iterable[metrics_api.Observation]:
+        waiting = self._read_lately()
+        return [] if waiting is None else [metrics_api.Observation(waiting.awaiting_decision)]
+
+    def _oldest_undelivered(
+        self, _options: metrics_api.CallbackOptions
+    ) -> Iterable[metrics_api.Observation]:
+        waiting = self._read_lately()
+        return [] if waiting is None else [metrics_api.Observation(waiting.oldest_undelivered)]

@@ -51,7 +51,7 @@ No metric is told apart by a run's id or a thread's id.
 | Value | What it holds |
 |---|---|
 | `http.request.method` | `GET`, `POST`, `PUT`, `PATCH`, `DELETE`, `HEAD`, `OPTIONS`, `CONNECT`, `TRACE`, or `_OTHER` |
-| `http.route` | a route's path as the service declares it, with its placeholders, or `unmatched` |
+| `http.route` | a route's path as the service declares it, with its placeholders, or `unmatched` for a request that reached no route. A request with a method its route does not take is named by that route, with the status 405 |
 | `http.response.status_code` | the status code sent, a number |
 | `freyja.http.listener` | `service`, or `outside` for the address other agents call (feature 009) |
 | `freyja.run.id` | the run's id, which the service made |
@@ -85,3 +85,4 @@ for, or its client's address; anything a model wrote.
 - A proposal a person rejected: the action never ran.
 - The model's name in a test of values that are not saved.
 - A trace's id a client sent with a request: it is not read.
+- The status code of a request whose client left before an answer began: there is none.

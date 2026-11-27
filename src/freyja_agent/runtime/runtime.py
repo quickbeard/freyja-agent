@@ -89,7 +89,7 @@ from freyja_agent.runtime.saved_agents import (
     PostgresSavedAgentStore,
     SavedAgentStore,
 )
-from freyja_agent.runtime.telemetry import Telemetry
+from freyja_agent.runtime.telemetry import WAITING_INTERVAL_SECONDS, Telemetry
 
 # Feature 007: the index of threads, kept through the run lease.
 from freyja_agent.runtime.thread_index import (
@@ -101,6 +101,7 @@ from freyja_agent.runtime.thread_index import (
 
 # Feature 007: runs that go on without a reader, and the stop.
 from freyja_agent.runtime.unattended import SegmentedGraph, UnattendedRuns
+from freyja_agent.runtime.waiting import WaitingWork
 
 logger = logging.getLogger(__name__)
 
@@ -293,6 +294,9 @@ class Runtime:
     # The spans and counts of what this instance does (``runtime/telemetry.py``); a runtime
     # put together by hand records nothing.
     telemetry: Telemetry = field(default_factory=Telemetry.off, repr=False)
+    # The timer that reads the work that waits for telemetry (``runtime/waiting.py``); None
+    # for a runtime put together by hand.
+    waiting: WaitingWork | None = field(default=None, repr=False)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -684,8 +688,13 @@ class Runtime:
                 if manager.strict is not None:
                     SegmentedGraph(manager.strict.agent, runtime.unattended)
                 runtime.worker = DelegationWorker(runtime)
+                runtime.waiting = WaitingWork(runtime, WAITING_INTERVAL_SECONDS)
                 if run_worker:
                     runtime.worker.start()
+                # Feature 011: read only with telemetry on, and never in the suite's
+                # applications, which run none of the service's loops.
+                if runtime.waiting.wanted(run_loops=run_worker):
+                    runtime.waiting.start()
                 try:
                     yield runtime
                 finally:
@@ -694,7 +703,10 @@ class Runtime:
                         # step under way is waited for; nothing is cancelled (R17).
                         await runtime.unattended.close()
                     finally:
-                        await runtime.worker.stop()
+                        try:
+                            await runtime.worker.stop()
+                        finally:
+                            await runtime.waiting.stop()
             finally:
                 # After the worker, whose rounds use the links.
                 await registry.close()

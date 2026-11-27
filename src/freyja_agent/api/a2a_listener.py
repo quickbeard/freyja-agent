@@ -35,7 +35,9 @@ from uvicorn.protocols.http.h11_impl import H11Protocol
 
 from freyja_agent.api.a2a_server import routes
 from freyja_agent.api.received import ReceivedTasks
+from freyja_agent.api.telemetry import RequestTelemetry
 from freyja_agent.runtime.callers import Callers
+from freyja_agent.runtime.telemetry import OUTSIDE_LISTENER, Telemetry
 
 logger = logging.getLogger(__name__)
 
@@ -49,12 +51,20 @@ class ListenerError(RuntimeError):
     """The outside listener could not be started on the address the settings give."""
 
 
-def application(received: ReceivedTasks, callers: Callers, url: str) -> FastAPI:
-    """The outside listener's application: the card, for ``url``, and the operations."""
+def application(
+    received: ReceivedTasks, callers: Callers, url: str, telemetry: Telemetry | None = None
+) -> FastAPI:
+    """The outside listener's application: the card, for ``url``, and the operations.
+
+    ``telemetry`` records its requests as the outside listener's (feature 011); it has no
+    runtime of its own to take one from.
+    """
     app = FastAPI(
         title="Freyja A2A", docs_url=None, redoc_url=None, openapi_url=None, lifespan=None
     )
     app.router.routes.extend(routes(received, callers, outside=True, url=url))
+    if telemetry is not None:
+        app.add_middleware(RequestTelemetry, listener=OUTSIDE_LISTENER, telemetry=telemetry)
     return app
 
 

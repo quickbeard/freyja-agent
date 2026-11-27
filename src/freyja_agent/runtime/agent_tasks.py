@@ -239,6 +239,8 @@ class AgentTaskStore(Protocol):
 
     async def threads_with_ready_outcomes(self) -> list[str]: ...
 
+    async def oldest_ready_outcome_age(self) -> float: ...
+
     async def threads_with_due_followups(self) -> list[str]: ...
 
     async def mark_delivered(
@@ -384,6 +386,22 @@ class InMemoryAgentTaskStore:
             if task.outcome_ready and task.delivered_at is None
         }
         return sorted(threads)
+
+    async def oldest_ready_outcome_age(self) -> float:
+        """Seconds since the oldest outcome that is ready and not delivered was learned, on
+        the store's clock; 0 when none waits. Telemetry reports it (feature 011).
+
+        An outcome is learned when its task ended, or, for a task that asks for input and
+        has not ended, when it was last checked.
+        """
+        learned = [
+            task.ended_at or task.last_checked_at
+            for task in self._tasks.values()
+            if task.outcome_ready and task.delivered_at is None
+        ]
+        if not learned:
+            return 0.0
+        return max(0.0, (await self.now() - min(learned)).total_seconds())
 
     async def threads_with_due_followups(self) -> list[str]:
         now = await self.now()
@@ -742,6 +760,15 @@ class PostgresAgentTaskStore:
             {},
         )
         return [row["thread_id"] for row in rows]
+
+    async def oldest_ready_outcome_age(self) -> float:
+        # One row always: an aggregate over no rows is NULL, which is no outcome waiting.
+        rows = await self._rows(
+            "SELECT coalesce(extract(epoch FROM now() - min(coalesce(ended_at, last_checked_at))),"
+            " 0) AS age FROM freyja_agent_tasks WHERE outcome_ready AND delivered_at IS NULL",
+            {},
+        )
+        return max(0.0, float(rows[0]["age"]))
 
     async def threads_with_due_followups(self) -> list[str]:
         rows = await self._rows(

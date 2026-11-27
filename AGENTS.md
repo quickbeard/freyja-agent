@@ -318,15 +318,21 @@ file, and that this list names every such file.
   `runtime/callers.py`). `tests/test_a2a_server_nowhere.py` searches everything the service
   gives back, keeps, and logs for two recognizable tokens; a new operation or log line about
   callers is added to it.
-- Telemetry holds names and never content: an attribute of a span or of a metric is an id
-  the service made, a name the deployment configured, one of the service's own words, or an
-  exception's class name. No message, tool argument or result, model reply, exception's
-  text, agent address, API key, or caller's token is ever one, and no metric names a run or
-  a thread. Every span, metric, and attribute is written in `runtime/telemetry.py`, which
-  is the only module that imports OpenTelemetry, and nothing registers a global provider
-  or sets OpenTelemetry's current span. `tests/test_telemetry_nowhere.py` searches every
-  exported span and metric and holds each attribute to what it may be (`allowed`); a new
-  span, metric, or attribute is added to it.
+- Telemetry holds names and never content (feature 011): an attribute of a span or of a
+  metric is an id the service made, a thread's id, a name the deployment or an operator
+  configured, a route as the service declares it, one of the service's own words, or an
+  exception's class name. No message, tool argument or result, model reply, agent's reply,
+  exception's text, agent address, API key, or caller's token is ever one, and neither is
+  anything of a request as it was written: its path, query, headers, body, or host name. A
+  thread's id is on its run's span and nowhere else, and no metric names a run or a
+  thread. Every span, metric, and attribute is written in `runtime/telemetry.py`, which
+  is the only module that imports OpenTelemetry, and nothing registers a global provider,
+  sets OpenTelemetry's current span, or reads a trace's id a client sent, so nothing a
+  model, a tool server, an agent, or a client receives changes. Recording is done inside
+  `Telemetry._safely` and never raises into a run, a step, or a request.
+  `tests/test_telemetry_nowhere.py` searches every exported span and metric and holds each
+  attribute to what it may be (`allowed`); a new span, metric, or attribute is added to
+  it, and to `docs/observability.md`.
 - A thread another agent started over A2A (feature 009) runs on the strict build and on no
   other: `SegmentedGraph` asks who started a thread before every run, of every kind, and
   refuses a caller's thread on the ordinary build and any thread whose lookup fails. A

@@ -37,7 +37,7 @@ Changes made while reviewing [checklists/privacy-reliability.md](checklists/priv
 - What is never sent also names an agent's reply and progress text and what its card says (FR-031), and every value that is text is cut to 256 characters (FR-030), which bounds a tool's name that its server chose.
 - The service's own lines never say where telemetry is sent; the component that sends may name the collector's address when it fails, and that address holds no credential (FR-005).
 - A failure to record is said in the log once an instance, at its first occurrence (FR-034).
-- `unmatched` also names a request whose method its route does not take (FR-024), and a request the application fails to answer is recorded with 500 and the error's class (Edge Cases).
+- A request whose method its route does not take has a name: its route's, since the path has one (FR-024; first written as `unmatched`, and corrected at the implement step, where the router was seen to match such a request by its path). A request the application fails to answer is recorded with 500 and the error's class (Edge Cases).
 - SC-005 is measured against the time limit of one attempt to send, and SC-006 names the three points at which recording is made to fail.
 - Sending goes on without a restart when the collector answers again (Edge Cases), and an address with `http` is taken without a warning, since nothing sent is content (Assumptions).
 
@@ -194,7 +194,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 **Requests**
 
-- **FR-024**: Every request the service answers, on its own address and on the address other agents call (feature 009), MUST have a span with the method, the route as the service declares it, and the status code. The path as it was written MUST NOT be sent; a request for which the service has no route, one with a method its route does not take, and one that is refused before a route is found MUST each be named `unmatched`.
+- **FR-024**: Every request the service answers, on its own address and on the address other agents call (feature 009), MUST have a span with the method, the route as the service declares it, and the status code. The path as it was written MUST NOT be sent; a request for which the service has no route, and one that is refused before a route is found, MUST each be named `unmatched`. A request whose path has a route that does not take its method is named by that route.
 - **FR-025**: A request's span MUST hold nothing of the query, the headers, the body, the host name asked for, the client's address, or a credential.
 - **FR-026**: The service MUST count requests and record how long each took, told apart by method, route, and status code.
 - **FR-027**: A request to a route that says whether the service is up or ready MUST NOT be recorded.

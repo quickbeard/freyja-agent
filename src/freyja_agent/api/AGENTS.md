@@ -10,6 +10,13 @@ other directories are in the `AGENTS.md` at the root of the repository.
   before every route, which refuses a request made for a host name the service does not
   answer for (403 `unknown_host`);
 
+- `telemetry.py` is `RequestTelemetry`, the ASGI middleware `create_app` adds last, so that
+  it is outside every other, and that the outside listener's application has too (feature
+  011): it tells telemetry of every request its method, the route as the service declares
+  it (`declared_route`, `unmatched` for none), and the status code, reads nothing else of a
+  request, changes nothing of an answer, and leaves out `/healthz` and `/readyz`; while a
+  request is served, it is what a run started inside stands under;
+
 - `runs.py` the bodies of the two thread routes that run a
   thread (`start_message`, `start_resume`), what the console's routes do around them
   (`open_first`, `go_on`, `start_console_run`), and the stop (`ask_stop`), so that the routes

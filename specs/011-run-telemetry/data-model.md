@@ -33,7 +33,7 @@ Made by `RequestTelemetry` for every `http` request but `/healthz` and `/readyz`
 | Field | From |
 |---|---|
 | method | the request's, when it is a standard one; `_OTHER` otherwise |
-| route | `scope["route"].path` once the application has answered; `unmatched` without one |
+| route | the declared path of what the router matched, read once the application has answered: `scope["route"].path` for a route of FastAPI's, and for any other route the path of the application's route with the scope's endpoint; `unmatched` without one |
 | status code | the `http.response.start` the application sent; 500 when it raised before one |
 | listener | `service` or `outside`, given when the middleware is added |
 | duration | from the request's arrival to the application's return |
@@ -60,8 +60,9 @@ What `runtime/waiting.py` last read, kept by `Telemetry` for the two gauges.
 
 Rules:
 
-- A reading replaces the one before it. A reading that fails replaces nothing and is said
-  once in the log.
+- A reading replaces the one before it. A reading that fails takes the one before it away,
+  so both values are left out at once, and is said in the log once until a reading
+  succeeds again.
 - A gauge's callback returns the reading's value while the reading is no older than two
   intervals, and nothing otherwise (FR-022).
 - Reading takes no thread's lease, changes no thread, and contacts no model, tool server,

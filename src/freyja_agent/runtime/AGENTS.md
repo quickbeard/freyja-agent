@@ -44,15 +44,32 @@ map of the other directories are in the `AGENTS.md` at the root of the repositor
 
 - `telemetry.py` is `Telemetry`, the one module
   that imports OpenTelemetry and the one place a span's or a metric's name or attribute is
-  written: off without `FREYJA_OTEL_ENDPOINT` (the API's tracer and meter that do nothing,
-  no SDK, no thread), and otherwise a span per run (`RunSpan`, ended by `run_stream`), per
-  model call, and per tool call, and the counts, sent over OTLP/HTTP from providers of its
-  own that are never registered as the process's; which span a call belongs under is kept
-  in a context variable of its own and OpenTelemetry's current span is never set, so
-  nothing a model, a tool server, or an agent receives changes; recording that fails is
-  left out with one warning and never fails a run or a call (`_safely`); `Runtime.assemble` takes
+  written (feature 011): off without `FREYJA_OTEL_ENDPOINT` (the API's tracer and meter
+  that do nothing, no SDK, no thread), and otherwise a span per request (`RequestSpan`,
+  made by `api/telemetry.py`), per run (`RunSpan`, ended by `run_stream`, under the request
+  that started it), per model call, and per tool call, and the counts, sent over OTLP/HTTP
+  from providers of its own that are never registered as the process's; which span a span
+  belongs under is kept in a context variable of its own (a scope that says whether it is
+  a request, a run, or a call) and OpenTelemetry's current span is never set, so
+  nothing a model, a tool server, or an agent receives changes; a model call says who made
+  it (`freyja.model.caller`): the middleware's are the agent's, a profile's test's are
+  recorded by the test, and `model_request` gives the guarded model what records a request
+  a library makes by itself, within a run and outside a call already recorded
+  (`ModelRequest`); `waiting` and `waiting_unknown` take what `waiting.py` read, for two
+  gauges that send nothing when the reading is older than two intervals; a text is cut to
+  256 characters; recording that fails is
+  left out with one warning and never fails a run, a call, or a request (`_safely`); `Runtime.assemble` takes
   `telemetry`, the seam the tests swap to read what was recorded, and shuts down the one it
   made itself after the worker has stopped;
+
+- `waiting.py` reads the work that waits for telemetry (feature 011): `read_waiting`
+  settles the rows of the index of threads whose run ended and whose lease is not held, as
+  the list of threads does, reads how many threads await a decision
+  (`ThreadIndex.counts`) and how old the oldest outcome is that is ready and not delivered
+  (`AgentTaskStore.oldest_ready_outcome_age`), through what the instance last built, so
+  it takes no lease, changes no thread, and contacts nothing; `WaitingWork` is the timer,
+  which `Runtime.assemble` starts only with telemetry on and with the service's loops, and
+  which says a failed reading once until one succeeds;
 
 - `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation

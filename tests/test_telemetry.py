@@ -21,6 +21,7 @@ import asyncio
 import logging
 import re
 import threading
+import time
 from collections.abc import AsyncIterator, Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -270,7 +271,9 @@ def test_a_run_is_one_trace_of_its_model_calls_and_tool_calls(
         events = run(client, "t-1", "List the workspace.")
 
     root = one(captured.spans(RUN_SPAN))
-    assert root.parent is None
+    # Under the request that started it, and nothing else (``test_telemetry_requests.py``).
+    request = one([span for span in captured.spans() if span.kind is SpanKind.SERVER])
+    assert parent_of(root) == request.context.span_id
     assert root.kind is SpanKind.INTERNAL
     assert root.status.status_code is StatusCode.UNSET
     assert attributes(root) == {
@@ -305,7 +308,14 @@ def test_a_run_is_one_trace_of_its_model_calls_and_tool_calls(
     spans = captured.spans()
     assert {span.context.trace_id for span in spans} == {root.context.trace_id}
     assert [parent_of(span) for span in [*calls, tool]] == [root.context.span_id] * 3
-    assert [span.name for span in spans] == [MODEL_SPAN, TOOL_SPAN, MODEL_SPAN, RUN_SPAN]
+    assert [span.name for span in spans] == [
+        MODEL_SPAN,
+        TOOL_SPAN,
+        MODEL_SPAN,
+        RUN_SPAN,
+        request.name,
+    ]
+    assert request.name == "POST /threads/{thread_id}/runs"
     # No span holds an event or a link, which could carry text.
     assert all(not span.events and not span.links for span in spans)
     assert dict(root.resource.attributes) == {"service.name": SERVICE}
@@ -556,8 +566,8 @@ def test_a_run_turned_away_for_want_of_a_model_is_recorded_and_calls_nothing(
         events = run(client, "t-1")
 
     assert events[-1][1]["code"] == "no_usable_model"
-    root = one(captured.spans())
-    assert root.name == RUN_SPAN
+    root = one(captured.spans(RUN_SPAN))
+    assert captured.spans(MODEL_SPAN) == captured.spans(TOOL_SPAN) == []
     found = attributes(root)
     assert (found[RUN_OUTCOME], found[ERROR_CODE]) == ("error", "no_usable_model")
     assert (found[MODEL_PROVIDER], found[MODEL_NAME]) == ("openai", "env-model")
@@ -702,6 +712,10 @@ class _Broken:
         )
 
     create_histogram = create_gauge = create_counter
+
+    # An instrument that is read and not used: making one never fails.
+    def create_observable_gauge(self, *_: Any, **__: Any) -> Any:
+        return SimpleNamespace()
 
 
 @pytest.mark.parametrize("at", ["start", "end", "count"])
@@ -848,9 +862,8 @@ def test_a_console_run_is_one_run_however_many_segments_it_is_run_in(
     assert (found[RUN_MODE], found[RUN_CONSOLE], found[RUN_OUTCOME]) == ("run", True, "end")
     # Three model steps and two tool steps, each its own segment, all under the one run.
     assert len(captured.spans(MODEL_SPAN)) == 3 and len(captured.spans(TOOL_SPAN)) == 2
-    assert {parent_of(span) for span in captured.spans() if span is not root} == {
-        root.context.span_id
-    }
+    calls = captured.spans(MODEL_SPAN) + captured.spans(TOOL_SPAN)
+    assert {parent_of(span) for span in calls} == {root.context.span_id}
     assert captured.count(RUNS_STARTED, **{RUN_CONSOLE: True}) == 1
 
 
@@ -1051,7 +1064,14 @@ def test_every_name_telemetry_sends_is_in_its_own_namespace() -> None:
     }
 
     assert len(names) > 20
-    assert {value for value in names.values() if not value.startswith("freyja.")} == {"error.type"}
+    # A request's names and an error's class are OpenTelemetry's own conventions.
+    assert {value for value in names.values() if not value.startswith("freyja.")} == {
+        "error.type",
+        "http.request.method",
+        "http.route",
+        "http.response.status_code",
+        "http.server.request.duration",
+    }
 
 
 # Part 5: the collector.
@@ -1548,3 +1568,134 @@ def test_every_trace_is_kept_and_no_setting_keeps_a_share_of_them() -> None:
 
     assert providers[0].sampler is ALWAYS_ON
     assert not [name for name in Settings.model_fields if "sampl" in name or "ratio" in name]
+
+
+# Part 8: telemetry that fails, a collector that never answers, and what others receive, for
+# what feature 011 added to the runs: a library's own call, a profile's test, and a request.
+
+
+@pytest.mark.parametrize("at", ["start", "end", "count"])
+async def test_telemetry_that_fails_changes_no_request_to_the_model(at: str) -> None:
+    broken: Any = _Broken(at)
+    telemetry = Telemetry(broken, broken, providers=("on",))
+    model = guard_model(ScriptedChatModel(), (), record=telemetry.model_request)
+    failing = guard_model(
+        FailingChatModel(fail_on_call=1, error="no"), (), record=telemetry.model_request
+    )
+    run_span = telemetry.run(
+        thread_id="t-1",
+        run_id="r-1",
+        mode="run",
+        console=False,
+        strict=False,
+        profile_id="environment",
+        profile_source="environment",
+        provider=PROVIDER,
+        model=MODEL,
+    )
+    answers: list[str] = []
+
+    async def graph() -> AsyncIterator[str]:
+        answers.append((await model.ainvoke("summarize")).text)
+        answers.extend([chunk.text async for chunk in model.astream("summarize")])
+        # The model's own error is what is raised, not telemetry's.
+        with pytest.raises(RuntimeError, match=r"^no$"):
+            await failing.ainvoke("summarize")
+        yield "item"
+
+    assert [item async for item in run_span.within(graph())] == ["item"]
+    run_span.end("end")
+
+    assert "".join(answers) == "Done.Done."
+    assert _scope() is None
+
+
+@pytest.mark.parametrize("at", ["start", "end", "count"])
+def test_telemetry_that_fails_changes_no_test_of_a_profile(
+    make_llm_app: Callable[..., LlmApp], monkeypatch: pytest.MonkeyPatch, at: str
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-key-9f2c")
+    broken: Any = _Broken(at)
+    made = make_llm_app(
+        model="openai:env-model", telemetry=Telemetry(broken, broken, providers=("on",))
+    )
+    with TestClient(made.app) as client:
+        answered = client.post("/llm/profiles/environment/test")
+
+    assert answered.status_code == 200 and answered.json()["ok"] is True
+    assert made.models.model("env-model").calls == 2
+
+
+class _NeverAnswers(BaseHTTPRequestHandler):
+    """A collector that takes a request and does not answer it before it is let go."""
+
+    held = threading.Event()
+    asked = threading.Event()
+
+    def do_POST(self) -> None:
+        type(self).asked.set()
+        type(self).held.wait(30)
+        self.send_response(200)
+        self.end_headers()
+
+    def log_message(self, format: str, *args: Any) -> None:
+        return None
+
+
+def test_a_collector_that_never_answers_delays_no_run(
+    make_mcp_app: Callable[..., McpApp],
+) -> None:
+    """SC-005: sending is off the path of a run, so a run does not wait for an export."""
+    _NeverAnswers.held.clear()
+    _NeverAnswers.asked.clear()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _NeverAnswers)
+    serving = threading.Thread(target=server.serve_forever, daemon=True)
+    serving.start()
+    try:
+        endpoint = f"http://127.0.0.1:{server.server_address[1]}"
+        telemetry = Telemetry.configured(endpoint, "freyja-test")
+        try:
+            script = [ls("l1")]
+            with_it = make_mcp_app(ScriptedChatModel(script=script), {}, telemetry=telemetry)
+            without = make_mcp_app(ScriptedChatModel(script=script), {})
+            kinds = []
+            for made in (with_it, without):
+                with TestClient(made.app) as client:
+                    began = time.monotonic()
+                    events = run(client, "t-1")
+                    took = time.monotonic() - began
+                    kinds.append([kind for kind, _data in events])
+                    assert took < telemetry_module.EXPORT_TIMEOUT_SECONDS
+            # The same events in the same order as with telemetry off.
+            assert kinds[0] == kinds[1] and kinds[0][-1] == "end"
+            # The collector was asked, off the run's path, and has not answered.
+            providers: Any = telemetry._providers
+            threading.Thread(target=providers[0].force_flush, args=(100,), daemon=True).start()
+            assert _NeverAnswers.asked.wait(10)
+        finally:
+            _NeverAnswers.held.set()
+            telemetry.close()
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_the_spans_that_wait_to_be_sent_are_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """FR-036: the SDK's queue is given its bound here, past which it drops a span and
+    makes nobody wait; nothing is left to its own default or to an ``OTEL_*`` variable."""
+    from opentelemetry.sdk.trace import export
+
+    given: dict[str, Any] = {}
+
+    class Recording(export.BatchSpanProcessor):
+        def __init__(self, exporter: Any, **kwargs: Any) -> None:
+            given.update(kwargs)
+            super().__init__(exporter, **kwargs)
+
+    monkeypatch.setattr(export, "BatchSpanProcessor", Recording)
+    monkeypatch.setenv("OTEL_BSP_MAX_QUEUE_SIZE", "999999")
+    captured = Captured(batch=True)
+    captured.telemetry.close()
+
+    assert given["max_queue_size"] == telemetry_module.SPAN_QUEUE_SIZE == 2048
+    assert given["max_export_batch_size"] <= given["max_queue_size"]
