@@ -1311,3 +1311,36 @@ requests themselves are built one after another: each depends on the one before.
   recorded in plan.md with the reason, not dropped.
 - Commit after each task or each small group of tasks; the commit hook runs the suites.
 - Stop at any checkpoint to validate the phase by hand before its request.
+
+## Phase 9: Convergence
+
+- [X] T112 Stop a follower that reads a run from sending a working status or a piece of the reply once its task has ended, as after a cancel, so that the next thing its stream sends is the task canceled, and test a stream followed through a cancel during a step, in `src/freyja_agent/api/received.py` (`follow`) and `tests/test_a2a_server_tasks.py`, per FR-016, FR-017 (partial; MEDIUM)
+- [X] T113 Reword `specs/009-a2a-server/spec.md` to FR-013a as amended by feature 010, where five lines still say every message to a delegate agent from a caller's thread pauses: User Story 2's scenario 3, FR-031's test of an agent that runs without approval, SC-003, the assumption on what a caller can cause with no person involved, and the line on feature 005's FR-022 under "Earlier requirements this feature changes", per FR-013a (contradicts; MEDIUM)
+- [ ] T114 Try a cancel of a removed caller's task that failed again in a later round of the sweep, not only a failed read of the list, in `src/freyja_agent/api/received.py` (`sweep`, `_cancel_unnamed`), per FR-021 (partial; LOW)
+- [ ] T115 Count only the attempts to reject a proposal by rule that failed toward `REJECT_ATTEMPTS`, so that a sixth proposal after a cancel is still rejected by rule, in `src/freyja_agent/api/received.py` and `src/freyja_agent/runtime/received_tasks.py`, per FR-022a (partial; LOW)
+- [ ] T116 Settle with the owner what FR-022a asks of a proposal that cannot be rejected by rule because the agents' approval mode turned Auto after it was proposed: try again once it can be, without using up the attempts, or amend FR-022a, per FR-022a (partial; LOW)
+- [ ] T117 Offer a proposal's decisions on a task's page only once the task's row has been read, so that a caller's proposal is never shown without who started it, in `web/components/tasks/task-view.tsx`, per FR-023, SC-004 (partial; LOW)
+- [ ] T118 Label a calling agent's message on a caller's thread with the caller, not "You", once the owner has decided it, in `web/components/tasks/message.tsx`, per FR-023 (partial; LOW)
+- [ ] T119 Reword the module docstring of `src/freyja_agent/runtime/runtime.py`, which still says every message to a delegate agent waits on the strict build, to FR-013a as amended, per FR-013a (contradicts; LOW)
+- [ ] T120 Report the count of refused credentials whose ten seconds closed with no later refusal, in `src/freyja_agent/runtime/callers.py` (`refused`), per FR-028 (partial; LOW)
+- [ ] T121 With the feature off, ignore a value of its other settings that does not parse, as the callers' value is ignored, or amend FR-001 and `contracts/settings.md`, in `src/freyja_agent/config.py`, per FR-001 (contradicts; LOW)
+- [ ] T122 Name the entry by its place when `FREYJA_A2A_SERVER_CALLERS` names a caller twice or an entry has the wrong shape, in `src/freyja_agent/config.py` (`_callers_read`), per FR-004, US3/AC7 (partial; LOW)
+- [ ] T123 Read the service's version for the card once at startup, not on the event loop in the card's first request, in `src/freyja_agent/api/a2a_server.py` (`_version`), per Constitution V (contradicts; LOW)
+- [ ] T124 Ask the outside listener also for the main application's documentation routes (`/docs`, `/redoc`, `/openapi.json`) in the test of what it serves, in `tests/test_a2a_server_callers.py` (`_paths`), per SC-005 (partial; LOW)
+- [ ] T125 Start the held tail of the reply's pieces afresh at each new message, so that a piece never joins text of two model steps, in `src/freyja_agent/api/received.py` (`follow`), per FR-017 (partial; LOW)
+- [ ] T126 Test that a task handed to an agent completes with the reply of the run that reports the agent's outcome, and fails as interrupted when that run fails and is given up, driving the delegation worker, in `tests/test_a2a_server_tasks.py`, per SC-014 (partial; LOW)
+- [ ] T127 Say in FR-018, SC-007, and `docs/a2a-server.md` that the local caller works in the shared workspace, console tasks' case folders included, per FR-018, SC-007 (contradicts; LOW)
+- [ ] T128 Log a message refused at the hand-over limit or for its length, naming the caller and never the text, in `src/freyja_agent/api/a2a_server.py`, per FR-028 (partial; LOW)
+
+## Phase 10: Convergence
+
+- [X] T129 Stop reading a run for a follower only once the task's caller has canceled it, not on any end of the task, so that a follower behind its run when the task completes still sends every step and piece the run left, and test it, in `src/freyja_agent/api/received.py` (`follow`, `_canceled_now`) and `tests/test_a2a_server_tasks.py`, per FR-017 (contradicts; MEDIUM)
+- [X] T130 Reword the contract's sentence on pieces that can still be sent after a cancel as a cancel sent to another instance, not a stream through one, in `specs/009-a2a-server/contracts/a2a-server.md`, per FR-017 (contradicts; LOW)
+- [X] T131 Reword to FR-013a as amended the edge case of a delegate agent's question, FR-013a's own last sentence, and the assumption that every message to a delegate agent from a caller's thread waits, in `specs/009-a2a-server/spec.md`, per FR-013a (contradicts; LOW)
+- [X] T132 Test through `follow` that a row that cannot be read while a run is followed keeps no status back, in `tests/test_a2a_server_tasks.py`, per FR-017 (partial; LOW)
+- [ ] T133 Wake a cancel's followers as soon as the task's end is written, not only after the stop is marked and the thread tidied, so that no piece of the step under way is sent in between, in `src/freyja_agent/api/received.py` (`cancel`), per FR-016 (partial; LOW)
+
+## Phase 11: Convergence
+
+- [X] T134 Test that a follower behind a run a person stopped in the console is still sent the step that completed, so that only the task's caller's cancel, and not every end that says canceled, stops the reading, in `tests/test_a2a_server_tasks.py`, per FR-017 (partial; LOW)
+- [ ] T135 Send a stream on the instance that runs the task the task canceled when its caller's cancel is written, not only with the run's next event, which waits for the step under way, or say in the contract and `docs/a2a-server.md` that it comes then, in `src/freyja_agent/api/received.py` (`follow`), per FR-016, FR-017 (partial; LOW)
