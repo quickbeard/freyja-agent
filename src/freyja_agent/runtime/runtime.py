@@ -397,6 +397,13 @@ class Runtime:
             return None
         return await self.received_tasks.conversation_of(thread_id)
 
+    async def hops_of(self, thread_id: str) -> int:
+        """The hand-over count of the last message a caller's thread took whose run started:
+        the task every run on the thread is of, and the count each message to an agent from
+        it passes on, plus one (FR-027, research R17). 0 for a thread with none."""
+        task = await self.received_tasks.last_started_task_of_thread(thread_id)
+        return task.hops if task is not None else 0
+
     def _segmented(self, graph: Any, *, strict: bool = False) -> Any:
         """``graph`` as a run needs it: one wrapper per build, which runs a console run's
         thread in segments (feature 007, R4) and holds a caller's thread to the strict build
@@ -408,6 +415,7 @@ class Runtime:
             kept = SegmentedGraph(graph, self.unattended)
             kept.strict = strict
             kept.lookup = self.received_tasks.conversation_of
+            kept.count = self.hops_of
             if strict:
                 self.strict_segmented = kept
             else:

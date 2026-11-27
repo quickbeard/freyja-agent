@@ -31,6 +31,11 @@ freyja-api = "freyja_agent.api.app:main"
 requires = ["uv_build>=0.12.21,<0.13.0"]
 build-backend = "uv_build"
 
+# The notes for coding agents that sit beside the code they describe (AGENTS.md, and the
+# CLAUDE.md that imports it) are not part of the service: an installed package has none.
+[tool.uv.build-backend]
+wheel-exclude = ["AGENTS.md", "CLAUDE.md"]
+
 [dependency-groups]
 dev = [
     "httpx>=0.28.1",
@@ -59,20 +64,21 @@ source = ["freyja_agent"]
 core = "sysmon"
 
 [tool.coverage.report]
-# The share of the service's lines the suite must run, as CI runs it: without the opt-in
-# Postgres tests, which leaves the Postgres stores unmeasured. Measured at 89.97 on
-# 2026-11-19 (96.62 with the Postgres tests). Raise it as the number rises; lower it only
-# with the reason written here.
-fail_under = 88
+# The share of the service's lines the suite must run, as CI runs it: with the Postgres
+# tests, which both CI systems run against a Postgres the job starts. Measured at 96.64 on
+# 2026-11-27. A run without a database skips those tests and leaves the Postgres stores
+# unmeasured (91.50 on the same day): the commit hook is such a run and holds a floor of its
+# own, beside its command in .pre-commit-config.yaml. Raise it as the number rises; lower it
+# only with the reason written here.
+fail_under = 95
 precision = 2
 show_missing = true
 skip_covered = true
 
 # The type checker, run as `uv run pyright`: by the commit hook and in CI. It checks the
-# service's code against the packages in .venv. The tests are not checked yet: they are
-# written against fakes and stand-ins whose types are looser than the service's.
+# service's code and the tests against the packages in .venv.
 [tool.pyright]
-include = ["src"]
+include = ["src", "tests"]
 pythonVersion = "3.12"
 typeCheckingMode = "standard"
 # Only `# pyright: ignore[rule]` silences a line, so every suppression names its rule. A
@@ -80,6 +86,17 @@ typeCheckingMode = "standard"
 enableTypeIgnoreComments = false
 venvPath = "."
 venv = ".venv"
+
+# The tests are checked as the service is, with one rule off for them alone: reading an
+# attribute of a value that may be None. A test that does so with None fails when it runs,
+# which is what a test is for, so the rule adds nothing there, and it would ask for an
+# assert before most uses of the test client's portal, which Starlette types as optional
+# because it is None outside `with`. Nothing is switched off for src/. extraPaths: the
+# tests import each other as `tests.<module>`, from the repository's root.
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+extraPaths = ["."]
+reportOptionalMemberAccess = false
 
 [tool.ruff]
 line-length = 100

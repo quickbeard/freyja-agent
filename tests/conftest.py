@@ -22,7 +22,7 @@ os.environ.setdefault("FREYJA_DATABASE_URI", "postgresql://localhost:5432/freyja
 os.environ["FREYJA_ALLOWED_HOSTS"] = '["testserver"]'
 
 from cryptography.fernet import Fernet
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.store.memory import InMemoryStore
@@ -40,7 +40,7 @@ from freyja_agent.runtime.locks import InMemoryRunLocks
 from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore, ReceivedTaskStore
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore, SavedAgentRecord
-from freyja_agent.runtime.thread_index import InMemoryThreadIndex, ThreadIndex
+from freyja_agent.runtime.thread_index import IndexedRunLocks, InMemoryThreadIndex, ThreadIndex
 from tests.a2a_stub import StubAgent
 from tests.a2a_stub import make_stub as make_a2a_stub
 from tests.asgi_stream import StreamingASGITransport
@@ -609,6 +609,21 @@ def make_app() -> Callable[[Runtime], FastAPI]:
         return create_app(open_runtime=lambda _settings: nullcontext(runtime))
 
     return _make
+
+
+def indexed_locks(runtime: Runtime) -> IndexedRunLocks:
+    """The lease of an assembled runtime, as what ``Runtime.assemble`` wrapped it in.
+
+    ``Runtime.locks`` is typed as any lease, which is what a runtime built by hand holds."""
+    assert isinstance(runtime.locks, IndexedRunLocks)
+    return runtime.locks
+
+
+def detail_of(refused: HTTPException) -> Any:
+    """What a refusal carries. FastAPI takes any value as a refusal's detail, and the tests
+    read the service's objects and lists from it; the attribute is Starlette's, typed as
+    text."""
+    return refused.detail
 
 
 def holds_port(text: str, port: str | int) -> bool:

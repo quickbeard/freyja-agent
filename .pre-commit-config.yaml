@@ -28,20 +28,24 @@ repos:
       - id: ruff-format
   - repo: local
     hooks:
-      # The type checker over the service's code, at the version uv.lock names, which is the
-      # one CI runs. It reads the whole of src/ whatever was staged, since a change to one
-      # file can break another's types, and runs when the code or what it is checked
-      # against changes. It changes no file. Its settings are in pyproject.toml.
+      # The type checker over the service's code and the tests, at the version uv.lock
+      # names, which is the one CI runs. It reads the whole of src/ and tests/ whatever was
+      # staged, since a change to one file can break another's types, and runs when the
+      # code, a test, or what they are checked against changes. It changes no file. Its
+      # settings are in pyproject.toml.
       - id: pyright
         name: pyright
         entry: uv run pyright
         language: system
-        files: ^(src/|pyproject\.toml$|uv\.lock$)
+        files: ^(src/|tests/|pyproject\.toml$|uv\.lock$)
         pass_filenames: false
       - id: pytest
         name: pytest
-        # --cov: with coverage, held to fail_under in pyproject.toml.
-        entry: uv run pytest -q --cov
+        # --cov: with coverage. The hook has no database, so the Postgres tests are skipped
+        # and the Postgres stores are not run: the floor here is the one of such a run, below
+        # fail_under in pyproject.toml, which CI holds with those tests. Measured at 91.50 on
+        # 2026-11-27. Raise it as the number rises; lower it only with the reason written here.
+        entry: uv run pytest -q --cov --cov-fail-under=89
         language: system
         pass_filenames: false
         always_run: true

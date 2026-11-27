@@ -595,7 +595,8 @@ files directory needs the same, in the phase that builds this.
 
 **Decision**: the count is `metadata["freyja.hops"]` of a message, a whole number of zero or
 more; a message without it has passed through none. The task's row keeps it. For a caller's
-thread, `SegmentedGraph` puts the count of the conversation's last message into the run's
+thread, `SegmentedGraph` puts the count of the conversation's last message whose run started
+(the task every run on the thread is of; request 6) into the run's
 config beside the files key, and the agent tools add `count + 1` to the metadata of every
 message they send. Messages from every other thread are sent as today.
 

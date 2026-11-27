@@ -407,7 +407,7 @@ def test_a_step_that_runs_again_returns_the_recorded_result(
 
     assert [m.text for m in made.stubs["hello"].record.messages] == ["once"]
     (result,) = [m for m in messages if isinstance(m, ToolMessage)]
-    assert result.content.startswith("Agent 'hello' completed task ")
+    assert result.text.startswith("Agent 'hello' completed task ")
     assert "once" in result.content
 
 

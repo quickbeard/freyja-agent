@@ -241,7 +241,7 @@ def switch_to(client: TestClient, profile_id: str) -> None:
 
 def humans(made: LlmApp, label: str) -> list[str]:
     """What the user said, as the model for this label last received it."""
-    return [m.content for m in made.models.model(label).seen[-1] if m.type == "human"]
+    return [m.text for m in made.models.model(label).seen[-1] if m.type == "human"]
 
 
 def test_after_an_activation_the_next_run_uses_the_new_profile_with_no_restart(

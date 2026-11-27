@@ -238,7 +238,8 @@ def test_what_is_not_a_request_passes() -> None:
     async def inner(scope: Any, receive: Any, send: Any) -> None:
         reached.append(scope["type"])
 
-    asyncio.run(AllowedHosts(inner)({"type": "lifespan"}, None, None))  # type: ignore[arg-type]
+    unused: Any = None
+    asyncio.run(AllowedHosts(inner)({"type": "lifespan"}, unused, unused))
     assert reached == ["lifespan"]
 
 

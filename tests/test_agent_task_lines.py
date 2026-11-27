@@ -88,7 +88,7 @@ def handed_off(
         finished.append(values.get("task_id"))
         await finish(*args, **values)
 
-    made.store.finish_send = recorded  # type: ignore[method-assign]
+    made.store.finish_send = recorded
     with TestClient(made.app) as client:
         events = run(client, "lines-1", sse_events)
         tasks = client.get("/threads/lines-1/state").json()["agent_tasks"]

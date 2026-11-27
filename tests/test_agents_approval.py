@@ -341,7 +341,7 @@ def test_a_step_that_runs_again_after_its_send_was_recorded_returns_the_recorded
 
     assert texts(made) == ["once"]
     (result,) = [m for m in messages if isinstance(m, ToolMessage)]
-    assert result.content.startswith("Agent 'helper' completed task ")
+    assert result.text.startswith("Agent 'helper' completed task ")
 
 
 # The rule: a proposal stays with the agent it was made for.
@@ -1027,7 +1027,7 @@ def test_a_step_that_runs_again_after_its_send_was_recorded_is_not_refused_after
 
     assert texts(made) == ["once"]
     (result,) = [m for m in messages if isinstance(m, ToolMessage)]
-    assert result.content.startswith("Agent 'helper' completed task ")
+    assert result.text.startswith("Agent 'helper' completed task ")
 
 
 def reads_of_the_saved_agent(made: A2aApp, monkeypatch: pytest.MonkeyPatch) -> list[str]:
@@ -1243,12 +1243,12 @@ def test_a_card_that_calls_its_agent_read_only_changes_nothing(
 
 def test_a_saved_agent_s_tools_are_not_built_without_the_store_they_read_it_from() -> None:
     from freyja_agent.config import A2aAgentConfig
-    from freyja_agent.delegates.a2a_agents import AgentLink, default_transport
+    from freyja_agent.delegates.a2a_agents import AgentLink, Source, default_transport
     from freyja_agent.delegates.a2a_tools import agent_tools
     from freyja_agent.runtime.agent_tasks import InMemoryAgentTaskStore
     from freyja_agent.runtime.saved_agents import InMemorySavedAgentStore
 
-    def link(source: str) -> AgentLink:
+    def link(source: Source) -> AgentLink:
         return AgentLink(
             "helper",
             A2aAgentConfig(url=SAVED_URL, read_only=False),
@@ -1545,13 +1545,13 @@ def test_a_call_a_person_rejected_is_not_recorded_as_decided(
     marked: list[tuple[str, list[str]]] = []
     mark = made.store.mark_decided
 
-    async def marking(thread_id: str, namespace: str, ids: Any) -> None:
-        marked.append((namespace, list(ids)))
-        await mark(thread_id, namespace, ids)
+    async def marking(thread_id: str, namespace: str, tool_call_ids: Any) -> None:
+        marked.append((namespace, list(tool_call_ids)))
+        await mark(thread_id, namespace, tool_call_ids)
 
     with TestClient(made.app) as client:
         interrupted(run(client, thread, sse_events))
-        made.store.mark_decided = marking  # type: ignore[method-assign]
+        made.store.mark_decided = marking
         events = resume(client, thread, [{"type": "reject", "message": "Not now."}], sse_events)
     assert events[-1] == ("end", {"status": "completed"})
     # The gate answered the call itself, so no row was marked, and nothing was sent.
@@ -1708,11 +1708,11 @@ def test_a_resume_records_no_decision_for_a_sibling_subagent_s_calls(
         marked: list[str] = []
         mark = made.store.mark_decided
 
-        async def marking(thread_id: str, namespace: str, ids: Any) -> None:
+        async def marking(thread_id: str, namespace: str, tool_call_ids: Any) -> None:
             marked.append(namespace)
-            await mark(thread_id, namespace, ids)
+            await mark(thread_id, namespace, tool_call_ids)
 
-        made.store.mark_decided = marking  # type: ignore[method-assign]
+        made.store.mark_decided = marking
         choose(client, made, made.saved["helper"], read_only=False)
         resume(client, thread, [{"type": "approve"}], sse_events)
 

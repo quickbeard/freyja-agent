@@ -19,10 +19,10 @@ Always go through uv. Never call python, pip, or pytest directly.
 - `uv run --env-file .env freyja-api` runs it through the console script, binding from settings.
 - `uv run ruff check .` and `uv run ruff format .` lint and format; use `--fix` and `--check`
   variants as usual.
-- `uv run pyright` checks the types of the service's code under `src/`, with the settings in
-  `pyproject.toml` (`[tool.pyright]`). The commit hook and CI run it this way. It needs
-  nothing but uv: Node comes with the package, and pyright itself is downloaded the first
-  time it runs, which needs the network. The tests are not checked.
+- `uv run pyright` checks the types of the service's code under `src/` and of the tests
+  under `tests/`, with the settings in `pyproject.toml` (`[tool.pyright]`). The commit hook
+  and CI run it this way. It needs nothing but uv: Node comes with the package, and pyright
+  itself is downloaded the first time it runs, which needs the network.
 - `uv run pytest` runs the suite. Tests run the production routes through FastAPI's test
   client with in-memory persistence and a scripted model; no server, database, or model
   provider is needed. Tool servers are played by the stub in `tests/mcp_stub.py`, and A2A
@@ -30,8 +30,10 @@ Always go through uv. Never call python, pip, or pytest directly.
   installed or running and no network is used; only the transport tests launch a stub as a
   process or serve it on the loopback interface.
 - `uv run pytest --cov` runs the suite with coverage and fails below `fail_under` in
-  `pyproject.toml`. The commit hook and CI run it this way. Without `--cov` nothing is
-  measured, so a run of one file is not held to the suite's number.
+  `pyproject.toml`, which is the floor of a run with the Postgres tests, as CI runs it. The
+  commit hook runs it without a database and with a floor of its own, `--cov-fail-under` in
+  `.pre-commit-config.yaml`; give a run without the Postgres tests that option too. Without
+  `--cov` nothing is measured, so a run of one file is not held to the suite's number.
 - `uv run python -m tests.mcp_stub --http 8765` serves the stub at
   `http://127.0.0.1:8765/mcp` for a manual run against an address server.
 - `uv run python -m tests.a2a_stub --http 9998` serves the stand-in agent at
@@ -48,12 +50,14 @@ Always go through uv. Never call python, pip, or pytest directly.
   other id answers. A request that asks for a stream is answered as one, so
   a profile pointing at it can be run on.
 - `FREYJA_TEST_DATABASE_URI=postgresql://freyja:freyja@localhost:5432/freyja_test uv run pytest
-  tests/integration` runs the opt-in Postgres tests; without the variable they are skipped.
+  tests/integration` runs the Postgres tests; without the variable they are skipped, so
+  they are opt-in on a developer's machine and in the commit hook. CI sets it, in both
+  systems, to a Postgres the `pytest` job starts for itself.
   Create the database once with `docker compose exec postgres createdb -U freyja freyja_test`.
 - `uv run pre-commit run --all-files` runs the commit hook over the whole repo: the file
   checks (whitespace at the end of a line, the newline at the end of a file, YAML that
   parses, merge markers), gitleaks over what is staged, Ruff, pyright when the service's
-  code or its packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
+  code, a test, or their packages changed, and pytest, then Biome and Vitest for the web app. The web hooks run when a file under `web/` is
   staged and need Node and pnpm on the path and the dependencies installed in `web/`.
   pre-commit builds gitleaks itself the first time it runs, which takes about a minute and
   needs the network.
@@ -90,408 +94,42 @@ startup and exits with an error naming the connection when it is unreachable.
 
 ## Layout
 
+What a directory holds is described beside its code, in an `AGENTS.md` of that directory, so
+that a session reads only what it works on. This file is in every session. A directory's file
+is not, unless the session was started in that directory or below it: read it before changing
+code there. A change to what one of them describes updates that file, and a new module is
+described in its directory's file, not in this one. `tests/test_agents_md.py` checks that every
+path these files name exists, that each module of the service is named in its directory's
+file, and that this list names every such file.
+
 - `src/freyja_agent/config.py`: the `Settings` class (pydantic-settings, `FREYJA_*` prefix) and
-  the shared `settings` instance. `FREYJA_MODEL` names the model, and
-  `FREYJA_OPENAI_RESPONSES_API` says whether an `openai:` model is called through the Responses
-  API or through chat completions. `FREYJA_ALLOWED_HOSTS` lists the host names the service
-  answers for beside `localhost` and IP addresses. `McpServerConfig` is one entry of `FREYJA_MCP_SERVERS`;
-  `FREYJA_MCP_CALL_TIMEOUT_SECONDS` and `FREYJA_MCP_STARTUP_TIMEOUT_SECONDS` are the two time
-  limits for tool servers. `A2aAgentConfig` is one entry of `FREYJA_A2A_AGENTS` (a loopback
-  `url` and `read_only`); agent and server names share one namespace. Seven limits go with it:
-  `FREYJA_A2A_CALL_TIMEOUT_SECONDS`, `FREYJA_A2A_STARTUP_TIMEOUT_SECONDS`,
-  `FREYJA_A2A_POLL_INTERVAL_SECONDS`, `FREYJA_A2A_TASK_MAX_AGE_SECONDS`,
-  `FREYJA_BACKGROUND_RUN_ATTEMPTS`, `FREYJA_BACKGROUND_RETRY_SECONDS`, and
-  `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
-  a Fernet key or unset, which protects stored API keys and stops startup when it is not a
-  Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
-  Nine belong to receiving tasks from other agents (feature 009), checked only while it is
-  on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_WAIT_SECONDS`, `FREYJA_A2A_SERVER_CALLER_TASKS`,
-  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
-  be inside it, or contain it, `FREYJA_A2A_SERVER_CALLERS`, named callers with their tokens
-  (`A2aCallerConfig`, a token held as `SecretStr`), and the outside listener's
-  `FREYJA_A2A_SERVER_HOST`, `FREYJA_A2A_SERVER_PORT`, and `FREYJA_A2A_SERVER_URL`, whose host
-  without its port, or the listener set while the feature is off, stops startup also then.
-- `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
-  (`build_agent`; the service, the tests, and any future CLI call it). `build_agent` takes the
-  tool server tools as `delegate_tools` and returns an `Orchestrator`: the compiled graph as
-  `.agent` and the `Catalog` of exactly the tools it was given as `.catalog`. `catalog.py`
-  holds the three classifications, the fixed table of Freyja's own tools (`OWN_TOOLS`), the
-  catalog, and the interrupt config generated from it; a tool with no classification raises
-  `UnclassifiedToolError` and stops startup. `prompts.py` is the system prompt and
-  `append_to_system_message`, with which a middleware adds text to it for one model call,
-  `tools.py` the
-  gated placeholder tool `send_notification`. `agent_tasks.py` is `AgentTasksMiddleware`, which
-  lists the thread's pending agent tasks in the prompt and, after every reply of the model,
-  records which agent each call of an agent's tool was proposed for, and, in a resume, right
-  after the approval gate, which of those calls a person approved or edited; and the
-  `check_agent_tasks` tool; both are added only when an agent is configured
-  (`build_agent(agent_tasks=...)`). `build_agent` also takes the file backend and whether to
-  name the thread by its alias (feature 009): `caller_files.py` is `CallerFiles`, the strict
-  build's backend, which gives a named caller `<files dir>/<name>` and the skills read-only,
-  by the key `freyja_caller_files` of the run's config, and refuses a call without it; and
-  `context.py`'s `thread_alias` is what the strict build tells the model in place of a
-  thread's id.
-- `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol. `mcp_servers.py`
-  connects to the configured MCP servers (`open_tool_servers`, `ToolServer`, `default_connect`),
-  applies the call time limit, records each server's status, and redacts `pass_env` values from
-  everything a server link emits. `mcp_tools.py` turns each listed tool into a `DelegateTool`,
-  classifies it from the `read_only` list (`classify`), and turns a result into text.
-  `a2a_agents.py` is the link to one agent (`AgentLink`): making one contacts nothing, and
-  `connect` reads the agent's card and builds the client, so nothing is sent over a link that
-  holds no usable card. It pins every request to the configured address, sends messages and
-  reads and cancels tasks under the call time limit, records each agent's status, and removes
-  every known address from everything it emits (`describe`). A reply that names a task
-  with an empty id or conversation id, or gives an id that is too long or holds a control
-  character or a line break, is malformed (`malformed`), and nothing of it is kept, since
-  an id is written into what the model reads line by line.
-  `progress_text` says what of a
-  status is a task's progress (feature 008): the text of a working status's message, cleaned
-  and cut to `PROGRESS_LIMIT` characters, used by the hand-off and the worker alike.
-  `agent_cards.py` reads an agent's card under one time limit and one size limit and says
-  in the service's own
-  sentence why a card cannot be used (`read_card`, `CardError`, the nine `CardProblem`
-  codes), and cuts and cleans what a card says of its agent into the details that are kept
-  and shown (`card_details`, `cleaned`). `addresses.py` is the process's one address
-  scrubber (`SCRUBBER`): it is told every agent address the process is given, takes each
-  out of text in every form it can be written in, its path included, and cleans every log
-  record through a record factory installed at startup. `agent_registry.py` is the
-  `AgentRegistry`, which holds the instance's `AgentSet`: the links in use, of environment
-  agents and of saved ones, each agent's approval choice, the agents' approval mode (feature
-  010: an agent's tools run without approval only when the mode is `auto` and its choice
-  allows it, `AgentSet.gated`), and the saved agents that are not in use. It refuses an entry that is invalid in itself at startup, tries every agent at once,
-  warns about one it cannot use, makes a new set when the saved agents' revision moved, and
-  closes a link once no set that is held has it. `a2a_tools.py` builds each agent's
-  `handoff_to_<agent>` and `cancel_<agent>_task` tools over the send ledger, so a step that
-  runs again never sends twice, checks that a task belongs to the agent the tool was built
-  for, that the link is connected, that the call was proposed for the agent the tool
-  sends to (`_proposed_for`), that the agents' approval mode is not `manual` now when the
-  tool was built to run without approval and no person decided the call (feature 010), and,
-  for a saved agent, that the agent as the store has it
-  now still exists, still runs without approval when no person decided the call (a person
-  decided it only when its row records an approve or an edit), and,
-  when it was moved since the run's tools were built, that no other saved agent has the
-  address the run started with
-  (`_still_allowed`, the last thing awaited before the send's first write), and turns a
-  reply into text. A hand-off writes a task's row only while the task is pending, and a
-  reply that names a task another agent of the name has is treated as malformed, so a task
-  stays with the agent it was given to. `delegation_worker.py` is the `DelegationWorker`: each poll it
-  takes a context, claims pending tasks, checks or gives them up, and starts a delivery for
-  each ready outcome: a background run of `run_stream`, retried when it fails. The loop never waits for a delivery;
-  `tick()` does, for the tests. While no usable model is active it starts no delivery, and what
-  is ready waits.
+  the shared `settings` instance. `src/freyja_agent/AGENTS.md` lists the settings; read it
+  before adding or changing one.
+- `src/freyja_agent/agent/`: the orchestrator: the factory that assembles it, the catalog of
+  its tools and the approval gate generated from it, the prompt, and Freyja's own tools.
+  `src/freyja_agent/agent/AGENTS.md` describes its modules; read it before changing code
+  there.
+- `src/freyja_agent/delegates/`: what the orchestrator reaches over a protocol.
+  `src/freyja_agent/delegates/AGENTS.md` describes its modules; read it before changing code
+  there.
 - `src/freyja_agent/llm/`: LLM profiles (feature 004), the ways to reach a model that an
-  operator saves, tests, and activates while the service runs. `providers.py` holds the
-  provider table, `build_model` for a saved profile, and the environment's profile, and is
-  the one module that reads a provider's own variables (`environment_key`). A saved profile's
-  client is built with its provider's variables hidden (`build_model`), and for the
-  provider's own address when it has no base URL, so nothing the environment sets for its own
-  model reaches a saved profile's endpoint, apart from a proxy and a telemetry opt-out; the
-  environment's profile is described from what its built client holds and will send
-  (`environment_access`), a LangSmith gateway and a credential in the SDK's custom headers
-  included; `secrets.py`
-  encrypts stored API keys under `FREYJA_SECRET_KEY` and removes keys from text (`redact`);
-  `guard.py` makes a model raise its errors with its profile's key already taken out
-  (`guard_model`), because LangGraph shows a failed step's error in the debug stream and
-  saves it with the thread; `store.py` is the `LlmProfileStore` for saved profiles
-  and the active choice (`PostgresLlmProfileStore` with `freyja_llm_profiles` and
-  `freyja_llm_state`, and `InMemoryLlmProfileStore`); `active.py` is the `ModelManager`, which
-  rebuilds the orchestrator through `build_agent` when the active profile's revision moved,
-  or when the agent set it is handed is not the one it built for,
-  around a placeholder model when the active profile is not usable, so that the service
-  starts and runs end with `no_usable_model`, and which guards every model it builds;
-  `check.py` is a profile's test (`check_model`: two requests under one time limit, the
-  second carrying earlier turns and a tool call) and the count of tests in progress
-  (`CheckSlots`).
-- `src/freyja_agent/runtime/`: `persistence.py` opens the shared Postgres pool, checkpointer,
-  and store, brings Freyja's tables to the build's schema version before any store is
-  given the pool, and holds what every Postgres store takes from it: `Pool`, the pool's
-  type, whose connections return a row as a dict, and `one_row`, the row of a statement
-  that always returns one; `migrations.py` is the schema: `MIGRATIONS`, the ordered list
-  every table and column of Freyja's comes from, and `migrate`, which applies what a
-  database lacks at startup, one transaction each under one advisory lock and a lock
-  timeout, records it in `freyja_schema_migrations`, and stops startup for a database a
-  newer build migrated, one whose applied migration differs from the build's (`pending`, by
-  checksum), or a table it cannot get in time; no store makes or changes a table;
-  `locks.py` is the per-thread run lease (`PostgresRunLocks`, `InMemoryRunLocks`);
-  `agent_tasks.py` is the `AgentTaskStore` for agent conversations, the send ledger, agent
-  tasks, and the calls of agents' tools that a model proposed (`PostgresAgentTaskStore` with
-  its four `freyja_agent_*` tables, and `InMemoryAgentTaskStore`); a task keeps the progress
-  its agent last reported and when it was learned (`progress`, `progress_at`, feature 008),
-  columns that migration 1 adds to a table of an earlier deployment, as it adds `agent_ref`;
-  `saved_agents.py` is the `SavedAgentStore` for the agents an operator
-  saved (`PostgresSavedAgentStore` with `freyja_agents` and `freyja_agents_state`, and
-  `InMemorySavedAgentStore`), and for the agents' approval mode of feature 010 (`mode`,
-  `set_mode`), a column of `freyja_agents_state` that migration 2 adds, whose change moves
-  the saved agents' revision; `received_tasks.py` is the `ReceivedTaskStore` of feature 009,
-  the conversations and received tasks of other agents (`PostgresReceivedTaskStore` with
-  `freyja_a2a_conversations` and `freyja_a2a_tasks`, and `InMemoryReceivedTaskStore`), whose
-  conversation row is what makes a thread a caller's and which accepts a message under one
-  advisory lock; `callers.py` is `Callers`, which turns an `Authorization` header into a
-  caller's name, comparing a token with every named caller's by `hmac.compare_digest`,
-  registers every caller's token with the record factory's `TOKENS`
-  (`delegates/addresses.py`), and warns of refused credentials once and then at most once in
-  ten seconds for each of the two addresses; `runtime.py` is the `Runtime` dataclass with the catalog, the tool
-  servers, the agent registry, the task store, the saved-agent store, and the delegation
-  worker. `Runtime.assemble` opens the tool servers, starts the registry, builds the agent, and
-  runs the worker; `Runtime.open` adds
-  Postgres and is what the FastAPI lifespan enters. Both take `connect`, the seam the tests swap
-  to reach stub servers, and `agent_transport`, the httpx transport each agent link uses, which
-  the tests swap to reach stand-in agents. `assemble` also takes `model_factory`, which turns
-  an LLM profile into a chat model and is the seam the profile tests swap. Every run, and every route and round of the worker that reads the graph or the catalog, first
-  takes a `RunContext` from `Runtime.begin_run()`: the graph, the catalog, the active model,
-  and the agent set of one build, in step with the active profile and the saved agents, held
-  until it is released. `Runtime.agent` and `Runtime.catalog` are what the instance last
-  built. While feature 009 is on the model manager builds a second, strict orchestrator
-  beside the first (`ModelManager.builds`), kept apart as `Runtime.strict_agent` and
-  `Runtime.strict_catalog`; `begin_run(thread_id)` and `begin_read(thread_id)` ask the
-  received-task store who started the thread, on or off (`Runtime.caller_of`), and give a
-  caller's thread the strict build. `Runtime.environment` is the environment's profile as the list shows it, described
-  once at startup. `Runtime.model_to_check` builds the model a profile's test asks, and
-  `Runtime.checks` and `Runtime.environment_test` hold the tests in progress and the
-  environment's last result, in memory. `thread_index.py` is the index of threads
-  (feature 007): the `ThreadIndex` store (`PostgresThreadIndex` with `freyja_threads`, and
-  `InMemoryThreadIndex`), one row per thread that has had a run; `IndexedRunLocks`, which
-  `Runtime.assemble` wraps the run lease in, so that every run that takes the lease and gives
-  it back is told to the index, whoever starts it, and whose own writes never fail the lease
-  and hold it up for `INDEX_WRITE_SECONDS` at most, and which calls `on_release`, when one is
-  set, after every release (feature 009); and `settle_thread`, `open_thread`, and
-  `status_of`, which read a thread's state once, keep what a row needs of it, and turn a row
-  into its one status. `Runtime.threads` is the index. A write that is for one run names
-  that run's lease owner, and one made from a reading of a thread's state names the number
-  of runs the row had; either changes nothing once the row has moved on. Whether a run is in
-  progress is the lease's to say, never the row's. Text is cleaned of what a text column
-  does not take before it is kept. `unattended.py` is the console's runs (feature
-  007): `UnattendedRuns` drives a run that goes on without a reader in a task of its own,
-  hands each event to its reader and disconnects one that falls `READER_BACKLOG` events
-  behind, takes an agent's address out of every text of every event before the event is
-  noted or handed on (`_scrubbed`), notes in the index how the run ended (`failed` with
-  its error, or `stopped`), and
-  at shutdown (`close`) asks each run to stop at its next boundary and waits for it;
-  `SegmentedGraph`, which `Runtime.begin_run` puts in every context in place of the graph,
-  runs an armed thread in segments that end before each `model` and `tools` step, gives each
-  segment what is left of the step limit, and asks between two segments, and nowhere else,
-  whether to stop. Every other thread is passed straight to the graph. Since feature 009 it
-  first asks, for every run, who started the thread: it refuses a caller's thread on the
-  ordinary build and any thread whose lookup fails, puts `freyja_caller_files` into the
-  config of a caller's thread on the strict build, and refuses every way to run a graph but
-  `astream`; `UnattendedRuns.join` gives one more reader of a console run in progress, and
-  `UnattendedRuns.on_start` is told of each run before its first event, which is how a
-  caller's follower joins the run a person's decision starts (`ReceivedTasks.on_run_started`).
-  `Runtime.unattended` is the console's runs of this instance.
-- `src/freyja_agent/api/`: `app.py` is `create_app(open_runtime)`, `/healthz`, and the
-  `freyja-api` entry point; `hosts.py` is `AllowedHosts`, the middleware `create_app` puts
-  before every route, which refuses a request made for a host name the service does not
-  answer for (403 `unknown_host`); `runs.py` the bodies of the two thread routes that run a
-  thread (`start_message`, `start_resume`), what the console's routes do around them
-  (`open_first`, `go_on`, `start_console_run`), and the stop (`ask_stop`), so that the routes
-  and the A2A service start runs through one piece of code; with feature 009 off it refuses
-  a message or a decision on a caller's thread with 409 `a2a_server_off`; `received.py` the
-  feature's service, `ReceivedTasks`: accepting a caller's message as a console run, where a
-  caller's thread stands (`standing`, research R7's table and its three fences), writing a
-  task's end once (`look`), and the function every release calls while the feature is on;
-  a task as its caller is told it (`view`: the fixed status sentences and reasons, every text
-  read from the thread cleaned of agents' addresses and models' keys), the follower that
-  turns a console run's events into what a caller is sent, names only and the text of
-  Freyja's own reply (`follow`), and the wait of a send without a stream (`settle`);
-  `a2a_server.py` the routes of feature 009, added by the lifespan while the feature is on:
-  the card (`GET /.well-known/agent-card.json`) and `POST /a2a`, the SDK's JSON-RPC
-  dispatcher behind the checks of other origins, a credential, and the size, with
-  `FreyjaRequestHandler`, which checks a message's form, calls `ReceivedTasks`, turns its
-  tasks into the protocol's types, and refuses what the contract does not offer; it is the
-  one module that imports the SDK's server modules, and builds the card and the routes for
-  both addresses; `a2a_listener.py` the outside listener of feature 009: the application with the card and
-  the operations and nothing else (`application`), for named callers' tokens only, and the
-  `uvicorn.Server` the lifespan starts on a socket it binds itself and stops before the
-  runtime closes (`Listener`); `streaming.py` marks each `message`
-  event of a run on the strict build with `metadata.reply`, whether it is text of Freyja's
-  own reply (`is_reply`); the two message routes refuse a caller's thread with 409
-  `caller_thread` (`runs.refuse_caller_thread`), and a thread's row has `caller`;
-  `threads.py` the three thread routes (runs, state, resume),
-  each of which takes a context, the two that run under the thread's lease, and validates
-  a decision on the orchestrator that then carries it out;
-  `tools.py` the catalog route `GET /tools`, which takes a context, so it reads two rows to
-  learn whether the agents or the active profile changed, contacts nothing, and lists the
-  agents;
-  `thread_index.py` the two routes that list threads (feature 007), `GET /threads` and
-  `GET /threads/{thread_id}`, in a router of their own under the same prefix, which settle
-  the rows whose run ended since they were last read, show no row a status nobody read for
-  it, leave out a row that cannot be read instead of failing the list, contact nothing, and
-  change no thread, and the three routes of the console's runs:
-  `POST /threads/{thread_id}/runs/unattended` and `POST /threads/{thread_id}/resume/unattended`,
-  which call the handlers of `threads.py`, take the run's events out of the response
-  (`body_iterator`), and hand them to `UnattendedRuns` (the first opens a thread that has
-  a state and no row before the run starts, so that its row keeps the thread's own first
-  message), answering with
-  `Cache-Control: no-store, no-transform` and a ping every `PING_SECONDS`, and
-  `POST /threads/{thread_id}/stop`, which marks the row and answers 202, with the run
-  the stop is for, 404, or 409 (`no_run`, `not_stoppable`),
-  with their shapes in `thread_index_schemas.py`;
-  `agents.py` the routes of the Agents section under `/agents`: `GET /agents`, the list,
-  which answers 500 when the saved agents cannot be read, `POST /agents`, which reads an
-  agent's card and saves the agent when it can be used, requiring approval unless the request
-  chose otherwise, `PATCH /agents/{id}`, which changes a saved agent's approval choice, its address, or
-  both at the version the page read, reading the card at a new address first and giving up
-  the agent's pending tasks with the move, `DELETE /agents/{id}`, which removes a saved
-  agent and gives up its pending tasks, and
-  `POST /agents/{id}/check`, which reads an agent's card again through its link and says
-  whether the agent can be used; the first three are the only answers of the service that hold
-  a saved agent's address; and `PUT /agents/mode`, which sets the agents' approval mode
-  (feature 010), returned with the list as `mode`;
-  `llm.py` the profile routes under `/llm`: `GET /llm/profiles`, `POST /llm/profiles`,
-  `PATCH` and `DELETE /llm/profiles/{id}`, and `POST /llm/profiles/{id}/activate`, none of which
-  asks a model anything, and `POST /llm/profiles/{id}/test` and `POST /llm/test`, which hold a
-  profile's test with its endpoint; an activation is applied on this instance at once;
-  `guards.py` what several routers share: the LLM routes and the Agents routes answer a
-  refused request without repeating the value (`NoInputRoute`), and those two and the
-  thread routes turn away a request that changes something when a browser marks it as made
-  by a page of another origin (`refuse_other_origins`, 403 `other_origin`); `streaming.py`
-  the SSE run loop with the lease heartbeat, also driven by the worker for background runs,
-  which turns a run away with `no_usable_model` before the graph when no usable model is active,
-  ends a resume whose paused step came to hold a call that needs a decision with
-  `approval_now_required` and the agents it is about (it knows that refusal by the approval
-  middleware's sentence, which `tests/test_a2a_gate.py` pins),
-  and takes the profile's key out of a model error before it is logged or sent; `outcomes.py`
-  records pending tasks' outcomes in their thread exactly once and answers messages to agents
-  that a stop left in flight; `decisions.py` resume validation, the decisions a subagent's gate already took
-  when a resume's run stopped after it (`decisions_taken`, which the route refuses others
-  against with 409 `already_decided`), and what a resume tells the step after the gate
-  (`decided_calls`: the gate's namespace and the calls the person approved or edited),
-  including edits checked against
-  a server tool's JSON Schema and pinned arguments; `schemas.py` and `serialize.py` the request,
-  response, and event shapes.
+  operator saves, tests, and activates while the service runs.
+  `src/freyja_agent/llm/AGENTS.md` describes its modules; read it before changing code there.
+- `src/freyja_agent/runtime/`: what an instance holds while it runs: the Postgres pool and the
+  schema's migrations, the stores, the run lease, the index of threads, the console's runs,
+  and the `Runtime` that assembles them. `src/freyja_agent/runtime/AGENTS.md` describes its
+  modules; read it before changing code there.
+- `src/freyja_agent/api/`: the FastAPI application: its routes, the loop that streams a run,
+  and the service other agents call over A2A. `src/freyja_agent/api/AGENTS.md` describes its
+  modules; read it before changing code there.
 - `workspace/`: the orchestrator's file root (`FREYJA_WORKSPACE_DIR`). `skills/` is committed
   source; `cases/` is written at runtime and git-ignored.
-- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/app/layout.tsx` is the
-  shell: the sidebar (`web/components/app-sidebar.tsx`) beside the page. `/` redirects to `/tasks`;
-  the sidebar lists Tasks, Agents, and Models, in that order. `web/app/models/` is the Models
-  section, which lists the LLM profiles as cards, and `web/app/agents/` the agents, read from
-  `GET /agents` (`web/lib/agents.ts`, `web/components/agents/`). The Agents section adds an
-  agent and changes a saved agent's address and approval choice (`agent-form.tsx`, which
-  keeps nothing once it is sent or closed, asks for confirmation before it sends anything
-  that loosens or tightens approval or moves the agent, and sends the version it opened
-  with), removes a saved agent behind a confirmation (`remove-dialog.tsx`), says how many
-  pending tasks a move or a removal gave up, checks an agent from
-  its card (`check-result.tsx`), and warns above the cards about every agent that cannot be
-  used (`agents-warning.tsx`). Feature 010 names an agent's approval choice Manual or Auto:
-  a saved agent's card switches it behind a confirmation (`mode-dialog.tsx`), and an Auto
-  agent's card says when the agents' approval mode holds it to Manual. The sidebar reads the
-  same list under the same SWR key (`AGENTS_KEY`) and shows how many agents cannot be used,
-  so every page asks for `/api/agents` once. The agents' approval mode is read from that list
-  too, as the dropdown that changes it (`web/components/agents-mode.tsx`, which asks before
-  Auto), which stands left of the Send button of New task and of a task's follow-up box
-  (`send-box.tsx`'s `beside`), and nowhere else.
-  `web/app/tasks/` is the Tasks section (feature 007), with the list of tasks under the notice
-  that the console has no users (`task-list.tsx`), and `web/app/tasks/[id]/` one task, whose
-  id is read inside `<Suspense>`, as Cache Components asks of a route with a parameter; the
-  sidebar's section links are read inside one too, or the build fails for that route.
-  `web/lib/tasks.ts` holds the task types, the calls, and `events`, which reads a run's
-  stream as it arrives; `web/lib/api.ts` has `stream` beside `api` for that answer, and
-  gives both `ANSWER_SECONDS`, `api` for the whole answer and `stream` for the answer to
-  begin, after which a request counts as one that got none. Both read JSON through
-  `web/lib/json.ts` (`readJson`), which keeps a whole number beyond 2^53 as it is written
-  where the browser can (`keepsDigits`), so that it is shown and sent back digit for
-  digit.
-  `web/lib/task-runs.ts` holds the runs this browser tab started, outside React, so that a
-  run started by New task on the list's page is shown on the task's page as it arrives
-  (`useRun`); nothing is stored. The list of tasks and the sidebar's number of tasks that
-  need a decision are one reading of `GET /threads` under `THREADS_KEY`, read again every
-  `LIST_SECONDS` by `web/hooks/use-every.ts`, a timer that goes on past a reading that
-  failed, and at once by a task's view when a run it shows ends. Every reading of tasks
-  takes `READING`, so that a page that was hidden is read as soon as it is shown. So every
-  page of the console asks for `/api/threads`. `web/components/tasks/` holds New task (`new-task.tsx`),
-  the box that sends text (`send-box.tsx`), a task's view (`task-view.tsx`), which shows a
-  run as it streams, joining a reply's pieces as the service's own library joins them,
-  whether they arrive as text or as blocks (`streamed`, with `web/lib/merge.ts`, a port
-  of LangChain's `merge_content`), each action from the piece that names it and with its
-  arguments from the model step's `update`, which the stream carries for Freyja's own steps
-  and not for a subagent's, and the service's conversation once it ended,
-  a message
-  (`message.tsx`), the status in words (`status.tsx`), and the proposal card
-  (`proposal-card.tsx`), which the view puts last on the page, in the follow-up box's
-  place, and scrolls to once per proposal, which offers each proposed action only the
-  decisions the service lists for it, sends them with `decide` to `POST /threads/{id}/resume/unattended`, checks
-  no more than that edited arguments are a JSON object that it can send as they were
-  entered (`parseArguments`) and that a reason is within the service's length, and has its
-  buttons outside any form, so that Enter in a field sends no decision. It also holds the
-  follow-up box (`follow-up.tsx`), which sends another message on a task through the same
-  `send-box.tsx` and is given why it cannot be sent, a run in progress or a pending
-  proposal, by the view, and the list of a task's agent tasks (`agent-tasks.tsx`), whose
-  `awaited` says whether a task still waits for one, and which shows under a working agent
-  task what its agent last reported and how long ago, worded by `web/lib/ago.ts` from the
-  browser's time that the view keeps in its state, set by its timer and when a reading
-  arrives, never while it renders (feature 008); and who started a task when another
-  agent did (`started-by.tsx`, from the row's `caller`), on the list's row, on the
-  task's page, which then offers no follow-up box and says why, and on the proposal's card,
-  which says that no person asked for the action (feature 009). The view
-  reads its task again by one
-  timer of its own: every `FOLLOW_SECONDS` while a run it does not read is in progress,
-  every `AGENT_SECONDS` while an agent task is awaited, its row alone every
-  `FOLLOW_SECONDS` while it reads its own run's stream, so that a stop asked in another
-  window is said, and never while the page is hidden. When the reading made at the end of
-  its own run still says a run is in progress, as it can while the service gives the lease
-  back, it reads once more `AGAIN_SECONDS` later.
-  Stop (`stop-button.tsx`) is offered by the view for a run the console started that is in
-  progress: a run of this tab once its `start` event arrived, and a run it follows when the
-  row says `stoppable`. It sends `stopRun` on a press, never otherwise; the view says
-  "stopping" until it learns how the run ended, from the run's last event when it reads the
-  stream and otherwise from a reading of the row made after the stop, shows a task as
-  stopped only when the row does, and says that the stop came too late when the run ended
-  another way (FR-022a). A row names its run (`runs`) and the stop's answer the run it was
-  for, so a page that follows by reading says that only of the run it stopped.
-  All text of a task is put in
-  text nodes and never rendered as markup. The console has no users, and the section says
-  so above its list.
-  `web/components/models/` holds the list, the card, the dialog that adds a profile or changes one
-  (`profile-form.tsx`, which keeps nothing once it is sent or closed), the confirmations before a
-  profile is activated (`activate-dialog.tsx`) and deleted (`delete-dialog.tsx`), and how a test's
-  result is shown (`test-result.tsx`). `web/lib/api.ts` is the one function that calls the service,
-  always through `/api`, and its error type; `web/lib/models.ts` holds the profile types and the calls
-  that list, add, change, delete, activate, and test. Lists are read with SWR in Client Components.
-  shadcn/ui is set up: `components.json`, components under `web/components/ui/`, and the `cn` helper
-  in `web/lib/utils.ts`. Generated components need `pnpm format` after they are added, and three
-  lint rules they do not meet are off for `web/components/ui/` only (`web/biome.json`).
-  `web/next.config.ts` is the one place the web app reads its configuration: `FREYJA_API_URL`, where
-  its server forwards `/api/...`, documented in `web/.env.example`; it also holds the redirect. Unit
-  tests are `*.test.ts` and `*.test.tsx` files under `web/__tests__/`, which follows the layout of
-  the code it covers (`web/__tests__/lib/api.test.ts` covers `web/lib/api.ts`), run by Vitest with
-  jsdom; `web/__tests__/testing.ts` stubs `fetch` for them, and `web/__tests__/tasks-testing.ts`
-  for the Tasks section's tests, with runs' streams built from events and the list of agents the
-  approval mode beside Send reads answered apart (`serve`). No test file sits beside the code.
-  `web/AGENTS.md` holds Next.js's own rules for coding agents; read it before changing code
-  there. `web/CLAUDE.md` only imports it for Claude Code.
+- `web/`: the Next.js web app (pnpm, Biome, Tailwind CSS), the console. `web/AGENTS.md` holds
+  Next.js's own rules for coding agents and, after them, describes the app's sections and
+  files; read it before changing code there. `web/CLAUDE.md` only imports it for Claude Code.
 - `web/e2e/`: the web app's end-to-end tests, `*.spec.ts` files run by Playwright
-  (`web/playwright.config.ts`). Playwright reads nothing outside this directory, and Vitest is
-  told to skip it (`web/vitest.config.mts`), so neither runner picks up the other's files.
-  `console.spec.ts` covers the shell, `models.spec.ts` the Models section as it is read,
-  `profiles.spec.ts` adding, activating, testing, changing, and deleting, `agents.spec.ts`
-  the Agents section as it is read, its warnings, and that an agent's address stays in it, and `agents-manage.spec.ts` adding an
-  agent, checking one, changing one's approval choice, moving one, and removing one;
-  `agents-mode.spec.ts` the agents' approval mode beside the Tasks section's Send buttons and
-  an agent's own mode on its card (feature 010);
-  `tasks.spec.ts` the Tasks section, and that a page of another origin cannot show it in a
-  frame, `tasks-decide.spec.ts` deciding a proposal, and
-  `tasks-run.spec.ts` follow-ups, agent tasks, a run the page does not read, a page closed
-  during a run, and Stop (it moves the page's clock with `page.clock` in place of waiting
-  five or fifteen seconds), `tasks-progress.spec.ts` what a working agent last reported, its
-  age, and its box (feature 008), `tasks-callers.spec.ts` the tasks other agents started
-  (feature 009), with
-  `tasks-api.ts` (`TaskService`, which answers a page's requests for tasks, its runs, and
-  its decisions and keeps what each left, `pausedTask` and `continued` for a proposal and
-  its decision, `followedUp` and `agentTask` for a follow-up and an agent task,
-  `runningTask` and `goesOn` for a run in progress and one whose stream stops, and
-  `answerThreads`; it answers a stop as the service rules it and keeps each in `stops`); and
-  `stream.spec.ts`, the one spec that lets a page's requests through the app's forwarding,
-  to a stand-in for the service on `STAND_IN_PORT` (3109, the address the app under test
-  forwards to), to see a run's events arrive as they are produced, and that the forwarding
-  passes on the three headers the service's refusal of other origins reads, and replaces an
-  `X-Forwarded-Host` a page wrote with the name the console was asked under, which the
-  service's refusal of unknown host names rests on. It runs in projects of
-  its own, `stream-chromium` and then `stream-firefox`, after every other spec; `api.ts`
-  holds what the service would answer (`answerProfiles` and `answerAgents` for a list,
-  `ProfileService` and `AgentService` for a page that changes profiles or agents, which keep
-  what the page saved) and the locators the specs share. The app under test forwards `/api/...` to an address nothing listens on, so a test that
-  hands a page no answer sees the console as it is with the service stopped; only
-  `stream.spec.ts` listens there, in its own projects.
+  (`web/playwright.config.ts`). `web/e2e/AGENTS.md` describes the specs and what they share;
+  read it before changing one.
 - `.github/workflows/` and `.gitlab-ci.yml`: the same CI jobs for GitHub and for GitLab.
   `lint.yml` runs Ruff (`ruff check` and `ruff format --check`), pyright (`uv run pyright`),
   and Biome (`pnpm lint`), and
@@ -508,7 +146,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `web/` changes. The GitLab Playwright image's version must equal the `@playwright/test`
   version in `web/pnpm-lock.yaml`; change both together. A change to one side's jobs goes
   to the other side too. The linters only report in CI; the commit hook is where files get
-  fixed. CI does not run the opt-in Postgres tests.
+  fixed. The `pytest` job of both sides starts a Postgres of its own and runs the Postgres
+  tests with the rest of the suite.
 - `docker-compose.yml`: local Postgres for development and the integration tests.
 - `Dockerfile` and `web/Dockerfile`: the two container images, the service and the web
   console, each with its `.dockerignore` (the service's names the files that are let in).
@@ -521,40 +160,8 @@ startup and exits with an error naming the connection when it is unreachable.
   `semgrep` jobs do the first two, and no GitLab job builds an image.
   `tests/test_container_images.py` holds the images' defaults and keeps the scanners' versions
   and questions equal on both sides.
-- `tests/`: pytest suite. `conftest.py` supplies the required environment and the in-memory
-  runtime fixtures, so no `.env` is needed; `make_mcp_app` assembles an app the production way
-  with stub tool servers, `make_a2a_app` with stand-in agents, `make_llm_app` with LLM
-  profiles and a model factory, and `make_a2a_server_app` with feature 009 on, one stand-in
-  agent, and a received-task store a second app can share (`again`), with helpers to accept
-  a caller's message through `ReceivedTasks` and read its run to the end. `fakes.py` holds the scripted chat model, a labelled one that
-  can hold a call open, and the test model factory; `nowhere.py` what the three proofs
-  that no key and no agent address gets out share; `llm_stub.py` the stand-in model
-  endpoint, OpenAI-compatible, which the suite reaches through the real client, and whose
-  model id `call-tools` asks for tools, so that the Tasks section can be tried by hand
-  without a provider's key;
-  `mcp_stub.py` the stub MCP server, which
-  records every call it
-  receives; `a2a_stub.py` the stand-in A2A agent, built with the SDK's server classes, which
-  records every message and cancel and behaves by a keyword at the start of the message, and
-  which, for feature 008, sends `working_text` with every task's first working status, has a
-  held task send a working status with the text a test reports (`report`, which returns once
-  the status is stored), and reports "Step k of n" for `steps <n> <seconds>`;
-  `asgi_stream.py` the httpx transport that runs a stand-in in the test process and streams
-  its replies as they are sent; `unattended_helpers.py` what the tests of the console's runs
-  share (a tool step a test holds open, a stream read in a thread of its own);
-  `test_a2a_progress.py` the tests of feature 008, the progress of pending agent tasks, in
-  eight parts, from what counts as progress to the stream of an agent that does not stream;
-  `test_agents_mode.py` the tests of feature 010, the agents' approval mode, from the set's
-  rule to a run in progress that Manual holds at once;
-  `a2a_caller.py` the stand-in caller of feature 009, the SDK's own client behind a small
-  class and a command, as another agent would call Freyja; `a2a_requests.py` the requests
-  the feature's tests make to the A2A routes, with the stand-in caller and without it;
-  `fakes.py`'s `StreamingChatModel` streams a reply in pieces and can hold between two; the
-  feature's tests are
-  `test_a2a_server_*.py` and `test_received_tasks.py`, with
-  `integration/test_received_tasks_postgres.py` for the store on Postgres;
-  `integration/` holds the Postgres tests, skipped unless
-  `FREYJA_TEST_DATABASE_URI` is set.
+- `tests/`: pytest suite. `tests/AGENTS.md` describes its fixtures, fakes, stubs, and
+  stand-ins; read it before changing a test.
 - `.specify/`: Spec Kit templates, scripts, installed extensions, and the constitution. Feature
   artifacts go under `specs/<NNN-slug>/` as `spec.md`, `plan.md`, and `tasks.md`.
 - `.claude/skills/speckit-*/`: the Spec Kit skills for Claude Code. Codex CLI reads its own copy
@@ -567,6 +174,7 @@ startup and exits with an error naming the connection when it is unreachable.
   updates that file; a new doc takes its place in the README's list and in the Next links
   around it, and no file is renamed or numbered.
 - `AGENTS.md`: this file. `CLAUDE.md` only imports it plus the constitution for Claude Code.
+  A directory's `AGENTS.md` has a `CLAUDE.md` beside it that only imports it.
 
 ## Conventions
 
@@ -577,8 +185,11 @@ startup and exits with an error naming the connection when it is unreachable.
   file under `web/__tests__/` for the web app.
 - Coverage has a floor: `fail_under` in `pyproject.toml` for the service's lines, and the
   four thresholds in `web/vitest.config.mts` for the web app. Both are measured as CI runs the
-  suites, so without the opt-in Postgres tests, and nothing of either project is left out of
-  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. A floor
+  suites, so with the Postgres tests, and nothing of either project is left out of
+  the count apart from `web/components/ui/`, which shadcn generates. A change that brings a number below its floor adds the tests it lacks. The commit hook
+  runs the service's suite without a database, so it holds a lower floor of its own, beside
+  its command in `.pre-commit-config.yaml`; `tests/test_coverage_gate.py` keeps the three
+  places in step. A floor
   is raised as its number rises and lowered only with the reason written beside it. Coverage
   shows what no test runs; it does not show that what runs is checked.
 - Write the tests before opening a pull request or merge request, not after. Its description
@@ -590,13 +201,20 @@ startup and exits with an error naming the connection when it is unreachable.
   part that starts with an underscore, apart from those `tests/test_prompts.py` lists in
   `PRIVATE_IMPORTS`, each with its reason. A new one is added to that table, and a helper
   that is a few lines over public types is written here instead.
-- pyright reports nothing over `src/`. A type error is fixed in the code or in its
-  annotations. A line is silenced only where a library's own types say less, or other, than
-  what the library does, with `# pyright: ignore[<rule>]` on that line and the reason beside
-  it; a bare `# type: ignore` silences nothing. No file is left out of the check and no rule
-  is switched off for the project. pyright is pinned to one exact version in `pyproject.toml`,
-  so the hook and both CI systems report the same; a new version is taken in a change of its
-  own, with what it newly reports fixed in it. `tests/test_type_check_gate.py` holds this.
+- pyright reports nothing over `src/` and `tests/`. A type error is fixed in the code or in
+  its annotations. A line is silenced only where a library's own types say less, or other,
+  than what the library does, with `# pyright: ignore[<rule>]` on that line and the reason
+  beside it; a bare `# type: ignore` silences nothing, and none is written. No file is left
+  out of the check and no rule is switched off for the service. One rule is off for the
+  tests alone, `reportOptionalMemberAccess`, with its reason beside it in `pyproject.toml`:
+  a test that reads an attribute of `None` fails when it runs. Every other rule holds for
+  the tests as for the service. A test that gives a function what its signature refuses, to
+  show the refusal, or a stand-in for what it takes, types that value as `Any`
+  (`cast(Any, ...)`, or a variable annotated so); the tests' shared typed accessors are in
+  `tests/conftest.py` (`detail_of`, `indexed_locks`). pyright is pinned to one exact version
+  in `pyproject.toml`, so the hook and both CI systems report the same; a new version is
+  taken in a change of its own, with what it newly reports fixed in it.
+  `tests/test_type_check_gate.py` holds this.
 - A change to the schema is a new migration at the end of `MIGRATIONS` in
   `runtime/migrations.py`, with its checksum added to `RELEASED` in
   `tests/test_migrations.py`. A migration that was merged is never edited: a database keeps
@@ -605,7 +223,8 @@ startup and exits with an error naming the connection when it is unreachable.
   works on the newer schema while a release is rolled out. No other module makes or
   changes a table, which `tests/test_migrations.py` checks, and
   `tests/integration/test_migrations_postgres.py` applies the list to a real Postgres; run
-  it for every new migration, since CI does not.
+  it for every new migration, since the commit hook does not and CI does only once the
+  change is pushed.
 - Trivy and Semgrep report nothing: no known vulnerability of HIGH or CRITICAL severity in a
   lock file or an image, and no Semgrep finding. A vulnerable package is upgraded in its lock
   file. A Semgrep finding that is wrong is marked `# nosemgrep: <rule id>` on the line before

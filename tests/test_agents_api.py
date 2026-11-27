@@ -32,7 +32,7 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -346,7 +346,7 @@ def test_the_list_answers_with_an_error_and_no_earlier_list_when_a_store_cannot_
         response = client.get("/agents")
         # The catalog, which shows no address and no version, answers from what it had.
         catalog = client.get("/tools")
-        held = dict(made.runtime.registry._holders)  # type: ignore[union-attr]
+        held = dict(made.runtime.registry._holders)
     assert response.status_code == 500
     assert response.json() == {
         "detail": {"code": "internal", "message": "The saved agents could not be read."}
@@ -1721,7 +1721,7 @@ def test_an_address_that_comes_to_the_saved_form_is_not_a_move(
 ) -> None:
     made, record, _there = movable(make_a2a_app, pending=1)
     here = made.transport_at(FIRST_URL)
-    more = {} if approval is None else {"approval": approval}
+    more: dict[str, Any] = {} if approval is None else {"approval": approval}
     with caplog.at_level(logging.DEBUG), TestClient(made.app) as client:
         at_startup = list(here.requests)
         response = move(client, record, spelling.strip(), **more)
@@ -2469,8 +2469,8 @@ def test_the_sweep_covers_every_route_of_the_section() -> None:
 
     routes = {
         (method, route.path.replace("{agent_id}", "{id}"))
-        for route in router.routes
-        for method in route.methods  # type: ignore[attr-defined]
+        for route in cast(list[Any], router.routes)
+        for method in route.methods
     }
     assert routes == set(AGENT_ROUTES)
     assert set(CHANGING) == {route for route in routes if route[0] != "GET"}

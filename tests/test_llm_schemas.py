@@ -26,6 +26,9 @@ VALID: dict[str, Any] = {
     "model": "served-model",
     "api_key": KEY,
 }
+# A request's fields as a request gives them: a key as text, and a field no shape has.
+DRAFT: dict[str, Any] = {"provider": "openai", "model": "m", "api_key": KEY}
+UNKNOWN: dict[str, Any] = {"extra": "x"}
 
 
 def test_a_new_profile_needs_a_name_a_provider_a_model_and_a_key() -> None:
@@ -83,11 +86,11 @@ def test_text_is_trimmed_and_the_limits_are_inclusive() -> None:
 
 def test_an_unknown_field_is_refused() -> None:
     with pytest.raises(ValidationError, match="extra"):
-        LlmProfileCreate(**VALID, extra="x")
+        LlmProfileCreate(**VALID, **UNKNOWN)
     with pytest.raises(ValidationError, match="extra"):
-        LlmProfileDraft(provider="openai", model="m", api_key=KEY, extra="x")
+        LlmProfileDraft(**DRAFT, **UNKNOWN)
     with pytest.raises(ValidationError, match="extra"):
-        LlmProfileUpdate(name="Renamed", extra="x")
+        LlmProfileUpdate(name="Renamed", **UNKNOWN)
 
 
 def test_an_update_changes_only_what_it_sends_and_must_send_something() -> None:
@@ -99,7 +102,7 @@ def test_an_update_changes_only_what_it_sends_and_must_send_something() -> None:
 
 
 def test_a_draft_takes_its_key_from_the_request_or_from_a_saved_profile() -> None:
-    assert LlmProfileDraft(provider="openai", model="m", api_key=KEY).profile_id is None
+    assert LlmProfileDraft(**DRAFT).profile_id is None
     assert LlmProfileDraft(provider="openai", model="m", profile_id="a" * 32).api_key is None
     with pytest.raises(ValidationError, match="api_key"):
         LlmProfileDraft(provider="openai", model="m")
@@ -133,7 +136,7 @@ ROOT = Path(__file__).resolve().parent.parent
     ],
 )
 def test_the_refusals_of_the_profile_routes_have_their_codes(code: str) -> None:
-    assert ErrorDetail(code=code, message="x").code == code
+    assert ErrorDetail.model_validate({"code": code, "message": "x"}).code == code
 
 
 def test_the_codes_are_the_ones_the_contract_lists() -> None:
@@ -157,4 +160,4 @@ def test_the_codes_are_the_ones_the_contract_lists() -> None:
 
 def test_a_stream_error_code_is_not_an_http_refusal() -> None:
     with pytest.raises(ValidationError):
-        ErrorDetail(code="no_usable_model", message="x")
+        ErrorDetail.model_validate({"code": "no_usable_model", "message": "x"})

@@ -148,7 +148,7 @@ has no state. When it has the lease, `started_at` and `base_checkpoint` are writ
 
 | Reader | What it asks |
 |---|---|
-| `Runtime.begin_run`, `begin_read`, `SegmentedGraph` | Which caller started this thread, if any; the hand-over count of the conversation's last task. |
+| `Runtime.begin_run`, `begin_read`, `SegmentedGraph` | Which caller started this thread, if any; the hand-over count of the conversation's last task whose run started. |
 | The thread routes | Whether a thread is a caller's, to refuse a message; whether its conversation has a working task, to refuse an approval when it has none. |
 | `UnattendedRuns.should_stop` | Whether the last task of a caller's thread was canceled by its caller, at each boundary of a console run on it. |
 | The sweep, every 30 seconds | Every row with `released_at` null; in its first round, the working rows of callers the settings no longer name. |
