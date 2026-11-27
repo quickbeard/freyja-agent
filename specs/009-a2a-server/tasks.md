@@ -39,7 +39,8 @@ plan phase 3), and another message in a conversation (plan phase 4, T041 here).
 
 Two refusals are absent between requests, and a person still decides in both windows: the
 hand-over count is not checked before request 6, and every hand-off from a caller's thread
-waits for a person from request 1 on (FR-013a); a proposal that a run comes to after a
+waits for a person from request 1 on (FR-013a; since feature 010, while the agents' approval
+mode or the agent is Manual); a proposal that a run comes to after a
 caller's task was stopped in the console is not rejected by rule before request 4, and a
 person can still decide it.
 
@@ -47,8 +48,9 @@ Terms used below:
 
 - **A caller's thread**: a thread with a row in `freyja_a2a_conversations`.
 - **The strict build**: the second orchestrator built while the feature is on, in which
-  every agent tool is gated, files go through `CallerFiles`, and the model is told an alias
-  in place of the thread's id (R6, R16). **The ordinary build** is the one built today.
+  files go through `CallerFiles` and the model is told an alias in place of the thread's id
+  (R6, R16). Until feature 010 every agent tool was also gated there; since then its agent
+  tools are classified as the ordinary build's are. **The ordinary build** is the one built today.
 - **The store**: `ReceivedTaskStore` in `src/freyja_agent/runtime/received_tasks.py`, with
   `InMemoryReceivedTaskStore` and `PostgresReceivedTaskStore`.
 - **`ReceivedTasks`**: the feature's service in `src/freyja_agent/api/received.py`.
@@ -1140,22 +1142,22 @@ automated proof of FR-018 and FR-019 passes.
 
 **Plan phase 7.**
 
-- [ ] T107 Walk the whole of quickstart.md on a check instance by the standing rules, in its
+- [X] T107 Walk the whole of quickstart.md on a check instance by the standing rules, in its
       order, and correct it where the built feature differs; record in plan.md anything the
       walk found that no test covers
-- [ ] T108 [P] Read `README.md`, `docs/a2a-server.md`, `docs/web-console.md`, `AGENTS.md`,
+- [X] T108 [P] Read `README.md`, `docs/a2a-server.md`, `docs/web-console.md`, `AGENTS.md`,
       and `web/README.md` against the code: they describe only what exists, name every file
       this feature added, and cover every point of FR-030; every setting is in `.env.example`
       and in the README's Configuration table
-- [ ] T109 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
+- [X] T109 [P] Compare the two coverage numbers with T001's. Raise `fail_under` in
       `pyproject.toml` or a threshold in `web/vitest.config.mts` only with the owner's word;
       say in the request what the opt-in Postgres tests, which CI does not run, leave out of
       the service's number
-- [ ] T110 Run every gate once more on the finished branch: the commit hook over all files
+- [X] T110 Run every gate once more on the finished branch: the commit hook over all files
       (`uv run pre-commit run --all-files`, touching nothing while it runs), `pnpm test:e2e`
       in both browsers, the opt-in Postgres tests against `freyja_test_a2a`, Semgrep, Trivy
       over the source, and the service's image built with `--network host` and scanned
-- [ ] T111 [P] Record in plan.md what was built differently from the plan, with the reason
+- [X] T111 [P] Record in plan.md what was built differently from the plan, with the reason
 
 ---
 
@@ -1273,7 +1275,8 @@ T049 then T051 web/lib/tasks.ts and web/components/tasks/
 3. **Stop and validate**: quickstart.md section 1 and the limit of section 5. A deployment
    can turn the feature on for agents on its own machine. Every hand-off from a caller's
    thread waits for a person from request 1 on, since the strict build exists before
-   anything is served; what request 3 adds is every operation tried against a proposal and
+   anything is served (since feature 010, while the agents' approval mode or the agent is
+   Manual); what request 3 adds is every operation tried against a proposal and
    the proposal's card in the console.
 
 ### Incremental Delivery

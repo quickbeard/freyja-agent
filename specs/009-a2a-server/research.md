@@ -152,6 +152,12 @@ as gated, whatever the agent's approval choice. `Runtime.begin_run` and `begin_r
 thread's id, look up whether a caller started the thread (R8), and return the strict build's
 graph and catalog for one that a caller did.
 
+**Amended by feature 010** (its FR-007, which amended FR-013a): the strict build classifies
+each agent's tools as the ordinary build does, by the agents' approval mode and the agent's
+own choice (`gated=agents.gated(link)`), and the check at send time does not refuse a call
+for being on the strict build. The strict build stays for the caller's file area (R16) and
+the alias. The first two points below describe the build before that change.
+
 - `Runtime._build` already classifies each agent's tools with `gated=agents.gated(link)`; the
   strict build passes `gated=True`, and the catalog, the allowed decisions, and the gate
   follow from the classification. `build_agent` itself gains two parameters, for the file

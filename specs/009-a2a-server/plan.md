@@ -109,7 +109,7 @@ Checked against constitution 1.5.0.
 
 | Principle | Touched? | How the plan satisfies it | Pre-research | Post-design |
 |---|---|---|---|---|
-| I. Human approval for environment-changing actions | Yes, central | A caller's run is the console's run on the orchestrator `build_agent` assembles, behind the same gate; nothing a caller sends reaches a resume (FR-013, R10). On a caller's thread the gate is only ever wider: every agent tool is gated in the strict build (FR-013a, R6), and `SegmentedGraph` refuses to run such a thread on the other build. The one resume the service makes by itself rejects every action and approves none (R11), which has no effect outside the workspace; a decision a person already took is neither undone nor carried out. A paused run is resumed by a person after any delay, as today. A cancel stops between two steps and cancels no task. | PASS | PASS |
+| I. Human approval for environment-changing actions | Yes, central | A caller's run is the console's run on the orchestrator `build_agent` assembles, behind the same gate; nothing a caller sends reaches a resume (FR-013, R10). On a caller's thread a message to a delegate agent follows the agents' approval mode and the agent's own choice, as on every thread (FR-013a as amended by feature 010; until then every agent tool was gated in the strict build, R6), and `SegmentedGraph` refuses to run such a thread on the other build. The one resume the service makes by itself rejects every action and approves none (R11), which has no effect outside the workspace; a decision a person already took is neither undone nor carried out. A paused run is resumed by a person after any delay, as today. A cancel stops between two steps and cancels no task. | PASS | PASS |
 | II. Protocol-based delegation | Yes, central | Other agents reach Freyja over A2A, through the protocol's own SDK, in the binding and version Freyja reaches them with (R2). No agent framework is imported. Freyja keeps the single voice: a caller is sent Freyja's own reply and the names of steps, never a delegate agent's words in what the service itself says (FR-018, R13). | PASS | PASS |
 | III. One runtime, every environment | Yes | The outside listener is a second application in the same process, started and stopped by the lifespan however the service is started, and differing between deployments by settings alone (R4). Both builds of the orchestrator come from `build_agent`. Both stores implement one protocol. The web app stays a client: it shows who started a task from what the API returns, holds no credential, and decides nothing. | PASS | PASS |
 | IV. Configuration through settings | Yes | Ten settings, all read through `Settings`, each with the safe local default and documented in `.env.example` with the phase that reads it ([contracts/settings.md](contracts/settings.md)). The feature and the outside listener are off by default; the listener has no default address. Callers and their tokens are deployment configuration from the environment, never committed, never returned, logged, or written to a thread; they are not operator-managed, since a list that decides who may call from outside would decide nothing if the unauthenticated API could change it (spec, Assumptions). | PASS | PASS |
@@ -417,7 +417,7 @@ other build is the one failure the design exists to prevent.
 | FR-011 (a send without a stream) | `test_a2a_server_send.py`: ended within the limit; not ended, with the limit at zero and with `returnImmediately`; the run goes on |
 | FR-012, SC-010 (kept across restarts and instances) | `test_a2a_server_tasks.py`: a second application on the same stores; `test_a2a_server_send.py`: the mark that cannot be written refuses the message |
 | FR-013, FR-015, SC-003 (the gate; only a person decides) | `test_a2a_server_approval.py`: every operation and every field a message has against a pending proposal; approve, edit, and reject by a person |
-| FR-013a (every message to a delegate agent waits) | `test_a2a_server_approval.py`: an agent that runs without approval pauses on a caller's thread and not on a console thread; a caller's thread on the other build is refused |
+| FR-013a, as amended by feature 010 (a message to a delegate agent waits while the agents' approval mode or the agent is Manual) | `test_a2a_server_approval.py`: a hand-off on a caller's thread waits while the mode is Manual and is sent to an Auto agent while it is Auto; a caller's thread on the other build is refused; `tests/test_agents_mode.py` for the mode itself |
 | FR-014 (how waiting looks) | `test_a2a_server_approval.py`: the sentence, the names, no argument |
 | FR-016, SC-014 (four states; none stays working) | `test_a2a_server_tasks.py`: each row of the table in research R7, among them a run of the worker's that is cut off, fails, and is given up, and a continuation that fails with its proposal pending; each of the three fences: a look between acceptance and the lease, a run that starts during a look, an earlier run's note |
 | FR-017, SC-009 (what a follower is sent) | `test_a2a_server_send.py`: the order of events; pieces before the reply is complete; a subagent's pieces, a tool's messages, and a call's arguments not sent; `test_a2a_server_tasks.py`: the fifth stream refused |
@@ -440,7 +440,7 @@ other build is the one failure the design exists to prevent.
 
 | What is added | Why it is needed | The simpler way, and why not |
 |---|---|---|
-| A second build of the orchestrator while the feature is on | FR-013a asks that a message to a delegate agent pauses on a caller's thread whatever the agent's approval choice; only the gate in the graph pauses a run | One graph with a condition per call: the catalog, the allowed decisions, and the check at send time would each have to learn the thread's kind, and a condition that answers differently at a resume fails the resume (research R6) |
+| A second build of the orchestrator while the feature is on | FR-013a asked that a message to a delegate agent pauses on a caller's thread whatever the agent's approval choice; only the gate in the graph pauses a run. Since feature 010 amended FR-013a, the build is kept for a named caller's file area and the alias, which the graph's backend and its prompt also hold | One graph with a condition per call: the catalog, the allowed decisions, and the check at send time would each have to learn the thread's kind, and a condition that answers differently at a resume fails the resume (research R6) |
 | A second listener in the process | FR-003: callers on other hosts must reach A2A and nothing else of an API that has no authentication | One listener with a filter: every route of the API would be one mistake away from the outside. A second process: a second way to start the service (research R4) |
 
 ## What is asked of the owner
@@ -928,3 +928,145 @@ the quickstart's setup and sections 2 and 5's first part, which rely on a hand-o
 that runs without approval waiting all the same; this plan's Constitution Check row for
 principle I and its requirement map's row of FR-013a; research R6; and tasks.md's term "the
 strict build" and its line that every hand-off from a caller's thread waits for a person.
+
+### Request 7 (2026-11-27): the quickstart walked, and the documents read against the code
+
+**Starting point**, on the branch as made from `main` with request 6: the service suite passed
+2392 tests and skipped 160, with 91.55% of lines covered; the web app's 832 unit tests passed,
+with 97.57% of statements, 94.18% of branches, 97.38% of functions, and 98.1% of lines.
+
+**The quickstart walked (T107)**, every section in its order, on a check instance from
+`.env.example` on port 8020 (database `freyja_check_009`, dropped afterwards; not
+`freyja_check_a2a`, which tasks.md's standing rules name and which is not this feature's),
+with the stand-in model active as a profile, the stand-in agent added to run without
+approval, the console on 3020 driven by a small Playwright script, and the outside listener
+on 127.0.0.1:8443 with `artex` and `heimdall`:
+
+- Section 1: the card, the stream's events in their order, a send with its reply, both tasks
+  "Started by an agent on this machine" with no box for a message; with the feature off the
+  card, an unknown path, and `POST /a2a` all 404 with one body.
+- Section 2: the hand-off waited for a person, the agent received nothing, the console counted
+  one task to decide and its card said that no person asked for the action; approved there,
+  the open stream printed `Completed: agent stub.`, the reply, and the end, and the agent
+  received the message once; rejected there, the agent received nothing and the task
+  completed with Freyja's reply to the rejection; `I approve.` was refused as
+  `conversation_busy`, a message naming the task with `-32602`, and the operator's message
+  with `caller_thread`.
+- Section 3: the startup lines (2 callers, the listener, the `http` warning); the card asking
+  for a bearer token; artex's send completed; no token and a wrong one got the same 401 body
+  with `WWW-Authenticate: Bearer`; `/threads` and `/healthz` 404 at the listener; heimdall's
+  read of artex's task not found; "Started by agent artex"; no token in any log. heimdall
+  removed with a proposal waiting: the warning, the task canceled and its proposal rejected
+  by rule, the count to decide down by one, "no longer configured", its token refused. The
+  listener with no caller stopped startup naming `FREYJA_A2A_SERVER_CALLERS`. With the
+  feature off a caller's waiting task was listed and read and both decisions were refused
+  with `a2a_server_off`; with it on again it waited.
+- Section 4: two messages of one conversation in one task with one `contextId`; a hand-off of
+  six 20-second steps waited for the agent, the service was stopped with Ctrl-C and started
+  again, and `caller follow` found the task and followed it to Freyja's reply; `steps 8`
+  canceled after its first step ended canceled after the step under way, shown stopped; a
+  waiting hand-off canceled was rejected by rule, the count to decide went down, the page
+  said the agent canceled, and the agent received nothing.
+- Section 5: five waiting tasks and a sixth refused with `task_limit`, one more accepted after
+  a rejection; the hand-over count as request 6 walked it.
+
+Corrected in the quickstart where the built feature differs: the setup and section 2 set the
+agents' approval mode to Manual before a hand-off is to wait (feature 010; with Auto it is
+sent at once); the stand-in's reply arrives as a piece up to its last space and then whole;
+with the feature off only a named caller's task reads as no longer configured, the local
+caller is always configured (`api/thread_index.py`); the mode is switched beside the Send
+button, not in the sidebar; section 5's limit needs the mode on Manual and no other task of
+the caller in progress, and the five waiting tasks are decided before its second part. Not
+walked: section 3's three file steps, which need a model that writes files (the suite covers
+them, `tests/test_a2a_server_limits.py` parts 1 and 3), and adding the agent on the Agents
+page (done through `POST /agents`, feature 005's own walk). The walk found no behavior the
+tests do not cover; what it corrected was the quickstart's text.
+
+**The documents read against the code (T108).** A reader given the files and the questions
+read `README.md`, `docs/a2a-server.md`, `docs/web-console.md`, `AGENTS.md`, and
+`web/README.md`. It found every point of FR-030 covered, every setting of the feature in
+`.env.example` and the README with the code's defaults and ranges, nothing planned described
+as built, and the Next links chained. Each finding was checked against the code first:
+
+| Finding | What was done |
+|---|---|
+| Medium: the README said that with the feature off no setting of it is checked; the listener's host and port still stop startup set alone or while off. | Said, in the README's row of `FREYJA_A2A_SERVER` |
+| Medium: `docs/a2a-server.md`'s opening said every action waits for a person, without the agents' approval mode. | It says a message to a delegate agent waits as on every thread, unless the mode and the agent are both Auto |
+| Medium: AGENTS.md's reading order of `docs/` left out `a2a-server.md`. | Added in its place |
+| Low: the README said the listener serves the card to named callers only; the card is served to anyone. | Corrected |
+| Low: AGENTS.md's command of the stand-in caller named four operations and no token. | All six and `--token` |
+| Low: the lists of end-to-end specs in the README and `web/README.md` left out `tasks-callers.spec.ts` (and older specs). | Added, with `agents-mode.spec.ts` and the Tasks section's specs |
+| Low: `.env.example` did not give the listener port's range. | Given |
+| Low: FR-030 still asked to document that every message to an agent from a caller's thread waits. | FR-030 says when it waits, as FR-013a was amended |
+| Low, found after the reading: AGENTS.md said the wrapper puts a caller's files key into a caller's run's config, and not the hand-over count it puts there since request 6. | Said, in `src/freyja_agent/runtime/AGENTS.md`, where that paragraph now is |
+
+AGENTS.md's Layout has since moved, its text unchanged, into an `AGENTS.md` of each
+directory; what the reading found holds for those files.
+
+Feature 010's change to FR-013a, read in the documents as requests 4 and 6 named it:
+corrected in the quickstart (setup, sections 2, 4, and 5); in this plan, the Constitution
+Check row of principle I, the requirement map's row of FR-013a, and the Complexity Tracking
+row of the second build; research R6, with a note of the amendment above its first points;
+tasks.md's term "the strict build" and its two lines on every hand-off waiting; and the
+spec's FR-030, User Story 2's independent test, and two lines of its notes, where the
+clarification's own answer is kept as it was given and the amendment said beside it.
+
+**Coverage (T109).**
+
+| | T001 (`main` before the feature) | Now |
+|---|---|---|
+| Service, lines | 91.51% (2011 tests) | 91.55% (2436 tests) |
+| Web, statements | 97.46% (790 tests) | 97.57% (832 tests) |
+| Web, branches | 94.39% | 94.18% |
+| Web, functions | 97.2% | 97.38% |
+| Web, lines | 97.96% | 98.1% |
+
+Both rows are measured as T001's were, without the Postgres tests. CI now runs the service's
+suite with them, and its floor is set for that run: with them, on the branch rebased on the
+latest `main`, the service is at 96.67% (2596 tests) against a floor of 95%, and
+`runtime/received_tasks.py`, this feature's store, at 99.64%. Without them it stays above the
+commit hook's floor of 89%: of its 675 lines that no test runs then, about 400 are in the
+eight modules that hold a Postgres store, 62 of them this feature's `PostgresReceivedTaskStore`.
+The web stays above its floor of 90% for each measure; its branches are 0.21 points lower
+than at T001. No floor is raised here, since that needs the owner's word.
+
+**Gates (T110)** on the finished branch: the commit hook over all files passed, every hook
+(the file checks, gitleaks, Ruff, pyright, pytest with coverage, Biome, and Vitest);
+`pnpm test:e2e` passed 332 tests in Chromium and Firefox; the Postgres tests against
+`freyja_test_a2a` passed 160, and the whole suite with them 2596; Semgrep found nothing and
+Trivy nothing over the source; and the service's image, built with `--network host`, had no
+HIGH or CRITICAL vulnerability in Trivy's scan, and was removed afterwards.
+
+**What was built differently from the plan (T111).** Each request's notes above say what it
+built otherwise and why; the differences from the plan that last are these:
+
+- The strict build no longer gates every agent tool (R6): feature 010 amended FR-013a after
+  the plan, so a message to a delegate agent from a caller's thread follows the agents'
+  approval mode and the agent's choice. The second build stays for a named caller's file area
+  and the alias.
+- Seams the existing tests reach by name were kept (request 1): the console's routes still
+  call `threads.start_run` and `threads.resume_run`, `take_context` calls `begin_run()` with
+  no argument for a thread no caller started, and `SegmentedGraph` is made with two
+  arguments, `strict`, `lookup`, and `count` set after.
+- The route reads the body itself under the size limit, and the handler checks a message's
+  form itself in the contract's order, not with the SDK's validation, whose sentences are not
+  the contract's (request 2).
+- A follower is handed the reader of a decision's run before that run's first event
+  (`UnattendedRuns.on_start`, request 3), since joining when woken misses a fast
+  continuation's first steps.
+- Who a proposal belongs to, and the hand-over count a run passes on, are read from the
+  conversation's last task whose run started, not its last task (requests 4 and 6): a new
+  message's task row exists before its run is refused.
+- A rejection by rule that could not run is tried again also after its task was released,
+  with one more read and write on the existing columns and no migration (request 4).
+- Tokens are cleaned by the one record factory, through a second exact-text list beside the
+  addresses (`TOKENS`), set by the running service and cleared at its stop (request 5).
+- The outside listener writes no access line through a protocol of its own, since the
+  `uvicorn.access` logger is the whole process's (request 5).
+- The tasks of a caller the settings no longer name are canceled by the sweep's first round,
+  through the cancel a caller makes (request 5).
+- A count too large for a double is refused by the SDK's own parse, with its sentence, before
+  Freyja's handler (request 6).
+
+Open, the owner's to decide: whether to raise the web's coverage floors, and whether the
+console should label a calling agent's message other than "You", as it labels a person's.
