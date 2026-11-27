@@ -25,6 +25,7 @@ from freyja_agent.runtime.thread_index import (
     LIST_LIMIT,
     IndexedRunLocks,
     InMemoryThreadIndex,
+    Settled,
     ThreadIndex,
     ThreadRecord,
     open_thread,
@@ -62,7 +63,7 @@ def index() -> ThreadIndex:
 async def settled(
     index: ThreadIndex,
     thread: str,
-    how: str,
+    how: Settled,
     *,
     at: datetime = AT,
     owner: str = A,

@@ -112,7 +112,7 @@ def test_a_guarded_model_answers_and_is_still_what_it_was() -> None:
     assert isinstance(guarded, Repeats)
     assert type(guarded).__name__ == "Repeats"
     assert guarded.invoke("hello").content == "hello"
-    assert "".join(chunk.content for chunk in guard_model(streaming, [KEY]).stream("hi")) == "hel"
+    assert "".join(chunk.text for chunk in guard_model(streaming, [KEY]).stream("hi")) == "hel"
     # A model that cannot stream is not taken for one that can: langchain-core tells by
     # whether the method is the base class's.
     assert type(guarded)._stream is BaseChatModel._stream
@@ -128,6 +128,7 @@ def test_guarding_again_changes_the_keys_and_not_the_class() -> None:
     assert type(model) is guarding
     with pytest.raises(ProviderError):
         model.invoke("hello")  # the first key is no longer one of this model's
+    assert isinstance(model, Repeats)
     model.says = "the key sk-another-key-0002 is not allowed"
     with pytest.raises(ModelError) as raised:
         model.invoke("hello")

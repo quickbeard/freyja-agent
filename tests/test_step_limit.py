@@ -1,7 +1,7 @@
 """FR-004a: a run stops at the configured step limit with an error event; the thread stays usable."""
 
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -37,7 +37,7 @@ def test_thread_is_usable_after_hitting_the_limit(
     with TestClient(make_app(looping)) as client:
         with client.stream("POST", "/threads/loop-2/runs", json={"message": "go"}) as response:
             assert sse_events(response.iter_lines())[-1][0] == "error"
-        assert not client.app.state.runtime.locks._rows
+        assert not cast(FastAPI, client.app).state.runtime.locks._rows
 
     # Same thread, same persistence, a model that finishes: the thread continues.
     healthy = make_runtime(

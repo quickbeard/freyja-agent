@@ -9,10 +9,9 @@ import asyncio
 from collections.abc import AsyncIterator
 
 import pytest
-from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.config import Settings
-from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.persistence import Pool, open_persistence
 from freyja_agent.runtime.received_tasks import PostgresReceivedTaskStore
 from tests.test_received_tasks import CASES, LIMITS, Case, accept
 
@@ -44,7 +43,7 @@ COLUMNS = {
 
 
 @pytest.fixture
-async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
+async def pool(settings: Settings) -> AsyncIterator[Pool]:
     persistence = await open_persistence(settings)
     try:
         yield persistence.pool
@@ -53,7 +52,7 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 
 
 @pytest.fixture
-async def store(pool: AsyncConnectionPool) -> PostgresReceivedTaskStore:
+async def store(pool: Pool) -> PostgresReceivedTaskStore:
     made = PostgresReceivedTaskStore(pool)
     return made
 
@@ -64,7 +63,7 @@ async def test_the_postgres_store(case: Case, store: PostgresReceivedTaskStore) 
 
 
 async def test_the_tables_are_the_data_model_s(
-    pool: AsyncConnectionPool, store: PostgresReceivedTaskStore
+    pool: Pool, store: PostgresReceivedTaskStore
 ) -> None:
     async with pool.connection() as conn:
         rows = await (

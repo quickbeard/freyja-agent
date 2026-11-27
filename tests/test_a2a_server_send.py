@@ -12,7 +12,7 @@ import logging
 import re
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, MutableMapping
 from importlib.metadata import version
 from typing import Any
 
@@ -300,6 +300,8 @@ def test_a_caller_that_stops_reading_leaves_the_run_going_on(
                 if event.WhichOneof("payload") == "artifact_update":
                     task_id = event.artifact_update.task_id
                     break
+            else:
+                raise AssertionError("the stream ended before any text of the reply")
             with model.held():
                 pass
             return task_id
@@ -392,7 +394,10 @@ def test_a_piece_is_freyja_s_own_reply_only() -> None:
     assert not is_reply((), ToolMessage(content="x", tool_call_id="c"), own)
     assert not is_reply(
         (),
-        AIMessageChunk(content="", tool_call_chunks=[{"name": "ls", "args": "{}", "index": 0}]),
+        AIMessageChunk(
+            content="",
+            tool_call_chunks=[{"name": "ls", "args": "{}", "id": None, "index": 0}],
+        ),
         own,
     )
     # A call the libraries make for themselves, as the one that summarizes.
@@ -730,16 +735,16 @@ def test_a_body_without_a_length_is_read_no_further_than_the_limit(
     piece = 64 * 1024
     reads = 0
 
-    async def ask() -> list[dict[str, Any]]:
+    async def ask() -> list[MutableMapping[str, Any]]:
         nonlocal reads
-        sent: list[dict[str, Any]] = []
+        sent: list[MutableMapping[str, Any]] = []
 
         async def receive() -> dict[str, Any]:
             nonlocal reads
             reads += 1
             return {"type": "http.request", "body": b"x" * piece, "more_body": reads < 20}
 
-        async def send(message: dict[str, Any]) -> None:
+        async def send(message: MutableMapping[str, Any]) -> None:
             sent.append(message)
 
         scope = {
@@ -1201,7 +1206,7 @@ def test_a_task_id_the_service_could_not_have_made_is_not_looked_up(
         looked.append(task_id)
         return await original(task_id, caller)
 
-    store.get = get  # type: ignore[method-assign]
+    store.get = get
     made = make_a2a_server_app(ScriptedChatModel(), received=store)
     with TestClient(made.app) as client:
         found = [rpc(client, "GetTask", {"id": bad}).json() for bad in ("x\u0000y", "T" * 32)]

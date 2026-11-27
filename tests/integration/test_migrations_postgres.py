@@ -31,7 +31,7 @@ from freyja_agent.runtime.migrations import (
     checksum,
     migrate,
 )
-from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.persistence import Pool, open_persistence
 from freyja_agent.runtime.saved_agents import PostgresSavedAgentStore
 from freyja_agent.runtime.thread_index import PostgresThreadIndex
 
@@ -403,7 +403,7 @@ async def test_a_migration_applied_as_another_text_stops_the_start(
 
 
 @pytest.fixture
-async def pools(settings: Settings) -> AsyncIterator[list[AsyncConnectionPool]]:
+async def pools(settings: Settings) -> AsyncIterator[list[Pool]]:
     """Two pools on one database: two instances of the service."""
     opened = [await open_persistence(settings), await open_persistence(settings)]
     try:
@@ -428,7 +428,7 @@ NOTES = Migration(0, "notes", ("CREATE TABLE freyja_test_notes (note text PRIMAR
 
 
 async def test_two_instances_that_start_together_apply_a_migration_once(
-    pools: list[AsyncConnectionPool], db: psycopg.AsyncConnection
+    pools: list[Pool], db: psycopg.AsyncConnection
 ) -> None:
     """The statement is not one that can run twice, and it is slow enough for the two to
     meet: the second waits for the first and finds the migration applied."""
@@ -445,7 +445,7 @@ async def test_two_instances_that_start_together_apply_a_migration_once(
 
 
 async def test_a_migration_that_fails_is_not_applied_in_part_and_the_one_before_it_stays(
-    pools: list[AsyncConnectionPool], db: psycopg.AsyncConnection
+    pools: list[Pool], db: psycopg.AsyncConnection
 ) -> None:
     broken = Migration(
         0,
@@ -472,7 +472,7 @@ async def test_a_migration_that_fails_is_not_applied_in_part_and_the_one_before_
 
 
 async def test_a_failed_migration_s_error_names_the_constraint_and_repeats_no_row_s_value(
-    pools: list[AsyncConnectionPool], db: psycopg.AsyncConnection
+    pools: list[Pool], db: psycopg.AsyncConnection
 ) -> None:
     """The database's own text for a unique violation repeats the value, which may be an
     agent's address. The error says the kind, the table, and the constraint."""

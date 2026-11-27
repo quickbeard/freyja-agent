@@ -16,12 +16,12 @@ import threading
 import time
 from collections.abc import Callable
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
 
-from freyja_agent.delegates.agent_cards import SENTENCES
+from freyja_agent.delegates.agent_cards import SENTENCES, CardCode
 from tests.a2a_stub import StubAgent, make_stub, stub_card
 from tests.asgi_stream import StreamingASGITransport
 from tests.conftest import A2aApp, holds_port, saved_card
@@ -198,7 +198,7 @@ def test_a_check_of_an_agent_that_cannot_be_used_says_why_and_the_agent_stays_co
     sse_events: Any,
     caplog: pytest.LogCaptureFixture,
     kind: str,
-    code: str,
+    code: CardCode,
 ) -> None:
     model = ScriptedChatModel(
         script=[
@@ -311,6 +311,7 @@ def test_a_saved_agent_s_changed_details_are_kept_and_reach_every_instance_s_nex
 
     assert (result["usable"], result["recorded"], result["card_changed"]) == (True, True, True)
     # The details just read are the kept ones, and nothing else of the agent changed.
+    assert kept is not None
     assert kept.card == saved_card(later) != record.card
     assert dataclasses.replace(kept, card=record.card, card_read_at=record.card_read_at) == record
     # The revision moved, so every instance describes the tools from them in its next run.
@@ -676,7 +677,7 @@ class Slow(StreamingASGITransport):
     delay = 0.0
 
     async def handle_async_request(self, request: Any) -> Any:
-        self.requests.append(None)  # counted when asked, not when answered
+        self.requests.append(cast(Any, None))  # counted when asked, not when answered
         await asyncio.sleep(self.delay)
         self.requests.pop()
         return await super().handle_async_request(request)

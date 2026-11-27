@@ -12,6 +12,7 @@ from freyja_agent.delegates.addresses import ADDRESS, AddressScrubber
 from freyja_agent.delegates.agent_cards import (
     SENTENCES,
     AgentCardSummary,
+    CardCode,
     CardError,
     CardProblem,
     SkillSummary,
@@ -37,7 +38,7 @@ async def read(stub: StubAgent, *, limit: float = 5) -> tuple[AgentCard, Streami
 
 
 async def problem_of(
-    stub: StubAgent, *, limit: float = 5, prepare: Callable[[StreamingASGITransport], None] = id
+    stub: StubAgent, *, limit: float = 5, prepare: Callable[[StreamingASGITransport], object] = id
 ) -> tuple[CardProblem, StreamingASGITransport]:
     transport = StreamingASGITransport(stub.app)
     prepare(transport)
@@ -211,10 +212,10 @@ async def test_a_compressed_card_is_not_decoded() -> None:
     ids=["authentication", "no-text", "no-json-rpc"],
 )
 async def test_a_card_freyja_cannot_use_says_which_check_failed(
-    card: AgentCard, code: str, sentence: str
+    card: AgentCard, code: CardCode, sentence: str
 ) -> None:
     problem, _ = await problem_of(make_stub("stub", card=card))
-    assert problem == CardProblem(code, sentence)  # type: ignore[arg-type]
+    assert problem == CardProblem(code, sentence)
 
 
 class Failing(httpx.AsyncBaseTransport):
@@ -253,7 +254,7 @@ async def test_whatever_the_read_meets_is_one_of_the_nine(error: Exception, code
 def test_no_sentence_holds_an_address_or_anything_an_agent_said() -> None:
     assert len(SENTENCES) == 9
     for code in SENTENCES:
-        message = CardProblem.of(code, seconds=20).message  # type: ignore[arg-type]
+        message = CardProblem.of(code, seconds=20).message
         assert message.endswith(".")
         for part in ("http", "127.0.0.1", "localhost", "9998", "{", "}"):
             assert part not in message

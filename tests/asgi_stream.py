@@ -69,6 +69,9 @@ class StreamingASGITransport(httpx.AsyncBaseTransport):
             raise httpx.ConnectError("All connection attempts failed", request=request)
         if self.hang:
             await asyncio.Event().wait()
+        # httpx types a request's body as read either way; a transport of an async client
+        # is handed one that is read asynchronously.
+        assert isinstance(request.stream, httpx.AsyncByteStream)
         body = b"".join([part async for part in request.stream])
         scope = {
             "type": "http",

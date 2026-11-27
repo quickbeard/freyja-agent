@@ -3,17 +3,16 @@
 from collections.abc import AsyncIterator
 
 import pytest
-from psycopg_pool import AsyncConnectionPool
 
 from freyja_agent.config import Settings
 from freyja_agent.runtime.locks import PostgresRunLocks
-from freyja_agent.runtime.persistence import open_persistence
+from freyja_agent.runtime.persistence import Pool, open_persistence
 
 THREAD = "pg-lock-1"
 
 
 @pytest.fixture
-async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
+async def pool(settings: Settings) -> AsyncIterator[Pool]:
     persistence = await open_persistence(settings)
     try:
         yield persistence.pool
@@ -22,12 +21,12 @@ async def pool(settings: Settings) -> AsyncIterator[AsyncConnectionPool]:
 
 
 @pytest.fixture
-async def locks(pool: AsyncConnectionPool) -> PostgresRunLocks:
+async def locks(pool: Pool) -> PostgresRunLocks:
     locks = PostgresRunLocks(pool, ttl_seconds=60)
     return locks
 
 
-async def expires_in(pool: AsyncConnectionPool, thread_id: str) -> float:
+async def expires_in(pool: Pool, thread_id: str) -> float:
     async with pool.connection() as conn:
         cursor = await conn.execute(
             "SELECT EXTRACT(EPOCH FROM expires_at - now()) AS seconds "
@@ -39,7 +38,7 @@ async def expires_in(pool: AsyncConnectionPool, thread_id: str) -> float:
     return float(row["seconds"])
 
 
-async def set_expiry(pool: AsyncConnectionPool, thread_id: str, seconds_from_now: int) -> None:
+async def set_expiry(pool: Pool, thread_id: str, seconds_from_now: int) -> None:
     async with pool.connection() as conn:
         await conn.execute(
             "UPDATE freyja_run_locks SET expires_at = now() + %(delta)s * interval '1 second' "
@@ -62,7 +61,7 @@ async def test_acquire_is_exclusive_until_released(locks: PostgresRunLocks) -> N
 
 
 async def test_renew_moves_expires_at_forward_for_the_owner_only(
-    locks: PostgresRunLocks, pool: AsyncConnectionPool
+    locks: PostgresRunLocks, pool: Pool
 ) -> None:
     await locks.acquire(THREAD, "a:1")
     await set_expiry(pool, THREAD, 5)
@@ -76,7 +75,7 @@ async def test_renew_moves_expires_at_forward_for_the_owner_only(
 
 
 async def test_an_expired_row_is_taken_over_by_a_new_owner(
-    locks: PostgresRunLocks, pool: AsyncConnectionPool
+    locks: PostgresRunLocks, pool: Pool
 ) -> None:
     await locks.acquire(THREAD, "a:1")
     await set_expiry(pool, THREAD, -1)

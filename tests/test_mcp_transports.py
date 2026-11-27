@@ -207,7 +207,7 @@ def test_a_launched_server_that_dies_is_unreachable_and_is_not_launched_again(
     with TestClient(app) as client:
         run(client, "p-2", sse_events)
         (answer,) = tool_results(client, runtimes[0], "p-2")
-        pid = int(answer.content)
+        pid = int(answer.text)
         assert alive(pid) and pid != os.getpid()
 
         os.kill(pid, signal.SIGKILL)
@@ -236,7 +236,7 @@ def test_stopping_the_service_stops_a_launched_server(
     with TestClient(app) as client:
         run(client, "p-5", sse_events)
         (answer,) = tool_results(client, runtimes[0], "p-5")
-        pid = int(answer.content)
+        pid = int(answer.text)
         assert alive(pid)
     assert wait_until_gone(pid)
 

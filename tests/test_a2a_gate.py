@@ -9,7 +9,7 @@ the stand-in's own record of the messages it received.
 
 import logging
 from collections.abc import Callable
-from typing import Any
+from typing import Any, cast
 
 import pytest
 from fastapi.testclient import TestClient
@@ -158,7 +158,7 @@ def test_approve_sends_exactly_one_message_as_proposed(
         ("text", PROPOSED["context"], {"freyja": "context"}),
     ]
     (result,) = tool_messages(model)
-    assert result.content.startswith("Agent 'stub' completed task ")
+    assert result.text.startswith("Agent 'stub' completed task ")
 
 
 def test_an_edit_sends_the_edited_message_and_context(
@@ -441,7 +441,7 @@ def test_the_sentence_a_blocked_resume_is_known_by_is_the_approval_middleware_s(
             human_in_the_loop, "interrupt", lambda _request: {"decisions": [{"type": "approve"}]}
         )
         try:
-            middleware.after_model({"messages": [step]}, None)  # type: ignore[arg-type]
+            middleware.after_model({"messages": [step]}, cast(Any, None))
         except Exception as error:
             raised = error
 
