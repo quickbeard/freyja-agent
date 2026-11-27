@@ -1,7 +1,7 @@
 [project]
 name = "freyja-agent"
 version = "0.1.0"
-description = "Add your description here"
+description = "General-purpose agent orchestrator built on Deep Agents and served with FastAPI"
 readme = "README.md"
 authors = [
     { name = "Minh Nguyen", email = "quickbeard@gmail.com" }
@@ -110,7 +110,6 @@ ignore = ["E501"]  # line length is the formatter's job
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101", "ARG"]            # assert and unused fixtures are normal in tests
-"src/freyja_agent/cli.py" = ["T201"]    # the CLI prints by design
 
 [tool.ruff.lint.isort]
 known-first-party = ["freyja_agent", "tests"]
