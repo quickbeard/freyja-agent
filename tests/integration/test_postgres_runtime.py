@@ -130,3 +130,26 @@ def test_a_failed_steps_error_is_stored_without_the_key(
     stored += [str(row[0]) for row in rest]
     assert any("Incorrect API key provided" in text for text in stored)
     assert all(MARK not in text for text in stored)
+
+
+def test_readyz_asks_the_database(settings: Settings) -> None:
+    """``/readyz`` is answered by one statement through the service's own pool."""
+    with TestClient(service(settings, ScriptedChatModel(), "instance-a")) as client:
+        ready = client.get("/readyz")
+
+    assert (ready.status_code, ready.json()) == (200, {"status": "ok"})
+
+
+async def test_the_readiness_statement_fails_once_the_database_cannot_be_asked(
+    settings: Settings,
+) -> None:
+    opened = await persistence.open_persistence(settings)
+    try:
+        await opened.ping()
+    finally:
+        await opened.close()
+
+    with pytest.raises(Exception) as refused:
+        await opened.ping()
+    # What the route says of it is the failure's kind and nothing else.
+    assert type(refused.value).__name__ == "PoolClosed"

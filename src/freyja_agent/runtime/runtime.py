@@ -16,7 +16,7 @@ for a caller's thread (research R6).
 
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
 from contextlib import asynccontextmanager, suppress
 from dataclasses import dataclass, field, replace
 from functools import partial
@@ -276,6 +276,9 @@ class Runtime:
     strict_agent: Any = None
     strict_catalog: Catalog | None = None
     strict_segmented: SegmentedGraph | None = field(default=None, repr=False)
+    # Whether the database answers, asked by ``/readyz``: set by ``open``, which has the
+    # pool. None for a runtime with in-memory persistence, which is always ready.
+    ping: Callable[[], Awaitable[None]] | None = field(default=None, repr=False)
 
     @property
     def agents(self) -> tuple[AgentLink, ...]:
@@ -704,6 +707,7 @@ class Runtime:
                 thread_index=thread_index,
                 received_tasks=received_tasks,
             ) as runtime:
+                runtime.ping = persistence.ping
                 yield runtime
         finally:
             await persistence.close()

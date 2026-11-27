@@ -21,6 +21,8 @@ from freyja_agent.runtime.migrations import migrate
 
 # How long startup waits for the first connection before giving up with a clear error.
 CONNECT_TIMEOUT_SECONDS = 10.0
+# How long the readiness check waits for a connection from the pool.
+PING_TIMEOUT_SECONDS = 2.0
 
 
 class DatabaseUnavailableError(RuntimeError):
@@ -50,6 +52,12 @@ class Persistence:
 
     async def close(self) -> None:
         await self.pool.close()
+
+    async def ping(self) -> None:
+        """Ask the database one statement that reads nothing; raises when it cannot be
+        asked, which is what ``/readyz`` reports."""
+        async with self.pool.connection(timeout=PING_TIMEOUT_SECONDS) as connection:
+            await connection.execute("SELECT 1")
 
 
 def redact_uri(uri: str) -> str:
