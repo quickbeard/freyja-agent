@@ -113,6 +113,8 @@ uv run pre-commit run --all-files
 
 CI runs both linters and pyright on every pull request and merge request and on `main`: `.github/workflows/lint.yml` on GitHub, and the `ruff`, `pyright`, and `biome` jobs of `.gitlab-ci.yml` on GitLab. There they only report: `ruff check`, `ruff format --check`, `pyright`, and `biome check` change no file, so a failure is fixed locally with the commands above.
 
+What a CI job checks is written once, in a script under `scripts/ci/` named after the job: `ruff.sh`, `pyright.sh`, `pytest.sh`, `biome.sh`, `vitest.sh`, `playwright.sh`, `gitleaks.sh`, `trivy.sh`, and `semgrep.sh`. GitHub's job and GitLab's job for the same check both call it and run nothing else of the check, so the two sides cannot come to ask different things; what a job installs first differs by side and stays in the CI file. To change a check, change its script. A new job is added to both CI files with a script of its own: `tests/test_ci_parity.py` fails when a job is on one side only, apart from the `images` job of `scan.yml`, which GitLab has no runner for. The weekly Deep Agents canary is the one job on both sides that calls no script, since it upgrades a package before its gate; `tests/test_deepagents_canary.py` compares its two sides. A script installs nothing and runs from any directory, so `scripts/ci/ruff.sh` asks locally what CI asks, given the tool it calls is on the path.
+
 ## Secrets
 
 [gitleaks](https://github.com/gitleaks/gitleaks) looks for keys, tokens, and passwords in what is committed. The commit hook runs it over the staged changes and stops the commit when it finds one. pre-commit builds gitleaks itself the first time, which takes about a minute and needs the network; nothing is installed by hand.

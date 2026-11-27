@@ -2,6 +2,10 @@
 # (pytest, Vitest) of both projects, and the web app's end-to-end tests (Playwright). The
 # same jobs run on GitHub from lint.yml, unit-tests.yml, and playwright.yml under
 # .github/workflows/. A job added since says in its own comment which workflow it has there.
+#
+# What a job checks is in scripts/ci/<job>.sh, which the job of the same check on GitHub
+# calls too, so the two sides cannot come to ask different things. What a job installs
+# differs by side and stays here. tests/test_ci_parity.py holds this.
 stages:
   - test
 
@@ -27,12 +31,10 @@ ruff:
     # Ruff comes from uv.lock, so CI checks with the version a developer has.
     - uv sync --locked
   script:
-    # Both report and change nothing; the commit hook is where files get fixed.
-    - uv run ruff check .
-    - uv run ruff format --check .
+    - scripts/ci/ruff.sh
 
 # The types of the service and of its tests. The same job runs on GitHub from lint.yml, and
-# the commit hook runs the same command.
+# the commit hook runs the script's command.
 pyright:
   extends: .every-change
   # The Python that .python-version names.
@@ -45,19 +47,16 @@ pyright:
     # the code against the packages the lock file installs.
     - uv sync --locked
   script:
-    # Over src/ and tests/, as pyproject.toml has it.
-    - uv run pyright
+    - scripts/ci/pyright.sh
 
 biome:
   extends: .every-change
   image: node:26-slim
   before_script:
     - npm install -g pnpm@12
-    - cd web
-    - pnpm install --frozen-lockfile
+    - pnpm --dir web install --frozen-lockfile
   script:
-    # biome check: lint and formatting in one command.
-    - pnpm lint
+    - scripts/ci/biome.sh
 
 # Secrets in any commit. The same job runs on GitHub from secrets.yml, and the commit hook
 # runs the same version over what is staged: change the three together.
@@ -71,9 +70,7 @@ gitleaks:
     # Every commit, not only the last: a secret stays in the history after it is removed.
     GIT_DEPTH: 0
   script:
-    # --redact: a finding is reported without the value, which a log would keep. The rules
-    # and the made-up keys of the tests that are let through are in .gitleaks.toml.
-    - gitleaks git --redact --no-banner .
+    - scripts/ci/gitleaks.sh
 
 pytest:
   extends: .every-change
@@ -99,20 +96,17 @@ pytest:
     # --locked fails when uv.lock is out of step with pyproject.toml instead of rewriting it.
     - uv sync --locked
   script:
-    # With the Postgres tests under tests/integration, against the service above. --cov:
-    # with coverage, held to fail_under in pyproject.toml.
-    - uv run pytest --cov
+    # With the Postgres tests under tests/integration, against the service above.
+    - scripts/ci/pytest.sh
 
 vitest:
   extends: .every-change
   image: node:26-slim
   before_script:
     - npm install -g pnpm@12
-    - cd web
-    - pnpm install --frozen-lockfile
+    - pnpm --dir web install --frozen-lockfile
   script:
-    # With coverage, held to the thresholds in web/vitest.config.mts.
-    - pnpm test:coverage
+    - scripts/ci/vitest.sh
 
 playwright:
   stage: test
@@ -127,17 +121,17 @@ playwright:
       changes:
         - web/**/*
         - .gitlab-ci.yml
+        - scripts/ci/playwright.sh
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
       changes:
         - web/**/*
         - .gitlab-ci.yml
+        - scripts/ci/playwright.sh
   before_script:
     - npm install -g pnpm@12
-    - cd web
-    - pnpm install --frozen-lockfile
+    - pnpm --dir web install --frozen-lockfile
   script:
-    # Playwright builds the app and serves it itself (web/playwright.config.ts).
-    - pnpm exec playwright test
+    - scripts/ci/playwright.sh
   artifacts:
     when: always
     paths:
@@ -156,21 +150,15 @@ trivy:
     # The image starts Trivy itself; the job needs a shell.
     entrypoint: [""]
   script:
-    - >-
-      trivy fs --scanners vuln,misconfig --severity HIGH,CRITICAL --exit-code 1
-      --skip-dirs .venv --skip-dirs web/node_modules --skip-dirs web/.next .
+    - scripts/ci/trivy.sh
 
 # Semgrep over the source. The same job runs on GitHub from scan.yml: change the version in
-# both. --error: any finding fails. --metrics=off: nothing about the repository is sent; the
-# rules are fetched, which is why they are named and `auto` is not used.
+# both.
 semgrep:
   extends: .every-change
   image: semgrep/semgrep:1.178.0
   script:
-    - >-
-      semgrep scan --metrics=off --error
-      --config p/default --config p/security-audit --config p/owasp-top-ten
-      --config p/dockerfile .
+    - scripts/ci/semgrep.sh
 
 # The Deep Agents canary: pyright and the Python suite against a newer Deep Agents than
 # uv.lock names, so that what an upgrade breaks is learned the week the release comes out.
@@ -178,7 +166,9 @@ semgrep:
 # for; tests/test_deepagents_canary.py keeps the two in step. It runs in a scheduled
 # pipeline and in no other, and a scheduled pipeline runs nothing else. The schedule is not
 # in this file: it is made once in the project's settings (Build, Pipeline schedules), weekly
-# and for main, and its play button starts the canary by hand.
+# and for main, and its play button starts the canary by hand. It is the one job with a
+# twin that calls no script of scripts/ci: it upgrades a package before its gate, which a
+# script does not do, and runs the gate without `uv run`'s sync, as no other job does.
 deepagents-canary:
   stage: test
   # The Python that .python-version names.

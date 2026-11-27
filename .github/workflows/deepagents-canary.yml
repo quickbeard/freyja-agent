@@ -6,7 +6,9 @@ name: Deep Agents canary
 # schedule and by hand, never for a pull request: a library's new release is no fault of the
 # change under review. What it upgrades stays in the job and is not committed. The same job
 # runs on GitLab as `deepagents-canary` in .gitlab-ci.yml, and
-# tests/test_deepagents_canary.py keeps the two in step.
+# tests/test_deepagents_canary.py keeps the two in step. Unlike the other workflows' jobs it
+# calls no script of scripts/ci: it upgrades a package before its gate, which a script does
+# not do, and runs the gate without `uv run`'s sync.
 on:
   schedule:
     # Mondays at 03:17 UTC.
