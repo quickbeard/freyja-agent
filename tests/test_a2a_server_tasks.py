@@ -41,7 +41,7 @@ from freyja_agent.runtime import unattended as unattended_module
 from freyja_agent.runtime.received_tasks import InMemoryReceivedTaskStore
 from freyja_agent.runtime.unattended import CallerThreadError
 from tests.a2a_caller import StandInCaller, as_json
-from tests.a2a_requests import ADDRESS, at_rest, ended, rpc, sending, text_of
+from tests.a2a_requests import ADDRESS, at_rest, call, ended, kinds, rpc, sending, text_of
 from tests.a2a_stub import make_stub
 from tests.asgi_stream import StreamingASGITransport
 from tests.conftest import ServerApp, detail_of, indexed_locks, read_events
@@ -1084,6 +1084,166 @@ def test_a_cancel_of_a_task_that_ended_or_was_never_made_is_refused(
     assert [answer["error"]["code"] for answer in refused] == [-32002, -32001, -32001]
     assert task.state == "completed"
     assert "canceled received task" not in caplog.text
+
+
+LOOK = AIMessage(
+    content="Let me look.", tool_calls=[{"id": "l1", "name": "ls", "args": {"path": "/"}}]
+)
+
+
+def _followed_through(
+    client: TestClient, made: ServerApp, model: LabelledChatModel, end: Callable[[str], Any]
+) -> tuple[list[dict[str, Any]], Any]:
+    """Every event of a send with a stream whose task ``end`` ends while the run waits in its
+    first model call, and what ``end`` returned. The step goes on once ``end`` has."""
+    returned: list[Any] = []
+
+    def end_while_held(task_id: str) -> None:
+        with model.held():
+            returned.append(end(task_id))
+
+    async def work(caller: StandInCaller) -> list[dict[str, Any]]:
+        events: list[dict[str, Any]] = []
+        async for event in caller.stream("List."):
+            events.append(as_json(event))
+            if len(events) == 1:
+                await asyncio.to_thread(end_while_held, events[0]["task"]["id"])
+        return events
+
+    model.hold()
+    return call(client, made, work), returned[0]
+
+
+def test_a_stream_sends_nothing_of_the_run_once_its_task_was_canceled(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    # The step under way completes (FR-021), but its caller canceled the task, which ended
+    # at once and does not change again (FR-016): its stream says so next, and nothing else.
+    model = LabelledChatModel(script=[LOOK, ls("l2")], final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        events, answer = _followed_through(
+            client, made, model, lambda task_id: cancel(client, task_id)
+        )
+        task = quiet(client, made, events[0]["task"]["id"])
+    assert answer["result"]["status"]["state"] == "TASK_STATE_CANCELED"
+    assert kinds(events) == ["task", "statusUpdate"]
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_CANCELED"
+    assert text_of(events[-1]) == CANCELED
+    assert model.calls == 1
+    assert (task.state, task.reason) == ("canceled", "canceled")
+
+
+def test_a_stream_says_no_step_once_another_instance_canceled_its_task(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    # A cancel through another instance writes the task's end and wakes no follower here; the
+    # run stops at its next boundary all the same, and the step's status is not sent.
+    model = LabelledChatModel(script=[ls("l1"), ls("l2")], final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        events, written = _followed_through(
+            client,
+            made,
+            model,
+            lambda task_id: client.portal.call(
+                functools.partial(made.received.end, task_id, "canceled", reason="canceled")
+            ),
+        )
+        quiet(client, made, events[0]["task"]["id"])
+    assert written is True
+    assert kinds(events) == ["task", "statusUpdate"]
+    assert events[-1]["statusUpdate"]["status"]["state"] == "TASK_STATE_CANCELED"
+    assert model.calls == 1
+
+
+def _followed_after_its_end(
+    client: TestClient, made: ServerApp, accepted: Any, during: Callable[[Any], Any] | None = None
+) -> list[Any]:
+    """Every change ``follow`` gives for ``accepted``'s task, its end written already, as a
+    follower that fell behind the run reads it; ``during`` is told of each change."""
+
+    async def follow() -> list[Any]:
+        changes = []
+        async for change in made.service().follow(accepted.task, accepted.events):
+            changes.append(change)
+            if during is not None:
+                during(change)
+        return changes
+
+    return client.portal.call(follow)
+
+
+def test_a_follower_behind_its_run_when_its_task_completes_is_sent_every_step(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    # Only a cancel ends a task while its run is in progress; every other end is written once
+    # the run has ended, and a follower behind it still reads what the run left.
+    model = StreamingChatModel(script=[ls("l1")], final_text="There is one file here now.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "List.")
+        ended(client, made, accepted.task.task_id)
+        changes = _followed_after_its_end(client, made, accepted)
+    names = [type(change).__name__ for change in changes]
+    assert names.count("Status") == 2
+    assert "Piece" in names
+    assert names[-1] == "Ended"
+    assert changes[-1].view.state == "completed"
+
+
+def test_a_follower_behind_a_run_a_person_stopped_is_sent_the_step_that_completed(
+    make_a2a_server_app: Callable[..., ServerApp],
+) -> None:
+    # A Stop in the console ends the task canceled too, but once the run has ended: it is not
+    # its caller's cancel, and what the run did is still the caller's to be told.
+    model = LabelledChatModel(script=[ls("l1")], final_text="Done.")
+    made = make_a2a_server_app(model)
+    with TestClient(made.app) as client:
+        model.hold()
+        accepted = made.accept(client, "List.")
+        with model.held():
+            asked = client.post(f"/threads/{accepted.task.thread_id}/stop")
+        task = ended(client, made, accepted.task.task_id)
+        changes = _followed_after_its_end(client, made, accepted)
+    assert asked.status_code == 202
+    assert (task.state, task.reason) == ("canceled", "stopped")
+    assert [type(change).__name__ for change in changes] == ["Status", "Ended"]
+    assert changes[-1].view.state == "canceled"
+
+
+def test_a_row_that_cannot_be_read_while_a_run_is_followed_is_taken_as_not_canceled(
+    make_a2a_server_app: Callable[..., ServerApp],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The stream goes on with the run: a status is not kept back for a failed read.
+    caplog.set_level(logging.WARNING, logger="freyja_agent")
+    made = make_a2a_server_app(ScriptedChatModel(script=[ls("l1")], final_text="Done."))
+    readable = made.received.get
+    broken = {"now": False}
+
+    async def get(task_id: str) -> Any:
+        if broken["now"]:
+            raise OSError(task_id)
+        return await readable(task_id)
+
+    def mended(change: Any) -> None:
+        # Readable again once the first step was sent, so that the task's end is read.
+        broken["now"] = False
+
+    with TestClient(made.app) as client:
+        accepted = made.accept(client, "List.")
+        monkeypatch.setattr(made.received, "get", get)
+        ended(client, made, accepted.task.task_id)
+        broken["now"] = True
+        changes = _followed_after_its_end(client, made, accepted, mended)
+    assert type(changes[0]).__name__ == "Status"
+    assert type(changes[-1]).__name__ == "Ended"
+    assert (
+        f"Received task {accepted.task.task_id} could not be read while its run was followed "
+        "(OSError)"
+    ) in caplog.text
 
 
 # Part 7: a cancel and a proposal (FR-021, FR-022, FR-022a, research R11).

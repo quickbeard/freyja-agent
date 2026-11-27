@@ -93,6 +93,9 @@ REJECT_ATTEMPTS = 5
 REJECT_SECONDS = 30
 # The reason every action of such a proposal is rejected with (FR-021).
 REJECTED = "The requesting agent canceled the task."
+# The reason of a task its caller canceled: the one end written while a run of its thread may
+# still be in progress (FR-016); every other end is written once the run has ended.
+CANCELED = "canceled"
 # The events that end a run's stream (001 contracts/sse-events.md).
 _TERMINAL = frozenset({"end", "interrupt", "error"})
 # A failed run's code, as the index notes it, to the fixed reason a caller is given.
@@ -648,7 +651,9 @@ class ReceivedTasks:
         A follower that falls so far behind a run that the console's runs disconnect its
         reader ends without ``Ended``: its caller is disconnected, and subscribes again
         (contracts/a2a-server.md). A run that starts on the thread once the task has ended,
-        such as the caller's next message's, is not read for it.
+        such as the caller's next message's, is not read for it, and a run it reads stops
+        being read once the task's caller has canceled it, while the step under way
+        completes: nothing more of the run is sent, and ``Ended`` follows.
         """
         wake = asyncio.Event()
         woken = self._wakers.setdefault(task.thread_id, set())
@@ -675,11 +680,22 @@ class ReceivedTasks:
                         sentence = WORKING
                         yield Status(WORKING)
                     held = ""
-                    finished = False
+                    finished = canceled = False
                     async with contextlib.aclosing(reader) as run:
                         async for event in run:
                             finished = finished or event.event in _TERMINAL
                             change = self._change(event)
+                            # A task its caller canceled ended at once and does not change
+                            # again (FR-016): nothing more of the run is sent for it. A cancel
+                            # here wakes its followers; one through another instance is read
+                            # from the row before a new status is sent. Every other end is
+                            # written once the run has ended, and what it left is read.
+                            told = isinstance(change, Status) and change.sentence != sentence
+                            if wake.is_set() or told:
+                                wake.clear()
+                                if await self._canceled_now(task):
+                                    canceled = True
+                                    break
                             if isinstance(change, Piece):
                                 ready, held = _ready(held + change.text)
                                 if ready:
@@ -691,7 +707,7 @@ class ReceivedTasks:
                                 sentence = change.sentence
                             if change is not None:
                                 yield change
-                    if not finished and self._running(task.thread_id):
+                    if not finished and not canceled and self._running(task.thread_id):
                         # The reader was disconnected for falling behind; the run goes on.
                         return
                 task, standing = await self._looked(await self.store.get(task.task_id) or task)
@@ -714,6 +730,21 @@ class ReceivedTasks:
                 del self._wakers[task.thread_id]
             for left in self._joined.pop(wake, []):
                 self.leave(left)
+
+    async def _canceled_now(self, task: ReceivedTask) -> bool:
+        """Whether its caller has canceled ``task`` by now, as its row says: the one end
+        written while a run of its thread may be in progress. A row that cannot be read is
+        taken as not canceled, and the follower goes on with the run."""
+        try:
+            current = await self.store.get(task.task_id)
+        except Exception as exc:
+            logger.warning(
+                "Received task %s could not be read while its run was followed (%s)",
+                task.task_id,
+                type(exc).__name__,
+            )
+            return False
+        return current is not None and (current.state, current.reason) == ("canceled", CANCELED)
 
     async def settle(self, accepted: Accepted, seconds: float) -> View:
         """The task of a send that asked for no stream, once it has ended or ``seconds``
@@ -877,7 +908,7 @@ class ReceivedTasks:
         agent task go on. What fails after the write is left to the next look.
         """
         found = await self.look(task)
-        if found.ended or not await self.store.end(found.task_id, "canceled", reason="canceled"):
+        if found.ended or not await self.store.end(found.task_id, "canceled", reason=CANCELED):
             raise NotCancelableError(found.task_id)
         if why == "unnamed":
             logger.warning(
