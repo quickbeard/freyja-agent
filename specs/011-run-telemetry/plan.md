@@ -149,7 +149,7 @@ tests/
 ├── test_telemetry_waiting.py     # new: User Story 3
 ├── test_telemetry_nowhere.py     # existing work; extended to every new span, metric, and value
 └── integration/
-    └── test_agent_tasks_postgres.py  # the new read against a real Postgres
+    └── test_a2a_tasks_postgres.py    # the new read against a real Postgres
 
 docs/observability.md             # every span, metric, and value; what is never sent
 .env.example, README.md, AGENTS.md and the nested AGENTS.md files

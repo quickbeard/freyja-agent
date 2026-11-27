@@ -41,6 +41,12 @@ Changes made while reviewing [checklists/privacy-reliability.md](checklists/priv
 - SC-005 is measured against the time limit of one attempt to send, and SC-006 names the three points at which recording is made to fail.
 - Sending goes on without a restart when the collector answers again (Edge Cases), and an address with `http` is taken without a warning, since nothing sent is content (Assumptions).
 
+### Analysis, 2026-11-27
+
+`/speckit-analyze` found no critical or high issue. One finding changed a requirement; the others changed tasks and the plan, and are named in the pull request.
+
+- FR-022 said "one line in the log" for a reading of the waiting values that failed, without saying how often. It is said once, and again only after a reading has succeeded, so a database that is down for an hour is one line.
+
 ## User Scenarios & Testing *(mandatory)*
 
 The terms of the earlier features are used as they are there. A **run** is one stretch of the orchestrator's work on a thread: the answer to a message, the continuation after a person's decision (a resume), or the background run that delivers an agent task's outcome (feature 003). A run ends, pauses with a proposal for a person to decide, fails, is stopped at a boundary (feature 007), or is cancelled when its reader leaves or the service stops it. A **model call** is one request to the model, and a **tool call** one use of a tool: one of Freyja's own, a tool server's (feature 002), or an agent's hand-off or cancel (feature 003). The **delegation worker** is what watches pending agent tasks and delivers their outcomes, one **round** at a time.
@@ -102,7 +108,7 @@ An operator wants to know what is waiting on somebody or something: how many thr
 1. **Given** threads whose last run paused with a proposal that is not decided, **When** the metrics are sent, **Then** the collector receives their number.
 2. **Given** an agent task whose outcome is ready and has not been delivered to its thread, **When** the metrics are sent, **Then** the collector receives the age of the oldest such outcome, and zero when there is none.
 3. **Given** several instances sharing one database, **When** each sends these two values, **Then** each sends what the database says, so the values are the same from every instance and are not to be added up.
-4. **Given** the database cannot be read when the values are due, **When** the metrics are sent, **Then** the two values are left out, the log says so once, and no run and no other metric is affected.
+4. **Given** the database cannot be read when the values are due, **When** the metrics are sent, **Then** the two values are left out, the log says so once until a reading succeeds again, and no run and no other metric is affected.
 
 ---
 
@@ -183,7 +189,7 @@ An operator wants to see the service as its clients see it: which routes are ask
 
 - **FR-020**: The service MUST report the number of threads whose last run paused with a proposal that no person has decided.
 - **FR-021**: The service MUST report the age of the oldest agent task's outcome that is ready and has not been delivered to its thread, and zero when there is none.
-- **FR-022**: The two values MUST be read from what every instance shares, no more often than metrics are sent, and never on the path of a run. Reading them MUST take no thread's lease, change no thread, and contact no model, tool server, or agent; it MAY settle a thread's row in the index of threads, as a reading of the list of threads does (feature 007). A reading that fails MUST leave both values out, with one line in the log, and MUST affect no run and no other metric.
+- **FR-022**: The two values MUST be read from what every instance shares, no more often than metrics are sent, and never on the path of a run. Reading them MUST take no thread's lease, change no thread, and contact no model, tool server, or agent; it MAY settle a thread's row in the index of threads, as a reading of the list of threads does (feature 007). A reading that fails MUST leave both values out and MUST affect no run and no other metric. The first failure MUST be said in the log in one line, and the next not before a reading has succeeded again.
 - **FR-023**: The documentation MUST say that the two values are the same from every instance and are not to be added up.
 
 **Requests**

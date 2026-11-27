@@ -61,7 +61,7 @@ orchestrator's own, marked `agent`.
 - [ ] T011 [US1] In `src/freyja_agent/runtime/telemetry.py`: the value `freyja.model.caller` (`agent`, `library`, `test`); `Telemetry.model_call(caller=..., provider=..., model=...)`, whose scope has `model_call` true; and `Telemetry.model_request()`, which returns what records one request to the model made inside a run and outside a model call, and None otherwise, without setting the context variable (research R8).
 - [ ] T012 [US1] In `src/freyja_agent/llm/guard.py`: `guard_model(model, secrets, record=None)` keeps `record` on the instance, and each of the four wrapped methods tells it of the request's start and end; the cleaned error is what is raised and what is recorded (research R8).
 - [ ] T013 [US1] In `src/freyja_agent/llm/active.py` and `src/freyja_agent/runtime/runtime.py`: the model manager is given the runtime's telemetry and hands `Telemetry.model_request` to every `guard_model` call.
-- [ ] T014 [US1] In `src/freyja_agent/llm/check.py` and `src/freyja_agent/api/llm.py`: `check_model` takes how to record a call and wraps each of its two requests; the route hands it `Telemetry.model_call` with `caller` `test`, the provider, and the model's name for a saved profile and the environment's only (FR-010a, research R9).
+- [ ] T014 [US1] In `src/freyja_agent/llm/check.py` and `src/freyja_agent/api/llm.py`: `check_model` takes how to record a call and wraps each of its two requests; `_check` hands it `Telemetry.model_call` with `caller` `test` and the provider, and with the model's name when the test is of a listed profile, saved or the environment's (`POST /llm/profiles/{profile_id}/test`), and not when it is of values that are not saved (`POST /llm/test`) (FR-010a, research R9).
 
 **Checkpoint**: a run's trace holds every call of the model made within it, once.
 
@@ -73,7 +73,7 @@ tells a count apart comes from a bounded set.
 **Independent Test**: drive runs with the orchestrator's calls, a library's, and a
 profile's test; `freyja.model.calls` holds one series for each caller with the right count.
 
-- [ ] T015 [US2] In `tests/test_telemetry.py`: `freyja.model.calls` is told apart by `freyja.model.caller` for the three callers; no metric this feature sends has a run's id or a thread's id among its values (FR-018); every count is of the instance that made it (FR-019).
+- [ ] T015 [US2] In `tests/test_telemetry.py`: `freyja.model.calls` is told apart by `freyja.model.caller` for the three callers; no metric this feature sends has a run's id or a thread's id among its values (FR-018); every count is of the instance that made it (FR-019); the sampler keeps every trace and `Settings` has no field that thins them (FR-006).
 - [ ] T016 [US2] In `src/freyja_agent/runtime/telemetry.py`: the caller is among the values of `freyja.model.calls`, for every way a model call is recorded.
 
 **Checkpoint**: User Stories 1 and 2 hold together.
@@ -90,14 +90,14 @@ delivered they read 0.
 ### Tests for User Story 3
 
 - [ ] T017 [P] [US3] In `tests/test_agent_task_store.py`, the store's contract tests, and `tests/integration/test_a2a_tasks_postgres.py`: `oldest_ready_outcome_age()` is 0 with no task, 0 when every ready outcome is delivered, and otherwise the seconds since the earliest of `coalesce(ended_at, last_checked_at)` among the tasks with `outcome_ready` and no `delivered_at`; a task that asks for input counts by when it was last checked.
-- [ ] T018 [P] [US3] In `tests/test_telemetry_waiting.py`: the two gauges send what the last reading found; with no reading, or one older than two intervals, they send nothing; a reading that fails replaces nothing, is said in the log once, and affects no other metric (FR-022).
+- [ ] T018 [P] [US3] In `tests/test_telemetry_waiting.py`: the two gauges send what the last reading found; with no reading, or one older than two intervals, they send nothing; a reading that fails replaces nothing and affects no other metric; the first failure is said in the log in one line, the next ones are not, and a failure after a reading succeeded is said again (FR-022).
 - [ ] T019 [P] [US3] In `tests/test_telemetry_waiting.py`: a reading counts a thread whose run paused and whose row nobody read since (it settles the row, as the list of threads does), leaves a thread whose lease is held alone, takes no lease, changes no thread's state, and contacts no model, tool server, or agent; two runtimes that share the stores read the same two values (FR-023); with telemetry off no reading is started.
 
 ### Implementation for User Story 3
 
 - [ ] T020 [US3] In `src/freyja_agent/runtime/agent_tasks.py`: `oldest_ready_outcome_age() -> float` on `AgentTaskStore`, `PostgresAgentTaskStore` (one statement over `freyja_agent_tasks` against the database's `now()`, composed with psycopg's `sql` module and marked for Semgrep as the others are), and `InMemoryAgentTaskStore`.
 - [ ] T021 [US3] In `src/freyja_agent/runtime/telemetry.py`: the observable gauges `freyja.threads.awaiting_decision` and `freyja.outcomes.oldest_undelivered.age`, `Telemetry.waiting(awaiting_decision, oldest_undelivered)`, and a callback that returns the reading "while the reading is no older than two intervals, and nothing otherwise".
-- [ ] T022 [US3] New `src/freyja_agent/runtime/waiting.py`: `read_waiting(runtime)`, which takes a context for reading, settles the unsettled rows whose lease is not held with `settle_thread`, reads `ThreadIndex.counts()` and `oldest_ready_outcome_age()`, and hands both to `Telemetry.waiting`; and the loop that calls it at the interval metrics are sent, logging a failed reading once.
+- [ ] T022 [US3] New `src/freyja_agent/runtime/waiting.py`: `read_waiting(runtime)`, which takes a context for reading, settles the unsettled rows whose lease is not held with `settle_thread`, reads `ThreadIndex.counts()` and `oldest_ready_outcome_age()`, and hands both to `Telemetry.waiting`; and the loop that calls it at the interval metrics are sent, logging the first failed reading and the next one only after a reading succeeded.
 - [ ] T023 [US3] In `src/freyja_agent/runtime/runtime.py`: `Runtime.assemble` starts the loop when telemetry is on and stops it before telemetry is shut down.
 
 **Checkpoint**: the two values follow the stores within two intervals.
@@ -128,9 +128,9 @@ request's.
 
 ## Phase 7: Polish and what crosses the stories
 
-- [ ] T030 Extend `tests/test_telemetry_nowhere.py` to everything the phases added: drive the recognizable key, caller's token, agent address, and text through a request's path, query, headers, and body, a library's model call, a profile's test (the key under test included), and the waiting values; add every new span, metric, and value to `allowed`, so that an unknown one fails (FR-033, SC-004).
+- [ ] T030 Extend `tests/test_telemetry_nowhere.py` to everything the phases added: drive the recognizable key, caller's token, agent address, and text through a request's path, query, headers, and body, a library's model call, a profile's test (the key under test included), and the waiting values; add every new span, metric, and value to `allowed`, so that an unknown one fails (FR-033, SC-004); and show that the thread's id is on the run's span and on no other span and no metric (FR-032).
 - [ ] T031 In `tests/test_telemetry.py`: recording made to fail at each of the three points (the start of a span, the end of a span, a count) for a request, a library's model call, a profile's test, and a reading of the waiting values changes nothing they do, and an approved action still runs once (SC-006).
-- [ ] T032 In `tests/test_telemetry.py`: with a collector on the loopback interface that takes a connection and never answers, a run produces the same events as with telemetry off and ends in less than `EXPORT_TIMEOUT_SECONDS` (SC-005); what a model, a tool server, and an agent received is the same with telemetry on and off, the new paths included (SC-007).
+- [ ] T032 In `tests/test_telemetry.py`: with a collector on the loopback interface that takes a connection and never answers, a run produces the same events as with telemetry off and ends in less than `EXPORT_TIMEOUT_SECONDS` (SC-005); what a model, a tool server, and an agent received is the same with telemetry on and off, the new paths included (SC-007); and the span processor is given the queue's bound, past which a span is dropped and nothing waits (FR-036).
 - [ ] T033 [P] Rewrite `docs/observability.md` from `contracts/telemetry.md` and `contracts/settings.md`: every span, metric, and value; what is never sent; that the two waiting values are not added up; what the exporter reads from the environment by itself. Keep it in the README's list and the **Next:** links.
 - [ ] T034 [P] Update `.env.example`, the README's settings table, `AGENTS.md` (the convention on telemetry: names never content, the one module, the proof to extend), and the nested `AGENTS.md` files of `src/freyja_agent/`, `agent/`, `llm/`, `runtime/`, `api/`, and `tests/` for every new module and seam.
 - [ ] T035 Run every gate: `uv run ruff check .`, `uv run ruff format --check .`, `uv run pyright`, `uv run pytest --cov` with `FREYJA_TEST_DATABASE_URI` set and, at the hook's floor, without; Semgrep and Trivy as CI runs them.
