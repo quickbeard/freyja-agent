@@ -76,16 +76,28 @@ pytest:
   extends: .every-change
   # The Python that .python-version names.
   image: python:3.12-slim
+  services:
+    # For the Postgres tests under tests/integration. The same container as
+    # docker-compose.yml, reached under its alias and made with the database those tests
+    # may wipe, from the three POSTGRES_ variables below.
+    - name: postgres:17-alpine
+      alias: postgres
   variables:
     # The cache and the environment may sit on different file systems on a runner.
     UV_LINK_MODE: copy
+    POSTGRES_USER: freyja
+    POSTGRES_PASSWORD: freyja
+    POSTGRES_DB: freyja_test
+    # Has the Postgres tests run; without it they would be skipped and the run would fall
+    # below the floor.
+    FREYJA_TEST_DATABASE_URI: postgresql://freyja:freyja@postgres:5432/freyja_test
   before_script:
     - pip install --quiet "uv==0.12.*"
     # --locked fails when uv.lock is out of step with pyproject.toml instead of rewriting it.
     - uv sync --locked
   script:
-    # The Postgres tests under tests/integration are skipped: they are opt-in and need
-    # FREYJA_TEST_DATABASE_URI. --cov: with coverage, held to fail_under in pyproject.toml.
+    # With the Postgres tests under tests/integration, against the service above. --cov:
+    # with coverage, held to fail_under in pyproject.toml.
     - uv run pytest --cov
 
 vitest:
