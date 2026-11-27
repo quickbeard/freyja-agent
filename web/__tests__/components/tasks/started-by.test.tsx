@@ -24,6 +24,21 @@ describe("who started a task", () => {
     expect(container.querySelector("b")).toBeNull();
   });
 
+  // Request 5 (T086): a caller the deployment no longer names.
+  it("says when the caller is no longer configured", () => {
+    const { container } = render(
+      <StartedBy
+        caller={{ name: "artex", canceled: true, configured: false }}
+      />,
+    );
+    expect(container.textContent).toBe(
+      "Started by agent artex, which is no longer configured",
+    );
+    expect(
+      startedBy({ name: "artex", canceled: false, configured: true }),
+    ).toBe("Started by agent artex");
+  });
+
   it("says nothing of a task a person started", () => {
     const { container } = render(<StartedBy caller={null} />);
     expect(container.innerHTML).toBe("");

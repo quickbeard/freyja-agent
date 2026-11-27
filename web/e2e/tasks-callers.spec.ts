@@ -244,3 +244,52 @@ test("an approval refused because the agent canceled is said so, and the proposa
     [{ type: "reject" }],
   ]);
 });
+
+// User Story 3: an agent on another host, named by the deployment.
+
+const NAMED_ID = "3a2b1c0d9e8f7a6b5c4d3e2f1a0b9c8d";
+const GONE_ID = "9f8e7d6c5b4a39281706f5e4d3c2b1a0";
+
+test("a task started by a named agent says so, and so does one whose agent is no longer configured", async ({
+  page,
+}) => {
+  const service = new TaskService();
+  callerTask(service, NAMED_ID, "Scan the staging host.", "It is scanned.");
+  callerTask(service, GONE_ID, "Scan the old host.", "It was scanned.");
+  for (const [id, configured] of [
+    [NAMED_ID, true],
+    [GONE_ID, false],
+  ] as const) {
+    const task = service.tasks.get(id);
+    if (task === undefined) {
+      throw new Error("the task is missing");
+    }
+    service.tasks.set(id, {
+      ...task,
+      row: {
+        ...task.row,
+        caller: { name: "artex", canceled: !configured, configured },
+      },
+    });
+  }
+  await service.serve(page);
+  await page.goto("/tasks");
+  const tasks = page.getByRole("list", { name: "Tasks" });
+  // The exact words: "Started by agent artex" is also the start of the other row's.
+  await expect(
+    tasks
+      .getByRole("listitem")
+      .filter({ hasText: "Scan the staging host." })
+      .getByText("Started by agent artex", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    tasks.getByRole("listitem").filter({ hasText: "Scan the old host." }),
+  ).toContainText("Started by agent artex, which is no longer configured");
+  await page.goto(`/tasks/${GONE_ID}`);
+  await expect(
+    page
+      .getByText("Started by agent artex, which is no longer configured")
+      .filter({ visible: true }),
+  ).toBeVisible();
+  await expect(page.getByRole("textbox")).toHaveCount(0);
+});

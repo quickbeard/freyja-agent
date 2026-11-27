@@ -104,9 +104,13 @@ startup and exits with an error naming the connection when it is unreachable.
   `FREYJA_BACKGROUND_RUN_CONCURRENCY`. Two settings belong to LLM profiles: `FREYJA_SECRET_KEY`,
   a Fernet key or unset, which protects stored API keys and stops startup when it is not a
   Fernet key, and `FREYJA_LLM_TEST_TIMEOUT_SECONDS`, the most a profile's test may take.
-  Four belong to receiving tasks from other agents (feature 009), checked only while it is
-  on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_CALLER_TASKS`, `FREYJA_A2A_SERVER_TASKS`, and
-  `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace, be inside it, or contain it.
+  Nine belong to receiving tasks from other agents (feature 009), checked only while it is
+  on: `FREYJA_A2A_SERVER`, `FREYJA_A2A_SERVER_WAIT_SECONDS`, `FREYJA_A2A_SERVER_CALLER_TASKS`,
+  `FREYJA_A2A_SERVER_TASKS`, `FREYJA_A2A_SERVER_FILES_DIR`, which may not be the workspace,
+  be inside it, or contain it, `FREYJA_A2A_SERVER_CALLERS`, named callers with their tokens
+  (`A2aCallerConfig`, a token held as `SecretStr`), and the outside listener's
+  `FREYJA_A2A_SERVER_HOST`, `FREYJA_A2A_SERVER_PORT`, and `FREYJA_A2A_SERVER_URL`, whose host
+  without its port, or the listener set while the feature is off, stops startup also then.
 - `src/freyja_agent/agent/`: `factory.py` is the one place the orchestrator is assembled
   (`build_agent`; the service, the tests, and any future CLI call it). `build_agent` takes the
   tool server tools as `delegate_tools` and returns an `Orchestrator`: the compiled graph as
@@ -222,7 +226,11 @@ startup and exits with an error naming the connection when it is unreachable.
   the conversations and received tasks of other agents (`PostgresReceivedTaskStore` with
   `freyja_a2a_conversations` and `freyja_a2a_tasks`, and `InMemoryReceivedTaskStore`), whose
   conversation row is what makes a thread a caller's and which accepts a message under one
-  advisory lock; `runtime.py` is the `Runtime` dataclass with the catalog, the tool
+  advisory lock; `callers.py` is `Callers`, which turns an `Authorization` header into a
+  caller's name, comparing a token with every named caller's by `hmac.compare_digest`,
+  registers every caller's token with the record factory's `TOKENS`
+  (`delegates/addresses.py`), and warns of refused credentials once and then at most once in
+  ten seconds for each of the two addresses; `runtime.py` is the `Runtime` dataclass with the catalog, the tool
   servers, the agent registry, the task store, the saved-agent store, and the delegation
   worker. `Runtime.assemble` opens the tool servers, starts the registry, builds the agent, and
   runs the worker; `Runtime.open` adds
@@ -290,7 +298,11 @@ startup and exits with an error naming the connection when it is unreachable.
   dispatcher behind the checks of other origins, a credential, and the size, with
   `FreyjaRequestHandler`, which checks a message's form, calls `ReceivedTasks`, turns its
   tasks into the protocol's types, and refuses what the contract does not offer; it is the
-  one module that imports the SDK's server modules; `streaming.py` marks each `message`
+  one module that imports the SDK's server modules, and builds the card and the routes for
+  both addresses; `a2a_listener.py` the outside listener of feature 009: the application with the card and
+  the operations and nothing else (`application`), for named callers' tokens only, and the
+  `uvicorn.Server` the lifespan starts on a socket it binds itself and stops before the
+  runtime closes (`Listener`); `streaming.py` marks each `message`
   event of a run on the strict build with `metadata.reply`, whether it is text of Freyja's
   own reply (`is_reply`); the two message routes refuse a caller's thread with 409
   `caller_thread` (`runs.refuse_caller_thread`), and a thread's row has `caller`;
@@ -659,6 +671,12 @@ startup and exits with an error naming the connection when it is unreachable.
   `tests/nowhere.py`: `Seen`, which keeps everything the service gave back, `kept`, what the
   checkpointer holds, `logged`, and the searches `no_key` and `no_address`. A proof imports
   them from there, never from another test file.
+- A named caller's token appears nowhere: in no answer, stream, thread, or log line at any
+  level. A caller's message is cleaned of every token before it is used, and every log record
+  through the record factory (`TOKENS` in `delegates/addresses.py`, filled by
+  `runtime/callers.py`). `tests/test_a2a_server_nowhere.py` searches everything the service
+  gives back, keeps, and logs for two recognizable tokens; a new operation or log line about
+  callers is added to it.
 - A thread another agent started over A2A (feature 009) runs on the strict build and on no
   other: `SegmentedGraph` asks who started a thread before every run, of every kind, and
   refuses a caller's thread on the ordinary build and any thread whose lookup fails. A

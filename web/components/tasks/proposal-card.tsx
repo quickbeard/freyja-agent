@@ -42,12 +42,20 @@ const UNKNOWN =
 // (`requester_gone`). The card stays, with Reject where the service lists it: an action that
 // no longer needs approval, as after the agents' approval mode turned Auto, takes only
 // approve, so it can be rejected only once the mode is Manual again.
-function requesterGone(single: boolean, rejectable: boolean): string {
+function requesterGone(
+  single: boolean,
+  rejectable: boolean,
+  removed = false,
+): string {
   const them = single ? "this action" : "these actions";
   const it = single ? "it" : "them";
+  // Request 5: the deployment, not the agent, canceled the task of a caller it removed.
+  const why = removed
+    ? "The deployment no longer names the agent that started this task"
+    : "The agent that started this task canceled it";
   return rejectable
-    ? `The agent that started this task canceled it, so ${them} can no longer be approved. Reject ${it} to close the proposal; nothing of it runs.`
-    : `The agent that started this task canceled it, so ${them} can no longer be approved. ${single ? "It no longer needs" : "They no longer need"} approval, so ${it} can be rejected only once the agents' approval mode is Manual again.`;
+    ? `${why}, so ${them} can no longer be approved. Reject ${it} to close the proposal; nothing of it runs.`
+    : `${why}, so ${them} can no longer be approved. ${single ? "It no longer needs" : "They no longer need"} approval, so ${it} can be rejected only once the agents' approval mode is Manual again.`;
 }
 
 type Choice = {
@@ -199,7 +207,9 @@ export function ProposalCard({
       if (failure instanceof ApiError && failure.code === "requester_gone") {
         setRefused({
           byAction: new Map(),
-          card: [requesterGone(single, rejectable)],
+          card: [
+            requesterGone(single, rejectable, caller?.configured === false),
+          ],
         });
         onRefused?.();
       } else if (failure instanceof ApiError && failure.code === "invalid") {
@@ -283,7 +293,7 @@ export function ProposalCard({
         )}
         {caller?.canceled === true && refused === null && (
           <p className="text-sm font-medium">
-            {requesterGone(single, rejectable)}
+            {requesterGone(single, rejectable, !caller.configured)}
           </p>
         )}
       </div>

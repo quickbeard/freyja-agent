@@ -435,6 +435,25 @@ describe("a task another agent started", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  // Review of request 5: a caller the deployment no longer names did not cancel by itself.
+  it("says that the deployment canceled the task of an agent it no longer names", async () => {
+    service({
+      row: () => ({
+        json: summary({
+          caller: { name: "artex", canceled: true, configured: false },
+          status: "stopped",
+        }),
+      }),
+      state: () => ({ json: state([human("Tell #ops."), ai("")]) }),
+    });
+    renderView();
+    expect(
+      await screen.findByText(
+        "The task was canceled because the deployment no longer names the agent that started it. Nothing the task still proposed can be approved any more: Freyja rejects it by itself, not as a person's decision. What ran before the cancel is in the conversation.",
+      ),
+    ).toBeTruthy();
+  });
+
   it("says nothing of a cancel while the agent has not canceled", async () => {
     service({
       row: () => ({ json: summary({ caller: LOCAL }) }),

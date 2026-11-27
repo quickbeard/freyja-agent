@@ -984,11 +984,12 @@ export function TaskView({ threadId }: { threadId: string }) {
           proposed, and the service rejects it by rule (FR-021, FR-022a). What ran before the
           cancel, such as an action a person approved, stays in the conversation. */}
       {conversed && caller?.canceled === true && (
+        // Request 5: a caller the deployment no longer names did not cancel by itself; the
+        // service canceled its task when it started without it (FR-021).
         <p className="text-sm">
-          The agent that started this task canceled it. Nothing the task still
-          proposed can be approved any more: Freyja rejects it by itself, for
-          that cancel and not as a person's decision. What ran before the cancel
-          is in the conversation.
+          {caller.configured
+            ? "The agent that started this task canceled it. Nothing the task still proposed can be approved any more: Freyja rejects it by itself, for that cancel and not as a person's decision. What ran before the cancel is in the conversation."
+            : "The task was canceled because the deployment no longer names the agent that started it. Nothing the task still proposed can be approved any more: Freyja rejects it by itself, not as a person's decision. What ran before the cancel is in the conversation."}
         </p>
       )}
       {conversed && caller === null && (

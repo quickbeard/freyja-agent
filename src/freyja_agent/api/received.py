@@ -62,9 +62,15 @@ from freyja_agent.api.runs import (
 )
 from freyja_agent.api.schemas import RejectDecision, ResumeRequest
 from freyja_agent.api.serialize import interrupt_to_pending
-from freyja_agent.delegates.addresses import SCRUBBER
+from freyja_agent.delegates.addresses import SCRUBBER, TOKENS
 from freyja_agent.llm.secrets import redact
-from freyja_agent.runtime.received_tasks import ReceivedTask, Refusal, TaskState, kept
+from freyja_agent.runtime.received_tasks import (
+    LOCAL,
+    ReceivedTask,
+    Refusal,
+    TaskState,
+    kept,
+)
 from freyja_agent.runtime.runtime import Runtime
 from freyja_agent.runtime.thread_index import INDEX_WRITE_SECONDS, ThreadRecord
 
@@ -77,6 +83,8 @@ UNSTARTED_SECONDS = 60
 FOLLOW_SECONDS = 4
 # How many streams follow one task on one instance at most (research R13).
 STREAMS_PER_TASK = 4
+# The most received tasks that can be in progress at once, the total limit's own bound.
+MAX_RECEIVED = 1000
 # How often each instance looks at the tasks that still count or still have a proposal to
 # reject (research R9).
 SWEEP_SECONDS = 30
@@ -321,6 +329,9 @@ class ReceivedTasks:
         # How many streams follow each task on this instance (research R13).
         self._streams: dict[str, int] = {}
         self._sweeper: asyncio.Task[None] | None = None
+        # Whether the sweep's first round, which cancels the tasks of callers the settings
+        # no longer name, is still to come (FR-021).
+        self._first_round = True
 
     async def accept(self, caller: str, context_id: str, text: str, *, hops: int = 0) -> Accepted:
         """Accept a message of ``caller`` in its conversation ``context_id`` and start its run.
@@ -535,7 +546,7 @@ class ReceivedTasks:
         hold either: an agent's reply quoted by Freyja, or a model that repeats its key."""
         runtime = self.runtime
         secrets = (*runtime.applied_model().secrets, *runtime.environment_secrets)
-        return redact(SCRUBBER.scrub(text), secrets)
+        return redact(TOKENS.scrub(SCRUBBER.scrub(text)), secrets)
 
     def _view(self, task: ReceivedTask, standing: Standing) -> View:
         if task.ended:
@@ -855,7 +866,7 @@ class ReceivedTasks:
         self.leave(reader)
         return True
 
-    async def cancel(self, task: ReceivedTask) -> View:
+    async def cancel(self, task: ReceivedTask, *, why: str = "caller") -> View:
         """Cancel ``task`` for its caller, and say it canceled (R11).
 
         The task is looked at first, so one that has ended is not canceled: that raises
@@ -868,7 +879,15 @@ class ReceivedTasks:
         found = await self.look(task)
         if found.ended or not await self.store.end(found.task_id, "canceled", reason="canceled"):
             raise NotCancelableError(found.task_id)
-        logger.info("Caller %s canceled received task %s", found.caller, found.task_id)
+        if why == "unnamed":
+            logger.warning(
+                "Caller %s is no longer named in FREYJA_A2A_SERVER_CALLERS: its received task "
+                "%s is canceled",
+                found.caller,
+                found.task_id,
+            )
+        else:
+            logger.info("Caller %s canceled received task %s", found.caller, found.task_id)
         canceled = await self.store.get(found.task_id) or found
         try:
             await self._mark_stop(canceled.thread_id)
@@ -934,6 +953,10 @@ class ReceivedTasks:
         proposal is to be rejected again, each up to the total limit, is looked at as a
         release would. It is what makes the rest true when a release's look did not run."""
         limit = self.runtime.settings.a2a_server_tasks
+        if self._first_round:
+            # Done once it has run through: a round that fails is tried again by the next.
+            await self._cancel_unnamed()
+            self._first_round = False
         seen: set[str] = set()
         found = [
             *await self.store.unreleased(limit),
@@ -952,6 +975,26 @@ class ReceivedTasks:
                     type(exc).__name__,
                 )
             self._wake(task.thread_id)
+
+    async def _cancel_unnamed(self) -> None:
+        """Cancel every working task of a caller the settings no longer name, as that
+        caller's cancel would, and say why (FR-021). A deployment that takes a caller away
+        takes away what it asked for."""
+        named = {LOCAL, *self.runtime.settings.a2a_server_callers}
+        # As many as the total limit can ever be, whatever it is now.
+        for task in await self.store.working_of_others(named, MAX_RECEIVED):
+            try:
+                await self.cancel(task, why="unnamed")
+            except NotCancelableError:
+                continue
+            except Exception as exc:
+                logger.warning(
+                    "Received task %s of caller %s, who is no longer named, could not be "
+                    "canceled now (%s)",
+                    task.task_id,
+                    task.caller,
+                    type(exc).__name__,
+                )
 
     def start_sweeping(self) -> None:
         """Sweep now and every ``SWEEP_SECONDS`` until ``close``."""

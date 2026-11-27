@@ -302,6 +302,7 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
         at: dict[str, tuple[StubAgent, StreamingASGITransport]] | None = None,
         received_tasks: ReceivedTaskStore | None = None,
         thread_index: ThreadIndex | None = None,
+        listen: bool = False,
         **overrides: Any,
     ) -> A2aApp:
         entries = {
@@ -382,7 +383,9 @@ def make_a2a_app(workspace: Path, clock: FakeClock) -> Callable[..., A2aApp]:
                 yield runtime
 
         made.open_runtime = open_runtime
-        made.app = create_app(open_runtime=open_runtime)
+        # Feature 009: the outside listener is bound only where a test asks (``listen``);
+        # otherwise its application is driven in-process as ``ServerApp.outside``.
+        made.app = create_app(open_runtime=open_runtime, listen=listen)
         return made
 
     return _make
@@ -398,7 +401,7 @@ class ServerApp:
     database; ``again`` takes the same settings as the fixture, the feature's switch
     included. The scripted model is ``model``.
 
-    Later requests extend it: T090 adds the outside application.
+    Request 5 adds the outside application (``outside``) and ``callers``.
     """
 
     a2a: A2aApp
@@ -422,6 +425,17 @@ class ServerApp:
     def service(self) -> Any:
         """The ``ReceivedTasks`` of the running app."""
         return self.app.state.received
+
+    @property
+    def outside(self) -> Any:
+        """The outside listener's application, while the app runs with the listener set
+        (request 5); driven in-process unless the app was made with ``listen=True``."""
+        return self.app.state.a2a_outside
+
+    @property
+    def callers(self) -> Any:
+        """The ``Callers`` of the running app (request 5)."""
+        return self.app.state.callers
 
     def accept(
         self,

@@ -5,6 +5,10 @@ Part 1, a named caller's files on the strict build (FR-009a, research R16). Two 
 named caller in ``<files dir>/<name>``, the other two in the shared workspace. A named caller
 reads the skills and changes none, reaches no file outside its area, and has no shell. Runs
 are started as a caller's message starts them; no caller's token is involved before request 5.
+
+Part 2, a message's form and the limits. Part 3, isolation through A2A (FR-009a, FR-020,
+SC-007): two named callers, by their tokens, reach nothing of each other's or of a console
+thread's, and work in their own files.
 """
 
 from collections.abc import Callable
@@ -455,4 +459,128 @@ def test_tasks_waiting_for_a_person_count_against_the_limit_until_they_end(
     ]
     assert refusals == [
         "A message of caller local was refused: the caller's limit on tasks in progress was reached"
+    ]
+
+
+# Part 3: isolation through A2A, with two named callers' tokens (FR-009a, FR-020, SC-007).
+
+# The two made-up tokens .gitleaks.toml lets through (research R15).
+ALPHA = "sk-recognizable-key-0001"
+BETA = "sk-recognizable-other-0002"
+NAMED = {"alpha": {"token": ALPHA}, "beta": {"token": BETA}}
+# A console thread whose id has the form of a received task's id.
+CONSOLE = "0123456789abcdef0123456789abcdef"
+
+
+def by(token: str) -> dict[str, str]:
+    return {"A2A-Version": "1.0", "Authorization": f"Bearer {token}"}
+
+
+def test_one_named_caller_reaches_nothing_of_another_s_tasks_or_of_a_console_thread(
+    make_a2a_server_app: Callable[..., ServerApp], sse_events: Any
+) -> None:
+    made = make_a2a_server_app(
+        ScriptedChatModel(script=[NOTIFY], final_text="Hi."), a2a_server_callers=NAMED
+    )
+    with TestClient(made.app) as client:
+        theirs = rpc(
+            client,
+            "SendMessage",
+            {
+                **sending("Tell #ops.", contextId="shared"),
+                "configuration": {"returnImmediately": True},
+            },
+            by(BETA),
+        ).json()["result"]["task"]["id"]
+        at_rest(client, made, theirs)
+        with client.stream("POST", f"/threads/{CONSOLE}/runs", json={"message": "hi"}) as answer:
+            sse_events(answer.iter_lines())
+        before = made.task(client, theirs)
+        answers = {
+            (method, target): rpc(client, method, {"id": target}, by(ALPHA)).content
+            for method in ("GetTask", "CancelTask", "SubscribeToTask")
+            for target in (theirs, CONSOLE, "f" * 32)
+        }
+        mine = rpc(client, "SendMessage", sending("hello", contextId="shared"), by(ALPHA)).json()
+        after = made.task(client, theirs)
+        own = made.task(client, mine["result"]["task"]["id"])
+        pending = client.get(f"/threads/{before.thread_id}/state").json()["pending"]
+    for method in ("GetTask", "CancelTask", "SubscribeToTask"):
+        never = answers[(method, "f" * 32)]
+        assert b"-32001" in never
+        assert answers[(method, theirs)] == never
+        assert answers[(method, CONSOLE)] == never
+    # The other caller's task and its proposal are as they were.
+    assert (after.state, after.reject_attempts) == (before.state, 0)
+    assert pending is not None
+    # A conversation id is the caller's own: the same one starts a conversation of alpha's.
+    assert (own.caller, own.context_id) == ("alpha", "shared")
+    assert own.thread_id != before.thread_id
+
+
+def test_through_a2a_each_named_caller_works_in_its_own_files(
+    make_a2a_server_app: Callable[..., ServerApp],
+    files_dir: Path,
+    workspace: Path,
+    sse_events: Any,
+) -> None:
+    model = ScriptedChatModel(
+        script=[
+            call("write_file", "w1", file_path="/alpha-recognizable.txt", content="alpha's text"),
+            DONE,
+            call("write_file", "w2", file_path="/beta-recognizable.txt", content="beta's text"),
+            DONE,
+            call("write_file", "w3", file_path="/console-recognizable.txt", content="console's"),
+            DONE,
+            calls(
+                ("ls", "l1", {"path": "/"}),
+                ("read_file", "l2", {"file_path": "/../beta/beta-recognizable.txt"}),
+                ("delete", "l3", {"file_path": "/skills"}),
+                ("execute", "l4", {"command": "cat /etc/hostname"}),
+            ),
+            DONE,
+        ]
+    )
+    made = make_a2a_server_app(model, a2a_server_callers=NAMED, a2a_server_files_dir=str(files_dir))
+    with TestClient(made.app) as client:
+        rpc(client, "SendMessage", sending("Write.", contextId="a"), by(ALPHA))
+        rpc(client, "SendMessage", sending("Write.", contextId="b"), by(BETA))
+        with client.stream("POST", "/threads/k-1/runs", json={"message": "Write."}) as answer:
+            sse_events(answer.iter_lines())
+        rpc(client, "SendMessage", sending("Look.", contextId="a"), by(ALPHA))
+    seen = results(model)
+    assert (files_dir / "alpha" / "alpha-recognizable.txt").read_text() == "alpha's text"
+    assert (files_dir / "beta" / "beta-recognizable.txt").read_text() == "beta's text"
+    assert (workspace / "console-recognizable.txt").read_text() == "console's"
+    assert "alpha-recognizable.txt" in seen["l1"]
+    assert "beta" not in seen["l1"] and "console" not in seen["l1"]
+    assert "beta's text" not in seen["l2"]
+    assert (workspace / "skills").is_dir()
+    assert "error" in seen["l4"].lower() or "not" in seen["l4"].lower()
+
+
+def test_the_total_limit_with_two_named_callers_refuses_with_the_same_sentence(
+    make_a2a_server_app: Callable[..., ServerApp], caplog: pytest.LogCaptureFixture
+) -> None:
+    model = ScriptedChatModel(script=[NOTIFY, NOTIFY])
+    made = make_a2a_server_app(
+        model,
+        a2a_server_callers=NAMED,
+        a2a_server_caller_tasks=1,
+        a2a_server_tasks=2,
+        a2a_server_wait_seconds=0,
+    )
+    with TestClient(made.app) as client:
+        one = rpc(client, "SendMessage", sending("one", contextId="c-1"), by(ALPHA)).json()
+        two = rpc(client, "SendMessage", sending("two", contextId="c-2"), by(BETA)).json()
+        at_rest(client, made, one["result"]["task"]["id"], two["result"]["task"]["id"])
+        third = rpc(client, "SendMessage", sending("three", contextId="c-3")).json()
+    error = third["error"]
+    assert (error["code"], error["message"]) == (
+        -32004,
+        "A limit on tasks in progress was reached. Send again when one has ended.",
+    )
+    assert error["data"][0]["metadata"] == {"reason": "task_limit"}
+    assert [r.getMessage() for r in caplog.records if "was refused" in r.getMessage()] == [
+        "A message of caller local was refused: the total limit on tasks in progress was reached"
     ]

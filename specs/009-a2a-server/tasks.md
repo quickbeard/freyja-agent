@@ -944,7 +944,7 @@ removing a caller cancels its task.
 
 ### Tests for User Story 3
 
-- [ ] T080 [P] [US3] Add part 2 to `tests/test_a2a_server_callers.py`, the settings of this
+- [X] T080 [P] [US3] Add part 2 to `tests/test_a2a_server_callers.py`, the settings of this
       request (FR-003, FR-004, FR-029, contracts/settings.md), one test per rule:
       `FREYJA_A2A_SERVER_CALLERS` is a JSON object of names, each with `token` and nothing
       else; a name of "lowercase letters, digits, hyphens, and underscores, starting with a
@@ -958,7 +958,7 @@ removing a caller cancels its task.
       host and at most a port; a port outside 1 to 65535, or the service's own on the same
       address; each error names the variable and the caller and holds no token and no value;
       a token neither prints nor serializes
-- [ ] T081 [US3] Add part 3 to `tests/test_a2a_server_callers.py`, the credential (FR-002,
+- [X] T081 [US3] Add part 3 to `tests/test_a2a_server_callers.py`, the credential (FR-002,
       FR-005), at both addresses: no header, a wrong token, another scheme, and a token in
       the body, a query, or another header are answered alike at the outside listener with
       401, `WWW-Authenticate: Bearer`, and the contract's body verbatim, make nothing, and
@@ -970,7 +970,7 @@ removing a caller cancels its task.
       addresses, one test per neighbouring pair of the contract's list that T035 could not
       show without one (a wrong token from a page of another origin gets 403; a wrong token
       with an oversized body gets 401; a right token with an oversized body gets 413)
-- [ ] T082 [US3] Add part 4 to `tests/test_a2a_server_callers.py`, the outside listener
+- [X] T082 [US3] Add part 4 to `tests/test_a2a_server_callers.py`, the outside listener
       (FR-003, FR-006, FR-029, SC-005): every route of the main application, `/healthz`
       included, asked at the outside application, answers as an unknown path; the card there
       gives `FREYJA_A2A_SERVER_URL` and `/a2a`, declares one HTTP `bearer` scheme and
@@ -980,14 +980,14 @@ removing a caller cancels its task.
       a stream is open; a taken port stops startup with an error that names the setting; the
       outside server writes no access log line; startup logs at INFO that the listener is on
       and where, and warns for an `http` address for callers and not for `https`
-- [ ] T083 [US3] Add part 5 to `tests/test_a2a_server_callers.py`, callers that change
+- [X] T083 [US3] Add part 5 to `tests/test_a2a_server_callers.py`, callers that change
       (FR-021, Edge Cases): a named caller's task waiting for a person, then a second
       application on the same stores without that caller: its first sweep cancels the task,
       rejects the proposal by rule, and logs the caller and why; the row says `configured:
       false` and `canceled: true`; the caller's token is refused; named again, the caller has
       its conversations and its files again; a replaced token gives the same conversations
       and the old one is refused
-- [ ] T084 [P] [US5] Add part 3 to `tests/test_a2a_server_limits.py`, isolation (FR-009a,
+- [X] T084 [P] [US5] Add part 3 to `tests/test_a2a_server_limits.py`, isolation (FR-009a,
       FR-020, SC-007): as one named caller, every operation on the other's task id, and on a
       console thread's id, answers in every byte but the request's id as for an id never
       used; a message under the other's `contextId` starts a conversation of the sender's
@@ -996,7 +996,7 @@ removing a caller cancels its task.
       read, write, and delete only in their own area, read the skills, change none, and get
       an error from the shell; the total limit with two callers refuses with the same
       sentence and `task_limit`, and its log line says which limit
-- [ ] T085 [P] [US3] Add part 2 to `tests/test_a2a_server_nowhere.py`, no token anywhere
+- [X] T085 [P] [US3] Add part 2 to `tests/test_a2a_server_nowhere.py`, no token anywhere
       (FR-028, SC-006), with the two recognizable tokens: through every operation and every
       refusal at both addresses, and a token pasted into a message, which is cleaned before
       it is used, no answer, stream, thread state, checkpoint (`kept`), or log record at any
@@ -1009,29 +1009,29 @@ removing a caller cancels its task.
       counted for the service's own address and for the outside listener apart, so that the
       count is bounded whoever sends them (FR-028: "for each address" is read as each of the
       service's two addresses, as the spec uses the word)
-- [ ] T086 [P] [US3] In `web/__tests__/components/tasks/started-by.test.tsx`: a caller whose
+- [X] T086 [P] [US3] In `web/__tests__/components/tasks/started-by.test.tsx`: a caller whose
       `configured` is false is said to be no longer configured
 
 ### Implementation for User Story 3
 
-- [ ] T087 [P] [US3] In `src/freyja_agent/config.py`, add `A2aCallerConfig` (a `token` held as
+- [X] T087 [P] [US3] In `src/freyja_agent/config.py`, add `A2aCallerConfig` (a `token` held as
       `SecretStr`) and `a2a_server_callers`, `a2a_server_host`, `a2a_server_port`, and
       `a2a_server_url`, with the rules of T080 and errors that name the variable and the
       caller only; document the four in `.env.example` with the example of
       contracts/settings.md
-- [ ] T088 [P] [US3] Create `src/freyja_agent/runtime/callers.py`: `Callers`, built from the
+- [X] T088 [P] [US3] Create `src/freyja_agent/runtime/callers.py`: `Callers`, built from the
       settings, which turns an `Authorization` header into a caller's name, `local` for no
       header, or a refusal, comparing the bytes of the presented token with every caller's
       by `hmac.compare_digest`; taking every named caller's token, by its exact text, out of
       a text and out of every log record, installed with the record factory of
       `install_log_scrubber`; and the limiter of refused-credential warnings, one and then at
       most one in ten seconds for each of the two addresses, with the count (R5, R15)
-- [ ] T089 [US3] In `src/freyja_agent/api/a2a_server.py`, take the caller from `Callers` at
+- [X] T089 [US3] In `src/freyja_agent/api/a2a_server.py`, take the caller from `Callers` at
       both addresses in place of request 2's refusal of every header; build the card per
       address, the outside one from `FREYJA_A2A_SERVER_URL` with its bearer scheme; clean a
       caller's message of tokens before it is used; pass the caller's name in the call
       context
-- [ ] T090 [US3] Create `src/freyja_agent/api/a2a_listener.py`: the outside application, built
+- [X] T090 [US3] Create `src/freyja_agent/api/a2a_listener.py`: the outside application, built
       with `outside=True`, the two routes and nothing else (a FastAPI application with
       `docs_url`, `redoc_url`, and `openapi_url` set to `None`, so that
       `refuse_other_origins("Tasks")` answers 403 with its `detail` body as on the service's
@@ -1040,21 +1040,21 @@ removing a caller cancels its task.
       off, and `timeout_graceful_shutdown`; the socket bound by the lifespan and passed to
       `serve`, with an error naming the setting when it cannot be (R4). In `tests/conftest.py`,
       `make_a2a_server_app` gives the outside application when the listener is set
-- [ ] T091 [US3] In `src/freyja_agent/api/app.py`, start the outside listener after the routes
+- [X] T091 [US3] In `src/freyja_agent/api/app.py`, start the outside listener after the routes
       are added, stop it before the runtime is closed, and log the startup lines and the
       warning of FR-029
-- [ ] T092 [US3] In `src/freyja_agent/api/received.py`, scope every task and conversation by
+- [X] T092 [US3] In `src/freyja_agent/api/received.py`, scope every task and conversation by
       caller (FR-020), and let the sweep's first round cancel every working task of a named
       caller the settings no longer name, as that caller's cancel would, logging the caller
       and why
-- [ ] T093 [P] [US3] In `src/freyja_agent/api/thread_index.py`, `caller.configured` is whether
+- [X] T093 [P] [US3] In `src/freyja_agent/api/thread_index.py`, `caller.configured` is whether
       the settings name the caller now, always true for `local`
-- [ ] T094 [P] [US3] In `web/components/tasks/started-by.tsx`, say when the caller is no
+- [X] T094 [P] [US3] In `web/components/tasks/started-by.tsx`, say when the caller is no
       longer configured
-- [ ] T095 [US3] Add User Story 3's part to `web/e2e/tasks-callers.spec.ts`: a task started by
+- [X] T095 [US3] Add User Story 3's part to `web/e2e/tasks-callers.spec.ts`: a task started by
       agent `artex`, and one whose caller is no longer configured; `web/e2e/tasks-api.ts`
       answers both
-- [ ] T096 [US3] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
+- [X] T096 [US3] Run `uv run pytest`, `pnpm test`, and `pnpm test:e2e`. In
       `docs/a2a-server.md`, how to name a caller, how to open the outside listener and what
       it serves, the token at both addresses, the warning, what encrypts the connection, a
       named caller's file area, and what removing or renaming a caller does; in the README's
@@ -1062,7 +1062,7 @@ removing a caller cancels its task.
       `api/a2a_listener.py`, and a convention that a caller's token appears nowhere,
       searched by `tests/test_a2a_server_nowhere.py`, to which a new operation or log line
       about callers is added
-- [ ] T097 [US3] Walk quickstart.md section 3 on a check instance by the standing rules, with
+- [X] T097 [US3] Walk quickstart.md section 3 on a check instance by the standing rules, with
       the outside listener on 8443, and correct it where the built feature differs
 
 **Checkpoint**: request 5. Agents on other hosts call with their tokens, at an address that
